@@ -116,7 +116,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     "@/components/settings/host-scope/host-scope-fixture"
   );
   return {
-    isHostScopeUsable: () => true,
     useHostScope: () => {
       const hosts = guideMocks.directoryEntries.map((entry) =>
         hostScopeOptionFixture({

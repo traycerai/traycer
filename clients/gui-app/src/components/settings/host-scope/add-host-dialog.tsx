@@ -61,12 +61,27 @@ function AddHostDialogBody(): ReactNode {
   const closeDialog = useAddHostDialogStore((s) => s.closeDialog);
   const [platform, setPlatform] = useState<"unix" | "windows">("unix");
 
-  // The arrival: any host in the registry that was NOT there when this
-  // dialog opened. Diffing against the open-time snapshot is what makes this
-  // recognise the NEW host rather than celebrating one already registered.
+  // The arrival: a host that was NOT there when this dialog opened AND has
+  // actually finished enrolling.
+  //
+  // Diffing against the open-time snapshot is what distinguishes a new host
+  // from one already registered — but the diff alone was not enough. The list
+  // is a UNION of the runtime directory and the cloud registry, so a row can
+  // appear in it while being only half real: a pre-existing registry host whose
+  // list simply resolved after the dialog opened, or a directory row nothing
+  // can dial yet. Both used to trip the success banner, telling the user their
+  // new host was "ready to run agents" when nothing had connected.
+  //
+  // `registered && connectable` is the claim the banner actually makes: the
+  // account knows it, and this client has a route to it.
   const arrived = useMemo(() => {
     const known = new Set(knownHostIds);
-    return scope.hosts.find((host) => !known.has(host.hostId)) ?? null;
+    return (
+      scope.hosts.find(
+        (host) =>
+          !known.has(host.hostId) && host.registered && host.connectable,
+      ) ?? null
+    );
   }, [scope.hosts, knownHostIds]);
 
   if (arrived !== null) {

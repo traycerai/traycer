@@ -84,13 +84,6 @@ export interface SettingsSection {
   readonly requiresLocalHost: boolean;
 }
 
-/** Sections in `group`, in sidebar order. */
-export function sectionsInGroup(
-  group: SettingsSectionGroupId,
-): ReadonlyArray<SettingsSection> {
-  return SETTINGS_SECTIONS.filter((section) => section.group === group);
-}
-
 /**
  * Order is meaningful twice over: it drives the leader-digit shortcuts
  * (`dispatch.ts` indexes straight into this array) and it groups the sidebar.
@@ -191,13 +184,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   },
 ];
 
-/** Sections scoped by the host switcher, in sidebar order. */
-export const HOST_SCOPED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set(
-  SETTINGS_SECTIONS.filter((section) => section.group === "host").map(
-    (section) => section.id,
-  ),
-);
-
-export function isHostScopedSection(id: SettingsSectionId): boolean {
-  return HOST_SCOPED_SECTION_IDS.has(id);
-}
+// No `HOST_SCOPED_SECTION_IDS` / `isHostScopedSection` helper here. Whether a
+// section is host-scoped is already stated by `group: "host"` in the table
+// above, and the sidebar is the only thing that asks. A derived Set plus a
+// predicate over it was a second source for a fact the data already carries.

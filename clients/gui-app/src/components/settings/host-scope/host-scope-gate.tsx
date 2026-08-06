@@ -78,18 +78,22 @@ export function HostScopeGate(props: {
             ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
             : "No connection is available to this host."
         }
+        // Unconditional. This used to be gated on `!scope.isViewingActive`,
+        // which is dead: `isViewingActive` IS `isFollowing`, and the status
+        // derivation returns "following" before it can ever return
+        // "unreachable" — so the null arm could not be reached. Stating the
+        // action plainly beats a condition that reads like it protects
+        // something and does not.
         action={
-          scope.isViewingActive ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={scope.returnToActive}
-              data-testid="host-scope-return-to-active"
-            >
-              Back to {scope.activeHost?.name ?? "your active host"}
-            </Button>
-          )
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={scope.returnToActive}
+            data-testid="host-scope-return-to-active"
+          >
+            Back to {scope.activeHost?.name ?? "your active host"}
+          </Button>
         }
         testId="host-scope-unreachable"
       />

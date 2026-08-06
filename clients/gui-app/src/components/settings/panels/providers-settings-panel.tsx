@@ -256,10 +256,18 @@ export function ProvidersSettingsPanel() {
   // A deep link that already knows which machine needs attention — the
   // composer's provider re-auth banner knows exactly whose profile expired —
   // hands its host to the SHARED scope rather than to a picker private to
-  // this panel. Consumed once, so a later manual pick is not overwritten.
+  // this panel.
+  //
+  // Cleared HERE, at the point of use. It used to be cleared only inside the
+  // provider rail, which is host-scoped and therefore never rendered when the
+  // deep-linked host was unreachable — so the intent survived, and every later
+  // visit to Providers yanked the scope back to a host the user had already
+  // moved on from.
   useEffect(() => {
-    const focusHostId = useProvidersFocusStore.getState().focusHostId;
-    if (focusHostId !== null) setHostId(focusHostId);
+    const store = useProvidersFocusStore.getState();
+    if (store.focusHostId === null) return;
+    setHostId(store.focusHostId);
+    store.clearFocusHostId();
   }, [setHostId]);
 
   const realBinding = useHostBinding();
@@ -300,6 +308,55 @@ function ProvidersSettingsPanelInner({
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
+  return (
+    <SettingsPanelShell
+      title="Providers"
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
+      fillHeight
+      bodyClassName="max-h-[min(85vh,52rem)]"
+      // No host readout here — the sidebar states the scoped host one row
+      // above and repeating it was the same fact printed twice.
+      //
+      // And no provider CONTROLS here either, which is the load-bearing half.
+      // `headerAction` renders as a SIBLING of the gate below, not a child, so
+      // anything mounted here escapes it: with a non-ready scope the runtime
+      // context is not re-provided, `useHostClient()` resolves to the ambient
+      // host, and "Refresh" re-probed and rewrote THAT host's provider list
+      // while the page named a different one. The gate only guards what it
+      // wraps, so the controls moved inside it.
+      headerAction={undefined}
+    >
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
+        <ProvidersScopedContent
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
+        />
+      </HostScopeGate>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * Everything that talks to the scoped host, mounted only once the gate has
+ * proven there is a client behind the name.
+ *
+ * The list query and the Refresh control live HERE rather than in the panel
+ * header for one reason: the header is outside the gate. Mounted there, these
+ * hooks resolved against the ambient host whenever the scope was not ready —
+ * so "Refresh" re-probed provider auth and rewrote the cached provider list of
+ * a host the page was not showing. Being a child of the gate is what makes
+ * them unable to do that.
+ */
+function ProvidersScopedContent({
+  hostId,
+  isSelectedHostLocal,
+}: {
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
+}): ReactNode {
   const query = useProvidersList({ enabled: true, subscribed: true });
   const providers = query.data?.providers ?? [];
   const checkingProviders =
@@ -307,40 +364,26 @@ function ProvidersSettingsPanelInner({
   const checkedAt = latestProviderCheckedAt(providers);
   const refreshProviders = useRefreshProviders();
   return (
-    <SettingsPanelShell
-      title="Providers"
-      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
-      fillHeight
-      bodyClassName="max-h-[min(85vh,52rem)]"
-      // No host readout here. The sidebar states the scoped host one row above
-      // this panel and never scrolls away, so repeating it in every header was
-      // the same fact printed twice — and it crowded out the controls this
-      // header actually owns.
-      headerAction={
-        <div className="flex items-center gap-2">
-          <ProviderLastChecked
-            checkedAt={checkedAt}
-            checking={checkingProviders}
-          />
-          <RefreshIconButton
-            onRefresh={refreshProviders}
-            label="Refresh providers"
-            refreshing={checkingProviders}
-          />
-        </div>
-      }
-    >
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-end gap-2 px-5 pb-2">
+        <ProviderLastChecked
+          checkedAt={checkedAt}
+          checking={checkingProviders}
+        />
+        <RefreshIconButton
+          onRefresh={refreshProviders}
+          label="Refresh providers"
+          refreshing={checkingProviders}
+        />
+      </div>
+      <div className="min-h-0 flex-1">
         <ProvidersPanelBody
           query={query}
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
-      </HostScopeGate>
-    </SettingsPanelShell>
+      </div>
+    </div>
   );
 }
 

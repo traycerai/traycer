@@ -47,7 +47,11 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // A section backed by the local config store cannot describe a host this
   // window can only reach over the wire. Dimming those rows while a remote
   // host is selected costs a click that would only ever land on a notice.
-  const localHostSelected = scope.host === null || scope.host.isLocalMachine;
+  //
+  // An unresolved scope is NOT local. Treating `null` as local lit those rows
+  // up as fully available while the panels behind them had no host to describe
+  // — the rail promising what the page could not deliver.
+  const localHostSelected = scope.host !== null && scope.host.isLocalMachine;
   return (
     <aside className="flex w-[clamp(13rem,20vw,17rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 bg-background p-4">
       {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (

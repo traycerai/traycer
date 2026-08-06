@@ -69,13 +69,37 @@ export function HostSwitcher(props: {
   useRefreshHostDirectoryOnOpen(open, binding?.directory ?? null);
   const { hosts, selected } = props;
 
-  if (selected === null) {
+  // The empty state keys on the LIST, not on the selection.
+  //
+  // Keying it on `selected === null` conflated two opposite situations: "you
+  // own no hosts" and "the host you were viewing was deregistered". The second
+  // one still has hosts, and this early return replaced the picker with a dead
+  // div — removing the only way back to a working host, and taking `Add host…`
+  // with it, since this popover's footer is its sole opener. So the one moment
+  // a person most needs the picker was the one moment it disappeared.
+  if (hosts.length === 0) {
     return (
       <div
-        className="flex w-full items-center gap-3 px-3 py-2 text-ui-xs text-muted-foreground"
+        className="flex w-full flex-col gap-2 px-3 py-2"
         data-testid="settings-host-switcher-empty"
       >
-        {props.isLoading ? "Finding your hosts…" : "No hosts available"}
+        <span className="text-ui-xs text-muted-foreground">
+          {props.isLoading ? "Finding your hosts…" : "No hosts yet"}
+        </span>
+        {/* Genuinely zero hosts is exactly when Add matters most, and it used
+            to be unreachable here — the only opener lived in a popover this
+            branch returned before rendering. */}
+        {props.isLoading ? null : (
+          <button
+            type="button"
+            onClick={props.onAddHost}
+            className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            data-testid="settings-host-switcher-empty-add"
+          >
+            <Plus className="size-3.5 shrink-0" />
+            Add host…
+          </button>
+        )}
       </div>
     );
   }
@@ -86,7 +110,11 @@ export function HostSwitcher(props: {
         // The DESTINATION belongs in the accessible name, not just the role.
         // A bare "Host" would tell a screen-reader user what the control is
         // for while withholding the one thing it displays.
-        aria-label={`Settings host: ${selected.name}`}
+        aria-label={
+          selected === null
+            ? "Settings host: none selected"
+            : `Settings host: ${selected.name}`
+        }
         data-testid="settings-host-switcher"
         // A filled row, not a bordered card. It has to read as a CONTROL among
         // navigation — the sections below it are transparent rows, so a quiet
@@ -100,10 +128,12 @@ export function HostSwitcher(props: {
           "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
         )}
       >
+        {/* `selected` is null while the scoped host is gone but others remain.
+            The row stays a live control in that state — it is the way out. */}
         <span className="flex size-4 shrink-0 items-center justify-center">
           <HostPresenceDot
-            tone={selected.health.tone}
-            animate={selected.health.live}
+            tone={selected === null ? "idle" : selected.health.tone}
+            animate={selected !== null && selected.health.live}
             className={undefined}
           />
         </span>
@@ -113,8 +143,13 @@ export function HostSwitcher(props: {
             are VIEWING. Which host is active is stated where it has room and
             where it matters, on the dropdown rows and on Overview, and its
             absence is called out by the "Viewing —" note below. */}
-        <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
-          {selected.name}
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-ui-sm font-medium",
+            selected === null ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {selected === null ? "Select a host" : selected.name}
         </span>
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
@@ -134,7 +169,7 @@ export function HostSwitcher(props: {
                 <HostSwitcherRow
                   key={host.hostId}
                   host={host}
-                  scoped={host.hostId === selected.hostId}
+                  scoped={selected !== null && host.hostId === selected.hostId}
                   active={host.hostId === props.activeHostId}
                   onSelect={() => {
                     props.onSelect(host.hostId);

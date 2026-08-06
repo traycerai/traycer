@@ -19,6 +19,7 @@ import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
   type HostScope,
@@ -113,7 +114,34 @@ export function AgentSelectionGuideSection() {
       ? { ...realBinding, hostClient: scope.client }
       : null;
 
+  // Mount, not just render. `AgentSelectionGuideSectionInner` owns the guide
+  // query, and a query hook under a non-usable scope still fires against the
+  // ambient host and caches ITS guide under this section — the gate would hide
+  // the result while the read had already happened. So the whole subtree stays
+  // unmounted until the scope is usable, and the gate speaks for the rest.
+  if (!isHostScopeUsable(scope.status)) {
+    return (
+      <div className="h-full min-h-0 p-5">
+        <section className="flex h-full min-h-0 flex-col">
+          <HostScopeGate
+            scope={scope}
+            skeleton={
+              <AgentSelectionGuideMessage>
+                <EditorSkeleton />
+              </AgentSelectionGuideMessage>
+            }
+          >
+            {null}
+          </HostScopeGate>
+        </section>
+      </div>
+    );
+  }
+
   const inner = <AgentSelectionGuideSectionInner scope={scope} />;
+  // `following` is usable but needs no re-provision: the ambient client
+  // already IS the scoped host's, and building a second one would duplicate
+  // its socket for nothing.
   if (scopedBinding === null) return inner;
   return (
     <HostRuntimeContext.Provider value={scopedBinding}>

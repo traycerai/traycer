@@ -9,11 +9,14 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
  * with the overlay up it swaps the section in place, and otherwise
  * `openSettings` focuses an existing settings TAB at that section (or opens
  * the modal if there is none). Callers therefore get correct behaviour in both
- * modes without reaching for router hooks, which a panel rendered in the modal
- * — or in a unit test — may not have.
+ * modes without reaching for router hooks, which the modal — or a unit test —
+ * may not have.
  *
- * No-ops when the bridge has not published an API yet, the same way the
- * keybinding and palette call sites do.
+ * The keybinding router adapter is currently the ONLY caller. The indirection
+ * is what would let a panel navigate correctly from either surface, not a
+ * description of panels that already do.
+ *
+ * No-ops when the bridge has not published an API yet.
  */
 export function navigateToSettingsSection(sectionId: SettingsSectionId): void {
   const api = getSystemTabModalApi();

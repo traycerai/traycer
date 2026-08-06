@@ -82,7 +82,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
               }),
         client: state.client,
       }),
-    isHostScopeUsable: () => true,
   };
 });
 
@@ -235,13 +234,20 @@ function assertBranchPrefixStripPresent(): void {
 }
 
 describe("WorktreesSettingsPanel host-scoped states", () => {
-  it("prompts to select a host when none is selected", () => {
+  it("defers to the scope gate when no host is resolved", () => {
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = null;
 
     renderPanel();
 
-    screen.getByText("Select a host to manage its worktrees.");
+    // Was "Select a host to manage its worktrees." — a flattened non-answer
+    // this panel produced for every unresolved scope, including a host that
+    // had just been deregistered out from under the user, and which offered
+    // nothing to act on. `HostScopeGate` owns those states now: it names the
+    // host, distinguishes deregistered from unroutable, and carries the way
+    // back to the active host.
+    expect(screen.queryByText("Select a host to manage its worktrees.")).toBeNull();
+    screen.getByTestId("host-scope-empty");
     // Branch prefix defaults are client-wide - not gated on host selection.
     assertBranchPrefixStripPresent();
   });
@@ -448,9 +454,15 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       screen.getByText("feat-clean");
     });
     // The toolbar neither picks the host nor names it: both belong to the
-    // sidebar, which states the scope a row away and never scrolls off.
+    // sidebar. Asserted on the host LABEL rather than on a testid - checking
+    // that a testid which exists nowhere is absent proves nothing, while the
+    // label is what actually reappears if a readout is ever restored here.
     expect(screen.queryByTestId("worktrees-host-select")).toBeNull();
-    expect(screen.queryByTestId("host-scope-line")).toBeNull();
+    expect(
+      screen.queryByText(state.reachability.hostLabel, {
+        selector: "[data-testid='worktrees-toolbar-actions'] *",
+      }),
+    ).toBeNull();
     screen.getByPlaceholderText("Search repo, branch, path, PR, or Task");
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");

@@ -100,6 +100,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
   type HostScope,
@@ -530,7 +532,15 @@ function WorktreesBody(props: {
 }): ReactNode {
   const { client, openStreamTransport, hostId, scope } = props;
   const reachability = useHostReachability(hostId ?? "");
-  const reachable = hostId !== null && reachability.status === "reachable";
+  // Two reachability opinions used to disagree here. `useHostReachability` is
+  // the TAB-binding check and can call a host reachable that this settings
+  // scope cannot dial (a registry row with no websocket URL), which surfaced
+  // as a bogus "Sign in to manage worktrees" on a host that was simply not
+  // routable from here. The scope's verdict wins: it is the one that knows
+  // whether a client exists.
+  const scopeUsable = isHostScopeUsable(scope.status);
+  const reachable =
+    scopeUsable && hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
   // The full listing's paths seed the background enrichment sweep: rows the
   // user never scrolls to still get probed (in bounded chunks), so tier pills
@@ -563,12 +573,29 @@ function WorktreesBody(props: {
 
   let content: ReactNode;
   let listOwnsToolbar = false;
-  if (hostId === null) {
+  if (!scopeUsable) {
+    // The gate owns every state where the scope has no client: it names the
+    // host, distinguishes deregistered from unroutable, and — the part this
+    // panel never had — offers the way back to the active host. The old
+    // `hostId === null` branch flattened all of that into "Select a host",
+    // which is not something the user can act on when the host they picked was
+    // deregistered out from under them.
     content = (
-      <WorktreesStateMessage tone="muted" spinner={false}>
-        Select a host to manage its worktrees.
-      </WorktreesStateMessage>
+      <HostScopeGate
+        scope={scope}
+        skeleton={
+          <WorktreesStateMessage tone="muted" spinner>
+            Connecting to {scope.hostLabel}…
+          </WorktreesStateMessage>
+        }
+      >
+        {null}
+      </HostScopeGate>
     );
+    // No `hostId === null` branch below: a usable scope is `following` or
+    // `ready`, and both require a resolved host — so the old "Select a host to
+    // manage its worktrees" state is unreachable from here, and was the
+    // flattened non-answer the gate above now replaces properly.
   } else if (reachability.status === "checking") {
     content = (
       <WorktreesStateMessage tone="muted" spinner>

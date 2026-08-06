@@ -124,17 +124,24 @@ function UpdateNowControl(props: {
   readonly mutation: UpdateHostVersionPolicyMutation;
 }): ReactNode {
   const { hostId, mutation } = props;
-  const [open, setOpen] = useState(false);
+  // Same arm-time capture as the drain-gate force below. A version draft typed
+  // for host B must never submit against host C because the scope moved while
+  // the popover was open — pinning a version is not destructive, but it is
+  // still a write aimed at a named host.
+  const [armedHostId, setArmedHostId] = useState<string | null>(null);
   const [version, setVersion] = useState("");
+  const open = armedHostId !== null;
+  const targetMoved = armedHostId !== null && armedHostId !== hostId;
   const trimmed = version.trim();
   const showInvalid = trimmed.length > 0 && !isValidHostVersion(trimmed);
-  const canSubmit = trimmed.length > 0 && isValidHostVersion(trimmed);
+  const canSubmit =
+    trimmed.length > 0 && isValidHostVersion(trimmed) && !targetMoved;
 
   return (
     <Popover
       open={open}
       onOpenChange={(next) => {
-        setOpen(next);
+        setArmedHostId(next ? hostId : null);
         if (!next) setVersion("");
       }}
     >
@@ -174,7 +181,7 @@ function UpdateNowControl(props: {
               },
               {
                 onSuccess: () => {
-                  setOpen(false);
+                  setArmedHostId(null);
                   setVersion("");
                 },
               },
@@ -228,7 +235,18 @@ function ApplyNowControl(props: {
   readonly mutation: UpdateHostVersionPolicyMutation;
 }): ReactNode {
   const { hostId, label, mutation } = props;
-  const [open, setOpen] = useState(false);
+  // The TARGET is captured when the dialog is armed, not read when it is
+  // confirmed.
+  //
+  // Only `open` used to live here while `hostId` and `mutation` arrived as
+  // props that rebind on every render. Anything that moved the scoped host
+  // while this dialog stood open — a switcher pick, or the active host
+  // changing from another window — slid a new host underneath it, and
+  // confirming then ended the sessions of a host the dialog never named. The
+  // copy says "this host"; this is what makes that true.
+  const [armedHostId, setArmedHostId] = useState<string | null>(null);
+  const open = armedHostId !== null;
+  const targetMoved = armedHostId !== null && armedHostId !== hostId;
 
   return (
     <>
@@ -236,7 +254,7 @@ function ApplyNowControl(props: {
         type="button"
         variant="destructive"
         size="sm"
-        onClick={() => setOpen(true)}
+        onClick={() => setArmedHostId(hostId)}
         disabled={mutation.isPending}
         data-testid={`host-apply-now-trigger-${hostId}`}
       >
@@ -244,16 +262,25 @@ function ApplyNowControl(props: {
       </Button>
       <ConfirmDestructiveDialog
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={(next) => {
+          if (!next) setArmedHostId(null);
+        }}
         title="Apply the update now?"
-        description="This ends every open terminal and agent session on this host so the update can apply immediately. Sessions can be reopened once the host is back."
+        description={
+          targetMoved
+            ? "The host this was aimed at is no longer the one selected. Close this and try again on the host you mean."
+            : "This ends every open terminal and agent session on this host so the update can apply immediately. Sessions can be reopened once the host is back."
+        }
         cascadeSummary={null}
         actionLabel="Apply now"
         isPending={mutation.isPending}
         onConfirm={() => {
+          // Refuse rather than retarget. A destructive action whose subject
+          // changed after it was armed has no safe interpretation.
+          if (targetMoved) return;
           mutation.mutate(
             { updatePolicy: undefined, desiredVersion: undefined, force: true },
-            { onSuccess: () => setOpen(false) },
+            { onSuccess: () => setArmedHostId(null) },
           );
         }}
       />

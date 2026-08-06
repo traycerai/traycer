@@ -599,7 +599,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   );
   return {
     useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
-    isHostScopeUsable: () => true,
   };
 });
 
@@ -1648,19 +1647,27 @@ describe("<ProvidersSettingsPanel />", () => {
 
   // The panel used to carry its own host `Select` in the header - one of four
   // near-identical dropdowns doing one job - and then, briefly, an inert
-  // readout of the scoped host. Both are gone: the sidebar states the scope one
-  // row away and never scrolls. Asserting the absence is the point - a second
-  // control here is the exact regression the unification exists to prevent, and
-  // a second READOUT is the duplication that made the old surface confusing.
-  it("states nothing about the host, leaving the scope to the sidebar", () => {
+  // readout of the scoped host. Both are gone: the sidebar owns the scope.
+  //
+  // Asserting on the host NAME, not on a testid. An earlier version of this
+  // test checked that `host-scope-line` was absent, which is unfalsifiable -
+  // that testid exists nowhere in the codebase, so the assertion passes no
+  // matter what the panel renders. The name is the thing that must not
+  // reappear, and the fixture puts it on screen the moment anything prints it.
+  it("names no host and offers no host picker, leaving both to the sidebar", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    expect(screen.queryByTestId("host-scope-line")).toBeNull();
+    expect(screen.queryByText("host-a")).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Host" })).toBeNull();
+    // The controls the header DOES own still render - so this test fails if
+    // the fix that moved them inside the gate ever drops them entirely.
+    expect(
+      screen.getByRole("button", { name: "Refresh providers" }),
+    ).toBeDefined();
   });
 
   it("blocks disabling the last enabled provider", () => {

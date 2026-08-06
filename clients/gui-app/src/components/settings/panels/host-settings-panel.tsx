@@ -27,6 +27,10 @@ import {
   ThisWindowCardStandalone,
 } from "@/components/settings/host-scope/host-identity-card";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import { HostRegistryUpdates } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { HostSummaryCard } from "@/components/settings/panels/host-settings-summary-card";
@@ -112,17 +116,28 @@ function HostSettingsPanelWithoutManagement() {
       }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      <div className="flex flex-col gap-5">
-        {scope.host === null ? null : (
-          <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
-            <ThisWindowCard scope={scope} host={scope.host} />
-          </HostIdentityCard>
-        )}
-        <p className="px-1 text-ui-sm text-muted-foreground">
-          Installing and restarting a local host service is only available in
-          the desktop app — this shell doesn&apos;t bundle the Traycer CLI.
-        </p>
-      </div>
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
+        <div className="flex flex-col gap-5">
+          {scope.host === null ? null : (
+            <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
+              <ThisWindowCard scope={scope} host={scope.host} />
+            </HostIdentityCard>
+          )}
+          <p className="px-1 text-ui-sm text-muted-foreground">
+            Installing and restarting a local host service is only available in
+            the desktop app — this shell doesn&apos;t bundle the Traycer CLI.
+          </p>
+          {/* Snapshots and Remove Traycer travel over the host's own RPC, not
+              the CLI bridge, so a shell without the CLI can still run them.
+              Omitting the whole zone here removed a capability for a reason
+              that does not apply to it — the paragraph above names the ONE
+              thing this shell actually cannot do. */}
+          <HostDangerZone scope={scope} />
+        </div>
+      </HostScopeGate>
     </SettingsPanelShell>
   );
 }
@@ -493,7 +508,13 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // — a remote host has no local service to install, restart or register, and
   // pretending otherwise is what produced two cards describing one host in two
   // dialects.
-  const scopedIsLocalMachine = scope.host?.isLocalMachine ?? true;
+  // `?? false`, never `?? true`. A null host means the scope resolved to
+  // NOTHING — vanished, unreachable, or still loading — and defaulting that to
+  // "yes, this is your machine" put this computer's install / restart /
+  // deregister-service console on screen under a host that no longer exists.
+  // The gate below withholds the body in those states; this is the second
+  // line, so a future caller that forgets the gate fails closed.
+  const scopedIsLocalMachine = scope.host?.isLocalMachine ?? false;
 
   // ONE Updates card, holding both halves of a host's update story.
   //
@@ -533,7 +554,13 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         <div className="[&>*:first-child]:border-t-0">
           {localUpdateRegion}
           {registryItem === null ? null : (
+            // Keyed by host: every piece of state inside — an open drain-gate
+            // confirmation, a half-typed version pin — belongs to ONE host, so
+            // changing hosts must destroy it rather than re-point it. The
+            // controls also capture their target at arm time; this is the
+            // structural half of the same guarantee.
             <HostRegistryUpdates
+              key={registryItem.hostId}
               item={registryItem}
               isLocalHost={scopedIsLocalMachine}
             />
@@ -555,6 +582,14 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       }
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
+      {/* Overview is host-scoped like every other section in its group, so it
+          owes the same contract: render NOTHING about a host the scope cannot
+          resolve. It used to skip this gate entirely, which is how a vanished
+          remote host ended up showing this computer's service console. */}
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         {scope.host === null || scopedIsLocalMachine ? null : (
           <HostIdentityCard
@@ -703,9 +738,10 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
 
         {/* No list of the OTHER hosts, and no "Add host": a page about one
             host is the wrong place to manage the collection it belongs to.
-            Both live on the Hosts page. */}
+            The switcher in the sidebar owns both. */}
         <HostDangerZone scope={scope} />
       </div>
+      </HostScopeGate>
 
       <RestartHostConfirmDialog
         open={restartConfirmOpen}

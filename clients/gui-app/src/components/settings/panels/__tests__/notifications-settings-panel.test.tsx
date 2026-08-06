@@ -33,7 +33,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   );
   return {
     useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
-    isHostScopeUsable: () => true,
   };
 });
 

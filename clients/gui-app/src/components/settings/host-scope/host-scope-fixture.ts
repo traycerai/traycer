@@ -40,6 +40,18 @@ export function hostScopeOptionFixture(
   };
 }
 
+/**
+ * NOTE ON THE DEFAULT SHAPE: `status: "following"` with `client: null` is not a
+ * state production can reach — `following` means the ambient client IS the
+ * scoped host's, so it is never null there. It is the default here because
+ * panel suites mock their own host hooks and never read `scope.client`, so
+ * supplying a real `HostClient` would be ceremony with no assertion behind it.
+ *
+ * The consequence is that NO panel suite proves the status/client pairing.
+ * That pairing is the safety contract, so it is covered where it is actually
+ * derived — see `__tests__/use-host-scope-status.test.ts` — rather than being
+ * implied by a fixture that cannot fail.
+ */
 export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
   const host =
     overrides.host === undefined
@@ -55,7 +67,11 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     activeHostId: host?.hostId ?? null,
     activeHost: host,
     isViewingActive: true,
-    status: "following",
+    // The default status FOLLOWS the host rather than being pinned. Pinning it
+    // to "following" meant `host: null` produced a scope claiming to follow a
+    // host that does not exist — a state production cannot reach — and panels
+    // tested against it took branches they never take in the app.
+    status: host === null ? "unreachable" : "following",
     client: null,
     setHostId: () => undefined,
     makeActive: () => undefined,

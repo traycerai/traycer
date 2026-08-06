@@ -5,6 +5,10 @@ import { toast } from "sonner";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { RequiresLocalHostNotice } from "@/components/settings/host-scope/requires-local-host-notice";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import { Button } from "@/components/ui/button";
@@ -50,10 +54,20 @@ export function DiagnosticsSettingsPanel() {
   // but this client reads them through the local CLI bridge — so a remote host
   // gets the notice rather than this computer's levels under its name. (The
   // `desktop` row is genuinely app-wide and says so in the group below.)
-  if (scope.host !== null && !scope.host.isLocalMachine) {
+  //
+  // `host === null` takes the same branch. This read `host !== null &&
+  // !isLocalMachine`, so an unresolved scope fell through and offered this
+  // computer's log levels — and its log TAIL — under a host that no longer
+  // exists. The gate answers those states; only a resolved local host proceeds.
+  if (scope.host === null || !scope.host.isLocalMachine) {
     return (
       <SettingsPanelShell title="Diagnostics" description={PANEL_DESCRIPTION}>
-        <RequiresLocalHostNotice scope={scope} subject="log settings" />
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          <RequiresLocalHostNotice scope={scope} subject="log settings" />
+        </HostScopeGate>
       </SettingsPanelShell>
     );
   }

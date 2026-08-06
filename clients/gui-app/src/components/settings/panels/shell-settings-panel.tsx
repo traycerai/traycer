@@ -19,6 +19,10 @@ import {
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { RequiresLocalHostNotice } from "@/components/settings/host-scope/requires-local-host-notice";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
 import { EnvOverrideEditor } from "@/components/settings/panels/env-override-editor";
@@ -93,10 +97,21 @@ export function ShellSettingsPanel() {
   // terminals and harnesses — but reachable only through the local CLI bridge.
   // Say so, rather than showing this computer's values under another host's
   // name.
-  if (scope.host !== null && !scope.host.isLocalMachine) {
+  //
+  // The `host === null` half matters as much as the remote half. This read
+  // `host !== null && !isLocalMachine`, so an UNRESOLVED scope — vanished,
+  // unreachable — fell past it into the local editor and offered this
+  // computer's shell config under a host that no longer exists. Only a
+  // resolved, local host reaches the editor now; the gate answers the rest.
+  if (scope.host === null || !scope.host.isLocalMachine) {
     return (
       <SettingsPanelShell title="Shell" description={PANEL_DESCRIPTION}>
-        <RequiresLocalHostNotice scope={scope} subject="shell configuration" />
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          <RequiresLocalHostNotice scope={scope} subject="shell configuration" />
+        </HostScopeGate>
       </SettingsPanelShell>
     );
   }

@@ -1,5 +1,7 @@
 import { useMemo } from "react";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostInstalledRecord } from "@traycer-clients/shared/platform/runner-host";
 import type { HostPresenceHealth } from "@traycer/protocol/host/host-status";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
@@ -12,45 +14,17 @@ import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings
 import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
 import { getViewerReachabilityCheck } from "@/lib/host/viewer-reachability-store";
 import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
+import {
+  deriveHostScopeStatus,
+  type HostScopeStatus,
+} from "@/components/settings/host-scope/host-scope-status";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   buildHostScopeOptions,
   findHostOption,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
-
-/**
- * Whether the host a panel is showing is the host its client actually talks to.
- *
- * These four are the whole safety contract of this surface, and they exist
- * because three of them look identical if you only check `client !== null`:
- *
- *   - `following` — no explicit pick; the panel is scoped to the active host.
- *     Its client IS the ambient one, so reading through it is correct.
- *   - `connecting` — a non-active host is picked and its transient client is
- *     still being built. `client` is `null`. Callers must NOT fall back to the
- *     ambient client: doing so shows host A's data under host B's name.
- *   - `unreachable` — the picked host exists but this client has no route to
- *     it (registry-only row, or a directory entry with no websocket URL).
- *     `client` is `null`, permanently, until something changes.
- *   - `vanished` — the picked host left the directory entirely: deregistered,
- *     or signed out from. `host` is `null` and the caller must say so and
- *     offer a way back. It deliberately does NOT auto-reset to the active
- *     host: silently re-pointing an administration surface at a different
- *     machine is the precise failure this whole redesign exists to remove, and
- *     it is worst here — the moment a destructive dialog is open.
- *   - `ready` — the picked host resolved to a live client of its own.
- *
- * The invariant every consumer owes: **a visible host name must always match
- * the client used by every read, stream and mutation beneath it.** When that
- * cannot be proven, render loading or unavailable — never somebody else's data.
- */
-export type HostScopeStatus =
-  | "following"
-  | "connecting"
-  | "unreachable"
-  | "vanished"
-  | "ready";
 
 export interface HostScope {
   /** Every host this account owns or this client can dial, merged and sorted. */
@@ -81,6 +55,18 @@ export interface HostScope {
 const HEALTHY_PRESENCE: HostPresenceHealth = { status: "healthy", reason: null };
 
 /**
+ * Stand-in `queryFn` for the disabled installed-record query.
+ *
+ * TanStack requires one even when `enabled` is false, and a rejecting stub is
+ * the honest shape: if it ever runs, the `enabled` guard above it is wrong and
+ * should fail loudly rather than resolve a fake `null` that would read as
+ * "nothing is installed".
+ */
+function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
+  return Promise.reject(new Error("host management bridge unavailable"));
+}
+
+/**
  * The one host-scope hook for Settings. Every host-scoped panel reads this and
  * nothing else, which is what makes the sidebar switcher authoritative rather
  * than one more picker among five.
@@ -95,7 +81,6 @@ export function useHostScope(): HostScope {
   const directoryQuery = useHostDirectoryList();
   const registryQuery = useRegisteredHosts();
   const localSnapshot = useLocalHostSnapshot(runnerHost);
-  const localHostId = binding?.directory.getLocalEntry()?.hostId ?? null;
 
   const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
   const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
@@ -103,14 +88,53 @@ export function useHostScope(): HostScope {
   const directory = directoryQuery.data;
   const registry = registryQuery.data;
 
-  // The local service snapshot alone cannot distinguish "stopped" from "not
-  // installed" — that needs the installed record, which only the Host panel
-  // queries. Passing `undefined` for the record keeps this honest: the local
-  // row reads `running` when a snapshot exists, and otherwise defers to the
-  // registry rather than guessing which of the two non-running states it is.
+  // Which host id is THIS computer's, asked of the directory rather than of
+  // `getLocalEntry()`.
+  //
+  // `getLocalEntry()` is backed by the live local snapshot, so it goes null the
+  // moment the local host stops — exactly when "is this my machine?" has to
+  // keep answering yes, because the answer gates install / restart / recovery.
+  // The directory keeps answering: while the local host is down it presents the
+  // registry twin carrying this machine's id as a non-dialable `kind: "local"`
+  // entry (`bootingLocalEntry`). Reading the list is therefore the durable
+  // question; the live entry is only a faster path to the same id.
+  const localHostId = useMemo(() => {
+    const fromDirectory = (directory ?? []).find(
+      (entry) => entry.kind === "local",
+    );
+    if (fromDirectory !== undefined) return fromDirectory.hostId;
+    return binding?.directory.getLocalEntry()?.hostId ?? null;
+  }, [directory, binding]);
+
+  // The installed record is what separates "stopped" from "not installed" — the
+  // two local states a person can actually act on. Without it `deriveStatus`
+  // can only answer `running` or `undefined`, and a stopped local host falls
+  // through to its registry lease and reads "Offline · last seen 3h ago": true
+  // of the lease, useless to someone whose host is sitting there stopped with a
+  // Start button one click away.
+  //
+  // Same query key as the Host panel's, so the two share one request rather
+  // than doubling it, and `enabled` keeps shells without the CLI bridge on the
+  // old honest-`undefined` path instead of guessing.
+  const management = runnerHost.hostManagement;
+  const installedQuery = useQuery(
+    queryOptions<HostInstalledRecord | null>({
+      queryKey:
+        management === null
+          ? ["runner", "host-installed-record", "unavailable"]
+          : runnerQueryKeys.hostInstalledRecord(management),
+      queryFn:
+        management === null
+          ? skipInstalledRecord
+          : () => management.installedRecord(),
+      enabled: management !== null,
+      staleTime: 30_000,
+    }),
+  );
+
   const localService = useMemo(
-    () => deriveStatus(localSnapshot, undefined),
-    [localSnapshot],
+    () => deriveStatus(localSnapshot, installedQuery.data),
+    [localSnapshot, installedQuery.data],
   );
 
   const hosts = useMemo(
@@ -129,12 +153,17 @@ export function useHostScope(): HostScope {
     [directory, registry, localHostId, activeHostId, localService, nowMs],
   );
 
+  // Both lists have answered at least once. `data !== undefined` rather than
+  // `!isLoading`, because a background refetch of an already-resolved list must
+  // not re-open the "still loading" window and un-say `vanished`.
+  const listsResolved = directory !== undefined && registry !== undefined;
+
   // Resolution order matters, and the `vanished` branch is the load-bearing
   // one. An explicit pick that is no longer in the list must NOT quietly
-  // resolve to the active host: that is a silent retarget of an
-  // administration surface, and it is exactly how a destructive action ends
-  // up aimed at a machine the user never chose. It resolves to nothing, and
-  // the caller is obliged to say so.
+  // resolve to the active host: that is a silent retarget of an administration
+  // surface, and it is exactly how a destructive action ends up aimed at a
+  // machine the user never chose. It resolves to nothing, and the caller is
+  // obliged to say so.
   const resolved = useMemo((): {
     readonly host: HostScopeOption | null;
     readonly vanishedHostId: string | null;
@@ -142,10 +171,13 @@ export function useHostScope(): HostScope {
     if (scopedHostId !== null) {
       const picked = findHostOption(hosts, scopedHostId);
       if (picked !== null) return { host: picked, vanishedHostId: null };
-      // Still loading the lists is not the same as gone. Withhold the verdict
-      // until there is something to be absent FROM, or the first paint of a
-      // cold Settings would accuse every host of having been deregistered.
-      if (hosts.length === 0) return { host: null, vanishedHostId: null };
+      // Still loading is not the same as gone, and the question is whether BOTH
+      // source lists have answered — not whether the union happens to be
+      // non-empty. Keying on `hosts.length` got this wrong in both directions:
+      // a registry-only host was declared vanished the instant the directory
+      // resolved first, and deregistering your ONLY host emptied the union so
+      // the verdict could never fire at all.
+      if (!listsResolved) return { host: null, vanishedHostId: null };
       return { host: null, vanishedHostId: scopedHostId };
     }
     const active = findHostOption(hosts, activeHostId);
@@ -154,7 +186,7 @@ export function useHostScope(): HostScope {
     // rather than rendering a pane the user cannot act on. This is a default,
     // not a fallback from a pick — nothing was overridden.
     return { host: hosts[0] ?? null, vanishedHostId: null };
-  }, [hosts, scopedHostId, activeHostId]);
+  }, [hosts, scopedHostId, activeHostId, listsResolved]);
 
   const host = resolved.host;
   const isFollowing =
@@ -171,11 +203,21 @@ export function useHostScope(): HostScope {
   );
   const overrideClient = useHostClientFor(overrideEntry);
 
+  // The transient client is built SYNCHRONOUSLY (`createRequester` is a Proxy),
+  // so for a connectable host the only reason one comes back null is a missing
+  // request context or unbound user. That is a credential gap, not a connection
+  // in progress, and it must not render as a spinner that can never resolve.
+  const hasRequestAuthority =
+    ambientClient.getRequestContext() !== null &&
+    ambientClient.getRequestContextUserId() !== null;
+
   const status = deriveHostScopeStatus({
     isFollowing,
     host,
     vanishedHostId: resolved.vanishedHostId,
     overrideClient,
+    hasRequestAuthority,
+    listsResolved,
   });
 
   return {
@@ -201,25 +243,4 @@ export function useHostScope(): HostScope {
     isLoading: directoryQuery.isLoading || registryQuery.isLoading,
     nowMs,
   };
-}
-
-function deriveHostScopeStatus(input: {
-  readonly isFollowing: boolean;
-  readonly host: HostScopeOption | null;
-  readonly vanishedHostId: string | null;
-  readonly overrideClient: HostClient<HostRpcRegistry> | null;
-}): HostScopeStatus {
-  if (input.vanishedHostId !== null) return "vanished";
-  if (input.isFollowing) return "following";
-  if (input.host === null) return "unreachable";
-  // No route exists and none is being built — this is terminal, not pending,
-  // and must not render as a spinner that never resolves.
-  if (!input.host.connectable) return "unreachable";
-  if (input.overrideClient === null) return "connecting";
-  return "ready";
-}
-
-/** True when the scope resolved to a client the caller may read/write through. */
-export function isHostScopeUsable(status: HostScopeStatus): boolean {
-  return status === "following" || status === "ready";
 }

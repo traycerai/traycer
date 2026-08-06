@@ -31,24 +31,13 @@ interface SettingsHostScopeState {
    * user never see a stale id after their only host is re-registered.
    */
   readonly scopedHostId: string | null;
+  /** `null` returns to following the active host. */
   readonly setScopedHostId: (hostId: string | null) => void;
-  /** Back to following the active host. */
-  readonly clearScopedHostId: () => void;
 }
 
 export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
   (set) => ({
     scopedHostId: null,
     setScopedHostId: (hostId) => set({ scopedHostId: hostId }),
-    clearScopedHostId: () => set({ scopedHostId: null }),
   }),
 );
-
-/**
- * Point Settings at a specific host from outside the Settings tree — used by
- * deep links that already know the host they need fixed (e.g. the composer's
- * provider re-auth banner, which knows which host's profile expired).
- */
-export function focusSettingsOnHost(hostId: string): void {
-  useSettingsHostScopeStore.getState().setScopedHostId(hostId);
-}
