@@ -2,6 +2,70 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { ProviderPluginsTab } from "@/components/settings/panels/provider-plugins-tab";
+import {
+  nativeScopeFolderActionMocks,
+  nativeScopeResolvedWorkspaceMocks,
+  nativeScopeWorktreeMocks,
+} from "@/components/settings/panels/__tests__/provider-native-scope-test-mocks";
+
+/*
+ * The Plugins tab calls `useProviderNativeScope`, which reaches three host
+ * queries. Without these the render dies on "No QueryClient set" before any
+ * notice is on screen - the failure is in the scope hook, not in the notice
+ * this suite is about. Mocked rather than wrapped in a QueryClientProvider so
+ * the suite keeps testing the notice against a fixed scope, matching the
+ * convention in provider-plugins-tab-scope.test.tsx.
+ */
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-1",
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => ({
+    getActiveHostId: () => "host-1",
+  }),
+  useHostBinding: () => ({
+    hostClient: {
+      getActiveHostId: () => "host-1",
+    },
+  }),
+}));
+
+vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
+  useResolvedWorkspaceFolders: () => ({
+    folders: nativeScopeResolvedWorkspaceMocks.folders,
+    isLoading: nativeScopeResolvedWorkspaceMocks.isLoading,
+    isFetching: nativeScopeResolvedWorkspaceMocks.isFetching,
+  }),
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
+  useWorkspaceFolderActionsForClient: () => ({
+    isPreparing: nativeScopeFolderActionMocks.isPreparing,
+    isRemoving: false,
+    prepareFoldersMutation: null,
+    removeEpicRepoMutation: null,
+    pickAndPrepareFolders: nativeScopeFolderActionMocks.pickAndPrepareFolders,
+  }),
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (
+    folder: { workspacePath: string; workspaceName: string },
+    hostId: string | null,
+  ) => ({
+    path: folder.workspacePath,
+    name: folder.workspaceName,
+    repoIdentifier: null,
+    hostId,
+  }),
+}));
+
+vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
+  useWorktreeListByWorkspacePathsForClient: () => ({
+    data: nativeScopeWorktreeMocks.loaded
+      ? { workspaces: nativeScopeWorktreeMocks.workspaces }
+      : undefined,
+    isPending: nativeScopeWorktreeMocks.pending,
+  }),
+}));
 
 vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
   useProvidersPluginsList: () => ({
