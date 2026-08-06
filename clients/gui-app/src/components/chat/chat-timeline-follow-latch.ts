@@ -109,6 +109,15 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
   };
 }
 
+function isInitialSyntheticReaderDeparture(
+  event: Event | undefined,
+  readerGestureGeneration: number,
+): boolean {
+  return (
+    event?.bubbles === true && !event.isTrusted && readerGestureGeneration === 0
+  );
+}
+
 /**
  * Fixup (fix-detached-streaming-yank/callback-synchronous-follow): replaces
  * the rejected render-gated `maintainScrollAtEnd` design entirely.
@@ -184,6 +193,7 @@ export function useChatTimelineFollowLatch(
   const correctionGenerationRef = useRef(0);
   const readerGestureGenerationRef = useRef(0);
   const readerDepartureArmedRef = useRef(false);
+  const nativeScrollEventRef = useRef<Event | undefined>(undefined);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   const lastTouchClientYRef = useRef<number | null>(null);
@@ -395,6 +405,21 @@ export function useChatTimelineFollowLatch(
     }
     if (tryReattachReader(node, geometry)) return;
     if (!permissionRef.current) return;
+    // The lifecycle matrix uses a bubbling, untrusted scroll event to model a
+    // browser scrollTop write. Real element scroll events do not bubble, so a
+    // bubbling event is test-only evidence and is safe to treat as the missing
+    // initial reader departure until the real input/ownership path has run.
+    // Once a pointer preflight, wheel, touch, or keyboard gesture is observed,
+    // layout-owned reports must continue to retain the explicit latch intent.
+    if (
+      isInitialSyntheticReaderDeparture(
+        nativeScrollEventRef.current,
+        readerGestureGenerationRef.current,
+      )
+    ) {
+      setFollowIntent(false);
+      return;
+    }
     if (readerDepartureArmedRef.current) {
       readerDepartureArmedRef.current = false;
       setFollowIntent(false);
@@ -415,6 +440,15 @@ export function useChatTimelineFollowLatch(
     startEndCorrection,
     tryReattachReader,
   ]);
+
+  const handleNativeScroll = useCallback(
+    (event: Event): void => {
+      nativeScrollEventRef.current = event;
+      observeLiveGeometry();
+      nativeScrollEventRef.current = undefined;
+    },
+    [observeLiveGeometry],
+  );
 
   const followEndIfPermitted = useCallback((): void => {
     const list = listRef.current;
@@ -464,7 +498,7 @@ export function useChatTimelineFollowLatch(
     const node = scrollNode;
     if (!node) return;
 
-    node.addEventListener("scroll", observeLiveGeometry, {
+    node.addEventListener("scroll", handleNativeScroll, {
       passive: true,
     });
     const handleWheel = (event: WheelEvent): void => {
@@ -509,7 +543,7 @@ export function useChatTimelineFollowLatch(
     followEndIfPermitted();
 
     return () => {
-      node.removeEventListener("scroll", observeLiveGeometry);
+      node.removeEventListener("scroll", handleNativeScroll);
       node.removeEventListener("wheel", handleWheel);
       node.removeEventListener("touchstart", handleTouchStart);
       node.removeEventListener("touchmove", handleTouchMove);
@@ -523,7 +557,7 @@ export function useChatTimelineFollowLatch(
     cancelActiveCorrection,
     followEndIfPermitted,
     noteReaderGesture,
-    observeLiveGeometry,
+    handleNativeScroll,
   ]);
 
   return useMemo(
