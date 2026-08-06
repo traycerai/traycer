@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import {
+  closeRawFd,
   openBootstrapLogFd,
   writeBootstrapMarker,
   writeBootstrapTerminalMarker,
@@ -266,6 +267,11 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
     environment: Environment | undefined,
   ) => Promise<IncumbentHost | null>;
   readonly openLogFd: (environment: Environment) => Promise<number>;
+  // Closes the supervisor's OWN copy of the log descriptor once an attempt is
+  // over. The child received a duplicate at spawn time, so this never disturbs
+  // a running host - it only stops descriptors accumulating one per attempt in
+  // a supervisor that can now outlive many of them.
+  readonly closeLogFd: (fd: number) => Promise<void>;
   readonly rotateLog: (
     environment: Environment,
   ) => Promise<"rotated" | "skipped">;
@@ -334,6 +340,7 @@ const defaultRunDeps: RunHostStartDeps = {
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
   findIncumbentHost: findLiveIncumbentHost,
   openLogFd: openBootstrapLogFd,
+  closeLogFd: closeRawFd,
   rotateLog: rotateHostLogIfOversized,
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
   writeMarker: writeBootstrapMarker,
@@ -613,13 +620,37 @@ export async function runHostStart(
       // is closed - so it costs an attempt from the budget and retries.
       // The FIRST attempt keeps today's contract exactly: surface and exit.
       if (!isFirstAttempt) {
+        // Evidence first: a relaunch that could not resolve its target used to
+        // retry silently, leaving `host.log` with a `starting` marker for an
+        // attempt that never spawned and nothing to say why. int #4839 reads
+        // exactly these markers to explain a failed start.
+        await deps.writeMarker(
+          opts.environment,
+          "failed-to-spawn",
+          markerFields(
+            attemptId,
+            supervisorPid,
+            {
+              shell: undefined,
+              args: undefined,
+              bundle: undefined,
+              exitCode: undefined,
+              signal: undefined,
+              error:
+                err instanceof CliError
+                  ? `${err.code}: ${err.message}`
+                  : errorFromUnknown(err).message,
+            },
+            null,
+          ),
+        );
         const decision = await decideRelaunch({
           deps,
           logger,
           environment: opts.environment,
           reason: "target-resolution-failed",
           consecutiveRelaunches,
-          shuttingDown,
+          isShuttingDown: () => shuttingDown,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -765,7 +796,7 @@ export async function runHostStart(
       ...target.args,
       "--layer0-attempt-id",
       attemptId,
-      ...(probeContext === null
+      ...(attemptProbeContext === null
         ? []
         : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
     ] as const;
@@ -795,7 +826,7 @@ export async function runHostStart(
         // strands an fd-bound copy in `host.log.1`) plus a bounded in-memory
         // tail for the crash marker.
         stdio:
-          probeContext === null
+          attemptProbeContext === null
             ? ["ignore", logFd, "pipe"]
             : ["ignore", logFd, "pipe", "pipe"],
         windowsHide: process.platform === "win32",
@@ -828,7 +859,7 @@ export async function runHostStart(
         ),
       );
       await writeProbeTerminalIfAttested({
-        context: probeContext,
+        context: attemptProbeContext,
         attemptId,
         supervisorPid,
         reason: "host-spawn-failed",
@@ -838,6 +869,26 @@ export async function runHostStart(
       deps.onError(
         `traycer host start: ${CLI_ERROR_CODES.HOST_SPAWN_FAILED}: ${message}`,
       );
+      await deps.closeLogFd(logFd);
+      // Identical policy to the ASYNCHRONOUS spawn failure below - whether
+      // `spawn()` throws or reports through the `error` event is a platform
+      // detail, not a difference in what the machine needs. Leaving the two
+      // paths to disagree is how a transient EBUSY mid-swap could still exit a
+      // supervisor that had budget left and nothing else watching.
+      if (!isFirstAttempt) {
+        const decision = await decideRelaunch({
+          deps,
+          logger,
+          environment: opts.environment,
+          reason: "spawn-threw",
+          consecutiveRelaunches,
+          isShuttingDown: () => shuttingDown,
+        });
+        if (decision.kind === "relaunch") {
+          consecutiveRelaunches = decision.consecutiveRelaunches;
+          continue;
+        }
+      }
       return deps.exit(66);
     }
 
@@ -880,11 +931,11 @@ export async function runHostStart(
     }
 
     const probeObservation =
-      probeContext === null
+      attemptProbeContext === null
         ? null
         : observeProbeStatus({
             child,
-            context: probeContext,
+            context: attemptProbeContext,
             attemptId,
             supervisorPid,
             deps,
@@ -936,6 +987,7 @@ export async function runHostStart(
     currentChild = null;
 
     if (ending.kind === "spawn-error") {
+      await deps.closeLogFd(logFd);
       await persistAsyncChildSpawnFailure({
         cause: ending.cause,
         deps,
@@ -956,7 +1008,7 @@ export async function runHostStart(
           environment: opts.environment,
           reason: "spawn-failed",
           consecutiveRelaunches,
-          shuttingDown,
+          isShuttingDown: () => shuttingDown,
         });
         if (decision.kind === "relaunch") {
           consecutiveRelaunches = decision.consecutiveRelaunches;
@@ -965,6 +1017,13 @@ export async function runHostStart(
       }
       return deps.exit(66);
     }
+
+    // The child is gone, so the supervisor's own copy of the log descriptor has
+    // no further use. Released HERE rather than at process exit because this
+    // process now outlives many attempts: a sustained-uptime reset can extend
+    // the loop indefinitely, which would otherwise leak one descriptor per
+    // relaunch for the life of the machine.
+    await deps.closeLogFd(logFd);
 
     const outcome = await persistChildExit({
       code: ending.code,
@@ -1005,7 +1064,7 @@ export async function runHostStart(
       environment: opts.environment,
       reason: ending.signal !== null ? "fatal-signal" : "crashed",
       consecutiveRelaunches,
-      shuttingDown,
+      isShuttingDown: () => shuttingDown,
     });
     if (decision.kind !== "relaunch") {
       return deps.exit(outcome.exitCode);
@@ -1029,17 +1088,28 @@ type RelaunchDecision =
 /**
  * The single place that answers "may this dead child be brought back?".
  *
- * Three refusals, in the order their evidence becomes available:
+ * Three refusals:
  *
  *  1. **Shutting down.** The POSIX stop path signals this supervisor, which
  *     forwards to the child; relaunching there fights our own teardown.
- *  2. **Stop intent.** The Windows stop path never signals this process at all
- *     (`schtasks /End` kills only the task's root `wscript.exe`), so a stop
- *     announces itself on disk instead. Checked immediately BEFORE the
- *     relaunch rather than once at the top, so intent that lands mid-backoff is
- *     still honoured.
- *  3. **Budget.** Exhaustion exits with the child's own code, handing the
+ *  2. **Budget.** Exhaustion exits with the child's own code, handing the
  *     machine back to launchd / systemd / the next logon rather than spinning.
+ *  3. **Stop intent.** The Windows stop path never signals this process at all
+ *     (`schtasks /End` kills only the task's root `wscript.exe`), so a stop
+ *     announces itself on disk instead.
+ *
+ * ### The refusals are re-evaluated AFTER the backoff, not only before it
+ *
+ * This is the whole correctness of the guard, and an earlier revision got it
+ * wrong: it sampled both signals once and then slept for up to a minute, so a
+ * `traycer host stop` or a `launchctl bootout` arriving DURING that backoff was
+ * decided against before it happened, and the supervisor spawned a replacement
+ * for a host the user had just stopped. The backoff window is precisely when a
+ * stop is most likely to land, because the host is already down and that is
+ * when a person or an installer acts.
+ *
+ * `isShuttingDown` is therefore a getter, not a boolean: a snapshot taken
+ * before an await cannot observe a signal that arrives during it.
  *
  * A relaunch that survives all three still has to get past the incumbent
  * re-check at the top of the next iteration.
@@ -1050,16 +1120,32 @@ async function decideRelaunch(input: {
   readonly environment: Environment;
   readonly reason: string;
   readonly consecutiveRelaunches: number;
-  readonly shuttingDown: boolean;
+  readonly isShuttingDown: () => boolean;
 }): Promise<RelaunchDecision> {
   const { deps, logger, environment, reason } = input;
-  if (input.shuttingDown) {
-    logger.info("Host supervisor not relaunching - shutting down", {
-      environment,
-      reason,
-    });
-    return { kind: "stop" };
-  }
+  const refused = async (when: "before" | "after"): Promise<boolean> => {
+    if (input.isShuttingDown()) {
+      logger.info("Host supervisor not relaunching - shutting down", {
+        environment,
+        reason,
+        observed: when,
+      });
+      return true;
+    }
+    if (await deps.hasStopIntent(environment, Date.now())) {
+      logger.info("Host supervisor not relaunching - a stop was requested", {
+        environment,
+        reason,
+        observed: when,
+      });
+      return true;
+    }
+    return false;
+  };
+
+  // Checked before the sleep too - purely so an already-known stop does not
+  // pay a minute of backoff before being honoured.
+  if (await refused("before")) return { kind: "stop" };
   if (input.consecutiveRelaunches >= deps.maxRelaunches) {
     logger.error(
       "Host supervisor relaunch budget exhausted - leaving the host down",
@@ -1072,17 +1158,14 @@ async function decideRelaunch(input: {
     );
     return { kind: "stop" };
   }
-  if (await deps.hasStopIntent(environment, Date.now())) {
-    logger.info("Host supervisor not relaunching - a stop was requested", {
-      environment,
-      reason,
-    });
-    return { kind: "stop" };
-  }
+  // `Math.min` keeps the index in range, so the lookup cannot be undefined;
+  // the last entry repeats for every attempt past the ladder's length.
   const backoffMs =
     RELAUNCH_BACKOFF_MS[
       Math.min(input.consecutiveRelaunches, RELAUNCH_BACKOFF_MS.length - 1)
-    ] ?? 1_000;
+    ] ??
+    RELAUNCH_BACKOFF_MS[RELAUNCH_BACKOFF_MS.length - 1] ??
+    1_000;
   // The only evidence a support pull will have that this loop ran at all.
   logger.warn("Host supervisor relaunching the host", {
     environment,
@@ -1092,6 +1175,8 @@ async function decideRelaunch(input: {
     backoffMs,
   });
   await deps.sleep(backoffMs);
+  // The load-bearing one: a stop that landed while we slept.
+  if (await refused("after")) return { kind: "stop" };
   return {
     kind: "relaunch",
     consecutiveRelaunches: input.consecutiveRelaunches + 1,

@@ -8,6 +8,8 @@ import { constants as osConstants } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
 import {
+  MAX_CONSECUTIVE_RELAUNCHES,
+  RELAUNCH_BACKOFF_MS,
   resolveHostStartTarget,
   runHostStart,
   type HostStartTarget,
@@ -307,6 +309,7 @@ function makeRunStubs(
     //     survives.
     hasStopIntent: async () => false,
     sleep: async () => undefined,
+    closeLogFd: async () => undefined,
     // Pin the shared harness to a SINGLE attempt. Every test built on
     // `makeRunStubs` predates the relaunch loop and asserts what one attempt
     // records and exits with; letting them relaunch would silently change what
@@ -1875,5 +1878,271 @@ describe("runHostStart - crash relaunch loop", () => {
 
     expect(recorded.spawnCalls).toHaveLength(3);
     expect(recorded.exited).toBe(8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressions found by cold review of the relaunch loop. Each of these passed
+// the original loop tests and was still wrong.
+// ---------------------------------------------------------------------------
+
+describe("runHostStart - relaunch loop, guards re-checked across the backoff", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("honours a stop that lands DURING the backoff, not just one already present", async () => {
+    // The original code sampled stop intent once and then slept up to a
+    // minute, so a `traycer host stop` arriving mid-backoff was decided
+    // against before it happened - and the supervisor respawned a host the
+    // user had just stopped. The backoff window is exactly when a stop is
+    // most likely to land, because the host is already down.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 1, signal: null }]);
+    let stopRequested = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            hasStopIntent: async () => stopRequested,
+            // The stop happens WHILE we are backing off.
+            sleep: async () => {
+              stopRequested = true;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(1);
+  });
+
+  it("honours a shutdown signal that lands DURING the backoff", async () => {
+    // Same race through the POSIX door: `launchctl bootout` signals this
+    // process mid-backoff. A boolean snapshot taken before the await cannot
+    // see it, which is why the decision reads a live getter.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 1, signal: null }]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            sleep: async () => {
+              process.emit("SIGTERM");
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+  });
+});
+
+describe("runHostStart - relaunch loop, per-attempt isolation", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("arms the transition probe on the first attempt only", async () => {
+    // The probe answers "did THIS transition succeed" - a one-shot verdict
+    // owned by the install/restart lifecycle. A relaunch re-arming it would
+    // overwrite that verdict with the outcome of unrelated recovery work.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: 2, signal: null },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            probe: {
+              transitionId: "t-1",
+              probeNonce: "n-1",
+              serviceLabel: "ai.traycer.host",
+            },
+          },
+          {
+            ...scripted.deps,
+            maxRelaunches: 5,
+            readLiveProbeContext: async () => ({
+              kind: "authorised" as const,
+              context: {
+                transitionId: "t-1",
+                probeNonce: "n-1",
+                serviceLabel: "ai.traycer.host",
+              },
+            }),
+            attestProbeSupervisor: async () => ({
+              serviceLabel: "ai.traycer.host",
+              supervisorPid: process.pid,
+              capturedAt: "2026-08-05T00:00:00.000Z",
+            }),
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(2);
+    // Attempt 1 is the probe attempt: fd 3 is opened and the flag passed.
+    // Attempt 2 must carry neither, or the host writes a status frame for a
+    // transition that was already decided.
+    const first = recorded.spawnCalls[0];
+    const second = recorded.spawnCalls[1];
+    expect(first?.args).toContain("--layer0-status-fd");
+    expect(second?.args).not.toContain("--layer0-status-fd");
+    expect((first?.stdio as unknown[]).length).toBe(4);
+    expect((second?.stdio as unknown[]).length).toBe(3);
+  });
+
+  it("releases the supervisor's log descriptor for every attempt", async () => {
+    // The supervisor now outlives many attempts, and a sustained-uptime reset
+    // can extend the loop indefinitely - so an fd opened per attempt and never
+    // closed is an unbounded leak, not a bounded one.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 4, signal: null }]);
+    const opened: number[] = [];
+    const closed: number[] = [];
+    let nextFd = 100;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 2,
+            openLogFd: async () => {
+              nextFd += 1;
+              opened.push(nextFd);
+              return nextFd;
+            },
+            closeLogFd: async (fd) => {
+              closed.push(fd);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(opened).toHaveLength(3);
+    expect(closed).toEqual(opened);
+  });
+});
+
+describe("runHostStart - relaunch loop, spawn-failure policy", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("retries a synchronous spawn throw on a relaunch, like the async one", async () => {
+    // Whether `spawn()` throws or reports through the `error` event is a
+    // platform detail. Letting the two disagree meant a transient EBUSY
+    // mid-swap could still exit a supervisor that had budget left.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let calls = 0;
+    const child = makeStubChild();
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            maxRelaunches: 3,
+            spawn: (command, args, options) => {
+              calls += 1;
+              originalSpawn(command, args, options);
+              // Attempt 1 crashes; attempt 2's spawn throws synchronously.
+              if (calls === 2) {
+                throw new Error("EBUSY: install swap in progress");
+              }
+              setImmediate(() => {
+                child.emit("exit", calls === 1 ? 7 : 0, null);
+              });
+              const asUnknown: unknown = child;
+              return asUnknown as ChildProcess;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // 1 crash, 1 sync throw that was RETRIED, then a clean run.
+    expect(calls).toBe(3);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("leaves terminal evidence when a relaunch cannot resolve its target", async () => {
+    // A retry that wrote only a `starting` marker left host.log claiming an
+    // attempt began with nothing to say why it never spawned - int #4839 reads
+    // exactly these markers to explain a failed start.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 3, signal: null }]);
+    let reads = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...scripted.deps,
+            maxRelaunches: 1,
+            readInstallRecord: async () => {
+              reads += 1;
+              // Attempt 1 resolves; the relaunch finds the install gone.
+              return reads === 1 ? sampleRecord(exec) : null;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    const failed = recorded.markers.filter(
+      (m) => m.phase === "failed-to-spawn",
+    );
+    expect(failed).toHaveLength(1);
+    expect(String(failed[0]?.fields.error)).toContain("HOST_NOT_INSTALLED");
+  });
+});
+
+describe("runHostStart - production defaults", () => {
+  it("wires the real budget and backoff ladder when nothing is injected", async () => {
+    // Every other test injects `maxRelaunches`, so without this the shipped
+    // default (5) and the ladder are never exercised end to end.
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [{ code: 11, signal: null }]);
+    const slept: number[] = [];
+    const { maxRelaunches: _omitted, ...withoutBudget } = scripted.deps;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withoutBudget,
+            sleep: async (ms) => {
+              slept.push(ms);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(MAX_CONSECUTIVE_RELAUNCHES + 1);
+    expect(slept).toEqual([...RELAUNCH_BACKOFF_MS]);
+    expect(recorded.exited).toBe(11);
   });
 });
