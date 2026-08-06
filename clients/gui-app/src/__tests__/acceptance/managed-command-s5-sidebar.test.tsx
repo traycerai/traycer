@@ -8,7 +8,6 @@
  * and every one is parsed through the wire contract's server-frame schema
  * first, so each fixture is a frame a host could actually have sent.
  */
-import "../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,

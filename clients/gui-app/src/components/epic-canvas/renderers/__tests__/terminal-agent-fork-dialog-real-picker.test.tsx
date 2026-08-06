@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { KeyboardEvent, Key, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {

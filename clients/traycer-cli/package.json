@@ -26,7 +26,8 @@
     "prepack": "bun run build",
     "build:sea": "node scripts/build-cli-sea.cjs",
     "smoke:sea": "node scripts/smoke-cli-sea.cjs",
-    "smoke:ndjson": "node scripts/smoke-cli-ndjson.cjs"
+    "smoke:ndjson": "node scripts/smoke-cli-ndjson.cjs",
+    "smoke:exit-code": "node scripts/smoke-cli-exit-code.cjs"
   },
   "dependencies": {
     "@sentry/node": "catalog:",

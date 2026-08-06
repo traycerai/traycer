@@ -11,7 +11,6 @@
  * history observe, Windows hydration release, prepared empty-draft swap,
  * repair/corrective replace, coordinator activateTab/restoreTabActivation).
  */
-import "../../../../__tests__/test-browser-apis";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type {

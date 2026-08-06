@@ -52,6 +52,22 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
   readonly auth: AuthService;
 }
 
+export interface HostRuntimeState<Registry extends VersionedRpcRegistry> {
+  readonly context: Context<HostRuntimeBinding<Registry> | null>;
+  readonly bindingSnapshot: {
+    value: HostRuntimeBinding<Registry> | null;
+  };
+}
+
+export function createHostRuntimeState<
+  Registry extends VersionedRpcRegistry,
+>(): HostRuntimeState<Registry> {
+  return {
+    context: createContext<HostRuntimeBinding<Registry> | null>(null),
+    bindingSnapshot: { value: null },
+  };
+}
+
 export type MessengerFactory<Registry extends VersionedRpcRegistry> = (args: {
   readonly registry: Registry;
 }) => IHostMessenger<Registry>;
@@ -115,12 +131,9 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
  */
 export function createHostRuntime<Registry extends VersionedRpcRegistry>(
   schedulingPolicy: RpcSchedulingPolicy<Registry>,
+  runtimeState: HostRuntimeState<Registry>,
 ): TypedHostRuntime<Registry> {
-  const context: Context<HostRuntimeBinding<Registry> | null> =
-    createContext<HostRuntimeBinding<Registry> | null>(null);
-  const latestBindingSnapshot: {
-    value: HostRuntimeBinding<Registry> | null;
-  } = { value: null };
+  const { context, bindingSnapshot: latestBindingSnapshot } = runtimeState;
   const setLatestBindingSnapshot = (
     binding: HostRuntimeBinding<Registry> | null,
   ): void => {

@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-
 const reactFlowMock = vi.hoisted(() => vi.fn((_props: unknown) => null));
 
 vi.mock("@xyflow/react", async (importOriginal) => {

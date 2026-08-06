@@ -534,6 +534,75 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
   });
 });
 
+// int#4840. The win32 SEA aborted in libuv teardown AFTER completing its work
+// (`src\win\async.c:76`), so the child emitted a full terminal `ok` line and
+// then exited non-zero. The streaming wrapper tested the exit code BEFORE
+// `sawTerminalOk`, so it threw away a payload it had already parsed - turning
+// a finished `host install` / `host ensure` into a reported failure.
+//
+// `runTraycerCliJson*` has always made the opposite call on the non-streaming
+// path (`host doctor` deliberately pairs an ok envelope with exitCode 1);
+// these pin the streaming path to the same contract, and pin the boundary so
+// the fix cannot widen into "ignore exit codes".
+describe("streamTraycerCliJson trusts a completed terminal result over the exit code", () => {
+  it("resolves with the payload when a successful envelope is followed by a non-zero exit", async () => {
+    const terminalLine = JSON.stringify({
+      type: "result",
+      status: "ok",
+      data: { version: "1.1.9" },
+      timestamp: "2026-05-15T00:00:00Z",
+    });
+    spawnImpl = () =>
+      new FakeChild({
+        stdoutLines: [terminalLine],
+        // The exact field signature: work done, then the abort.
+        stderr:
+          "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\r\n",
+        exitCode: 134,
+      });
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+
+    const result = await streamTraycerCliJson<{ version: string }>({
+      args: ["host", "install", "latest"],
+      onEvent: () => undefined,
+      env: null,
+      idleTimeoutMs: 5_000,
+      signal: null,
+    });
+
+    expect(result.data).toEqual({ version: "1.1.9" });
+  });
+
+  it("still rejects a non-zero exit that produced no terminal result", async () => {
+    spawnImpl = () =>
+      new FakeChild({
+        stdoutLines: [],
+        stderr: "boom\n",
+        exitCode: 3,
+      });
+    const { streamTraycerCliJson, TraycerCliError } =
+      await import("../traycer-cli");
+    let thrown: unknown = null;
+    try {
+      await streamTraycerCliJson<unknown>({
+        args: ["host", "install", "latest"],
+        onEvent: () => undefined,
+        env: null,
+        idleTimeoutMs: 5_000,
+        signal: null,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    // The guard is keyed on "a terminal ok was seen", not on the exit code,
+    // so a run that never produced one fails exactly as it did before.
+    expect(thrown).toBeInstanceOf(TraycerCliError);
+    if (thrown instanceof TraycerCliError) {
+      expect(thrown.message).toContain("exited with code 3");
+    }
+  });
+});
+
 // Fixup C4: `streamBundledTraycerCliJson`'s only cancellable caller
 // (`runDownloadLane`'s `AbortController`) used to abort a signal nothing
 // downstream ever read - the spawned subprocess ran to completion

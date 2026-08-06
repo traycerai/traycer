@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";

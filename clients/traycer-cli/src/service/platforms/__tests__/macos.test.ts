@@ -1053,6 +1053,58 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     await result;
   });
 
+  it("forces a recycle on the CLI-owned restart, because the supervisor outlives the host pid it waited on", async () => {
+    // `stopService` waits on the pid `pid.json` publishes - the HOST. The
+    // launchd job is the SUPERVISOR, and it outlives its child by the whole
+    // post-mortem (stderr end wait, tee flush, crash-report scan), longer still
+    // when a grandchild holds the inherited stderr open. In that window the
+    // host is gone, this call has returned, and launchd still considers the job
+    // running - so the plain kickstart `forcedRecycle: false` selects is a
+    // silent no-op and the "successful" restart leaves no host.
+    //
+    // It used to be survivable by accident: the supervisor exited with its
+    // signalled child's code and `KeepAlive{SuccessfulExit:false}` respawned it.
+    // That respawn is exactly what made `host stop` come back, so removing it
+    // was the point - and it left this path with nothing underneath.
+    //
+    // This whole branch of `stopForRestart` had no test; all four lived on the
+    // Desktop-managed path.
+    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(false);
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+
+    await expect(controller.stopForRestart(label)).resolves.toEqual({
+      forcedRecycle: true,
+    });
+  });
+
+  it("recycles rather than plain-kickstarts when relaunching a CLI-owned restart", async () => {
+    // The other half: `forcedRecycle` only matters if the relaunch honours it.
+    // Assert the exact invocation, not "some argument list contains -k": the
+    // latter passes for any call carrying that flag anywhere, which is not
+    // evidence that `launchctl kickstart -k` was the thing issued.
+    const calls: { command: string; args: readonly string[] }[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await expect(
+      controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.some(
+        (c) =>
+          c.command === "launchctl" &&
+          c.args[0] === "kickstart" &&
+          c.args[1] === "-k",
+      ),
+    ).toBe(true);
+  });
+
   it("detects SMAppService in-bundle LaunchAgent paths", () => {
     expect(
       isSmAppServiceLaunchAgentPath(

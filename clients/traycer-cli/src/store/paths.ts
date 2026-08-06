@@ -76,6 +76,7 @@ const HOST_TRANSITION_FILENAME = "transition.json";
 const HOST_TRANSITION_PROBE_FILENAME = "transition-probe.json";
 const HOST_ACTIVATION_FILENAME = "activation.json";
 const HOST_PENDING_ACTIVATION_FILENAME = "pending-activation.json";
+const HOST_STOP_INTENT_FILENAME = "stop-intent.json";
 
 function environmentSubdir(base: string, environment: Environment): string {
   // production → base; dev → base/dev (the slot dir name is the environment
@@ -197,6 +198,18 @@ export function hostPendingActivationPath(
   environment: Environment | undefined,
 ): string {
   return join(hostHomeDir(environment), HOST_PENDING_ACTIVATION_FILENAME);
+}
+/**
+ * Deliberate-stop intent, written by whoever is about to stop the host and read
+ * by the supervisor before it relaunches a dead child. Cross-process by
+ * necessity: the stopper (`traycer host stop`, an installer, Desktop's
+ * `host restart`) is never the supervisor process itself, and on Windows the
+ * supervisor survives the stop it is being asked not to fight.
+ */
+export function hostStopIntentPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_STOP_INTENT_FILENAME);
 }
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);

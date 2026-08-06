@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Same UI/infra scaffolding `harness-model-picker.test.tsx` mocks - none of it

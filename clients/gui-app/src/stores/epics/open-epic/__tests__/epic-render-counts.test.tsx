@@ -8,7 +8,6 @@
  * These tests are the safety net for the "Y update -> targeted slice
  * patch -> no cross-component churn" claim that justifies the refactor.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { act, cleanup, render } from "@testing-library/react";

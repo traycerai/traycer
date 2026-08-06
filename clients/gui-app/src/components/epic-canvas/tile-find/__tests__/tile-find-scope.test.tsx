@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";

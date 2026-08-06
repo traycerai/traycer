@@ -298,7 +298,111 @@ describe("MarkdownAnchor", () => {
     });
     expect(host.openedExternalLinks).toEqual([]);
   });
+
+  it("routes a NATIVE backslash Windows link through the surface policy end to end", () => {
+    // The shape a Windows agent actually writes: backslash separators, and the
+    // destination wrapped in `<>` because the home directory has a space in it.
+    // This must go through the real markdown parser, not `markdownUrlTransform`
+    // alone - remark percent-encodes the destination (`\` -> `%5C`, ` ` ->
+    // `%20`) BEFORE the transform runs, so the drive-letter bypass has to match
+    // the encoded separator and the anchor has to decode it back to a native
+    // path. Feeding a raw backslash href straight to the transform (see
+    // `classifyRenderedHref` below) skips that encoding entirely and hides this.
+    const host = createRunnerHost();
+    const openFileLink = vi.fn(() => true);
+    const { container } = render(
+      <RunnerHostContext.Provider value={host}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
+          <TraycerMarkdown
+            className={null}
+            proseSize="normal"
+            components={null}
+            remarkPlugins={null}
+            rehypePlugins={null}
+            quotable={false}
+            isStreaming={false}
+          >
+            {String.raw`[App](<C:\Users\Traycer Dev\repo\app.ts>)`}
+          </TraycerMarkdown>
+        </MarkdownLinkContext.Provider>
+      </RunnerHostContext.Provider>,
+    );
+
+    // Queried as an element, not by role: a dropped href strips the anchor of
+    // its `link` role, and this assertion is about the href itself.
+    const link = requireAnchor(container);
+    // A blank href is the crash: it resolves to the current document, so the
+    // click performs a real navigation and unloads the SPA. Asserted against
+    // the drive prefix - "not empty" alone would pass on the dropped-attribute
+    // form the anchor falls back to when the transform empties an href.
+    expect(link.getAttribute("href")).toMatch(/^C:(%5C|\\)Users/i);
+
+    // `fireEvent.click` returns false when the handler called `preventDefault`.
+    // A true here means the browser owns the click - the renderer reload.
+    expect(fireEvent.click(link)).toBe(false);
+
+    expect(openFileLink).toHaveBeenCalledWith({
+      path: String.raw`C:\Users\Traycer Dev\repo\app.ts`,
+      line: null,
+      col: null,
+      isDirectory: false,
+    });
+    expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  it("never renders an emptied href the browser could navigate", () => {
+    // `defaultUrlTransform` empties any href it deems unsafe, and an empty href
+    // is not inert: it points at the current document, so a click navigates for
+    // real and the whole renderer reloads. The anchor must drop the attribute
+    // rather than render a navigable blank. This is the general guard behind
+    // the Windows-path case above.
+    //
+    // `z:notapath` is emptied because the two layers disagree: the sanitize
+    // schema allows every single-letter scheme (drive letters), but the drive
+    // bypass in `markdownUrlTransform` only applies to an actual path, so this
+    // falls through to `defaultUrlTransform` and is emptied there.
+    const host = createRunnerHost();
+    const openFileLink = vi.fn(() => true);
+    const { container } = render(
+      <RunnerHostContext.Provider value={host}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
+          <TraycerMarkdown
+            className={null}
+            proseSize="normal"
+            components={null}
+            remarkPlugins={null}
+            rehypePlugins={null}
+            quotable={false}
+            isStreaming={false}
+          >
+            {"[Blocked](z:notapath)"}
+          </TraycerMarkdown>
+        </MarkdownLinkContext.Provider>
+      </RunnerHostContext.Provider>,
+    );
+
+    const link = requireAnchor(container);
+    expect(link.getAttribute("href")).toBeNull();
+    fireEvent.click(link);
+    expect(openFileLink).not.toHaveBeenCalled();
+    expect(host.openedExternalLinks).toEqual([]);
+  });
 });
+
+/**
+ * The rendered anchor, addressed as an element. `getByRole("link")` is the
+ * usual query, but an anchor whose href the transform emptied loses its `link`
+ * role - and that anchor is exactly what the reload cases assert against.
+ */
+function requireAnchor(container: HTMLElement): HTMLAnchorElement {
+  const anchor = container.querySelector("a");
+  if (anchor === null) throw new Error("Expected a rendered anchor.");
+  return anchor;
+}
 
 function readNeutralToastOptions(): ExternalToast {
   const call = neutralToast.mock.lastCall;
@@ -405,6 +509,45 @@ describe("classifyHref", () => {
       path: "/a/b:c/d.ts",
       line: null,
       col: null,
+    });
+  });
+
+  it("decodes percent-encoded separators and spaces out of a rendered path", () => {
+    // remark percent-encodes the link destination before the anchor sees it, so
+    // a native Windows path arrives as `C:%5C…%20…`. The surface policy resolves
+    // against a real filesystem and needs the decoded form.
+    expect(classifyRenderedHref("C:%5CUsers%5CTraycer%20Dev%5Capp.ts")).toEqual(
+      {
+        kind: "file",
+        path: String.raw`C:\Users\Traycer Dev\app.ts`,
+        line: null,
+        col: null,
+      },
+    );
+    expect(classifyRenderedHref("/Users/them%20dev/app.ts:12")).toEqual({
+      kind: "file",
+      path: "/Users/them dev/app.ts",
+      line: 12,
+      col: null,
+    });
+  });
+
+  it("decodes reserved characters in a filename without reading them as syntax", () => {
+    // `#` and `:` are reserved, so `decodeURI` would leave them encoded and hand
+    // the surface policy a path no filesystem has. Splitting the fragment and
+    // the `:line[:col]` suffix off the ENCODED href is what keeps the decoded
+    // `%23` from being taken as a fragment and the decoded `%3A` as a location.
+    expect(classifyHref("/notes/release%231%3A2.md")).toEqual({
+      kind: "file",
+      path: "/notes/release#1:2.md",
+      line: null,
+      col: null,
+    });
+    expect(classifyHref("/notes/release%231%3A2.md:12:3")).toEqual({
+      kind: "file",
+      path: "/notes/release#1:2.md",
+      line: 12,
+      col: 3,
     });
   });
 

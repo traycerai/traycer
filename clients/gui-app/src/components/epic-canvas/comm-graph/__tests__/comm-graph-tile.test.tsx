@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-
 const useHostNotificationIndicatorsMock = vi.hoisted(() =>
   vi.fn(() => ({
     data: { epics: {}, chats: {} },

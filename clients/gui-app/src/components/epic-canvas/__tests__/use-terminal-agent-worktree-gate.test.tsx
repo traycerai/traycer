@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";

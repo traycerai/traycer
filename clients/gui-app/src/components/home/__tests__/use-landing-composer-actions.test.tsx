@@ -18,7 +18,6 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../../../../__tests__/test-browser-apis";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";

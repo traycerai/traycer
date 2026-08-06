@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
