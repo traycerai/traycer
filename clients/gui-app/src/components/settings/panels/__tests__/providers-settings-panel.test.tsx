@@ -1200,14 +1200,95 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("hides the CLI-candidates picker for Amp - a selected path is never consulted", () => {
+  it("shows the CLI & Args tab and empty-state notice for amp (no longer id-hidden)", () => {
+    // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
+    // premise that those two have no user-selectable binary. Both spawn the
+    // Traycer-resolved binary for MCP write verbs, so the table is the only
+    // route out of the F2 dead end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
           providerId: "amp",
-          selected: { kind: "bundled" },
+          selected: { kind: "path" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: ["general", "env", "mcp", "plugins", "skills"],
+            mcp: SAMPLE_MCP,
+            plugins: null,
+            skills: null,
+          },
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
+    expect(
+      screen.getByText(
+        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("link", { name: "Amp installation guide" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+  });
+
+  it("shows the CLI & Args tab and candidates table for cursor when a path is available", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/cursor-agent",
+              version: "0.50.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: [
+              "general",
+              "env",
+              "usage",
+              "mcp",
+              "plugins",
+              "skills",
+            ],
+            mcp: {
+              ...SAMPLE_MCP,
+              perToolBacking: "degraded-server-level",
+              instructionsSource: "none",
+            },
+            plugins: {
+              addModes: ["read-only"],
+              marketplaceBrowse: false,
+              actionScopes: {
+                list: ["global"],
+                add: [],
+                remove: [],
+                setEnabled: [],
+              },
+              traycerSessionToolsNotice: true,
+            },
+            skills: null,
+          },
         }),
       ],
     };
@@ -1218,8 +1299,15 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
     expect(
-      screen.queryByRole("button", { name: "Add custom path" }),
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/cursor-agent",
+      }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/No Cursor CLI was found on this machine/),
     ).toBeNull();
   });
 
@@ -4802,7 +4890,13 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Opening the sign-in page…")).toBeDefined();
   });
 
-  it("does not offer the share-skills-and-plugins checkbox for a provider without the overlay mechanism (codex)", () => {
+  it("does not offer the share-skills-and-plugins checkbox for codex (overlay layout, not a bug)", () => {
+    // Codex's exclusion is CORRECT: seedManagedProfileDir honours
+    // shareSkillsAndPlugins only on the partial-overlay layout branch
+    // (profile-seeding.ts), and codex takes the overlay branch whose seeding
+    // never reads the flag. Offering the checkbox here would send a request
+    // the host silently discards. Do not "fix" this by adding codex to
+    // PROVIDER_SHARES_SKILLS_AND_PLUGINS without changing the host layout.
     providerMocks.listResult.data = {
       providers: [
         {
