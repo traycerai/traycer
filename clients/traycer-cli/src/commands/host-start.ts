@@ -377,7 +377,6 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly hasStopIntent: (
     environment: Environment,
     nowMs: number,
-    ignoreRequestedBeforeMs: number,
     servedAtStartup: StopIntentIdentity | null,
   ) => Promise<boolean>;
   readonly readStopIntentIdentity: (
@@ -505,17 +504,18 @@ export async function runHostStart(
   // on a pre-action log baseline (Finding F evidence identity).
   const attemptId = randomUUID();
   const supervisorPid = process.pid;
-  // Captured before anything can await: every stop-intent read is relative to
-  // "when was this supervisor asked to start". Intent older than this instant
-  // was already answered by that request; intent newer than it is aimed at us.
-  const supervisorStartedAtMs = Date.now();
-  // The clock-independent companion to the stamp above, read as early as it can
-  // be (this one needs a file, so it cannot precede the first await the way the
-  // stamp does). Whatever record is here NOW is one this start has answered by
-  // existing; anything that appears later is aimed at us, whatever the clock
-  // does in between. The unavoidable gap between the stamp and this read is
-  // covered by the stamp itself - a record written inside it is newer than
-  // `supervisorStartedAtMs`, so the cutoff half still calls it actionable.
+  // Read before any other await, because it defines what "already served" means
+  // for this whole invocation: whatever record is on disk NOW is one our own
+  // existence answers - something asked for a start after asking for a stop, and
+  // the start is the newer instruction. Every record that appears afterwards is
+  // aimed at us.
+  //
+  // Deliberately NOT a timestamp comparison against our start. That was a proxy
+  // for this same question, and it read a clock that moves: a backward step
+  // makes a live stop look older than us (we relaunch a host the user stopped)
+  // and simultaneously makes an already-answered record look future-dated (we
+  // decline to spawn and exit 0, which no service manager answers). See
+  // `hasActionableStopIntent`.
   const servedStopIntentAtStartup = await deps.readStopIntentIdentity(
     opts.environment,
   );
@@ -849,7 +849,6 @@ export async function runHostStart(
           reason: "target-resolution-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          supervisorStartedAtMs,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1059,7 +1058,6 @@ export async function runHostStart(
           reason: "attempt-setup-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          supervisorStartedAtMs,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1153,7 +1151,6 @@ export async function runHostStart(
     const stopAnnounced = await deps.hasStopIntent(
       opts.environment,
       Date.now(),
-      supervisorStartedAtMs,
       servedStopIntentAtStartup,
     );
     if (shuttingDown || stopAnnounced) {
@@ -1270,7 +1267,6 @@ export async function runHostStart(
           reason: "spawn-threw",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          supervisorStartedAtMs,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1398,7 +1394,6 @@ export async function runHostStart(
       (await deps.hasStopIntent(
         opts.environment,
         Date.now(),
-        supervisorStartedAtMs,
         servedStopIntentAtStartup,
       ))
     ) {
@@ -1478,7 +1473,6 @@ export async function runHostStart(
           reason: "spawn-failed",
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
-          supervisorStartedAtMs,
           servedStopIntentAtStartup,
           shutdownRequested,
         });
@@ -1561,7 +1555,6 @@ export async function runHostStart(
       reason: ending.signal !== null ? "fatal-signal" : "crashed",
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
-      supervisorStartedAtMs,
       servedStopIntentAtStartup,
       shutdownRequested,
     });
@@ -1644,7 +1637,6 @@ async function decideRelaunch(input: {
   readonly reason: string;
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
-  readonly supervisorStartedAtMs: number;
   readonly servedStopIntentAtStartup: StopIntentIdentity | null;
   readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
@@ -1662,7 +1654,6 @@ async function decideRelaunch(input: {
       await deps.hasStopIntent(
         environment,
         Date.now(),
-        input.supervisorStartedAtMs,
         input.servedStopIntentAtStartup,
       )
     ) {

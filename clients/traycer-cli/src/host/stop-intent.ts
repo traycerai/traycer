@@ -180,12 +180,12 @@ export async function readStopIntent(
  * host, matching `findLiveIncumbentHost`'s own bias. Leaving a machine hostless
  * on a garbled byte is the worse failure.
  *
- * `ignoreRequestedBeforeMs` is the moment this supervisor was invoked. Intent
- * older than that was answered by our own existence - something asked for a
- * start after asking for a stop, and the start is the newer instruction.
- * Intent newer than that is aimed at us.
+ * `servedAtStartup` is the record that existed when this supervisor was
+ * invoked. Our own existence answers it - something asked for a start after
+ * asking for a stop, and the start is the newer instruction. Any OTHER record
+ * is a request we have not answered.
  *
- * ### Why a cutoff rather than deleting the file
+ * ### Why identity rather than deleting the file
  *
  * The obvious implementation is to `rm` the sentinel once at startup. It has a
  * race that matters: a stop landing between this supervisor's invocation and
@@ -193,81 +193,61 @@ export async function readStopIntent(
  * stopped. Two supervisors (a logon trigger plus a manual start) make it worse,
  * because either one's clear can delete intent written after the other's.
  *
- * Filtering destroys nothing, so there is no window in which a real stop can be
- * lost. The record disappears on its own via `STOP_INTENT_STALE_MS`, and that is
- * now the ONLY thing that retires it on the ordinary path: the cutoff answers
- * each supervisor separately, so a lingering record silences the process being
- * retired while a later one reads it as served and starts normally. Deleting it
- * is what would re-arm the retired process - see `withStopIntent`.
+ * Remembering destroys nothing, so there is no window in which a real stop can
+ * be lost. The record disappears on its own via `STOP_INTENT_STALE_MS`, and that
+ * is the ONLY thing that retires it on the ordinary path: each supervisor
+ * remembers separately, so a lingering record silences the process being retired
+ * while a later one - which saw it at ITS start - reads it as served and starts
+ * normally. Deleting it is what would re-arm the retired process; see
+ * `withStopIntent`.
  *
  * It is also what makes checking intent on the FIRST attempt safe. Reading the
  * raw file there would make a logon-started supervisor refuse to start the host
  * at all within the freshness window of any stop - strictly worse than the bug.
- * With the cutoff, attempt one can be guarded like every other attempt.
  *
- * ### Why the cutoff alone is not enough
+ * ### Why not a timestamp cutoff
  *
- * The cutoff compares two readings of a clock that can move between them, and a
- * BACKWARD correction larger than this supervisor's uptime inverts the order: a
- * stop issued now gets a stamp EARLIER than our own start, so a live request
- * reads as already served. On win32 that is the whole bug back again - the stop
- * kills the child, the orphaned supervisor sees no actionable intent, and it
- * relaunches the host the user just stopped. The window is not exotic: a machine
- * that boots with a wrong RTC (dead CMOS cell, a restored VM snapshot) gets its
- * largest correction seconds after the logon task started this process, which is
- * exactly when uptime is smallest.
+ * This compared the record's stamp against the supervisor's own start stamp:
+ * two readings of a clock that can move between them. Both directions bite, and
+ * both end the same way, with a machine that has no host:
  *
- * An earlier note here described this limit with the ordering REVERSED - "a jump
- * between the stop and this supervisor's start" - which is the harmless
- * direction: it leaves the stamp ABOVE the cutoff and the intent is honoured.
- * The direction that breaks is a jump AFTER we start and BEFORE the stop writes.
+ *   - a BACKWARD step larger than our uptime makes a stop issued NOW look older
+ *     than our start, so a live request reads as served, the orphaned win32
+ *     supervisor sees nothing actionable, and it relaunches the host the user
+ *     just stopped;
+ *   - the same step leaves a PRE-EXISTING record looking future-dated, so a
+ *     supervisor starting afterwards reads an already-answered stop as aimed at
+ *     it, declines to spawn, and exits 0 - which `KeepAlive.SuccessfulExit=false`,
+ *     `Restart=on-failure` and Task Scheduler all decline to answer. The host
+ *     then stays down until the next logon rather than for the intended five
+ *     minutes.
  *
- * So the cutoff is now only half the answer, and the other half does not read a
- * clock at all: the supervisor remembers WHICH record existed when it started,
- * and any record that is not that one is a request it has not answered.
+ * Neither is exotic: a machine that boots with a wrong RTC - a dead CMOS cell, a
+ * restored VM snapshot - takes its largest correction seconds after the logon
+ * task started this process, exactly when uptime is smallest.
  *
- * The two halves are OR-ed, and deliberately so - each covers the other's blind
- * spot, and both failures point the same way (honour the stop):
+ * The cutoff was only ever a PROXY for "did my own start answer this record",
+ * and identity answers that question directly and without a clock. So the proxy
+ * is gone rather than refined: the two cases it distinguished were the same
+ * record either way, and no clock reading can separate them.
  *
- *   - identity alone would mis-serve a record written between our start stamp
- *     and our first read of the file, since we would remember it as pre-existing;
- *     the cutoff catches that one, because its stamp is newer than our start.
- *   - the cutoff alone loses to the backward clock step above; identity catches
- *     it, because a new stop is a different record no matter what the clock says.
- *
- * A false "actionable" only ever delays a spawn, and `STOP_INTENT_STALE_MS`
- * bounds that at five minutes - the same cap the whole sentinel already lives
- * under. A false "served" leaves the machine hostless, which is this ticket.
+ * KNOWN LIMIT: a stop written between this supervisor's invocation and its first
+ * read of the file is remembered as pre-existing, and therefore read as served.
+ * That window is a single file read at process start, and it is irreducible -
+ * whether such a stop came before or after the start request is exactly what no
+ * clock on a machine with a moving clock can tell us. It is also the cheaper
+ * failure: a host that is running after a stop can be stopped again, whereas the
+ * other direction leaves the machine with no host at all.
  */
 export async function hasActionableStopIntent(
   environment: Environment | undefined,
   nowMs: number,
-  ignoreRequestedBeforeMs: number,
   servedAtStartup: StopIntentIdentity | null,
 ): Promise<boolean> {
   const intent = await readStopIntent(environment);
   if (intent === null) return false;
   if (!isStopIntentFresh(intent, nowMs)) return false;
-  // Clock-independent half first: a record we did not see at startup is one we
-  // have not answered, whatever its stamp says.
-  if (!isSameStopIntent(intent, servedAtStartup)) return true;
-  return !isStopIntentAlreadyServed(intent, ignoreRequestedBeforeMs);
-}
-
-/**
- * Whether `intent` predates the supervisor invocation at
- * `supervisorStartedAtMs`, and was therefore already answered by that start.
- *
- * An unparseable stamp reads as SERVED - the same bias as everywhere else in
- * this module: a garbled byte must not be able to hold a machine hostless.
- */
-export function isStopIntentAlreadyServed(
-  intent: StopIntent,
-  supervisorStartedAtMs: number,
-): boolean {
-  const requestedAtMs = Date.parse(intent.requestedAt);
-  if (Number.isNaN(requestedAtMs)) return true;
-  return requestedAtMs < supervisorStartedAtMs;
+  return !isSameStopIntent(intent, servedAtStartup);
 }
 
 /**
@@ -279,12 +259,12 @@ export function isStopIntentAlreadyServed(
  * the supervisor should not discard a real request), but an UNBOUNDED forward
  * window is a wedge with no expiry at all, which is the one thing this whole
  * sentinel must never become. A backward wall-clock jump - a VM resuming, NTP
- * correcting a bad clock - leaves the record dated hours ahead. Such a stamp is
- * newer than every subsequent supervisor's invocation cutoff, so
- * `isStopIntentAlreadyServed` can never retire it either: every automatic start
- * would decline to spawn until the clock caught up, holding the machine hostless
- * for exactly as long as the jump. That is this ticket's own bug, reintroduced
- * through the guard meant to prevent it.
+ * correcting a bad clock - leaves the record dated hours ahead, and nothing else
+ * would ever retire it: it stays "recent" for as long as the jump lasts. Every
+ * automatic start that had not already seen the record would then read it as a
+ * live stop and decline to spawn, holding the machine hostless for exactly that
+ * long. That is this ticket's own bug, reintroduced through the guard meant to
+ * prevent it.
  *
  * Bounding the forward half caps that at the same five minutes the backward half
  * already accepts.

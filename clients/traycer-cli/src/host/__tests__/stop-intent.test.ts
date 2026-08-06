@@ -37,7 +37,6 @@ const {
   STOP_INTENT_STALE_MS,
   clearStopIntent,
   hasActionableStopIntent,
-  isStopIntentAlreadyServed,
   isStopIntentFresh,
   readStopIntent,
   readStopIntentIdentity,
@@ -176,12 +175,12 @@ describe("isStopIntentFresh", () => {
   it("expires a stamp dated FAR in the future, so a backward clock jump cannot wedge recovery", () => {
     // The window has to be symmetric. A VM resuming, or NTP correcting a bad
     // clock, leaves an already-written intent dated hours ahead - and an
-    // unbounded forward window makes that record permanent, because it is also
-    // newer than every later supervisor's invocation cutoff, so
-    // `isStopIntentAlreadyServed` can never retire it either. Every automatic
-    // start would decline to spawn until the clock caught up: the guard against
-    // a stop being undone, holding the machine hostless, which is this
-    // ticket's own bug wearing the fix's clothes.
+    // unbounded forward window makes that record permanent - nothing else would
+    // retire it, since it stays "recent" for as long as the jump lasts. Every
+    // automatic start that had not already seen the record would decline to
+    // spawn until the clock caught up: the guard against a stop being undone,
+    // holding the machine hostless, which is this ticket's own bug wearing the
+    // fix's clothes.
     const now = Date.parse("2026-08-05T12:00:00.000Z");
     const intent = at(
       new Date(now + (STOP_INTENT_STALE_MS + 1_000)).toISOString(),
@@ -197,20 +196,20 @@ describe("isStopIntentFresh", () => {
 
 describe("hasActionableStopIntent - file round trip", () => {
   it("is false with no file, true right after a write, false once cleared", async () => {
-    const before = Date.now() - 1_000;
-
+    // `null` identity throughout: this supervisor saw no record at startup, so
+    // anything on disk afterwards is a request aimed at it.
     await expect(
-      hasActionableStopIntent("production", Date.now(), before, null),
+      hasActionableStopIntent("production", Date.now(), null),
     ).resolves.toBe(false);
 
     await writeStopIntent("production", "restart");
     await expect(
-      hasActionableStopIntent("production", Date.now(), before, null),
+      hasActionableStopIntent("production", Date.now(), null),
     ).resolves.toBe(true);
 
     await clearStopIntent("production");
     await expect(
-      hasActionableStopIntent("production", Date.now(), before, null),
+      hasActionableStopIntent("production", Date.now(), null),
     ).resolves.toBe(false);
   });
 });
@@ -222,85 +221,30 @@ describe("clearStopIntent", () => {
   });
 });
 
-describe("isStopIntentAlreadyServed", () => {
-  const intentAt = (requestedAt: string) =>
-    ({
-      v: 1 as const,
-      requestedAt,
-      requestedByPid: 4242,
-      reason: "stop" as const,
-    }) as const;
-
-  it("treats intent older than the supervisor's start as served", () => {
-    const startedAt = Date.parse("2026-08-06T12:00:00.000Z");
-    expect(
-      isStopIntentAlreadyServed(
-        intentAt("2026-08-06T11:59:59.000Z"),
-        startedAt,
-      ),
-    ).toBe(true);
-  });
-
-  it("treats intent at or after the supervisor's start as aimed at it", () => {
-    const startedAt = Date.parse("2026-08-06T12:00:00.000Z");
-    // Exactly equal counts as NOT served: a stop written in the same
-    // millisecond we started must win, because the costly direction here is
-    // fighting a deliberate stop.
-    expect(
-      isStopIntentAlreadyServed(
-        intentAt("2026-08-06T12:00:00.000Z"),
-        startedAt,
-      ),
-    ).toBe(false);
-    expect(
-      isStopIntentAlreadyServed(
-        intentAt("2026-08-06T12:00:01.000Z"),
-        startedAt,
-      ),
-    ).toBe(false);
-  });
-
-  it("treats an unparseable stamp as served rather than blocking recovery", () => {
-    // Same bias as everywhere else in this module: a garbled byte must not be
-    // able to hold a machine hostless.
-    expect(isStopIntentAlreadyServed(intentAt("not-a-date"), Date.now())).toBe(
-      true,
-    );
-  });
-});
-
 describe("hasActionableStopIntent", () => {
-  it("ignores a fresh intent that predates the supervisor", async () => {
-    // The logon-inside-the-freshness-window case: stopping the host and
-    // logging back in must not leave the new supervisor unable to recover its
-    // own child's first crash.
+  it("serves the record it saw at startup, whatever that record's stamp says", async () => {
+    // Two cases that used to be answered by a timestamp cutoff, and are now one
+    // case because they always WERE one case: this is the record our own start
+    // answered.
     //
-    // Passing the record's OWN identity is what keeps this a test of the
-    // cutoff. With any other identity the clock-independent half answers first
-    // and the cutoff never runs - which is the whole point of that half, and
-    // exactly why it has to be handed the record this start actually saw.
+    // The second half is the one the cutoff got wrong. After a backward clock
+    // correction a pre-existing record looks FUTURE-dated, so the cutoff read an
+    // already-answered stop as aimed at this supervisor - which declines to
+    // spawn and exits 0. No service manager answers exit 0, so the host stayed
+    // down until the next logon instead of the intended five minutes.
     await writeStopIntent("production", "stop");
     const served = await readStopIntentIdentity("production");
     const now = Date.now();
 
+    // Stamp older than "now" - the ordinary logon-inside-the-window shape.
     await expect(
-      hasActionableStopIntent("production", now, now + 1_000, served),
+      hasActionableStopIntent("production", now + 1_000, served),
     ).resolves.toBe(false);
-    // Still FRESH - it is the cutoff, not staleness, doing the work here: the
-    // same record read with an earlier cutoff is actionable.
+    // Stamp NEWER than "now", i.e. future-dated by a backward clock step. Still
+    // ours, still served: identity does not consult the clock.
     await expect(
-      hasActionableStopIntent("production", now, now - 1_000, served),
-    ).resolves.toBe(true);
-  });
-
-  it("honours an intent written after the supervisor started", async () => {
-    await writeStopIntent("production", "stop");
-    const served = await readStopIntentIdentity("production");
-    const now = Date.now();
-
-    await expect(
-      hasActionableStopIntent("production", now, now - 60_000, served),
-    ).resolves.toBe(true);
+      hasActionableStopIntent("production", now - 1_000, served),
+    ).resolves.toBe(false);
   });
 
   it("honours a record it never saw even when the clock says it is older", async () => {
@@ -317,12 +261,7 @@ describe("hasActionableStopIntent", () => {
     const now = Date.now();
 
     await expect(
-      hasActionableStopIntent(
-        "production",
-        now,
-        now + STOP_INTENT_STALE_MS - 1_000,
-        FOREIGN_INTENT,
-      ),
+      hasActionableStopIntent("production", now, FOREIGN_INTENT),
     ).resolves.toBe(true);
   });
 
@@ -334,13 +273,13 @@ describe("hasActionableStopIntent", () => {
     const now = Date.now() + STOP_INTENT_STALE_MS + 1_000;
 
     await expect(
-      hasActionableStopIntent("production", now, 0, FOREIGN_INTENT),
+      hasActionableStopIntent("production", now, FOREIGN_INTENT),
     ).resolves.toBe(false);
   });
 
   it("reads an absent record as no intent", async () => {
     await expect(
-      hasActionableStopIntent("production", Date.now(), 0, null),
+      hasActionableStopIntent("production", Date.now(), null),
     ).resolves.toBe(false);
   });
 });

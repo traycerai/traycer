@@ -31,6 +31,7 @@ import {
 } from "../../host/crash-diagnostics";
 import { SHUTDOWN_FORCE_EXIT_MS } from "@traycer/protocol/host/lifecycle-constants";
 import type { Environment } from "../../runner/environment";
+import type { StopIntentIdentity } from "../../host/stop-intent";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
@@ -3212,22 +3213,27 @@ describe("runHostStart - stop signals outside the child-running window", () => {
     expect(recorded.exited).toBe(0);
   });
 
-  it("ignores a stop intent that predates this supervisor, so the next crash is recoverable", async () => {
+  it("ignores the stop intent it saw at startup, so the next crash is recoverable", async () => {
     // Stop the host, log back in inside the sentinel's freshness window, and
     // the new supervisor must not read the previous stop as still in progress
     // and refuse to recover its OWN child's first crash.
     //
-    // The intent is FILTERED by invocation time, never deleted: an earlier
-    // version cleared the file at startup, which erased any stop that landed
-    // between this invocation and the clear. The stub below models the real
+    // The record is REMEMBERED, never deleted: an earlier version cleared the
+    // file at startup, which erased any stop that landed between this
+    // invocation and the clear. The stub below models the real
     // `hasActionableStopIntent` contract rather than a boolean, so it fails if
-    // the cutoff argument stops being honoured.
+    // the supervisor stops handing down the identity it saw at startup.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const scripted = withScriptedAttempts(deps, [
       { code: 5, signal: null },
       { code: 0, signal: null },
     ]);
-    let cutoffSeen: number | null = null;
+    const startupRecord = {
+      requestedAt: "2026-08-06T12:00:00.000Z",
+      requestedByPid: 4242,
+    };
+    let servedSeen: StopIntentIdentity | null = null;
+    let sawIdentity = false;
 
     await runUntilExit(
       () =>
@@ -3236,27 +3242,24 @@ describe("runHostStart - stop signals outside the child-running window", () => {
           {
             ...scripted.deps,
             maxRelaunches: 5,
-            hasStopIntent: async (_environment, nowMs, ignoreBeforeMs) => {
-              cutoffSeen = ignoreBeforeMs;
-              // A stop requested a minute BEFORE this supervisor was invoked:
-              // still fresh by the staleness rule, but already served by the
-              // start that produced us. `hasActionableStopIntent` is what
-              // decides that, and it has its own direct tests; this models
-              // only the cutoff half, which is the part the supervisor has to
-              // pass correctly.
-              const requestedAtMs = ignoreBeforeMs - 60_000;
-              expect(nowMs).toBeGreaterThanOrEqual(requestedAtMs);
-              return requestedAtMs >= ignoreBeforeMs;
+            readStopIntentIdentity: async () => startupRecord,
+            hasStopIntent: async (_environment, _nowMs, servedAtStartup) => {
+              servedSeen = servedAtStartup;
+              sawIdentity = true;
+              // The record on disk IS the one this supervisor started with, so
+              // its own start already answered it. Deliberately no clock here:
+              // that is the whole point of the identity rule.
+              return servedAtStartup === null;
             },
           },
         ),
       recorded,
     );
 
-    // The supervisor actually passed a cutoff rather than defaulting to 0,
-    // which would make every pre-invocation intent look actionable.
-    expect(cutoffSeen).not.toBeNull();
-    expect(cutoffSeen ?? 0).toBeGreaterThan(0);
+    // The supervisor actually handed down the startup identity rather than
+    // null, which would make every pre-existing record look actionable.
+    expect(sawIdentity).toBe(true);
+    expect(servedSeen).toEqual(startupRecord);
     // The crash WAS recovered rather than misread as part of the old stop.
     expect(recorded.spawnCalls).toHaveLength(2);
     expect(recorded.exited).toBe(0);
