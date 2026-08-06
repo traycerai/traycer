@@ -506,9 +506,9 @@ function createFixture(): {
   readonly holdForcedReads: () => void;
   readonly holdBranchReads: () => void;
   /**
-   * Resolves when `count` held requests of `kind` have arrived (including any
-   * already held). Successive calls with a higher count observe later arrivals
-   * without fixed delays.
+   * Resolves when `count` held requests of `kind` arrive in its current hold
+   * window. Re-arming a kind starts a new window, so this stays relative to the
+   * request race the test is controlling rather than earlier holds.
    */
   readonly waitForHeldRequest: (
     kind: HeldRequestKind,
@@ -579,6 +579,13 @@ function createFixture(): {
   const hold = (kind: HeldRequestKind, release: () => void): void => {
     heldByKind[kind].push(release);
     noteArrival(kind);
+  };
+
+  const armHold = (kind: HeldRequestKind): void => {
+    // Counts are scoped to the active hold window. A test can release a kind,
+    // re-arm it later, and wait for the next request without an earlier arrival
+    // immediately satisfying the new wait.
+    arrivalCount[kind] = 0;
   };
 
   const releaseKind = (kind: HeldRequestKind): void => {
@@ -728,15 +735,18 @@ function createFixture(): {
       resolvedAt = next.resolvedAt;
     },
     holdForcedReads: () => {
+      armHold("forced");
       holdForced = true;
     },
     holdBranchReads: () => {
+      armHold("branch");
       holdBranches = true;
     },
     setBranches: (names) => {
       branchNames = names;
     },
     holdCacheOnlyReads: () => {
+      armHold("cacheOnly");
       holdCacheOnly = true;
     },
     waitForHeldRequest: (kind, count) => {

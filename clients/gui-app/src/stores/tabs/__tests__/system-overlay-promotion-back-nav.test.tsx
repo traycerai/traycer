@@ -245,8 +245,8 @@ describe("back stays functional after promoting a system overlay to a tab", () =
       });
       await waitFor(() => {
         expect(snapshot(router).index).toBeLessThan(indexBefore);
+        expect(router.state.location.pathname).not.toBe("/settings/general");
       });
-      expect(router.state.location.pathname).not.toBe("/settings/general");
     }
 
     await waitFor(() =>
