@@ -2116,12 +2116,34 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // can reacquire follow before the saved anchor is replayed, permanently
     // replacing the reading position with `following-end`.
     restorePersistencePendingRef.current = true;
-    restorePersistedTimelineLocation(replay.anchorMessageId, replay.offset, {
-      isAborted: () => false,
-      onValidated: () => undefined,
-      onExhausted: () => undefined,
-    });
-  }, [identity, restorePersistedTimelineLocation, visible]);
+    // Unlike the hydration catch-up above, nothing re-attempts a failed
+    // visibility replay (this effect only fires on hide/show transitions), so
+    // retaining the gate on failure would leave follow reconciliation and
+    // scroll persistence suppressed until an unrelated reader gesture. Reuse
+    // the mount-time exhaustion fallback instead: accept wherever the bounded
+    // retries (or an unavailable list/anchor) left the viewport as the new
+    // truth and release the gate.
+    const acceptFailedReplayLanding = (): void => {
+      restorePersistencePendingRef.current = false;
+      pendingMeasuredFreeRestoreRef.current = null;
+      reconcileInvalidTimelineLanding();
+    };
+    const issued = restorePersistedTimelineLocation(
+      replay.anchorMessageId,
+      replay.offset,
+      {
+        isAborted: () => false,
+        onValidated: () => undefined,
+        onExhausted: acceptFailedReplayLanding,
+      },
+    );
+    if (!issued) acceptFailedReplayLanding();
+  }, [
+    identity,
+    reconcileInvalidTimelineLanding,
+    restorePersistedTimelineLocation,
+    visible,
+  ]);
 
   const navigateToMessage = useCallback(
     (messageId: string, highlight: boolean, animated: boolean): void => {
