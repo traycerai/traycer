@@ -32,7 +32,9 @@ vi.mock("../../store/paths", async () => {
 const {
   STOP_INTENT_STALE_MS,
   clearStopIntent,
+  hasActionableStopIntent,
   hasFreshStopIntent,
+  isStopIntentAlreadyServed,
   isStopIntentFresh,
   readStopIntent,
   writeStopIntent,
@@ -186,5 +188,92 @@ describe("clearStopIntent", () => {
   it("is a no-op when nothing was recorded", async () => {
     await expect(clearStopIntent("production")).resolves.toBeUndefined();
     await expect(readFile(intentPath(), "utf8")).rejects.toThrow();
+  });
+});
+
+describe("isStopIntentAlreadyServed", () => {
+  const intentAt = (requestedAt: string) =>
+    ({
+      v: 1 as const,
+      requestedAt,
+      requestedByPid: 4242,
+      reason: "stop" as const,
+    }) as const;
+
+  it("treats intent older than the supervisor's start as served", () => {
+    const startedAt = Date.parse("2026-08-06T12:00:00.000Z");
+    expect(
+      isStopIntentAlreadyServed(
+        intentAt("2026-08-06T11:59:59.000Z"),
+        startedAt,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats intent at or after the supervisor's start as aimed at it", () => {
+    const startedAt = Date.parse("2026-08-06T12:00:00.000Z");
+    // Exactly equal counts as NOT served: a stop written in the same
+    // millisecond we started must win, because the costly direction here is
+    // fighting a deliberate stop.
+    expect(
+      isStopIntentAlreadyServed(
+        intentAt("2026-08-06T12:00:00.000Z"),
+        startedAt,
+      ),
+    ).toBe(false);
+    expect(
+      isStopIntentAlreadyServed(
+        intentAt("2026-08-06T12:00:01.000Z"),
+        startedAt,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats an unparseable stamp as served rather than blocking recovery", () => {
+    // Same bias as everywhere else in this module: a garbled byte must not be
+    // able to hold a machine hostless.
+    expect(isStopIntentAlreadyServed(intentAt("not-a-date"), Date.now())).toBe(
+      true,
+    );
+  });
+});
+
+describe("hasActionableStopIntent", () => {
+  it("ignores a fresh intent that predates the supervisor", async () => {
+    // The logon-inside-the-freshness-window case: stopping the host and
+    // logging back in must not leave the new supervisor unable to recover its
+    // own child's first crash.
+    await writeStopIntent("production", "stop");
+    const now = Date.now();
+
+    await expect(
+      hasActionableStopIntent("production", now, now + 1_000),
+    ).resolves.toBe(false);
+    // Still FRESH - it is the cutoff, not staleness, doing the work here.
+    await expect(hasFreshStopIntent("production", now)).resolves.toBe(true);
+  });
+
+  it("honours an intent written after the supervisor started", async () => {
+    await writeStopIntent("production", "stop");
+    const now = Date.now();
+
+    await expect(
+      hasActionableStopIntent("production", now, now - 60_000),
+    ).resolves.toBe(true);
+  });
+
+  it("ignores an intent that is past the staleness window", async () => {
+    await writeStopIntent("production", "stop");
+    const now = Date.now() + STOP_INTENT_STALE_MS + 1_000;
+
+    await expect(hasActionableStopIntent("production", now, 0)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("reads an absent record as no intent", async () => {
+    await expect(
+      hasActionableStopIntent("production", Date.now(), 0),
+    ).resolves.toBe(false);
   });
 });

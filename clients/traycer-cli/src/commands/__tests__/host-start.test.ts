@@ -8,6 +8,7 @@ import { constants as osConstants } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CliError, CLI_ERROR_CODES } from "../../runner/errors";
 import {
+  defaultRunHostStartDeps,
   MAX_CONSECUTIVE_RELAUNCHES,
   RELAUNCH_BACKOFF_MS,
   resolveHostStartTarget,
@@ -1716,6 +1717,35 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(term.recorded.exited).toBe(128 + osConstants.signals.SIGTERM);
   });
 
+  it("relaunches a host the OOM killer took, which no diagnostic whitelist names", async () => {
+    // Recoverability and diagnosability are different questions, and deciding
+    // one with the other's answer is the bug this pins. `describeFatalSignal`
+    // lists native-crash signals so a support log can explain them; SIGKILL is
+    // deliberately absent because there is nothing to explain. Keying "should
+    // we relaunch" off that list made the single most likely signal death on
+    // Linux - the OOM killer - the one death that was never recovered.
+    //
+    // The real question is only whether the death was ASKED FOR, and this
+    // supervisor asks with SIGTERM/SIGINT/SIGHUP.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: null, signal: "SIGKILL" },
+      { code: 0, signal: null },
+    ]);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+  });
+
   it("does not relaunch when a stop was requested", async () => {
     // The Windows half of the deliberate-stop guard: `schtasks /End` never
     // signals this process, so a stop announces itself on disk instead.
@@ -1854,22 +1884,41 @@ describe("runHostStart - crash relaunch loop", () => {
   });
 
   it("registers one set of signal listeners no matter how many attempts run", async () => {
-    // Five relaunches must not install five listener sets on `process`.
+    // Five relaunches must not install five listener sets on `process` - and
+    // the one set that IS installed must not outlive the call. Production
+    // never notices the second half, because `deps.exit` is `process.exit`
+    // there; an injected `exit` returns, and every such call used to strand
+    // three listeners.
     const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const scripted = withScriptedAttempts(deps, [{ code: 6, signal: null }]);
     const before = process.listenerCount("SIGTERM");
+    const duringRun: number[] = [];
+    const originalSpawn = scripted.deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
 
     await runUntilExit(
       () =>
         runHostStart(
           { environment: "production", cwd: null },
-          { ...scripted.deps, maxRelaunches: 3 },
+          {
+            ...scripted.deps,
+            maxRelaunches: 3,
+            spawn: (command, args, options) => {
+              duringRun.push(process.listenerCount("SIGTERM") - before);
+              return originalSpawn(command, args, options);
+            },
+          },
         ),
       recorded,
     );
 
     expect(recorded.spawnCalls).toHaveLength(4);
-    expect(process.listenerCount("SIGTERM") - before).toBe(1);
+    // One set while running, on every attempt - not one set per attempt.
+    expect(duringRun).toEqual([1, 1, 1, 1]);
+    // And nothing left behind once the supervisor has returned.
+    expect(process.listenerCount("SIGTERM") - before).toBe(0);
   });
 
   it("resets the budget only after a child that actually ran for the sustained window", async () => {
@@ -2465,6 +2514,29 @@ describe("runHostStart - production defaults", () => {
     expect(slept).toEqual([...RELAUNCH_BACKOFF_MS]);
     expect(recorded.exited).toBe(11);
   });
+
+  it("keeps the backoff timer referenced so the supervisor survives the wait", async () => {
+    // Every other test injects `sleep`, so the REAL one is otherwise never
+    // exercised - and it is the only thing holding the event loop open during
+    // a backoff. By then the child is dead, its stderr is closed and the log
+    // descriptor has been released; signal listeners do not ref the loop and
+    // neither does an awaited promise. An `unref()`ed timer here means Node
+    // drains and exits 0 mid-wait, and the relaunch never happens - silently,
+    // in production only.
+    // `getActiveResourcesInfo()` reports only what is currently KEEPING THE
+    // EVENT LOOP ALIVE, so an unref'd timer does not appear in it. That makes
+    // it a direct read of the property in question rather than a proxy for it.
+    const countTimers = (): number =>
+      process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+
+    const before = countTimers();
+    const pending = defaultRunHostStartDeps.sleep(20);
+    const during = countTimers();
+    await pending;
+
+    expect(during).toBe(before + 1);
+    expect(countTimers()).toBe(before);
+  });
 });
 
 describe("runHostStart - stop signals outside the child-running window", () => {
@@ -2525,11 +2597,15 @@ describe("runHostStart - stop signals outside the child-running window", () => {
             maxRelaunches: 5,
             hasStopIntent: async (_environment, nowMs, ignoreBeforeMs) => {
               cutoffSeen = ignoreBeforeMs;
-              // Requested a minute before this supervisor was invoked: still
-              // FRESH, but already served by the start that produced us.
+              // A stop requested a minute BEFORE this supervisor was invoked:
+              // still fresh by the staleness rule, but already served by the
+              // start that produced us. `hasActionableStopIntent` is what
+              // decides that, and it has its own direct tests; this models
+              // only the cutoff half, which is the part the supervisor has to
+              // pass correctly.
               const requestedAtMs = ignoreBeforeMs - 60_000;
-              const fresh = nowMs - requestedAtMs < 300_000;
-              return fresh && requestedAtMs >= ignoreBeforeMs;
+              expect(nowMs).toBeGreaterThanOrEqual(requestedAtMs);
+              return requestedAtMs >= ignoreBeforeMs;
             },
           },
         ),
@@ -2575,6 +2651,14 @@ describe("runHostStart - stop signals outside the child-running window", () => {
 
     expect(recorded.spawnCalls).toHaveLength(0);
     expect(recorded.exited).toBe(0);
+    // The attempt already wrote `starting` before the guard ran, and
+    // `spawn-evidence.ts` pairs that against a terminal marker. Leaving it
+    // unpaired makes a cleanly stopped host read as an attempt still in
+    // progress.
+    expect(recorded.markers.map((m) => m.phase)).toEqual([
+      "starting",
+      "failed-to-spawn",
+    ]);
   });
 
   it("does not spawn when stop intent lands during a RELAUNCH's setup", async () => {

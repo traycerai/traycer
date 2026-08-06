@@ -168,6 +168,26 @@ export const RELAUNCH_BACKOFF_MS: readonly number[] = [
  */
 export const SUSTAINED_UPTIME_RESET_MS = 300_000;
 
+/**
+ * The signals a deliberate stop reaches this supervisor as, and which it
+ * forwards to its child.
+ *
+ * Used for two things that must not drift apart: which handlers get installed,
+ * and which child signal deaths count as ASKED FOR rather than recoverable. A
+ * child killed by anything else - `SIGKILL` from the OOM killer above all -
+ * died from outside and should be brought back.
+ */
+const FORWARDED_SHUTDOWN_SIGNALS = [
+  "SIGTERM",
+  "SIGINT",
+  "SIGHUP",
+] as const satisfies readonly NodeJS.Signals[];
+
+function isForwardedShutdownSignal(signal: NodeJS.Signals): boolean {
+  const forwarded: readonly string[] = FORWARDED_SHUTDOWN_SIGNALS;
+  return forwarded.includes(signal);
+}
+
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
     environment: Environment,
@@ -367,10 +387,17 @@ const defaultRunDeps: RunHostStartDeps = {
     prepareCrashReportsDir(dir, MAX_KEPT_CRASH_REPORTS),
   findCrashReport: findCrashReportSince,
   createStderrTee: (environment) => new StderrLogTee(environment),
+  // NOT `unref()`ed, and that is load-bearing. During a backoff the child is
+  // dead, its stderr is closed, and this supervisor has already released the
+  // log descriptor - signal listeners do not ref the loop, and neither does an
+  // awaited promise. An unref'd timer would be the only handle left, so Node
+  // would drain and exit 0 in the middle of the wait and the relaunch this
+  // whole feature exists for would silently never happen. Tests inject their
+  // own `sleep`, so no test built on the harness can observe this; the
+  // production-defaults suite asserts the timer stays referenced.
   sleep: (ms) =>
     new Promise((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      timer.unref?.();
+      setTimeout(resolve, ms);
     }),
   hasStopIntent: hasActionableStopIntent,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
@@ -573,8 +600,8 @@ export async function runHostStart(
   // This is the POSIX half of the deliberate-stop guard. Windows needs the
   // other half (`host/stop-intent.ts`): there the supervisor is an orphaned
   // grandchild that `schtasks /End` never signals at all.
-  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-    process.on(sig, () => {
+  const shutdownHandlers = FORWARDED_SHUTDOWN_SIGNALS.map((sig) => {
+    const handler = (): void => {
       shuttingDown = true;
       const child = currentChild;
       logger.debug("Host supervisor forwarding signal to child", {
@@ -595,8 +622,26 @@ export async function runHostStart(
           // Child may have already exited.
         }
       }
-    });
-  }
+    };
+    process.on(sig, handler);
+    return { sig, handler };
+  });
+
+  /**
+   * Leave through here, not `deps.exit`, from anywhere below this point.
+   *
+   * The handlers above are registered for the loop's whole life. In production
+   * `deps.exit` is `process.exit`, so they die with the process and removing
+   * them is moot - but `runHostStart` is exported and an injected `exit` is
+   * explicitly allowed to RETURN (that is why the dependency is typed `void`),
+   * and every such call leaves three listeners on `process` behind.
+   */
+  const exitSupervisor = (code: number): void => {
+    for (const { sig, handler } of shutdownHandlers) {
+      process.off(sig, handler);
+    }
+    return deps.exit(code);
+  };
 
   for (;;) {
     attemptNumber += 1;
@@ -636,7 +681,7 @@ export async function runHostStart(
             supervisorPid,
           },
         );
-        return deps.exit(0);
+        return exitSupervisor(0);
       }
     }
 
@@ -696,7 +741,7 @@ export async function runHostStart(
           consecutiveRelaunches = decision.consecutiveRelaunches;
           continue;
         }
-        return deps.exit(err instanceof CliError ? err.exitCode : 1);
+        return exitSupervisor(err instanceof CliError ? err.exitCode : 1);
       }
       if (err instanceof CliError) {
         logger.warn("Host supervisor target resolution failed", {
@@ -737,7 +782,7 @@ export async function runHostStart(
         });
         deps.onError(`traycer host start: ${err.code}: ${err.message}`);
         deps.onError(detailLine);
-        return deps.exit(err.exitCode);
+        return exitSupervisor(err.exitCode);
       }
       logger.error(
         "Host supervisor target resolution threw unexpectedly",
@@ -883,8 +928,30 @@ export async function runHostStart(
         attemptNumber,
         viaSignal: shuttingDown,
       });
+      // This attempt already wrote its `starting` marker above. Returning
+      // without a terminal one leaves `spawn-evidence.ts` pairing a
+      // post-baseline `starting` against nothing, so a cleanly stopped host
+      // reads as an attempt still in progress - the same unpaired-marker
+      // defect a relaunch that could not resolve its target used to have.
+      await deps.writeMarker(
+        opts.environment,
+        "failed-to-spawn",
+        markerFields(
+          attemptId,
+          supervisorPid,
+          {
+            shell: undefined,
+            args: undefined,
+            bundle: target.executable,
+            exitCode: undefined,
+            signal: undefined,
+            error: "stop requested before spawn",
+          },
+          null,
+        ),
+      );
       await deps.closeLogFd(logFd);
-      return deps.exit(0);
+      return exitSupervisor(0);
     }
 
     // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
@@ -971,7 +1038,7 @@ export async function runHostStart(
           continue;
         }
       }
-      return deps.exit(66);
+      return exitSupervisor(66);
     }
 
     // Stderr tee (see the stdio comment above): bounded path-addressed mirror
@@ -1098,7 +1165,7 @@ export async function runHostStart(
           continue;
         }
       }
-      return deps.exit(66);
+      return exitSupervisor(66);
     }
 
     // The child is gone, so the supervisor's own copy of the log descriptor has
@@ -1129,7 +1196,7 @@ export async function runHostStart(
     // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
     // restated, which is the point: one semantic on all three platforms.
     if (!outcome.abnormal) {
-      return deps.exit(outcome.exitCode);
+      return exitSupervisor(outcome.exitCode);
     }
 
     // D7: only real uptime forgives the budget. The desktop recovery governor
@@ -1151,7 +1218,7 @@ export async function runHostStart(
       supervisorStartedAtMs,
     });
     if (decision.kind !== "relaunch") {
-      return deps.exit(outcome.exitCode);
+      return exitSupervisor(outcome.exitCode);
     }
     consecutiveRelaunches = decision.consecutiveRelaunches;
   }
@@ -1442,11 +1509,20 @@ async function persistChildExit(input: {
             },
       ),
       exitCode: 128 + signalNumber(signal),
-      // A Node fatal abort on POSIX IS the crash, wearing a signal (see
-      // `describeFatalSignal`). A forwarded shutdown signal is not, so it
-      // resolves `null` here and never relaunches - a second, independent
-      // guard alongside the `shuttingDown` latch.
-      abnormal: fatalMeaning !== null,
+      // Recoverability is a DIFFERENT question from diagnosability, and using
+      // `fatalMeaning` for both was wrong. `describeFatalSignal` answers "can
+      // this signal be explained in a support log" - a deliberately narrow
+      // whitelist of native-crash signals. It does not contain `SIGKILL`, so
+      // an OOM-killed host - the single most likely way a host dies by signal
+      // on Linux - read as "not abnormal" and was never relaunched.
+      //
+      // The question here is only whether the death was ASKED FOR. The three
+      // signals this supervisor forwards are the ones a deliberate stop
+      // arrives as; anything else killed the child from outside and is
+      // recoverable. This stays a second, independent guard alongside the
+      // `shuttingDown` latch, because a child can be signalled directly
+      // without the supervisor ever being told.
+      abnormal: !isForwardedShutdownSignal(signal),
     });
   }
   if (code === null || code === 0) {
