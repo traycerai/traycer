@@ -209,6 +209,37 @@ describe("mention menu dismissal", () => {
     expect(pickerStore.getState().query).toBe("lib");
   });
 
+  it("keeps a synchronously-typed second @ open past the deferred plugin exit", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@auth");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+
+    // No flush between these: the comma queues the plugin exit on a
+    // microtask, and the second insert lands before it drains. The stale
+    // exit must not dismiss the @lib occurrence that superseded it.
+    editor.commands.insertContent(", ");
+    editor.commands.insertContent("@lib");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().query).toBe("lib");
+  });
+
+  it("does not let a stale queued exit close a mention activated by a selection restore", async () => {
+    const { editor, pickerStore } = makeFixture();
+    // Production shape (applyContent): one transaction applies content whose
+    // trailing text is prose (queues the dismissal exit), the next restores
+    // a saved selection that activates a legitimate earlier @ - before the
+    // queued exit's microtask drains.
+    editor.commands.insertContent("@lib then @auth,");
+    editor.commands.setTextSelection(5);
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().query).toBe("lib");
+  });
+
   it("closes on a double space but keeps single-space queries open", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("@release notes");

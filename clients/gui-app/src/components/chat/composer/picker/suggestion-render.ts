@@ -50,55 +50,93 @@ export function createComposerSuggestionRender<
     // leave the typed query in place. Track the latest props so commits
     // dispatch against the up-to-date range.
     let latestProps: SuggestionProps<unknown, TItem> | null = null;
-    // Identity for this one suggestion session. Tiptap calls this factory per
-    // session, and several plugins share the store, so every write is tagged
-    // to keep a departing session from writing over a newer one.
+    // Identity for this renderer's store writes. Tiptap creates ONE renderer
+    // per suggestion plugin for the editor's lifetime, and several plugins
+    // (`/`, `$`, `@`) share the store, so every write is tagged to keep a
+    // departing plugin's teardown from writing over another plugin's state.
     nextSessionId += 1;
     const sessionId = nextSessionId;
+    // Trigger position of the occurrence a dismissal applied to. One renderer
+    // spans occurrences (see above), and after a dismissal the matcher can
+    // land on a DIFFERENT trigger without ever going inactive - synchronous
+    // transactions outrun the queued exit below - so `onUpdate` has to tell
+    // "still the dismissed occurrence" (stay closed) from "a new occurrence
+    // took over" (start fresh) by the trigger's position.
+    let dismissedFrom: number | null = null;
+    // Epoch guarding queued exits. A queued exit belongs to the occurrence it
+    // was queued for; any legitimate start (or a newer dismissal) bumps the
+    // epoch so a stale exit cannot fire and dismiss the occurrence that
+    // superseded it - application code can dispatch several transactions
+    // before a microtask drains (setContent + setTextSelection).
+    let exitEpoch = 0;
+
     // Ends the tiptap suggestion session itself (see `suggestionPluginKey`).
     // Deferred: dismissals fire inside the plugin's own update cycle, and
     // dispatching a transaction synchronously would re-enter it.
     const exitPluginSession = (editor: Editor): void => {
       const pluginKey = args.suggestionPluginKey;
       if (pluginKey === null) return;
+      exitEpoch += 1;
+      const epoch = exitEpoch;
       queueMicrotask(() => {
         if (editor.isDestroyed) return;
+        // Superseded: the plugin has legitimately moved on (a new occurrence
+        // opened, or the session already exited); exiting now would dismiss
+        // state this exit was never aimed at.
+        if (epoch !== exitEpoch) return;
         const { view } = editor;
         view.dispatch(view.state.tr.setMeta(pluginKey, { exit: true }));
       });
     };
+
+    // Full dismissal of the CURRENT occurrence: remember which trigger it
+    // was, close the picker now, end the plugin session (deferred).
+    const dismissOccurrence = (editor: Editor, from: number): void => {
+      dismissedFrom = from;
+      args.pickerStore.getState().closeSession(sessionId);
+      exitPluginSession(editor);
+    };
+
+    const startSession = (props: SuggestionProps<unknown, TItem>): void => {
+      dismissedFrom = null;
+      // Cancel any exit still queued for a previous occurrence - it must not
+      // fire into the session that starts here.
+      exitEpoch += 1;
+      const slashScope = args.slashScopeForProps?.(props) ?? null;
+      args.pickerStore.getState().openPicker({
+        sessionId,
+        kind: args.kind,
+        slashScope,
+        slashTrigger: args.slashTrigger,
+        range: { from: props.range.from, to: props.range.to },
+        query: props.query,
+        commit: (item) => {
+          if (latestProps === null) return;
+          latestProps.command(item as TItem);
+        },
+        // Dismissal handle for pickers with post-open close rules (the
+        // mention hook's zero-match rule): closes the store now and the
+        // plugin session with it, so the dismissal cannot leak into the
+        // next `@` occurrence.
+        dismiss: () => {
+          if (latestProps === null) return;
+          dismissOccurrence(latestProps.editor, latestProps.range.from);
+        },
+        clientRect: props.clientRect ?? null,
+      });
+    };
+
     return {
       onStart(props) {
         latestProps = props;
         // A pasted "@ ..." or "@x, y" is already prose; never open for it,
         // and end the plugin session so a later `@` elsewhere can start over.
         if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+          dismissedFrom = props.range.from;
           exitPluginSession(props.editor);
           return;
         }
-        const slashScope = args.slashScopeForProps?.(props) ?? null;
-        args.pickerStore.getState().openPicker({
-          sessionId,
-          kind: args.kind,
-          slashScope,
-          slashTrigger: args.slashTrigger,
-          range: { from: props.range.from, to: props.range.to },
-          query: props.query,
-          commit: (item) => {
-            if (latestProps === null) return;
-            latestProps.command(item as TItem);
-          },
-          // Dismissal handle for pickers with post-open close rules (the
-          // mention hook's zero-match rule): closes the store now and the
-          // plugin session with it, so the dismissal cannot leak into the
-          // next `@` occurrence.
-          dismiss: () => {
-            args.pickerStore.getState().closeSession(sessionId);
-            if (latestProps === null) return;
-            exitPluginSession(latestProps.editor);
-          },
-          clientRect: props.clientRect ?? null,
-        });
+        startSession(props);
       },
 
       onUpdate(props) {
@@ -108,8 +146,17 @@ export function createComposerSuggestionRender<
         // records the dismissed range, so this `@` occurrence stays dismissed
         // while a new `@` elsewhere opens fresh.
         if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
-          args.pickerStore.getState().closeSession(sessionId);
-          exitPluginSession(props.editor);
+          dismissOccurrence(props.editor, props.range.from);
+          return;
+        }
+        if (dismissedFrom !== null) {
+          // Still the dismissed occurrence: stay closed until the queued
+          // plugin exit lands (or the matcher moves).
+          if (props.range.from === dismissedFrom) return;
+          // A DIFFERENT trigger took over before the queued exit could run -
+          // the plugin never went inactive, so no `onStart` will come. This
+          // update is that occurrence's start.
+          startSession(props);
           return;
         }
         const slashScope = args.slashScopeForProps?.(props) ?? null;
@@ -124,6 +171,10 @@ export function createComposerSuggestionRender<
 
       onExit() {
         latestProps = null;
+        dismissedFrom = null;
+        // The plugin session is over; a queued exit has nothing left to end,
+        // and letting it fire could dismiss whatever session opens next.
+        exitEpoch += 1;
         // Ownership-checked: swapping `$` for `/` over a selection starts the
         // new session before this one exits, and an unconditional close here
         // would shut the picker that just opened.
@@ -162,6 +213,8 @@ export function createComposerSuggestionRender<
           return state.commitActiveItem();
         }
         if (event.key === "Escape") {
+          // Tiptap itself dispatches the plugin exit for Escape, synchronously
+          // in its handleKeyDown - only the store needs closing here.
           state.closeSession(sessionId);
           return true;
         }
