@@ -47,7 +47,11 @@ import {
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
-import { hasActionableStopIntent } from "../host/stop-intent";
+import {
+  hasActionableStopIntent,
+  readStopIntentIdentity,
+  type StopIntentIdentity,
+} from "../host/stop-intent";
 import {
   attestLaunchdSupervisorPid,
   readLayer0Frame,
@@ -368,11 +372,17 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // older than that was served by our own start. Filtering rather than
   // deleting is what lets attempt one be guarded without a logon-started
   // supervisor refusing to start. See `host/stop-intent.ts`.
+  // `servedAtStartup` is the clock-independent half: the record that existed
+  // when this supervisor started, which it therefore has already answered.
   readonly hasStopIntent: (
     environment: Environment,
     nowMs: number,
     ignoreRequestedBeforeMs: number,
+    servedAtStartup: StopIntentIdentity | null,
   ) => Promise<boolean>;
+  readonly readStopIntentIdentity: (
+    environment: Environment,
+  ) => Promise<StopIntentIdentity | null>;
   // Consecutive relaunches allowed before the supervisor gives up and hands
   // the machine back to launchd / systemd / the next logon. A dependency
   // rather than a bare constant so a test can state which behaviour it is
@@ -434,6 +444,7 @@ const defaultRunDeps: RunHostStartDeps = {
     };
   },
   hasStopIntent: hasActionableStopIntent,
+  readStopIntentIdentity,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
 };
 
@@ -498,6 +509,16 @@ export async function runHostStart(
   // "when was this supervisor asked to start". Intent older than this instant
   // was already answered by that request; intent newer than it is aimed at us.
   const supervisorStartedAtMs = Date.now();
+  // The clock-independent companion to the stamp above, read as early as it can
+  // be (this one needs a file, so it cannot precede the first await the way the
+  // stamp does). Whatever record is here NOW is one this start has answered by
+  // existing; anything that appears later is aimed at us, whatever the clock
+  // does in between. The unavoidable gap between the stamp and this read is
+  // covered by the stamp itself - a record written inside it is newer than
+  // `supervisorStartedAtMs`, so the cutoff half still calls it actionable.
+  const servedStopIntentAtStartup = await deps.readStopIntentIdentity(
+    opts.environment,
+  );
   const requestedProbe = "probe" in opts ? opts.probe : null;
   const serviceLabel = "serviceLabel" in opts ? opts.serviceLabel : null;
   const probeRead: LiveProbeContextRead | null =
@@ -829,6 +850,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          servedStopIntentAtStartup,
           shutdownRequested,
         });
         if (decision.kind === "relaunch") {
@@ -1038,6 +1060,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          servedStopIntentAtStartup,
           shutdownRequested,
         });
         if (decision.kind === "relaunch") {
@@ -1131,6 +1154,7 @@ export async function runHostStart(
       opts.environment,
       Date.now(),
       supervisorStartedAtMs,
+      servedStopIntentAtStartup,
     );
     if (shuttingDown || stopAnnounced) {
       logger.info("Host supervisor not spawning - a stop was requested", {
@@ -1247,6 +1271,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          servedStopIntentAtStartup,
           shutdownRequested,
         });
         if (decision.kind === "relaunch") {
@@ -1374,6 +1399,7 @@ export async function runHostStart(
         opts.environment,
         Date.now(),
         supervisorStartedAtMs,
+        servedStopIntentAtStartup,
       ))
     ) {
       logger.info("Host supervisor stopping a child a stop raced", {
@@ -1453,6 +1479,7 @@ export async function runHostStart(
           consecutiveRelaunches,
           isShuttingDown: () => shuttingDown,
           supervisorStartedAtMs,
+          servedStopIntentAtStartup,
           shutdownRequested,
         });
         if (decision.kind === "relaunch") {
@@ -1535,6 +1562,7 @@ export async function runHostStart(
       consecutiveRelaunches,
       isShuttingDown: () => shuttingDown,
       supervisorStartedAtMs,
+      servedStopIntentAtStartup,
       shutdownRequested,
     });
     if (decision.kind !== "relaunch") {
@@ -1617,6 +1645,7 @@ async function decideRelaunch(input: {
   readonly consecutiveRelaunches: number;
   readonly isShuttingDown: () => boolean;
   readonly supervisorStartedAtMs: number;
+  readonly servedStopIntentAtStartup: StopIntentIdentity | null;
   readonly shutdownRequested: Promise<void>;
 }): Promise<RelaunchDecision> {
   const { deps, logger, environment, reason } = input;
@@ -1634,6 +1663,7 @@ async function decideRelaunch(input: {
         environment,
         Date.now(),
         input.supervisorStartedAtMs,
+        input.servedStopIntentAtStartup,
       )
     ) {
       logger.info("Host supervisor not relaunching - a stop was requested", {

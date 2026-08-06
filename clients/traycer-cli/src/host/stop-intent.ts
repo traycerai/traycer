@@ -111,6 +111,48 @@ export async function clearStopIntent(
   }
 }
 
+/**
+ * Which RECORD a supervisor has already answered, independent of any clock.
+ *
+ * `requestedAt` alone would be a timestamp comparison again; pairing it with the
+ * writing pid makes this an identity rather than an ordering. Two different stop
+ * requests cannot collide on both - they would have to be issued by the same
+ * process in the same millisecond, which is the same process's single write.
+ */
+export interface StopIntentIdentity {
+  readonly requestedAt: string;
+  readonly requestedByPid: number;
+}
+
+export function stopIntentIdentity(intent: StopIntent): StopIntentIdentity {
+  return {
+    requestedAt: intent.requestedAt,
+    requestedByPid: intent.requestedByPid,
+  };
+}
+
+/** Whether `intent` IS the record named by `identity`. A null identity - no
+ * record existed when the supervisor started - matches nothing, so any record
+ * that appears later is a request this supervisor has not answered. */
+export function isSameStopIntent(
+  intent: StopIntent,
+  identity: StopIntentIdentity | null,
+): boolean {
+  if (identity === null) return false;
+  return (
+    intent.requestedAt === identity.requestedAt &&
+    intent.requestedByPid === identity.requestedByPid
+  );
+}
+
+/** The record present right now, as an identity a supervisor can remember. */
+export async function readStopIntentIdentity(
+  environment: Environment | undefined,
+): Promise<StopIntentIdentity | null> {
+  const intent = await readStopIntent(environment);
+  return intent === null ? null : stopIntentIdentity(intent);
+}
+
 /** `null` when absent, unreadable, or not a well-formed intent record. */
 export async function readStopIntent(
   environment: Environment | undefined,
@@ -163,19 +205,52 @@ export async function readStopIntent(
  * at all within the freshness window of any stop - strictly worse than the bug.
  * With the cutoff, attempt one can be guarded like every other attempt.
  *
- * KNOWN LIMIT: a backward wall-clock jump between the stop and this supervisor's
- * start can push a real intent below the cutoff, and it would be ignored. That
- * is the same class of exposure `isStopIntentFresh` already accepts for skew,
- * and it degrades to the pre-existing behaviour rather than to something worse.
+ * ### Why the cutoff alone is not enough
+ *
+ * The cutoff compares two readings of a clock that can move between them, and a
+ * BACKWARD correction larger than this supervisor's uptime inverts the order: a
+ * stop issued now gets a stamp EARLIER than our own start, so a live request
+ * reads as already served. On win32 that is the whole bug back again - the stop
+ * kills the child, the orphaned supervisor sees no actionable intent, and it
+ * relaunches the host the user just stopped. The window is not exotic: a machine
+ * that boots with a wrong RTC (dead CMOS cell, a restored VM snapshot) gets its
+ * largest correction seconds after the logon task started this process, which is
+ * exactly when uptime is smallest.
+ *
+ * An earlier note here described this limit with the ordering REVERSED - "a jump
+ * between the stop and this supervisor's start" - which is the harmless
+ * direction: it leaves the stamp ABOVE the cutoff and the intent is honoured.
+ * The direction that breaks is a jump AFTER we start and BEFORE the stop writes.
+ *
+ * So the cutoff is now only half the answer, and the other half does not read a
+ * clock at all: the supervisor remembers WHICH record existed when it started,
+ * and any record that is not that one is a request it has not answered.
+ *
+ * The two halves are OR-ed, and deliberately so - each covers the other's blind
+ * spot, and both failures point the same way (honour the stop):
+ *
+ *   - identity alone would mis-serve a record written between our start stamp
+ *     and our first read of the file, since we would remember it as pre-existing;
+ *     the cutoff catches that one, because its stamp is newer than our start.
+ *   - the cutoff alone loses to the backward clock step above; identity catches
+ *     it, because a new stop is a different record no matter what the clock says.
+ *
+ * A false "actionable" only ever delays a spawn, and `STOP_INTENT_STALE_MS`
+ * bounds that at five minutes - the same cap the whole sentinel already lives
+ * under. A false "served" leaves the machine hostless, which is this ticket.
  */
 export async function hasActionableStopIntent(
   environment: Environment | undefined,
   nowMs: number,
   ignoreRequestedBeforeMs: number,
+  servedAtStartup: StopIntentIdentity | null,
 ): Promise<boolean> {
   const intent = await readStopIntent(environment);
   if (intent === null) return false;
   if (!isStopIntentFresh(intent, nowMs)) return false;
+  // Clock-independent half first: a record we did not see at startup is one we
+  // have not answered, whatever its stamp says.
+  if (!isSameStopIntent(intent, servedAtStartup)) return true;
   return !isStopIntentAlreadyServed(intent, ignoreRequestedBeforeMs);
 }
 

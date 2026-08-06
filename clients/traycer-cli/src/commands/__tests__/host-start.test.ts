@@ -326,6 +326,13 @@ function makeRunStubs(
     //     1+5+15+30+60 = 111s of wall clock, which no 10s test timeout
     //     survives.
     hasStopIntent: async () => false,
+    // Same hazard as `hasStopIntent` above, and easier to miss because it is
+    // read ONCE at startup rather than per attempt: unset, the `Partial`
+    // default falls through to the real `readStopIntentIdentity`, which reads
+    // the developer's actual `~/.traycer/host/stop-intent.json`. A stray record
+    // from a real `traycer host stop` would then be remembered as "served at
+    // startup", silently changing what every intent assertion below means.
+    readStopIntentIdentity: async () => null,
     sleep: async () => undefined,
     closeLogFd: async () => undefined,
     // Pin the shared harness to a SINGLE attempt. Every test built on

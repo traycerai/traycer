@@ -40,8 +40,16 @@ const {
   isStopIntentAlreadyServed,
   isStopIntentFresh,
   readStopIntent,
+  readStopIntentIdentity,
   writeStopIntent,
 } = await import("../stop-intent");
+
+// A record this supervisor demonstrably never saw. Used to stand in for "the
+// file changed since startup" without depending on what is on disk.
+const FOREIGN_INTENT = {
+  requestedAt: "2020-01-01T00:00:00.000Z",
+  requestedByPid: 1,
+} as const;
 
 let dir: string;
 
@@ -192,17 +200,17 @@ describe("hasActionableStopIntent - file round trip", () => {
     const before = Date.now() - 1_000;
 
     await expect(
-      hasActionableStopIntent("production", Date.now(), before),
+      hasActionableStopIntent("production", Date.now(), before, null),
     ).resolves.toBe(false);
 
     await writeStopIntent("production", "restart");
     await expect(
-      hasActionableStopIntent("production", Date.now(), before),
+      hasActionableStopIntent("production", Date.now(), before, null),
     ).resolves.toBe(true);
 
     await clearStopIntent("production");
     await expect(
-      hasActionableStopIntent("production", Date.now(), before),
+      hasActionableStopIntent("production", Date.now(), before, null),
     ).resolves.toBe(false);
   });
 });
@@ -266,40 +274,73 @@ describe("hasActionableStopIntent", () => {
     // The logon-inside-the-freshness-window case: stopping the host and
     // logging back in must not leave the new supervisor unable to recover its
     // own child's first crash.
+    //
+    // Passing the record's OWN identity is what keeps this a test of the
+    // cutoff. With any other identity the clock-independent half answers first
+    // and the cutoff never runs - which is the whole point of that half, and
+    // exactly why it has to be handed the record this start actually saw.
     await writeStopIntent("production", "stop");
+    const served = await readStopIntentIdentity("production");
     const now = Date.now();
 
     await expect(
-      hasActionableStopIntent("production", now, now + 1_000),
+      hasActionableStopIntent("production", now, now + 1_000, served),
     ).resolves.toBe(false);
     // Still FRESH - it is the cutoff, not staleness, doing the work here: the
     // same record read with an earlier cutoff is actionable.
     await expect(
-      hasActionableStopIntent("production", now, now - 1_000),
+      hasActionableStopIntent("production", now, now - 1_000, served),
     ).resolves.toBe(true);
   });
 
   it("honours an intent written after the supervisor started", async () => {
     await writeStopIntent("production", "stop");
+    const served = await readStopIntentIdentity("production");
     const now = Date.now();
 
     await expect(
-      hasActionableStopIntent("production", now, now - 60_000),
+      hasActionableStopIntent("production", now, now - 60_000, served),
+    ).resolves.toBe(true);
+  });
+
+  it("honours a record it never saw even when the clock says it is older", async () => {
+    // The backward-clock-step case, and the reason the cutoff cannot stand
+    // alone. A machine that boots with a wrong RTC gets its correction seconds
+    // after the logon task started this supervisor, so a stop issued NOW is
+    // stamped EARLIER than our own start. The cutoff reads that as served, and
+    // on win32 the orphaned supervisor then relaunches the host the user just
+    // stopped - this ticket's bug, restored by its own guard.
+    //
+    // Identity settles it without consulting a clock: this is not the record we
+    // saw at startup, so it is a request we have not answered.
+    await writeStopIntent("production", "stop");
+    const now = Date.now();
+
+    await expect(
+      hasActionableStopIntent(
+        "production",
+        now,
+        now + STOP_INTENT_STALE_MS - 1_000,
+        FOREIGN_INTENT,
+      ),
     ).resolves.toBe(true);
   });
 
   it("ignores an intent that is past the staleness window", async () => {
+    // Freshness short-circuits BOTH halves, so an unknown identity cannot
+    // resurrect an expired record - the five-minute bound still caps how long
+    // any of this can hold a spawn back.
     await writeStopIntent("production", "stop");
     const now = Date.now() + STOP_INTENT_STALE_MS + 1_000;
 
-    await expect(hasActionableStopIntent("production", now, 0)).resolves.toBe(
-      false,
-    );
+    await expect(
+      hasActionableStopIntent("production", now, 0, FOREIGN_INTENT),
+    ).resolves.toBe(false);
   });
 
   it("reads an absent record as no intent", async () => {
     await expect(
-      hasActionableStopIntent("production", Date.now(), 0),
+      hasActionableStopIntent("production", Date.now(), 0, null),
     ).resolves.toBe(false);
   });
 });
