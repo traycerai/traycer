@@ -23,14 +23,14 @@ import {
 import {
   HostIdentityCard,
   HostIdRow,
-  OtherMachinesStrip,
   ThisWindowCard,
   ThisWindowCardStandalone,
 } from "@/components/settings/host-scope/host-identity-card";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
+import { HostRegistryUpdates } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
-import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { HostSummaryCard } from "@/components/settings/panels/host-settings-summary-card";
+import { HostUpdateRegion } from "@/components/settings/panels/host-settings-update-region";
 import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
 import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -94,19 +94,18 @@ export function HostSettingsPanel() {
 }
 
 /**
- * Shells without the Traycer CLI (web, mobile) can still ADMINISTER a machine
- * over its host RPC — they simply cannot install, restart or register a local
+ * Shells without the Traycer CLI (web, mobile) can still ADMINISTER a host
+ * over its RPC — they simply cannot install, restart or register a local
  * service, because there is no local service here. So the page keeps the
- * scoped machine's identity and the fleet, and says exactly which capability
- * is missing instead of degrading to a bare sentence.
+ * scoped host's identity and says exactly which capability is missing instead
+ * of degrading to a bare sentence.
  */
 function HostSettingsPanelWithoutManagement() {
   const scope = useHostScope();
-  const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   return (
     <SettingsPanelShell
-      title={scope.host?.name ?? "Machine"}
-      description="Status and maintenance for the machine selected in the sidebar."
+      title={scope.host?.name ?? "Host"}
+      description="Status and maintenance for the selected host."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className="flex flex-col gap-5">
@@ -119,10 +118,6 @@ function HostSettingsPanelWithoutManagement() {
           Installing and restarting a local host service is only available in
           the desktop app — this shell doesn&apos;t bundle the Traycer CLI.
         </p>
-        <OtherMachinesStrip
-          scope={scope}
-          onAddHost={() => openAddHost(scope.hosts.map((host) => host.hostId))}
-        />
       </div>
     </SettingsPanelShell>
   );
@@ -141,7 +136,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const queryClient = useQueryClient();
   const compact = useSettingsDensity() === "compact";
   const scope = useHostScope();
-  const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   const nowMs = useNowMs();
   const [doctorOpen, setDoctorOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -490,16 +484,64 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     }
   };
 
-  // The scoped machine is the SUBJECT of this page. The local service console
-  // below renders only when that subject is this device — a remote machine has
-  // no local service to install, restart or register, and pretending otherwise
-  // is what produced two cards describing one machine in two dialects.
+  // The scoped host is the SUBJECT of this page. The local service console
+  // below renders only when that subject is the host running on this computer
+  // — a remote host has no local service to install, restart or register, and
+  // pretending otherwise is what produced two cards describing one host in two
+  // dialects.
   const scopedIsLocalMachine = scope.host?.isLocalMachine ?? true;
+
+  // ONE Updates card, holding both halves of a host's update story.
+  //
+  // They are genuinely two mechanisms — the local controller stages and
+  // applies a build on this computer, while the account registry carries the
+  // policy and target version any host reads on its next check-in — and they
+  // used to live on two different pages because of it. A person does not have
+  // two update questions, so the mechanisms sit in one card and the copy
+  // distinguishes them.
+  const registryItem = scope.host?.item ?? null;
+  const localUpdateRegion =
+    scopedIsLocalMachine && status?.state !== "not-installed" ? (
+      <HostUpdateRegion
+        registryState={registryState}
+        registryFetching={registryFetching || refreshRegistryMutation.isPending}
+        anyPending={anyPending}
+        updatePending={updatePending}
+        latestReleasedAt={latestReleasedAt}
+        nowMs={nowMs}
+        updateReady={controllerStatus?.updateReady ?? false}
+        stagedVersion={controllerStatus?.stagedVersion ?? null}
+        downloadProgress={controllerStatus?.download?.progress ?? null}
+        onUpdate={() => runApply(false)}
+        onRefresh={handleRefreshRegistry}
+      />
+    ) : null;
+  const updatesCard =
+    localUpdateRegion === null && registryItem === null ? null : (
+      <SettingsGroup
+        title="Updates"
+        tone="default"
+        dataTestId="host-updates"
+        fill={false}
+      >
+        {/* Every row brings its own top rule as a separator; the first one
+            would otherwise double up with the card's own border. */}
+        <div className="[&>*:first-child]:border-t-0">
+          {localUpdateRegion}
+          {registryItem === null ? null : (
+            <HostRegistryUpdates
+              item={registryItem}
+              isLocalHost={scopedIsLocalMachine}
+            />
+          )}
+        </div>
+      </SettingsGroup>
+    );
 
   return (
     <SettingsPanelShell
-      title={scope.host?.name ?? "Machine"}
-      description="Status, updates and maintenance for the machine selected in the sidebar."
+      title={scope.host?.name ?? "Host"}
+      description="Status, updates and maintenance for the selected host."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
@@ -514,11 +556,13 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
               hostId={scope.host.hostId}
               onCopy={(value) => {
                 void navigator.clipboard.writeText(value);
-                toast.success("Machine ID copied");
+                toast.success("Host ID copied");
               }}
             />
           </HostIdentityCard>
         )}
+
+        {scopedIsLocalMachine ? null : updatesCard}
 
         {scopedIsLocalMachine ? (
           <>
@@ -587,7 +631,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
               onOpenDoctor: () => setDoctorOpen(true),
             }}
             updates={{
-              hidden: status?.state === "not-installed",
+              // Rendered in the Updates card below instead, so the page has
+              // exactly one place that answers "is this host up to date?".
+              hidden: true,
               registryState,
               registryFetching:
                 registryFetching || refreshRegistryMutation.isPending,
@@ -602,6 +648,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
               onRefresh: handleRefreshRegistry,
             }}
           />
+
+            {updatesCard}
 
             {scope.host === null ? null : (
               <ThisWindowCardStandalone scope={scope} host={scope.host} />
@@ -642,16 +690,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           </>
         ) : null}
 
-        {/* The scoped machine is the subject above, so it is excluded here by
-            construction. That exclusion IS the fix for the machine that used
-            to appear twice — as a cloud-iconed row AND as "This machine". */}
-        <OtherMachinesStrip
-          scope={scope}
-          onAddHost={() =>
-            openAddHost(scope.hosts.map((host) => host.hostId))
-          }
-        />
-
+        {/* No list of the OTHER hosts, and no "Add host": a page about one
+            host is the wrong place to manage the collection it belongs to.
+            Both live on the Hosts page. */}
         <HostDangerZone scope={scope} />
       </div>
 

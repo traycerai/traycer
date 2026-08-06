@@ -4,6 +4,8 @@ import { ChevronDown, ChevronUp, FolderOpen, Info } from "lucide-react";
 import { toast } from "sonner";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { RequiresLocalHostNotice } from "@/components/settings/host-scope/requires-local-host-notice";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -37,11 +39,24 @@ import type {
 
 const LOG_TAIL_LINES = 100;
 const PANEL_DESCRIPTION =
-  "Log verbosity for each Traycer component on this machine, plus recent log output. All default to Info - raise a level to Debug when capturing a problem for support, then set it back.";
+  "Log verbosity for each Traycer component, plus recent log output. All default to Info - raise a level to Debug when capturing a problem for support, then set it back.";
 const LOG_LEVEL_SCOPES: readonly LogLevelScope[] = ["desktop", "cli", "host"];
 
 export function DiagnosticsSettingsPanel() {
   const compact = useSettingsDensity() === "compact";
+  const scope = useHostScope();
+
+  // `cli` and `host` verbosity are fields of the selected host's own config,
+  // but this client reads them through the local CLI bridge — so a remote host
+  // gets the notice rather than this computer's levels under its name. (The
+  // `desktop` row is genuinely app-wide and says so in the group below.)
+  if (scope.host !== null && !scope.host.isLocalMachine) {
+    return (
+      <SettingsPanelShell title="Diagnostics" description={PANEL_DESCRIPTION}>
+        <RequiresLocalHostNotice scope={scope} subject="log settings" />
+      </SettingsPanelShell>
+    );
+  }
 
   return (
     <SettingsPanelShell
@@ -159,22 +174,26 @@ function LogDetailGroup(): ReactNode {
         tabIndex={-1}
         className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
+        {/* Mixed scope, stated per row: `cli` and `host` belong to the host
+            this page is showing, while `desktop` is this app window wherever
+            it points. Leaving that unsaid is what let the section read as
+            "settings for one machine" and get filed outside the host group. */}
         <LogLevelRow
           scope="desktop"
           label="App log level"
-          description="Verbosity of the desktop app's own logs."
+          description="Verbosity of the desktop app's own logs. Applies to this app, not to a host."
           disabled={resetPending}
         />
         <LogLevelRow
           scope="cli"
           label="CLI log level"
-          description="Verbosity of the bundled Traycer CLI's logs."
+          description="Verbosity of the bundled Traycer CLI's logs on this host."
           disabled={resetPending}
         />
         <LogLevelRow
           scope="host"
           label="Host log level"
-          description="Verbosity of the background host process's logs."
+          description="Verbosity of the background host process's logs on this host."
           disabled={resetPending}
         />
         {nonDefaultScopes.length > 0 ? (

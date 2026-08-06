@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/hover-card";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { RequiresLocalHostNotice } from "@/components/settings/host-scope/requires-local-host-notice";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
 import { EnvOverrideEditor } from "@/components/settings/panels/env-override-editor";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
@@ -74,6 +76,7 @@ function flagsDeviateFromDefault(
 
 export function ShellSettingsPanel() {
   const runnerHost = useRunnerHost();
+  const scope = useHostScope();
   if (runnerHost.traycerCli === null) {
     return (
       <SettingsPanelShell
@@ -83,6 +86,17 @@ export function ShellSettingsPanel() {
         <div className="px-6 py-8 text-ui-sm text-muted-foreground">
           This shell does not expose the local host CLI.
         </div>
+      </SettingsPanelShell>
+    );
+  }
+  // Host-scoped by nature — a shell config decides how THAT host launches
+  // terminals and harnesses — but reachable only through the local CLI bridge.
+  // Say so, rather than showing this computer's values under another host's
+  // name.
+  if (scope.host !== null && !scope.host.isLocalMachine) {
+    return (
+      <SettingsPanelShell title="Shell" description={PANEL_DESCRIPTION}>
+        <RequiresLocalHostNotice scope={scope} subject="shell configuration" />
       </SettingsPanelShell>
     );
   }

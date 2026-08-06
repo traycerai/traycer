@@ -45,7 +45,7 @@ export function HostScopeGate(props: {
             onClick={scope.returnToActive}
             data-testid="host-scope-return-to-active"
           >
-            Back to {scope.activeHost?.name ?? "your active machine"}
+            Back to {scope.activeHost?.name ?? "your active host"}
           </Button>
         }
         testId="host-scope-vanished"
@@ -57,11 +57,11 @@ export function HostScopeGate(props: {
     return (
       <HostScopeNotice
         tone="idle"
-        title={scope.isLoading ? "Finding your machines…" : "No machines yet"}
+        title={scope.isLoading ? "Finding your hosts…" : "No hosts yet"}
         detail={
           scope.isLoading
             ? null
-            : "Install the Traycer host on a machine and sign in — it appears here on its own."
+            : "Install the Traycer host on a computer and sign in — it appears here on its own."
         }
         action={null}
         testId="host-scope-empty"
@@ -79,8 +79,8 @@ export function HostScopeGate(props: {
         // "try again" against a route that does not exist.
         detail={
           scope.host.registered && !scope.host.connectable
-            ? "This machine is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
-            : "No connection is available to this machine."
+            ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
+            : "No connection is available to this host."
         }
         action={
           scope.isViewingActive ? null : (
@@ -91,7 +91,7 @@ export function HostScopeGate(props: {
               onClick={scope.returnToActive}
               data-testid="host-scope-return-to-active"
             >
-              Back to {scope.activeHost?.name ?? "your active machine"}
+              Back to {scope.activeHost?.name ?? "your active host"}
             </Button>
           )
         }
@@ -108,10 +108,10 @@ export function HostScopeGate(props: {
 }
 
 /**
- * A one-line readout naming the machine a panel is acting on.
+ * A one-line readout naming the host a panel is acting on.
  *
  * Panels that are scoped by the sidebar switcher still owe the reader an
- * answer to "which machine is this?" at the point of the content — the
+ * answer to "which host is this?" at the point of the content — the
  * sidebar is a glance away, but a destructive button is not the place to make
  * someone glance. It is deliberately inert: the accent-free styling and the
  * absence of a chevron say "this is a fact, the control is elsewhere".
@@ -140,10 +140,10 @@ export function HostScopeLine(props: {
       <span className="truncate">{scope.host.health.label}</span>
       {scope.isViewingActive ? null : (
         // The one asymmetry worth stating inline: you are configuring a
-        // machine that is NOT the one this window's bell and new work use.
+        // host that is NOT the one this window's bell and new work use.
         // Without it, a person edits notification policy on B all evening and
         // wonders why the bell never changes.
-        <span className="shrink-0">· not this window's active machine</span>
+        <span className="shrink-0">· not this window's active host</span>
       )}
     </span>
   );

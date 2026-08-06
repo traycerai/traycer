@@ -4,12 +4,12 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { cn } from "@/lib/utils";
 
 /**
- * A machine's glyph.
+ * A host's glyph.
  *
  * The old list drew a CLOUD on every row — including the laptop the app was
- * running on. That single wrong icon is most of why the local machine read as
+ * running on. That single wrong icon is most of why the local host read as
  * a different species from itself in the section below. The glyph now answers
- * "what kind of machine is this?": your own device, another machine you own,
+ * "what kind of host is this?": the one on this computer, another host you own,
  * or something reached over a relay.
  */
 export function HostGlyph(props: {

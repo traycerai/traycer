@@ -30,28 +30,37 @@ export type SettingsSectionId =
  * What a section BELONGS to — the organising idea of the whole surface.
  *
  * Settings used to be one flat list in which "Appearance" (this app),
- * "Sessions" (your account) and "Providers" (one specific machine) were
+ * "Sessions" (your account) and "Providers" (one specific host) were
  * indistinguishable peers. Nothing said which of them followed you between
- * machines, and four sections quietly grew their own host dropdown to cover
- * for it.
+ * hosts, and four sections quietly grew their own host dropdown to cover for
+ * it.
  *
- * Grouping makes the scope structural instead of memorised: the `host` group
- * is headed by the one host switcher, and everything in it is scoped by that
- * selection. The rule becomes "if it varies by machine it sits under the
- * switcher" rather than "memorise five exceptions".
+ * The fix is a SCOPE, not a level. Settings has already spent its nesting
+ * budget inside Providers — that panel is a rail plus a per-provider tab bar,
+ * so the sidebar itself gets exactly one level and the host cannot become
+ * another one. The host group is therefore headed by ONE picker, and
+ * everything under it is scoped by that pick. Depth stays flat; the rule ("if
+ * it varies by host it sits under the picker") becomes structural rather than
+ * memorised.
  */
 export type SettingsSectionGroupId = "app" | "account" | "host";
 
 export interface SettingsSectionGroup {
   readonly id: SettingsSectionGroupId;
-  /** `null` for the host group — the switcher itself is its header. */
-  readonly label: string | null;
+  readonly label: string;
 }
 
+/**
+ * Application and Account lead: both are short, both are fixed, and neither
+ * ever changes shape, so they hold stable positions at the top of the rail.
+ * The host group goes last because it is the only one whose contents are
+ * scoped — it carries the picker, and everything beneath the picker belongs
+ * to whichever host that picker names.
+ */
 export const SETTINGS_SECTION_GROUPS: ReadonlyArray<SettingsSectionGroup> = [
-  { id: "app", label: "App" },
+  { id: "app", label: "Application" },
   { id: "account", label: "Account" },
-  { id: "host", label: null },
+  { id: "host", label: "Host" },
 ];
 
 export interface SettingsSection {
@@ -60,12 +69,26 @@ export interface SettingsSection {
   readonly icon: LucideIcon;
   readonly group: SettingsSectionGroupId;
   /**
-   * A section that can only ever act on the machine the app is running on,
-   * because it is backed by a local bridge / the local CLI rather than a host
-   * RPC. It sits in the `app` group but says so, instead of leaving the reader
-   * to wonder whether it followed the host switcher.
+   * Host-scoped, but only reachable when the selected host is the one running
+   * on this computer — because the section is backed by the on-disk config
+   * store through the local CLI bridge rather than by a host RPC.
+   *
+   * This is a TRANSPORT limit, never a scope one. Shell config decides how a
+   * host launches terminals and harnesses, and `hostLogLevel` is a field of
+   * that same per-host config; both belong to whichever host they sit next to.
+   * An earlier pass let the missing RPC push these two sections out of the
+   * host group entirely, which put the app right back to "memorise the
+   * exceptions". They stay in the group and say plainly when the selected host
+   * is out of reach — see `RequiresLocalHostNotice`.
    */
-  readonly thisMachineOnly: boolean;
+  readonly requiresLocalHost: boolean;
+}
+
+/** Sections in `group`, in sidebar order. */
+export function sectionsInGroup(
+  group: SettingsSectionGroupId,
+): ReadonlyArray<SettingsSection> {
+  return SETTINGS_SECTIONS.filter((section) => section.group === group);
 }
 
 /**
@@ -73,6 +96,10 @@ export interface SettingsSection {
  * (`dispatch.ts` indexes straight into this array) and it groups the sidebar.
  * Entries must stay contiguous per group or the sidebar renders a group
  * heading twice.
+ *
+ * Only the first ten entries can carry a digit
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`); Diagnostics is the eleventh and goes
+ * without, which is the right one to lose — it is the rarest destination here.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal switch, the command palette and remembered tab paths all key
@@ -84,75 +111,57 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "General",
     icon: SettingsIcon,
     group: "app",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
   {
     id: "appearance",
     label: "Appearance",
     icon: Palette,
     group: "app",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
   {
     id: "keybindings",
     label: "Keybindings",
     icon: Keyboard,
     group: "app",
-    thisMachineOnly: false,
-  },
-  // Shell and Diagnostics are backed by the local CLI / desktop bridges, not
-  // by a host RPC, so they cannot target a picked host at all. They stay out
-  // of the host group rather than sitting under a switcher they would ignore
-  // — the precise failure that made the old flat list untrustworthy.
-  {
-    id: "shell",
-    label: "Shell",
-    icon: TerminalSquare,
-    group: "app",
-    thisMachineOnly: true,
-  },
-  {
-    id: "diagnostics",
-    label: "Diagnostics",
-    icon: Activity,
-    group: "app",
-    thisMachineOnly: true,
+    requiresLocalHost: false,
   },
   {
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
     group: "account",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
-  // The host group. Everything below the switcher is scoped by it.
+  // The host group. Everything here is scoped by the picker that heads it.
   {
     id: "host",
     label: "Overview",
     icon: Server,
     group: "host",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
   {
     id: "providers",
     label: "Providers",
     icon: Boxes,
     group: "host",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
   {
     id: "worktrees",
     label: "Worktrees",
     icon: GitBranch,
     group: "host",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
   {
     id: "notifications",
     label: "Notifications",
     icon: Bell,
     group: "host",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent
   // and model get chosen when spawning child agents. It does not manage the
@@ -164,7 +173,21 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     label: "Agent selection",
     icon: Bot,
     group: "host",
-    thisMachineOnly: false,
+    requiresLocalHost: false,
+  },
+  {
+    id: "shell",
+    label: "Shell",
+    icon: TerminalSquare,
+    group: "host",
+    requiresLocalHost: true,
+  },
+  {
+    id: "diagnostics",
+    label: "Diagnostics",
+    icon: Activity,
+    group: "host",
+    requiresLocalHost: true,
   },
 ];
 

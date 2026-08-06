@@ -16,14 +16,14 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import { cn } from "@/lib/utils";
 
 /**
- * The scoped machine's identity — the page's subject, stated once.
+ * The scoped host's identity — the page's subject, stated once.
  *
- * This replaces a pair of surfaces that described the SAME machine twice and
+ * This replaces a pair of surfaces that described the SAME host twice and
  * disagreed while doing it: a "My Hosts" row (cloud icon, platform triple,
  * build id, a run of pills, an unlabelled switch) and a separate "This
  * machine" card ("Running", a monospace `ws://…· pid` line, its own update
- * mechanism). A machine is now either the subject of this page or a row in the
- * list below it — never both at once.
+ * mechanism). A host is now the subject of exactly one page — this one — and
+ * appears elsewhere only as a row in the picker that navigates to it.
  */
 export function HostIdentityCard(props: {
   readonly host: HostScopeOption;
@@ -57,7 +57,7 @@ export function HostIdentityCard(props: {
               <h2 className="truncate font-semibold text-foreground text-title-sm">
                 {host.name}
               </h2>
-              {host.isLocalMachine ? <Tag label="This device" /> : null}
+              {host.isLocalMachine ? <HostTag label="This computer" /> : null}
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-ui-sm">
               <HostPresenceDot
@@ -108,7 +108,7 @@ export function HostIdentityCard(props: {
 }
 
 /**
- * "Which machine does this window use?" — answered where the consequence is,
+ * "Which host does this window use?" — answered where the consequence is,
  * and changed only by a verb that states it.
  *
  * The old app had exactly one control for this: a modal radiogroup that looked
@@ -147,7 +147,7 @@ export function ThisWindowCard(props: {
         <p className="text-ui-sm text-foreground">
           This window uses{" "}
           <span className="font-medium">
-            {scope.activeHost?.name ?? "another machine"}
+            {scope.activeHost?.name ?? "another host"}
           </span>
           .
         </p>
@@ -156,7 +156,7 @@ export function ThisWindowCard(props: {
               life, so a person who expects "switch" to move their work would
               otherwise watch nothing happen and conclude the button is broken. */}
           Switching changes where new work starts. Tabs you already have open
-          stay on the machine they started on.
+          stay on the host they started on.
         </p>
       </div>
       <Button
@@ -167,16 +167,16 @@ export function ThisWindowCard(props: {
         onClick={() => scope.makeActive(host.hostId)}
         data-testid="host-make-active"
       >
-        Use this machine in this window
+        Use this host in this window
       </Button>
     </div>
   );
 }
 
 /**
- * `ThisWindowCard` for the local machine, whose console is the pre-existing
- * summary card rather than `HostIdentityCard`. Same content, same copy — it
- * just brings its own border because it is not nested inside a card here.
+ * `ThisWindowCard` for the host on this computer, whose console is the
+ * pre-existing summary card rather than `HostIdentityCard`. Same content, same
+ * copy — it just brings its own border because it is not nested in a card.
  */
 export function ThisWindowCardStandalone(props: {
   readonly scope: HostScope;
@@ -190,92 +190,6 @@ export function ThisWindowCardStandalone(props: {
 }
 
 /**
- * The other machines, as one compact strip.
- *
- * Deliberately NOT a second full list: the scoped machine is the card above,
- * so it never appears here. That is the structural fix for local-appears-twice
- * — a host is the subject or a row, and the two sets cannot overlap.
- */
-export function OtherMachinesStrip(props: {
-  readonly scope: HostScope;
-  readonly onAddHost: () => void;
-}): ReactNode {
-  const others = props.scope.hosts.filter(
-    (host) => host.hostId !== props.scope.hostId,
-  );
-  return (
-    <section aria-label="Your other machines" data-testid="other-machines">
-      <div className="mb-1.5 flex items-center justify-between gap-3 px-1">
-        <h2 className="font-semibold text-ui-xs text-muted-foreground">
-          Your other machines
-        </h2>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={props.onAddHost}
-          data-testid="other-machines-add"
-        >
-          Add a machine
-        </Button>
-      </div>
-      <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
-        {others.length === 0 ? (
-          <p className="px-5 py-4 text-ui-sm text-muted-foreground">
-            No other machines yet. Install the Traycer host somewhere else and
-            sign in — it shows up here on its own.
-          </p>
-        ) : (
-          <ul>
-            {others.map((host) => (
-              <li key={host.hostId}>
-                <button
-                  type="button"
-                  onClick={() => props.scope.setHostId(host.hostId)}
-                  data-testid={`other-machines-row-${host.hostId}`}
-                  className="flex w-full items-center gap-3 border-b border-border/40 px-5 py-3 text-left transition-colors last:border-b-0 hover:bg-accent/40"
-                >
-                  <HostGlyph
-                    host={host}
-                    className="size-4 text-muted-foreground"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-ui-sm font-medium">
-                        {host.name}
-                      </span>
-                      {host.isActive ? <Tag label="Active" tone="accent" /> : null}
-                    </span>
-                    <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-                      <HostPresenceDot
-                        tone={host.health.tone}
-                        animate={host.health.live}
-                        className={undefined}
-                      />
-                      <span className="truncate">
-                        {[host.health.label, host.health.detail]
-                          .filter(
-                            (part): part is string =>
-                              part !== null && part.length > 0,
-                          )
-                          .join(" · ")}
-                      </span>
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-ui-xs text-muted-foreground">
-                    Manage
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
-
-/**
  * The host id, copyable, in the one place it is genuinely useful (a support
  * report) rather than leading an identity line as it used to.
  */
@@ -285,13 +199,13 @@ export function HostIdRow(props: {
 }): ReactNode {
   return (
     <div className="flex items-center justify-between gap-3 border-t border-border/40 px-5 py-2.5">
-      <span className="text-ui-xs text-muted-foreground">Machine ID</span>
+      <span className="text-ui-xs text-muted-foreground">Host ID</span>
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="truncate font-mono text-code-xs text-muted-foreground">
           {props.hostId}
         </span>
         <TooltipWrapper
-          label="Copy machine ID"
+          label="Copy host ID"
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -302,7 +216,7 @@ export function HostIdRow(props: {
             size="sm"
             className="size-7 p-0"
             onClick={() => props.onCopy(props.hostId)}
-            aria-label="Copy machine ID"
+            aria-label="Copy host ID"
           >
             <Copy className="size-3.5" />
           </Button>
@@ -312,7 +226,7 @@ export function HostIdRow(props: {
   );
 }
 
-function Tag(props: {
+export function HostTag(props: {
   readonly label: string;
   readonly tone?: "muted" | "accent";
 }): ReactNode {

@@ -31,7 +31,7 @@ interface ClearLocalSnapshotsMutationContext {
  * app state" — three rows at three different scopes, one of which carried its
  * own host dropdown so that a destructive button took its target from a
  * control styled like a form field. Splitting by scope is the fix: what
- * belongs to a machine lives on that machine's page, where the page title
+ * belongs to a host lives on that host's page, where the page title
  * already names the target; "Clear local app state" is genuinely app-global
  * and stays behind in General.
  */
@@ -60,8 +60,8 @@ function ClearFileEditSnapshotsRow(props: {
   const [confirmOpen, setConfirmOpen] = useState(false);
   // The host this dialog was opened against, captured at open time. The scope
   // can move underneath an open dialog — the active host can change from
-  // another window, or the user can pick a different machine in the sidebar —
-  // and a destructive action must never execute against a machine the user did
+  // another window, or the user can pick a different host in the sidebar —
+  // and a destructive action must never execute against a host the user did
   // not have on screen when they decided. Compared on confirm, not assumed.
   const [armedHostId, setArmedHostId] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -127,14 +127,14 @@ function ClearFileEditSnapshotsRow(props: {
 
   // The scope moved while the dialog was open. Disarm rather than close:
   // closing discards an intent the user expressed, and retargeting silently
-  // executes against a machine they never chose.
+  // executes against a host they never chose.
   const targetMoved = armedHostId !== null && armedHostId !== scope.hostId;
 
   return (
     <>
       <SettingsRow
         label="File edit snapshots"
-        description={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that machine and is never synced.`}
+        description={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that host and is never synced.`}
         control={
           <div className="flex flex-col items-end gap-2">
             <div
@@ -175,8 +175,8 @@ function ClearFileEditSnapshotsRow(props: {
         title={`Clear file edit snapshots on ${hostLabel}?`}
         description={
           targetMoved
-            ? "The selected machine changed while this dialog was open, so this action is no longer armed. Close it and try again on the machine you want."
-            : `Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that machine.`
+            ? "The selected host changed while this dialog was open, so this action is no longer armed. Close it and try again on the host you want."
+            : `Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that host.`
         }
         cascadeSummary={null}
         actionLabel="Clear snapshots"
@@ -192,8 +192,8 @@ function ClearFileEditSnapshotsRow(props: {
 
 /**
  * Uninstalling the host is the most host-scoped action there is, so it lives
- * on the machine's own page rather than beside app-global resets in General.
- * Local machine only — there is no remote uninstall verb.
+ * on the host's own page rather than beside app-global resets in General.
+ * Local host only — there is no remote uninstall verb.
  */
 function RemoveTraycerRow(): ReactNode {
   const { hostManagement } = useRunnerHost();
@@ -205,7 +205,7 @@ function RemoveTraycerRow(): ReactNode {
     return (
       <SettingsRow
         label="Traycer removed"
-        description="Background components were removed. Your agents, history and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
+        description="Background components were removed. Your agents, history and credentials are preserved on this computer. To finish, quit Traycer and drag it from Applications to the Trash."
         control={
           <Button
             type="button"
@@ -224,7 +224,7 @@ function RemoveTraycerRow(): ReactNode {
   return (
     <>
       <SettingsRow
-        label="Remove Traycer from this device"
+        label="Remove Traycer from this computer"
         description="Stops the background host and services and removes the installed components. Your agents and history are preserved, and the host won't reinstall itself."
         control={
           <Button
@@ -249,8 +249,8 @@ function RemoveTraycerRow(): ReactNode {
       <ConfirmDestructiveDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Remove Traycer from this device?"
-        description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your agents, history and credentials stay on this device - you can reinstall anytime from Settings."
+        title="Remove Traycer from this computer?"
+        description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your agents, history and credentials stay on this computer - you can reinstall anytime from Settings."
         cascadeSummary={null}
         actionLabel="Remove Traycer"
         isPending={uninstall.isPending}

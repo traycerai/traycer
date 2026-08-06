@@ -111,7 +111,7 @@ function localServiceHealth(
     return {
       state: "not-installed",
       label: "Not installed",
-      detail: "No Traycer host is installed on this machine yet.",
+      detail: "No Traycer host is installed on this computer yet.",
       tone: HOST_HEALTH_TONE["not-installed"],
       live: false,
       busy: false,
@@ -133,7 +133,7 @@ function localServiceHealth(
   return {
     state: "online",
     label: "Online",
-    detail: "Running on this machine.",
+    detail: "Running on this computer.",
     tone: HOST_HEALTH_TONE.online,
     live: true,
     busy: options.item?.status.busy ?? false,

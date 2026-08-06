@@ -23,17 +23,17 @@ const WINDOWS_COMMAND = "irm traycer.ai/install.ps1 | iex";
 const LOGIN_COMMAND = "traycer login";
 
 /**
- * Adding a machine, as something you WATCH happen.
+ * Adding a host, as something you WATCH happen.
  *
  * The old dialog printed a curl command beside a static paragraph that read
  * "Waiting for a new host to come online…" — a sentence that always rendered
  * and was never true, because nothing was watching. The registry already polls
- * every ~15s and this dialog already knows which machines existed when it
+ * every ~15s and this dialog already knows which hosts existed when it
  * opened, so the wait can be real: run the command on the other computer, and
- * the moment it registers, the dialog resolves into that machine's identity.
+ * the moment it registers, the dialog resolves into that host's identity.
  *
  * That is the one moment worth animating in this whole surface. It is also the
- * product's core promise (one account, many machines) rendered literally.
+ * product's core promise (one account, many hosts) rendered literally.
  */
 export function AddHostDialog(): ReactNode {
   const open = useAddHostDialogStore((s) => s.open);
@@ -61,9 +61,9 @@ function AddHostDialogBody(): ReactNode {
   const closeDialog = useAddHostDialogStore((s) => s.closeDialog);
   const [platform, setPlatform] = useState<"unix" | "windows">("unix");
 
-  // The arrival: any machine in the registry that was NOT there when this
+  // The arrival: any host in the registry that was NOT there when this
   // dialog opened. Diffing against the open-time snapshot is what makes this
-  // recognise the NEW machine rather than celebrating one already registered.
+  // recognise the NEW host rather than celebrating one already registered.
   const arrived = useMemo(() => {
     const known = new Set(knownHostIds);
     return scope.hosts.find((host) => !known.has(host.hostId)) ?? null;
@@ -126,10 +126,10 @@ function AddHostDialogBody(): ReactNode {
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Add a machine</DialogTitle>
+        <DialogTitle>Add host</DialogTitle>
         <DialogDescription>
           Run these on the computer you want to reach. Traycer can&apos;t
-          install itself onto another machine, so this part happens over there —
+          install itself onto another computer, so this part happens over there —
           this window will notice the moment it connects.
         </DialogDescription>
       </DialogHeader>
@@ -155,7 +155,7 @@ function AddHostDialogBody(): ReactNode {
           />
         </li>
         <li className="flex flex-col gap-2">
-          <span>Sign in on that machine:</span>
+          <span>Sign in on that computer:</span>
           <CommandBlock command={LOGIN_COMMAND} />
         </li>
         <li>Approve the login in the browser that opens.</li>
@@ -170,7 +170,7 @@ function AddHostDialogBody(): ReactNode {
           variant="orbit"
           className="text-muted-foreground"
         />
-        Watching for a new machine…
+        Watching for a new host…
       </p>
     </>
   );

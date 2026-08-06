@@ -74,16 +74,46 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
 load-bearing rather than cosmetic.
 
-- **App** - General, Appearance, Keybindings, plus Shell and Diagnostics, which
-  are backed by the local CLI / desktop bridges and so can only ever describe
-  the machine the app runs on (they carry a quiet `this machine` tag).
+- **Application** - General, Appearance, Keybindings.
 - **Account** - Sessions.
-- **Machine** - headed by THE host switcher (`host-scope/host-switcher.tsx`).
+- **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Providers, Worktrees, Notifications, Agent
-  selection - is scoped by that one selection.
+  selection, Shell, Diagnostics - is scoped by that one selection.
+
+Application and Account lead because they are short, fixed and never re-shaped;
+the host group goes last because it is the only one whose contents depend on a
+selection.
+
+**Scope is not a level.** Settings already spends its nesting budget inside
+Providers, which is a rail plus a per-provider tab bar - so the sidebar gets
+exactly one level and the host cannot become another one. Earlier attempts that
+made the host a tier (tabs across the content, an accordion of host cards in
+the rail) all pushed the deepest page four levels down. The picker is
+navigation only.
+
+**One place per host verb.** There is no Hosts page. A separate collection page
+looks harmless but is a second lifecycle surface the moment it can change an
+update policy, which is exactly what the old "My Hosts" list did - so adding,
+comparing and updating hosts all resolve to: the picker lists them, the `+`
+footer adds one, and everything else about a host lives on that host's Overview
+(`host-scope/host-registry-updates.tsx` holds the registry half of Updates,
+beside the local controller's own region in the SAME card).
+
+**The picker inherits the composer's row anatomy** (`components/home/
+host-workspace-selector/host-section.tsx`): kind glyph, name, status dot,
+check. Two pickers over one concept must not each invent a vocabulary. Search
+appears from six hosts up; below that it is one more thing to skip past.
+
+`requiresLocalHost` (Shell, Diagnostics) marks a TRANSPORT limit, never a scope
+one: shell config and `hostLogLevel` are fields of the selected host's own
+config, but this client reads them through the local CLI bridge. Those sections
+stay in the host group and render `RequiresLocalHostNotice` for a remote host,
+rather than showing this computer's values under another host's name. An
+earlier pass let the missing RPC exile them into the App group, which put the
+surface right back to "memorise the exceptions".
 
 This replaced a flat list in which "Appearance" (this app), "Sessions" (your
-account) and "Providers" (one specific machine) were indistinguishable peers,
+account) and "Providers" (one specific host) were indistinguishable peers,
 and in which FOUR sections had each grown their own host `<Select>`: Providers
 (header), Worktrees (toolbar), General -> File Edit Snapshots (a settings row,
 directly above a destructive button) and Agent selection (floating above the
@@ -93,14 +123,14 @@ one job.
 **Two host relationships, kept apart by grammar.** Merging them is the defect
 the whole surface guards against:
 
-- **Viewing** (`stores/settings/settings-host-scope-store.ts`) - which machine
+- **Viewing** (`stores/settings/settings-host-scope-store.ts`) - which host
   Settings is administering. Free, reversible, no effect outside Settings.
   Renders as neutral chrome; never accent-coloured.
 - **Active for this window** (`HostDirectoryService.selectById`, read through
-  `useReactiveActiveHostId`) - which machine this window talks to for ambient
+  `useReactiveActiveHostId`) - which host this window talks to for ambient
   work: notification indicators, the bell, rate limits, the resource monitor,
   and where newly started work lands. Changed ONLY by a labelled verb that
-  states its consequence ("Use this machine in this window"), never as a
+  states its consequence ("Use this host in this window"), never as a
   dropdown side effect. Always wears the accent.
 
 `useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
@@ -112,13 +142,13 @@ of its states look identical if you only check `client !== null`:
 | `following` | ambient | render normally - the ambient client IS the scoped host's |
 | `connecting` | `null` | render its loading shape, NEVER the ambient client's data |
 | `unreachable` | `null` | say so - terminal, not pending; never a spinner that cannot resolve |
-| `vanished` | `null` | say the machine was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
+| `vanished` | `null` | say the host was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
 | `ready` | scoped | render normally |
 
 The invariant every consumer owes: **a visible host name must always match the
 client used by every read, stream and mutation beneath it.** `HostScopeGate`
 (`host-scope/host-scope-gate.tsx`) enforces this centrally so each panel does
-not re-derive it; `HostScopeLine` is the inert readout that names the machine
+not re-derive it; `HostScopeLine` is the inert readout that names the host
 at the point of the content.
 
 **One host model.** The app carries two host lists that need not agree - the

@@ -6,7 +6,6 @@ import {
   SETTINGS_SECTIONS,
   SETTINGS_SECTION_GROUPS,
   type SettingsSection,
-  type SettingsSectionGroupId,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import {
@@ -36,26 +35,26 @@ export interface SettingsSidebarProps {
 /**
  * The sidebar carries the scope model.
  *
- * Sections are grouped by what they belong to — this app, your account, or one
- * specific machine — and the machine group is headed by the ONE host switcher
- * in Settings. Everything indented beneath it is scoped by that selection,
- * which is what makes the rule learnable instead of memorised. See
+ * Application and Account come first — short, fixed, never re-shaped — and the
+ * host group goes last, headed by ONE picker with its scoped sections beneath.
+ * The picker is deliberately NOT a level of navigation: Providers already
+ * spends the app's nesting budget on a rail plus a tab bar, so a host tier
+ * here would have made the deepest page four levels down. See
  * `settings-sections.ts` for the grouping itself.
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
+  const scope = useHostScope();
+  // A section backed by the local config store cannot describe a host this
+  // window can only reach over the wire. Dimming those rows while a remote
+  // host is selected costs a click that would only ever land on a notice.
+  const localHostSelected = scope.host === null || scope.host.isLocalMachine;
   return (
-    <aside className="flex w-64 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 bg-background p-4">
+    <aside className="flex w-[clamp(13rem,20vw,17rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 bg-background p-4">
       {SETTINGS_SECTION_GROUPS.map((group) => (
         <Fragment key={group.id}>
-          <SettingsSidebarGroupHeader group={group.id} label={group.label} />
-          <div
-            className={cn(
-              "flex flex-col gap-0.5",
-              // The host group's items read as belonging to the switcher above
-              // them, so they carry a small inset the ungrouped tiers don't.
-              group.id === "host" && "mt-1 pl-1",
-            )}
-          >
+          <SettingsSidebarGroupHeader label={group.label} />
+          {group.id === "host" ? <SettingsSidebarHostPicker /> : null}
+          <div className="flex flex-col gap-0.5">
             {SETTINGS_SECTIONS.map((section, index) =>
               section.group === group.id ? (
                 <SettingsSidebarItem
@@ -63,6 +62,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                   section={section}
                   index={index}
                   mode={props.mode}
+                  unreachable={
+                    section.requiresLocalHost ? !localHostSelected : false
+                  }
                 />
               ) : null,
             )}
@@ -73,45 +75,61 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   );
 }
 
-function SettingsSidebarGroupHeader(props: {
-  readonly group: SettingsSectionGroupId;
-  readonly label: string | null;
-}): ReactNode {
-  if (props.group === "host") return <SettingsSidebarHostHeader />;
+/**
+ * The scope control, between the "Host" heading and the sections it governs —
+ * the one position that reads as "everything below belongs to this".
+ */
+function SettingsSidebarHostPicker(): ReactNode {
+  const scope = useHostScope();
+  const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   return (
-    <h2 className="mt-3 mb-1 px-3 font-semibold text-ui-xs tracking-wide text-muted-foreground/70 uppercase first:mt-0">
-      {props.label}
-    </h2>
+    <div className="mb-1.5 flex flex-col gap-1">
+      <HostSwitcher
+        hosts={scope.hosts}
+        selected={scope.host}
+        activeHostId={scope.activeHostId}
+        onSelect={scope.setHostId}
+        onAddHost={() => openAddHost(scope.hosts.map((host) => host.hostId))}
+        isLoading={scope.isLoading}
+      />
+      {/* Said at rest, not on discovery: sections describing a host that is
+          NOT the one this window runs on is the single most confusing state
+          this surface can be in, so it never waits to be noticed. */}
+      {scope.host === null || scope.isViewingActive ? null : (
+        <p
+          className="px-1 text-[0.6875rem] leading-snug text-muted-foreground/80"
+          data-testid="settings-host-viewing-note"
+        >
+          Viewing — this window runs on{" "}
+          {scope.activeHost?.name ?? "another host"}.
+        </p>
+      )}
+      {/* Mounted once: the picker footer is the only opener, but the dialog
+          reads a shared store and two copies would race its open state. */}
+      <AddHostDialog />
+    </div>
   );
 }
 
 /**
- * The host group's header IS the switcher — not a label above one. Putting the
- * control in the heading position is what says "these sections belong to this
- * machine" without a sentence of explanatory copy.
+ * Whether `pathname` is this section's route, matching on whole path segments
+ * rather than by prefix, so no section id can ever light up another's row.
  */
-function SettingsSidebarHostHeader(): ReactNode {
-  const scope = useHostScope();
-  const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+function isSectionPathname(
+  pathname: string,
+  sectionId: SettingsSectionId,
+): boolean {
+  const base = `/settings/${sectionId}`;
+  return pathname === base || pathname.startsWith(`${base}/`);
+}
+
+function SettingsSidebarGroupHeader(props: {
+  readonly label: string;
+}): ReactNode {
   return (
-    <div className="mt-4 flex flex-col gap-1.5">
-      <h2 className="px-3 font-semibold text-ui-xs tracking-wide text-muted-foreground/70 uppercase">
-        Machine
-      </h2>
-      <HostSwitcher
-        hosts={scope.hosts}
-        selected={scope.host}
-        onSelect={scope.setHostId}
-        onAddHost={() =>
-          openAddHost(scope.hosts.map((host) => host.hostId))
-        }
-        isLoading={scope.isLoading}
-      />
-      {/* Mounted here rather than at each call site: the switcher and the
-          Overview page both open it, and two mounted copies would race each
-          other's open state. */}
-      <AddHostDialog />
-    </div>
+    <h2 className="mt-4 mb-1 px-3 font-semibold text-ui-xs tracking-wide text-muted-foreground/70 uppercase first:mt-0">
+      {props.label}
+    </h2>
   );
 }
 
@@ -119,10 +137,11 @@ interface SettingsSidebarItemProps {
   section: SettingsSection;
   index: number;
   mode: SettingsSidebarMode;
+  unreachable: boolean;
 }
 
 function SettingsSidebarItem(props: SettingsSidebarItemProps) {
-  const { section, index, mode } = props;
+  const { section, index, mode, unreachable } = props;
   const badgeModifier = useSettingsLeaderModifierForIndex(index);
   const Icon = section.icon;
   const digit = singleDigitLeaderDigitFor(index);
@@ -144,12 +163,7 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
       </AnimatePresence>
     </span>
   );
-  const label = (
-    <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-      <span className="truncate">{section.label}</span>
-      {section.thisMachineOnly ? <ThisMachineTag /> : null}
-    </span>
-  );
+  const label = <span className="min-w-0 flex-1 truncate">{section.label}</span>;
   if (mode.kind === "modal") {
     const active = mode.activeSection === section.id;
     return (
@@ -169,6 +183,7 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
           active
             ? "bg-accent text-accent-foreground"
             : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
+          unreachable && !active && "text-foreground/40",
         )}
       >
         <Icon className="size-4 shrink-0" />
@@ -178,7 +193,12 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
     );
   }
   return (
-    <SettingsSidebarRouteItem section={section} label={label} badge={badge} />
+    <SettingsSidebarRouteItem
+      section={section}
+      label={label}
+      badge={badge}
+      unreachable={unreachable}
+    />
   );
 }
 
@@ -186,11 +206,12 @@ function SettingsSidebarRouteItem(props: {
   readonly section: SettingsSection;
   readonly label: React.ReactNode;
   readonly badge: React.ReactNode;
+  readonly unreachable: boolean;
 }) {
-  const { section, label, badge } = props;
+  const { section, label, badge, unreachable } = props;
   const Icon = section.icon;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const active = pathname.startsWith(`/settings/${section.id}`);
+  const active = isSectionPathname(pathname, section.id);
   return (
     <Link
       to={`/settings/${section.id}`}
@@ -207,25 +228,12 @@ function SettingsSidebarRouteItem(props: {
         active
           ? "bg-accent text-accent-foreground"
           : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
+        unreachable && !active && "text-foreground/40",
       )}
     >
       <Icon className="size-4 shrink-0" />
       {label}
       {badge}
     </Link>
-  );
-}
-
-/**
- * Says the quiet part. Shell and Diagnostics read the local CLI / desktop
- * bridges, so they can only ever describe the machine the app is running on —
- * they sit outside the host group and this tag explains why rather than
- * leaving the reader to infer it from an absence.
- */
-function ThisMachineTag(): ReactNode {
-  return (
-    <span className="shrink-0 text-[0.625rem] text-muted-foreground/60">
-      this machine
-    </span>
   );
 }
