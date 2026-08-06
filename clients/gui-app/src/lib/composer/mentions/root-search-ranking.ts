@@ -73,8 +73,11 @@ export function rankRootSearchEntries(
   // rows within a tier — it can no longer push a substring hit above a
   // label-prefix hit.
   const matches = resortByNameTier(
-    searchFuzzyMatches(candidates, trimmedQuery, FUSE_KEYS, (candidate, score) =>
-      score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
+    searchFuzzyMatches(
+      candidates,
+      trimmedQuery,
+      FUSE_KEYS,
+      (candidate, score) => score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
     ),
     trimmedQuery,
     (candidate) => candidate.entry.label,

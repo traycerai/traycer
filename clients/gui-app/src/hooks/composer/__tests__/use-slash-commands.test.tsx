@@ -122,8 +122,6 @@ describe("useSlashCommands", () => {
       name: "frontend-design",
       kind: "skill",
     });
-    expect(
-      result.current.data.map((cmd) => cmd.name),
-    ).not.toContain("plan");
+    expect(result.current.data.map((cmd) => cmd.name)).not.toContain("plan");
   });
 });

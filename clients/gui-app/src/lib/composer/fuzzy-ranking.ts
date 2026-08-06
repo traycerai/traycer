@@ -68,9 +68,7 @@ export function searchFuzzyMatches<T>(
         item: result.item,
         refIndex: result.refIndex,
         score:
-          adjustScore === null
-            ? rawScore
-            : adjustScore(result.item, rawScore),
+          adjustScore === null ? rawScore : adjustScore(result.item, rawScore),
       };
     })
     .toSorted((left, right) =>

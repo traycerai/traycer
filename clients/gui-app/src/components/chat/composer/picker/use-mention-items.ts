@@ -415,26 +415,27 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // root search matched nothing, the menu closes the way Escape would.
   // Session-scoped close, so a session that already yielded cannot shut its
   // successor's menu.
-  const sourcesErrored =
-    active &&
-    ((workspaceRequests.length > 0 && workspaceError !== null) ||
-      (epicRequests.length > 0 && epicError !== null));
-
-  const dismissForNoMatches =
-    active &&
-    shouldCloseMentionForNoMatches({
-      stepKind: step.kind,
-      query,
-      debouncedQuery,
-      matchedCount: stepEntries.matchedCount,
-      loading,
-      fetching,
-      sourcesErrored,
-    });
+  const dismissForNoMatches = mentionNoMatchDismissVerdict({
+    active,
+    stepKind: step.kind,
+    query,
+    debouncedQuery,
+    matchedCount: stepEntries.matchedCount,
+    loading,
+    fetching,
+    workspaceRequestCount: workspaceRequests.length,
+    workspaceError,
+    epicRequestCount: epicRequests.length,
+    epicError,
+  });
 
   useEffect(() => {
     if (!dismissForNoMatches || sessionId === null) return;
     const state = pickerStore.getState();
+    // A stale effect must never fire the CURRENT session's dismiss handle:
+    // this verdict was computed for `sessionId`, but the store may already
+    // belong to a successor session by the time the effect runs.
+    if (state.sessionId !== sessionId) return;
     // Prefer the session's dismissal handle: it also ends the tiptap
     // suggestion session, so the zero-match close cannot leak into the next
     // `@` occurrence. Bare `closeSession` is the fallback for owners that
@@ -445,6 +446,46 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     }
     state.closeSession(sessionId);
   }, [dismissForNoMatches, pickerStore, sessionId]);
+}
+
+interface MentionNoMatchVerdictInput {
+  readonly active: boolean;
+  readonly stepKind: "root" | "provider";
+  readonly query: string;
+  readonly debouncedQuery: string;
+  readonly matchedCount: number | null;
+  readonly loading: boolean;
+  readonly fetching: boolean;
+  readonly workspaceRequestCount: number;
+  readonly workspaceError: Error | null;
+  readonly epicRequestCount: number;
+  readonly epicError: Error | null;
+}
+
+/**
+ * Whether the open mention picker should close because a fully settled search
+ * genuinely matched nothing. A source is "errored" only when it was actually
+ * asked for rows this query (request count > 0) — a failed search proves
+ * nothing empty, so it blocks this close and only this close.
+ */
+function mentionNoMatchDismissVerdict(
+  input: MentionNoMatchVerdictInput,
+): boolean {
+  const sourcesErrored =
+    (input.workspaceRequestCount > 0 && input.workspaceError !== null) ||
+    (input.epicRequestCount > 0 && input.epicError !== null);
+  return (
+    input.active &&
+    shouldCloseMentionForNoMatches({
+      stepKind: input.stepKind,
+      query: input.query,
+      debouncedQuery: input.debouncedQuery,
+      matchedCount: input.matchedCount,
+      loading: input.loading,
+      fetching: input.fetching,
+      sourcesErrored,
+    })
+  );
 }
 
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
