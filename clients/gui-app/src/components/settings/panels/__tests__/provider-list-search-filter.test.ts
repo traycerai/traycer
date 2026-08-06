@@ -20,7 +20,6 @@ function server(name: string): ProviderMcpServer {
     transport: {
       type: "http",
       url: "https://example.com",
-      urlHasMaskedParts: false,
       auth: null,
     },
     status: "connected",
