@@ -998,6 +998,10 @@ describe("AuthService", () => {
   });
 
   it("surfaces session-expired on refresh-rejected but keeps the credentials file", async () => {
+    // Startup validation gets a transient 5xx and exhausts the auth-boundary
+    // retry budget (500ms + 1s) before rotate spends the refresh token.
+    // Virtualize so that budget is not real wall-clock.
+    vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
       { token: "stale-token", refreshToken: "stale-token-refresh" },
@@ -1017,7 +1021,10 @@ describe("AuthService", () => {
       return status(500);
     });
 
-    await service.start();
+    const start = service.start();
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await start;
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
@@ -1026,10 +1033,14 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("stale-token", "stale-token-refresh"),
     );
+    // collapseConsecutiveCalls: 3× GET validate (retry budget) collapses to 1.
     expect(collapseConsecutiveCalls(calls)).toEqual([
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
     ]);
+    expect(
+      calls.filter((call) => call === `GET ${VALIDATION_URL}`),
+    ).toHaveLength(3);
   });
 
   it("UI-only signs out with session-expired when validation rejects with 401 on start()", async () => {
@@ -1356,10 +1367,23 @@ describe("AuthService", () => {
   });
 
   it("surfaces sign-in-failed when a device-poll token validation hits a network error", async () => {
+    // Auth-boundary validation retries transient failures on a bounded
+    // exponential backoff (500ms, then 1s; 3 attempts total). Drive those
+    // windows with fake timers so the suite does not sleep real wall-clock.
+    // Install before constructing the subject so any timer the service arms
+    // is already virtualized (suite afterEach restores real timers).
+    vi.useFakeTimers();
     const { service, host } = makeService();
     await service.start();
     restoreFetch();
-    restoreFetch = installFetch(() => Promise.reject(new Error("offline")));
+    const validationCalls: string[] = [];
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) {
+        validationCalls.push(url);
+      }
+      return Promise.reject(new Error("offline"));
+    });
 
     await service.signIn();
     host.deviceFlow.emitResult({
@@ -1368,15 +1392,14 @@ describe("AuthService", () => {
       refreshToken: "net-fail-token-refresh",
     });
 
-    // The device-poll token validation now retries transient failures on a
-    // bounded backoff, so the surfaced error can arrive after the default 1s
-    // waitFor budget - allow for the full retry window.
-    await vi.waitFor(
-      () => {
-        expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
-      },
-      { timeout: 5000 },
-    );
+    // Advance only the retry delays — not the device_code TTL (~600s) that
+    // signIn arms as a backstop (runAllTimersAsync would fire that too).
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
+    // Exhausted AUTH_FETCH_MAX_ATTEMPTS (= 3) before the terminal failure.
+    expect(validationCalls).toHaveLength(3);
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(await host.tokenStore.get()).toBeNull();
@@ -1766,11 +1789,28 @@ describe("AuthService", () => {
       await service.start();
       await deviceSignIn(service, host, "still-valid");
 
+      // Revalidation's access-only `/user` lookup retries transient 5xx on the
+      // same bounded schedule as sign-in validation (500ms + 1s). Virtualize
+      // after the signed-in subject exists so deviceSignIn's real-timer
+      // waitFor is unaffected; suite afterEach restores real timers.
+      vi.useFakeTimers();
       restoreFetch();
-      restoreFetch = installFetch(() => status(503));
+      const validationCalls: string[] = [];
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          validationCalls.push(url);
+        }
+        return status(503);
+      });
 
-      const outcome = await service.revalidateCurrentContext();
+      const pending = service.revalidateCurrentContext();
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const outcome = await pending;
+
       expect(outcome?.kind).toBe("network-error");
+      expect(validationCalls).toHaveLength(3);
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("still-valid");
     });
