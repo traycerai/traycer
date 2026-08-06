@@ -27,7 +27,9 @@ const mutateSpy = vi.fn();
 const capturedQueryClients: Array<HostClient<HostRpcRegistry> | null> = [];
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: (args: { readonly client: HostClient<HostRpcRegistry> | null }) => {
+  useHostQuery: (args: {
+    readonly client: HostClient<HostRpcRegistry> | null;
+  }) => {
     capturedQueryClients.push(args.client);
     return { data: undefined, isPending: false, isError: false };
   },
@@ -60,8 +62,8 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 // A real client over a mock messenger, not a chained assertion — the repo's
 // lint forbids `as unknown as` in tests too, and rightly: a cast here would
 // also hide the day this component starts calling something the stub lacks.
-const SOME_CLIENT: HostClient<HostRpcRegistry> = new HostClient<HostRpcRegistry>(
-  {
+const SOME_CLIENT: HostClient<HostRpcRegistry> =
+  new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -69,8 +71,7 @@ const SOME_CLIENT: HostClient<HostRpcRegistry> = new HostClient<HostRpcRegistry>
       requestId: () => "req-danger-zone-test",
       handlers: {},
     }),
-  },
-);
+  });
 
 function remoteHost(hostId: string): HostScopeOption {
   return hostScopeOptionFixture({
@@ -97,7 +98,11 @@ describe("HostDangerZone", () => {
     // at whatever the ambient client happened to be.
     const { container } = render(
       <HostDangerZone
-        scope={hostScopeFixture({ host: null, status: "vanished", vanishedHostId: "gone" })}
+        scope={hostScopeFixture({
+          host: null,
+          status: "vanished",
+          vanishedHostId: "gone",
+        })}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -119,7 +124,9 @@ describe("HostDangerZone", () => {
         })}
       />,
     );
-    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
     expect(capturedQueryClients).toHaveLength(0);
   });
 
@@ -148,7 +155,9 @@ describe("HostDangerZone", () => {
     expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
     // ...while the genuinely RPC-backed row stays gated, mounts no read, and
     // says why it is missing instead of just disappearing.
-    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
     expect(capturedQueryClients).toHaveLength(0);
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
   });
@@ -168,7 +177,9 @@ describe("HostDangerZone", () => {
       />,
     );
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
-    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
     expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
   });
 

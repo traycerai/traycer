@@ -111,9 +111,8 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 // the `vanished` verdict, which is the state that used to let a panel silently
 // read through the active host.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture, hostScopeOptionFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => {
       const hosts = guideMocks.directoryEntries.map((entry) =>
@@ -473,9 +472,7 @@ describe("AgentSelectionGuideSection", () => {
     rerender(strictPanel());
 
     await waitFor(() => {
-      expect(
-        screen.getByText("remote is no longer registered"),
-      ).toBeTruthy();
+      expect(screen.getByText("remote is no longer registered")).toBeTruthy();
     });
     // The stale local-scoped editor from before the pick must not remain
     // mounted, silently reading/writing through the active host's client.

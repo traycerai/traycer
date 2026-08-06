@@ -637,153 +637,152 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           {null}
         </HostScopeGate>
       ) : (
-      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
-        {scopedIsLocalMachine ? null : (
-          <HostIdentityCard
-            host={scope.host}
-            onRename={null}
-            renameDisabled
-          >
-            <ThisWindowCard scope={scope} host={scope.host} />
-            <HostIdRow
-              hostId={scope.host.hostId}
-              onCopy={(value) => {
-                void navigator.clipboard.writeText(value);
-                toast.success("Host ID copied");
-              }}
-            />
-          </HostIdentityCard>
-        )}
+        <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+          {scopedIsLocalMachine ? null : (
+            <HostIdentityCard host={scope.host} onRename={null} renameDisabled>
+              <ThisWindowCard scope={scope} host={scope.host} />
+              <HostIdRow
+                hostId={scope.host.hostId}
+                onCopy={(value) => {
+                  void navigator.clipboard.writeText(value);
+                  toast.success("Host ID copied");
+                }}
+              />
+            </HostIdentityCard>
+          )}
 
-        {scopedIsLocalMachine ? null : updatesCard}
+          {scopedIsLocalMachine ? null : updatesCard}
 
-        {scopedIsLocalMachine ? (
-          <>
-            {packageManagerUpgrade !== null ? (
-              <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
-            ) : null}
+          {scopedIsLocalMachine ? (
+            <>
+              {packageManagerUpgrade !== null ? (
+                <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
+              ) : null}
 
-          <HostSummaryCard
-            status={status}
-            statusPending={statusPending}
-            banner={{
-              progress,
-              terminalOutcome:
-                terminalOutcome === null
-                  ? null
-                  : { message: terminalOutcome.message },
-              onRetryTerminalOutcome: handleRetryTerminalOutcome,
-              onDismissTerminalOutcome: () => setTerminalOutcome(null),
-            }}
-            nameEdit={{
-              settings: hostNameSettings,
-              pending: hostNamePending,
-              error: hostNameError,
-              draft: hostNameDraft,
-              savePending: hostNameMutation.isPending,
-              editing: editingName,
-              onDraftChange: (value) => setHostNameDraftOverride(value),
-              onSave: () => {
-                hostNameMutation.mutate(
-                  customNameFromDraft(hostNameDraft, hostNameSettings),
-                );
-              },
-              onReset: () => {
-                hostNameMutation.mutate(null);
-              },
-              onOpenEditing: () => setEditingName(true),
-              onCancel: () => {
-                setEditingName(false);
-                setHostNameDraftOverride(null);
-              },
-            }}
-            actions={{
-              anyPending,
-              installPending,
-              restartPending: restartMutation.isPending,
-              onInstall: () =>
-                convergeReadyMutation.mutate(
-                  { force: false },
-                  {
-                    onSuccess: (outcome) => {
-                      if (outcome.kind === "ok" && outcome.value.running) {
-                        toast.success(
-                          outcome.value.version !== null
-                            ? `Installed host v${outcome.value.version}`
-                            : "Host installed",
-                        );
-                      }
-                      invalidate();
-                    },
-                    onError: (err) => {
-                      toastFromRunnerError(err, "Couldn't install host");
-                    },
+              <HostSummaryCard
+                status={status}
+                statusPending={statusPending}
+                banner={{
+                  progress,
+                  terminalOutcome:
+                    terminalOutcome === null
+                      ? null
+                      : { message: terminalOutcome.message },
+                  onRetryTerminalOutcome: handleRetryTerminalOutcome,
+                  onDismissTerminalOutcome: () => setTerminalOutcome(null),
+                }}
+                nameEdit={{
+                  settings: hostNameSettings,
+                  pending: hostNamePending,
+                  error: hostNameError,
+                  draft: hostNameDraft,
+                  savePending: hostNameMutation.isPending,
+                  editing: editingName,
+                  onDraftChange: (value) => setHostNameDraftOverride(value),
+                  onSave: () => {
+                    hostNameMutation.mutate(
+                      customNameFromDraft(hostNameDraft, hostNameSettings),
+                    );
                   },
-                ),
-              onRestart: () => setRestartConfirmOpen(true),
-              onOpenDoctor: () => setDoctorOpen(true),
-            }}
-            updates={{
-              // Rendered in the Updates card below instead, so the page has
-              // exactly one place that answers "is this host up to date?".
-              hidden: true,
-              registryState,
-              registryFetching:
-                registryFetching || refreshRegistryMutation.isPending,
-              anyPending,
-              updatePending,
-              latestReleasedAt,
-              nowMs,
-              updateReady: controllerStatus?.updateReady ?? false,
-              stagedVersion: controllerStatus?.stagedVersion ?? null,
-              downloadProgress: controllerStatus?.download?.progress ?? null,
-              onUpdate: () => runApply(false),
-              onRefresh: handleRefreshRegistry,
-            }}
-          />
-
-            {updatesCard}
-
-            {/* Unconditional: the branch above already established a resolved
-                host, so the old null check could not fire. */}
-            <ThisWindowCardStandalone scope={scope} host={scope.host} />
-
-            <SettingsGroup
-              title="Installation"
-              tone="default"
-              dataTestId={undefined}
-              fill={false}
-            >
-              <InstallationDetailsDisclosure
-                record={installedRecord ?? null}
-                loading={installedPending}
-              />
-              <AdvancedDisclosure
-                installedVersion={installedRecord?.version ?? null}
-                availableSnapshot={availableSnapshot}
-                availablePending={availablePending}
-                availableErrorMessage={extractErrorMessage(
-                  availableError,
+                  onReset: () => {
+                    hostNameMutation.mutate(null);
+                  },
+                  onOpenEditing: () => setEditingName(true),
+                  onCancel: () => {
+                    setEditingName(false);
+                    setHostNameDraftOverride(null);
+                  },
+                }}
+                actions={{
+                  anyPending,
+                  installPending,
+                  restartPending: restartMutation.isPending,
+                  onInstall: () =>
+                    convergeReadyMutation.mutate(
+                      { force: false },
+                      {
+                        onSuccess: (outcome) => {
+                          if (outcome.kind === "ok" && outcome.value.running) {
+                            toast.success(
+                              outcome.value.version !== null
+                                ? `Installed host v${outcome.value.version}`
+                                : "Host installed",
+                            );
+                          }
+                          invalidate();
+                        },
+                        onError: (err) => {
+                          toastFromRunnerError(err, "Couldn't install host");
+                        },
+                      },
+                    ),
+                  onRestart: () => setRestartConfirmOpen(true),
+                  onOpenDoctor: () => setDoctorOpen(true),
+                }}
+                updates={{
+                  // Rendered in the Updates card below instead, so the page has
+                  // exactly one place that answers "is this host up to date?".
+                  hidden: true,
                   registryState,
-                )}
-                availableFetching={availableFetching}
-                includePreReleases={includePreReleases}
-                registryState={registryState}
-                statusState={status?.state}
-                anyPending={anyPending}
-                registerPending={registerPending}
-                deregisterPending={deregisterServiceMutation.isPending}
-                onInstallVersion={(version) => runInstallVersion(version, false)}
-                onRegisterService={() => registerServiceMutation.mutate()}
-                onDeregisterService={() => deregisterServiceMutation.mutate()}
-                onRefreshAvailable={handleRefreshRegistry}
-                onIncludePreReleasesChange={setIncludePreReleases}
+                  registryFetching:
+                    registryFetching || refreshRegistryMutation.isPending,
+                  anyPending,
+                  updatePending,
+                  latestReleasedAt,
+                  nowMs,
+                  updateReady: controllerStatus?.updateReady ?? false,
+                  stagedVersion: controllerStatus?.stagedVersion ?? null,
+                  downloadProgress:
+                    controllerStatus?.download?.progress ?? null,
+                  onUpdate: () => runApply(false),
+                  onRefresh: handleRefreshRegistry,
+                }}
               />
-            </SettingsGroup>
-          </>
-        ) : null}
 
-        {/* No list of the OTHER hosts, and no "Add host": a page about one
+              {updatesCard}
+
+              {/* Unconditional: the branch above already established a resolved
+                host, so the old null check could not fire. */}
+              <ThisWindowCardStandalone scope={scope} host={scope.host} />
+
+              <SettingsGroup
+                title="Installation"
+                tone="default"
+                dataTestId={undefined}
+                fill={false}
+              >
+                <InstallationDetailsDisclosure
+                  record={installedRecord ?? null}
+                  loading={installedPending}
+                />
+                <AdvancedDisclosure
+                  installedVersion={installedRecord?.version ?? null}
+                  availableSnapshot={availableSnapshot}
+                  availablePending={availablePending}
+                  availableErrorMessage={extractErrorMessage(
+                    availableError,
+                    registryState,
+                  )}
+                  availableFetching={availableFetching}
+                  includePreReleases={includePreReleases}
+                  registryState={registryState}
+                  statusState={status?.state}
+                  anyPending={anyPending}
+                  registerPending={registerPending}
+                  deregisterPending={deregisterServiceMutation.isPending}
+                  onInstallVersion={(version) =>
+                    runInstallVersion(version, false)
+                  }
+                  onRegisterService={() => registerServiceMutation.mutate()}
+                  onDeregisterService={() => deregisterServiceMutation.mutate()}
+                  onRefreshAvailable={handleRefreshRegistry}
+                  onIncludePreReleasesChange={setIncludePreReleases}
+                />
+              </SettingsGroup>
+            </>
+          ) : null}
+
+          {/* No list of the OTHER hosts, and no "Add host": a page about one
             host is the wrong place to manage the collection it belongs to.
             The switcher in the sidebar owns both.
 
@@ -792,8 +791,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             bridge and is exactly what someone reaches for when the service is
             stopped or broken. A gate around both took the recovery action away
             in the only state that needs it, so the region gates its own rows. */}
-        <HostDangerZone scope={scope} />
-      </div>
+          <HostDangerZone scope={scope} />
+        </div>
       )}
 
       <RestartHostConfirmDialog

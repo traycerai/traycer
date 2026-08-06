@@ -47,9 +47,8 @@ vi.mock("sonner", () => ({
 // host scoping, so it mocks at the scope boundary rather than standing up a
 // host runtime for the Settings page's machine header.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture({ client: null }),
   };
@@ -58,7 +57,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
 }));
-
 
 const READY_STATUS: HostControllerStatus = {
   download: null,

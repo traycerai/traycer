@@ -14,7 +14,11 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
 import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
 import { getViewerReachabilityCheck } from "@/lib/host/viewer-reachability-store";
-import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import {
   deriveHostScopeStatus,
@@ -64,7 +68,10 @@ export interface HostScope {
   readonly nowMs: number;
 }
 
-const HEALTHY_PRESENCE: HostPresenceHealth = { status: "healthy", reason: null };
+const HEALTHY_PRESENCE: HostPresenceHealth = {
+  status: "healthy",
+  reason: null,
+};
 
 /**
  * Stand-in `queryFn` for the disabled installed-record query.

@@ -25,14 +25,12 @@ const hostScopeMocks = vi.hoisted(() => ({
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
 // mocks at that boundary rather than re-mocking the scope's internals.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
   };
 });
-
 
 interface ManagementMock {
   readonly management: IHostManagement;

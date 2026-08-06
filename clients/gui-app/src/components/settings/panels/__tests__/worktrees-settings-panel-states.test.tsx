@@ -67,9 +67,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 // dropdown, so the scope hook is what drives these states. Derived from the
 // same `state` the other host mocks use, so each test still sets one field.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture, hostScopeOptionFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () =>
       hostScopeFixture({
@@ -246,7 +245,9 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     // nothing to act on. `HostScopeGate` owns those states now: it names the
     // host, distinguishes deregistered from unroutable, and carries the way
     // back to the active host.
-    expect(screen.queryByText("Select a host to manage its worktrees.")).toBeNull();
+    expect(
+      screen.queryByText("Select a host to manage its worktrees."),
+    ).toBeNull();
     screen.getByTestId("host-scope-empty");
     // Branch prefix defaults are client-wide - not gated on host selection.
     assertBranchPrefixStripPresent();

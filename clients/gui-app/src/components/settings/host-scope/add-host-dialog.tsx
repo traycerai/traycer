@@ -98,9 +98,8 @@ function AddHostDialogBody(): ReactNode {
     if (baseline === null) return null;
     const known = new Set(baseline);
     return (
-      scope.hosts.find(
-        (host) => !known.has(host.hostId) && host.registered,
-      ) ?? null
+      scope.hosts.find((host) => !known.has(host.hostId) && host.registered) ??
+      null
     );
   }, [scope.hosts, baseline]);
 
@@ -170,8 +169,8 @@ function AddHostDialogBody(): ReactNode {
         <DialogTitle>Add host</DialogTitle>
         <DialogDescription>
           Run these on the computer you want to reach. Traycer can&apos;t
-          install itself onto another computer, so this part happens over there —
-          this window will notice the moment it connects.
+          install itself onto another computer, so this part happens over there
+          — this window will notice the moment it connects.
         </DialogDescription>
       </DialogHeader>
 

@@ -530,9 +530,7 @@ describe("GeneralSettingsPanel", () => {
     expect(
       screen.queryByRole("button", { name: "Clear file edit snapshots" }),
     ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Remove Traycer" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
   });
 
   it("opens the confirm dialog when clicking Clear local app state", () => {

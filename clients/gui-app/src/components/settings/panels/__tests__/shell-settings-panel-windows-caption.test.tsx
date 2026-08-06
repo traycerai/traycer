@@ -3,9 +3,8 @@
 // boundary: these suites render the panel bare, without the host runtime and
 // query providers the real hook needs.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture({}),
   };

@@ -103,9 +103,7 @@ describe("buildHostScopeOptions connectable", () => {
     // mounted host-RPC panels against a machine nothing could dial. The client
     // builder does not re-check status, so nothing downstream would have
     // caught it.
-    expect(
-      connectableFor(entry({ status: "unavailable" })),
-    ).toBe(false);
+    expect(connectableFor(entry({ status: "unavailable" }))).toBe(false);
   });
 
   it("refuses an entry with no URL", () => {
@@ -169,7 +167,10 @@ describe("resolveScopedHost", () => {
     readonly scopedHostId: string | null;
     readonly listsResolved: boolean;
     readonly listsFailed: boolean;
-  }): { readonly hostId: string | null; readonly vanishedHostId: string | null } {
+  }): {
+    readonly hostId: string | null;
+    readonly vanishedHostId: string | null;
+  } {
     const result = resolveScopedHost({
       hosts: input.hosts,
       scopedHostId: input.scopedHostId,

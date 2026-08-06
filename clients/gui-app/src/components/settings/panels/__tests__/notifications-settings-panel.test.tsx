@@ -34,9 +34,8 @@ const hostScopeMocks: {
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
 // mocks at that boundary rather than re-mocking the scope's internals.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () =>
       hostScopeFixture({
@@ -746,7 +745,10 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
     const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
     });
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>

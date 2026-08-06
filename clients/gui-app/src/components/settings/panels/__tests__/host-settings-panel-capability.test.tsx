@@ -32,9 +32,8 @@ const scopeMocks: { overrides: Partial<HostScope> } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture(scopeMocks.overrides),
   };
@@ -94,9 +93,8 @@ describe("Overview capability split without host management", () => {
   });
 
   it("keeps account-backed update controls for a host it cannot reach", async () => {
-    const { hostScopeOptionFixture } = await import(
-      "@/components/settings/host-scope/host-scope-fixture"
-    );
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
     const host = hostScopeOptionFixture({
       hostId: "host-remote",
       name: "Studio Linux",
@@ -116,14 +114,15 @@ describe("Overview capability split without host management", () => {
     // zone itself still renders: its other row (Remove Traycer) runs over the
     // local CLI bridge, so the gate belongs around the snapshots row, not
     // around the region.
-    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(
+      screen.queryByTestId("settings-clear-file-edit-snapshots"),
+    ).toBeNull();
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
   });
 
   it("withholds version pinning while an update is already in flight", async () => {
-    const { hostScopeOptionFixture } = await import(
-      "@/components/settings/host-scope/host-scope-fixture"
-    );
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
     const draining: HostListItem = {
       ...REGISTRY_ITEM,
       status: {
@@ -151,9 +150,8 @@ describe("Overview capability split without host management", () => {
   });
 
   it("offers version pinning once no update is in flight", async () => {
-    const { hostScopeOptionFixture } = await import(
-      "@/components/settings/host-scope/host-scope-fixture"
-    );
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
     const host = hostScopeOptionFixture({
       hostId: "host-remote",
       isLocalMachine: false,
@@ -168,9 +166,8 @@ describe("Overview capability split without host management", () => {
   });
 
   it("says nothing at all about a vanished host", async () => {
-    const { hostScopeOptionFixture } = await import(
-      "@/components/settings/host-scope/host-scope-fixture"
-    );
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
     const host = hostScopeOptionFixture({
       hostId: "host-remote",
       item: REGISTRY_ITEM,

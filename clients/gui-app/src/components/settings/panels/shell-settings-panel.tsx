@@ -110,7 +110,10 @@ export function ShellSettingsPanel() {
           scope={scope}
           skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
         >
-          <RequiresLocalHostNotice scope={scope} subject="shell configuration" />
+          <RequiresLocalHostNotice
+            scope={scope}
+            subject="shell configuration"
+          />
         </HostScopeGate>
       </SettingsPanelShell>
     );

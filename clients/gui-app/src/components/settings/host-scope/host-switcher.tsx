@@ -258,7 +258,10 @@ function HostSwitcherRow(props: {
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
     >
-      <HostGlyph host={host} className="size-4 shrink-0 text-muted-foreground" />
+      <HostGlyph
+        host={host}
+        className="size-4 shrink-0 text-muted-foreground"
+      />
       <span className="min-w-0 flex-1 truncate text-ui-sm">{host.name}</span>
       {props.active ? <ActiveTag /> : null}
       {/* A host this client cannot dial is still worth listing — it is the

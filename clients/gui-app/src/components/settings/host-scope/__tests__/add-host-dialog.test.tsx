@@ -22,9 +22,8 @@ const scopeMocks: { scope: Partial<HostScope> } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture(scopeMocks.scope),
   };
@@ -46,9 +45,8 @@ async function hostOption(overrides: {
   readonly registered: boolean;
   readonly connectable: boolean;
 }) {
-  const { hostScopeOptionFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return hostScopeOptionFixture(overrides);
 }
 
@@ -63,7 +61,11 @@ describe("<AddHostDialog /> arrival", () => {
       registered: true,
       connectable: false,
     });
-    scopeMocks.scope = { hosts: [newcomer], isLoading: false, listsFailed: false };
+    scopeMocks.scope = {
+      hosts: [newcomer],
+      isLoading: false,
+      listsFailed: false,
+    };
     useAddHostDialogStore.getState().openDialog([]);
 
     render(<AddHostDialog />);
@@ -81,7 +83,11 @@ describe("<AddHostDialog /> arrival", () => {
       registered: true,
       connectable: true,
     });
-    scopeMocks.scope = { hosts: [newcomer], isLoading: false, listsFailed: false };
+    scopeMocks.scope = {
+      hosts: [newcomer],
+      isLoading: false,
+      listsFailed: false,
+    };
     useAddHostDialogStore.getState().openDialog([]);
 
     render(<AddHostDialog />);

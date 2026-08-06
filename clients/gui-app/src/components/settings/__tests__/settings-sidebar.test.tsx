@@ -24,9 +24,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // several host-runtime hooks. This suite is about NAVIGATION, so it mocks at
 // the scope boundary rather than standing up a host runtime.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () => hostScopeFixture({ client: null }),
   };

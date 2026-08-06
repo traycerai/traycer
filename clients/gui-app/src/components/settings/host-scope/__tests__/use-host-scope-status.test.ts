@@ -27,8 +27,8 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 // a stub would do behaviourally — but a chained `as unknown as` assertion is
 // exactly what this repo's lint forbids, in tests as much as in production,
 // and constructing the real thing over a mock messenger costs three lines.
-const SOME_CLIENT: HostClient<HostRpcRegistry> = new HostClient<HostRpcRegistry>(
-  {
+const SOME_CLIENT: HostClient<HostRpcRegistry> =
+  new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -36,8 +36,7 @@ const SOME_CLIENT: HostClient<HostRpcRegistry> = new HostClient<HostRpcRegistry>
       requestId: () => "req-status-test",
       handlers: {},
     }),
-  },
-);
+  });
 
 const CONNECTABLE = hostScopeOptionFixture({
   hostId: "host-b",
@@ -140,9 +139,9 @@ describe("deriveHostScopeStatus", () => {
     // The transient client is built synchronously, so a connectable host with
     // no client means no request context / no bound user — signed out. This
     // rendered "Connecting to X…" forever before.
-    expect(
-      derive({ overrideClient: null, hasRequestAuthority: false }),
-    ).toBe("unreachable");
+    expect(derive({ overrideClient: null, hasRequestAuthority: false })).toBe(
+      "unreachable",
+    );
   });
 
   it("still reports connecting when authority exists but the client does not", () => {

@@ -594,9 +594,8 @@ const hostScopeMocks = vi.hoisted(() => ({
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
 // mocks at that boundary rather than re-mocking the scope's internals.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () =>
       hostScopeFixture({
@@ -605,7 +604,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       }),
   };
 });
-
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";

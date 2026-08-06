@@ -154,13 +154,13 @@ the whole surface guards against:
 host-scoped panel reads. Its status enum is the safety contract, because three
 of its states look identical if you only check `client !== null`:
 
-| Status | `client` | The panel must |
-|---|---|---|
-| `following` | ambient | render normally - the ambient client IS the scoped host's |
-| `connecting` | `null` | render its loading shape, NEVER the ambient client's data |
-| `unreachable` | `null` | say so - terminal, not pending; never a spinner that cannot resolve |
-| `vanished` | `null` | say the host was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
-| `ready` | scoped | render normally |
+| Status        | `client` | The panel must                                                                                          |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `following`   | ambient  | render normally - the ambient client IS the scoped host's                                               |
+| `connecting`  | `null`   | render its loading shape, NEVER the ambient client's data                                               |
+| `unreachable` | `null`   | say so - terminal, not pending; never a spinner that cannot resolve                                     |
+| `vanished`    | `null`   | say the host was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
+| `ready`       | scoped   | render normally                                                                                         |
 
 The invariant every consumer owes: **a visible host name must always match the
 client used by every read, stream and mutation beneath it.** Because the only

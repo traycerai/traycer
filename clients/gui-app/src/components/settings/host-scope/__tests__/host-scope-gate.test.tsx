@@ -22,9 +22,8 @@ describe("<HostScopeGate /> empty and failed states", () => {
     // is already null. Nothing changes, including the notice the user is
     // looking at. An action that cannot alter the state it is offered against
     // is worse than none — it reads as the way out.
-    const { hostScopeOptionFixture } = await import(
-      "@/components/settings/host-scope/host-scope-fixture"
-    );
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
     const active = hostScopeOptionFixture({
       hostId: "host-active",
       name: "This Mac",
@@ -56,9 +55,8 @@ describe("<HostScopeGate /> empty and failed states", () => {
   it("still offers the way back when the unreachable host is not the active one", async () => {
     // The counterweight: withholding the action for the active host must not
     // withhold it for a pick that genuinely has somewhere to return to.
-    const { hostScopeOptionFixture } = await import(
-      "@/components/settings/host-scope/host-scope-fixture"
-    );
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
     render(
       <HostScopeGate
         scope={hostScopeFixture({

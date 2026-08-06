@@ -47,7 +47,12 @@ describe("deriveHostHealth — the two actionable local states", () => {
     const health = deriveHostHealth({
       ...BASE,
       isLocalMachine: true,
-      service: { state: "stopped", version: "1.4.2", listenUrl: null, pid: null },
+      service: {
+        state: "stopped",
+        version: "1.4.2",
+        listenUrl: null,
+        pid: null,
+      },
     });
 
     expect(health.state).toBe("stopped");
@@ -111,7 +116,12 @@ describe("deriveHostHealth — the two actionable local states", () => {
     const health = deriveHostHealth({
       ...BASE,
       isLocalMachine: false,
-      service: { state: "stopped", version: "1.4.2", listenUrl: null, pid: null },
+      service: {
+        state: "stopped",
+        version: "1.4.2",
+        listenUrl: null,
+        pid: null,
+      },
     });
 
     expect(health.state).not.toBe("stopped");

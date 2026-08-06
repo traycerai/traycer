@@ -193,7 +193,9 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
       </AnimatePresence>
     </span>
   );
-  const label = <span className="min-w-0 flex-1 truncate">{section.label}</span>;
+  const label = (
+    <span className="min-w-0 flex-1 truncate">{section.label}</span>
+  );
   if (mode.kind === "modal") {
     const active = mode.activeSection === section.id;
     return (

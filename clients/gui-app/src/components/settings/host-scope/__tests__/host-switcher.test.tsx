@@ -43,7 +43,12 @@ describe("<HostSwitcher /> empty vs failed", () => {
   it("reports a failed load with a retry instead of claiming an empty account", () => {
     const onRetryLists = vi.fn();
     const onAddHost = vi.fn();
-    renderEmpty({ isLoading: false, listsFailed: true, onRetryLists, onAddHost });
+    renderEmpty({
+      isLoading: false,
+      listsFailed: true,
+      onRetryLists,
+      onAddHost,
+    });
 
     expect(
       screen.getByTestId("settings-host-switcher-lists-failed"),

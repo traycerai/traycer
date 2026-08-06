@@ -56,10 +56,7 @@ export function HostPresenceDot(props: {
   const toneClass = DOT_TONE[props.tone];
   return (
     <span
-      className={cn(
-        "relative inline-flex size-1.5 shrink-0",
-        props.className,
-      )}
+      className={cn("relative inline-flex size-1.5 shrink-0", props.className)}
       aria-hidden
     >
       {props.animate ? (
