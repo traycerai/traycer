@@ -1,6 +1,6 @@
 import type { ProviderPlugin } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderPluginsTab } from "@/components/settings/panels/provider-plugins-tab";
 
@@ -242,5 +242,47 @@ describe("<ProviderPluginsTab /> icons and manifest labels", () => {
       ["a@m", true],
       ["b@m", false],
     ]);
+  });
+
+  it("shows the empty-list copy when no plugins are installed", () => {
+    // Caps default to read-only here, so the empty body uses the installed
+    // wording rather than the "add from a marketplace" prompt.
+    pluginMocks.plugins = [];
+    renderTab();
+
+    expect(screen.getByText("No plugins installed.")).toBeDefined();
+    expect(
+      screen.getByRole("textbox", { name: "Search plugins" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/No plugins match/)).toBeNull();
+  });
+
+  it("distinguishes an unmatched query from a truly empty plugin list", () => {
+    pluginMocks.plugins = [
+      plugin({
+        id: "pdf@openai-primary-runtime",
+        name: "pdf",
+        displayName: "PDF tools",
+      }),
+      plugin({
+        id: "slides@openai-primary-runtime",
+        name: "slides",
+        displayName: null,
+      }),
+    ];
+    renderTab();
+
+    expect(screen.getByText("PDF tools")).toBeDefined();
+    expect(screen.getByText("slides")).toBeDefined();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search plugins" }), {
+      target: { value: "zzzz-nope" },
+    });
+
+    expect(screen.queryByText("PDF tools")).toBeNull();
+    expect(screen.queryByText("slides")).toBeNull();
+    expect(screen.queryByText("No plugins installed.")).toBeNull();
+    expect(screen.getByText('No plugins match “zzzz-nope”.')).toBeDefined();
+    expect(screen.getByRole("status").textContent).toBe("No plugins match.");
   });
 });

@@ -141,4 +141,22 @@ describe("provider resource fuzzy filters", () => {
       filterProviderPlugins(PLUGINS, "slides@").map((row) => row.name),
     ).toEqual(["slides"]);
   });
+
+  it("returns the same tool object so non-search fields stay intact", () => {
+    // Filtering is a FILTER, not a projection: stripping fields that the
+    // matcher never reads (enabled, denySources, …) used to leave the tools
+    // grid without a toggle. Identity of the match is the contract that keeps
+    // those fields reachable after a search.
+    const hit = filterProviderMcpTools(TOOLS, "search_code");
+    expect(hit).toHaveLength(1);
+    expect(hit[0]).toBe(TOOLS[0]);
+    expect(hit[0].enabled).toBe(true);
+    expect(hit[0].denySources).toEqual([]);
+  });
+
+  it("returns no rows when the query matches nothing", () => {
+    expect(filterProviderMcpServers(SERVERS, "zzzz-nope")).toEqual([]);
+    expect(filterProviderSkills(SKILLS, "zzzz-nope")).toEqual([]);
+    expect(filterProviderPlugins(PLUGINS, "zzzz-nope")).toEqual([]);
+  });
 });

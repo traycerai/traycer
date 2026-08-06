@@ -1343,4 +1343,63 @@ describe("<ProviderMcpTab />", () => {
     );
     expect(screen.getByText(/Traycer sessions only/)).toBeDefined();
   });
+
+  it("shows the empty list copy when no servers are configured", () => {
+    mcpMocks.listResult.data = { servers: [] };
+    renderTab(FULL_CAPS, "codex");
+
+    expect(screen.getByText("No MCP servers")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Add an MCP server so codex can use external tools and context.",
+      ),
+    ).toBeDefined();
+    // Search is still offered so an empty host does not hide the affordance,
+    // but the empty-list copy must not be replaced by a "no match" state.
+    expect(
+      screen.getByRole("textbox", { name: "Search servers" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/No servers match/)).toBeNull();
+  });
+
+  it("distinguishes an unmatched query from a truly empty server list", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({ name: "github" }),
+      ],
+    };
+    renderTab(FULL_CAPS, "codex");
+
+    expect(screen.getByText("context7")).toBeDefined();
+    expect(screen.getByText("github")).toBeDefined();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search servers" }), {
+      target: { value: "zzzz-nope" },
+    });
+
+    expect(screen.queryByText("context7")).toBeNull();
+    expect(screen.queryByText("github")).toBeNull();
+    expect(screen.queryByText("No MCP servers")).toBeNull();
+    expect(screen.getByText('No servers match “zzzz-nope”.')).toBeDefined();
+    expect(screen.getByRole("status").textContent).toBe("No servers match.");
+  });
+
+  it("filters the server list and announces how many remain", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({ name: "github" }),
+      ],
+    };
+    renderTab(FULL_CAPS, "codex");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search servers" }), {
+      target: { value: "contxt7" },
+    });
+
+    expect(screen.getByText("context7")).toBeDefined();
+    expect(screen.queryByText("github")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("1 server shown.");
+  });
 });
