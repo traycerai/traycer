@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type {
   ProviderCliState,
   ProviderId,
@@ -19,6 +19,16 @@ import { useProvidersPluginsList } from "@/hooks/providers/use-providers-plugins
 import { useProvidersPluginsMutate } from "@/hooks/providers/use-providers-plugins-mutate-mutation";
 import { cn } from "@/lib/utils";
 import { ProviderEntryIcon } from "./provider-entry-icon";
+import {
+  filterProviderPlugins,
+  isProviderListSearchActive,
+} from "./provider-list-search-filter";
+import {
+  ProviderListSearch,
+  ProviderListSearchEmptyState,
+} from "./provider-list-search";
+
+const EMPTY_PLUGINS: readonly ProviderPlugin[] = [];
 
 const CURSOR_SESSION_NOTICE =
   "Cursor marketplace plugins are not yet active in Traycer sessions. Listing is read-only until settingSources includes plugins.";
@@ -91,8 +101,14 @@ function ProviderPluginsTabBody({
   const [reloadHint, setReloadHint] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderPlugin | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const plugins = listQuery.data?.plugins ?? [];
+  const plugins = listQuery.data?.plugins ?? EMPTY_PLUGINS;
+  const filteredPlugins = useMemo(
+    () => filterProviderPlugins(plugins, searchQuery),
+    [plugins, searchQuery],
+  );
+  const pluginSearchActive = isProviderListSearchActive(searchQuery);
   const isMutating = pendingIds.size > 0 || mutate.isPending;
   const removeDialogPending =
     removeTarget !== null && pendingIds.has(removeTarget.id);
@@ -193,12 +209,22 @@ function ProviderPluginsTabBody({
         </div>
       ) : null}
 
+      <ProviderListSearch
+        query={searchQuery}
+        onQueryChange={setSearchQuery}
+        resultCount={filteredPlugins.length}
+        resourceLabel="plugins"
+      />
+
       <PluginsListBody
         providerId={providerId}
         listLoading={listQuery.isLoading || listQuery.isPending}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
-        plugins={plugins}
+        plugins={filteredPlugins}
+        unfilteredPluginCount={plugins.length}
+        searchQuery={searchQuery}
+        searchActive={pluginSearchActive}
         isReadOnly={isReadOnly}
         caps={caps}
         pendingIds={pendingIds}
@@ -307,6 +333,9 @@ function PluginsListBody({
   listError,
   errorMessage,
   plugins,
+  unfilteredPluginCount,
+  searchQuery,
+  searchActive,
   isReadOnly,
   caps,
   pendingIds,
@@ -318,6 +347,9 @@ function PluginsListBody({
   readonly listError: boolean;
   readonly errorMessage: string | null;
   readonly plugins: readonly ProviderPlugin[];
+  readonly unfilteredPluginCount: number;
+  readonly searchQuery: string;
+  readonly searchActive: boolean;
   readonly isReadOnly: boolean;
   readonly caps: ProviderPluginsCapabilities;
   readonly pendingIds: ReadonlySet<string>;
@@ -346,7 +378,7 @@ function PluginsListBody({
       </div>
     );
   }
-  if (plugins.length === 0) {
+  if (unfilteredPluginCount === 0) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
         <Package className="size-5 text-muted-foreground" />
@@ -356,6 +388,14 @@ function PluginsListBody({
             : "No plugins installed yet. Add one from a source or marketplace."}
         </p>
       </div>
+    );
+  }
+  if (searchActive && plugins.length === 0) {
+    return (
+      <ProviderListSearchEmptyState
+        query={searchQuery}
+        resourceLabel="plugins"
+      />
     );
   }
   // A list-level decision, not a per-row one: the icon column is reserved for

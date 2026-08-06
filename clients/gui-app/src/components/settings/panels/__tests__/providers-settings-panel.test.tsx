@@ -1181,6 +1181,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -1245,6 +1247,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    selectTab("CLI & Args");
+
     const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
       name: "Select /usr/local/bin/hermes",
     });
@@ -1273,6 +1277,8 @@ describe("<ProvidersSettingsPanel />", () => {
         </TooltipProvider>
       </RunnerHostContext.Provider>,
     );
+
+    selectTab("CLI & Args");
 
     expect(
       screen.getByText(
@@ -1579,6 +1585,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -4498,8 +4505,10 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
+    // Profiles & Limits is now the default first tab for providers without an
+    // API-key Account tab, so startSignIn opens the dialog immediately. That
+    // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
+    // fail getByRole("tab") without { hidden: true }.
     expect(
       screen
         .getByRole("button", { name: "Claude Code", hidden: true })

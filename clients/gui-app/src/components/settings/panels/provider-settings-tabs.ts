@@ -25,11 +25,17 @@ export type ProviderTabKey = ProviderSettingsTab | "account";
 /**
  * Stable display order for the provider detail tab bar. Unsupported tabs are
  * filtered out per provider by {@link supportedTabsFor}.
+ *
+ * Account and Profiles & Limits lead: they are what people open Providers to
+ * do (sign in, switch profile, check remaining quota). CLI & Args is rarer
+ * setup and sits after them. The first *supported* tab is also the default
+ * selection ({@link supportedTabsFor} keeps this order), so a provider with
+ * neither account nor usage still opens on a sensible first tab (env, mcp, …).
  */
 export const PROVIDER_TAB_ORDER: readonly ProviderTabKey[] = [
-  "general",
   "account",
   "usage",
+  "general",
   "env",
   "mcp",
   "plugins",

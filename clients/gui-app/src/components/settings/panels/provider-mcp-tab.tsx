@@ -67,6 +67,14 @@ import {
   McpScopePicker,
   type McpScopeTarget,
 } from "./provider-mcp-scope-picker";
+import {
+  filterProviderMcpServers,
+  isProviderListSearchActive,
+} from "./provider-list-search-filter";
+import {
+  ProviderListSearch,
+  ProviderListSearchEmptyState,
+} from "./provider-list-search";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 
@@ -494,6 +502,7 @@ export function ProviderMcpTab(props: {
     ReadonlySet<string>
   >(() => new Set());
   const [authInstruction, setAuthInstruction] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const pendingAuthUpsert = useMcpPendingAuthStore((s) => s.upsert);
   const pendingAuthRemove = useMcpPendingAuthStore((s) => s.remove);
   const pendingAuthEntries = useMcpPendingAuthStore((s) => s.entries);
@@ -521,6 +530,11 @@ export function ProviderMcpTab(props: {
 
   const listData = listQuery.data;
   const servers = listData?.servers ?? EMPTY_MCP_SERVERS;
+  const filteredServers = useMemo(
+    () => filterProviderMcpServers(servers, searchQuery),
+    [servers, searchQuery],
+  );
+  const serverSearchActive = isProviderListSearchActive(searchQuery);
 
   // Adjust auth-awaiting set from latest list data during render (React
   // "storing information from previous renders" pattern) — avoids setState
@@ -954,6 +968,15 @@ export function ProviderMcpTab(props: {
         authInstruction={authInstruction}
       />
 
+      {!projectNeedsWorkspace ? (
+        <ProviderListSearch
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          resultCount={filteredServers.length}
+          resourceLabel="servers"
+        />
+      ) : null}
+
       <McpServerList
         projectNeedsWorkspace={projectNeedsWorkspace}
         multiWorkspace={multiWorkspace}
@@ -961,7 +984,10 @@ export function ProviderMcpTab(props: {
         listPending={listQuery.isPending}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
-        servers={servers}
+        servers={filteredServers}
+        unfilteredServerCount={servers.length}
+        searchQuery={searchQuery}
+        searchActive={serverSearchActive}
         providerLabel={providerLabel}
         capabilities={capabilities}
         shadowedNames={shadowedNames}
@@ -1124,6 +1150,9 @@ function McpServerList(props: {
   readonly listError: boolean;
   readonly errorMessage: string | null;
   readonly servers: readonly ProviderMcpServer[];
+  readonly unfilteredServerCount: number;
+  readonly searchQuery: string;
+  readonly searchActive: boolean;
   readonly providerLabel: string;
   readonly capabilities: ProviderMcpCapabilities;
   readonly shadowedNames: ReadonlySet<string>;
@@ -1196,11 +1225,19 @@ function McpServerList(props: {
       />
     );
   }
-  if (props.servers.length === 0) {
+  if (props.unfilteredServerCount === 0) {
     return (
       <EmptyState
         title="No MCP servers"
         description={`Add an MCP server so ${props.providerLabel} can use external tools and context.`}
+      />
+    );
+  }
+  if (props.searchActive && props.servers.length === 0) {
+    return (
+      <ProviderListSearchEmptyState
+        query={props.searchQuery}
+        resourceLabel="servers"
       />
     );
   }

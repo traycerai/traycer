@@ -30,8 +30,17 @@ import {
   SKILL_SOURCE_LABEL,
   SKILL_SOURCE_TONE,
 } from "./provider-skill-source-badge";
+import {
+  filterProviderSkills,
+  isProviderListSearchActive,
+} from "./provider-list-search-filter";
+import {
+  ProviderListSearch,
+  ProviderListSearchEmptyState,
+} from "./provider-list-search";
 
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
 export function ProviderSkillsTab({
   state,
@@ -96,8 +105,14 @@ function ProviderSkillsTabBody({
   // Separate from `localError`, which renders on the TAB - behind the open
   // skill dialog, where a failed removal would be invisible.
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const skills = listQuery.data?.skills ?? [];
+  const skills = listQuery.data?.skills ?? EMPTY_SKILLS;
+  const filteredSkills = useMemo(
+    () => filterProviderSkills(skills, searchQuery),
+    [skills, searchQuery],
+  );
+  const skillSearchActive = isProviderListSearchActive(searchQuery);
   const isMutating = mutate.isPending;
   // `canList &&` is load-bearing: a disabled TanStack query stays `isPending`
   // forever (pending status, idle fetchStatus), so without it a contract whose
@@ -315,11 +330,21 @@ function ProviderSkillsTabBody({
         </div>
       ) : null}
 
+      <ProviderListSearch
+        query={searchQuery}
+        onQueryChange={setSearchQuery}
+        resultCount={filteredSkills.length}
+        resourceLabel="skills"
+      />
+
       <SkillsListBody
         listLoading={listLoading}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
-        skills={skills}
+        skills={filteredSkills}
+        unfilteredSkillCount={skills.length}
+        searchQuery={searchQuery}
+        searchActive={skillSearchActive}
         onOpenSkill={setOpenSkill}
       />
 
@@ -609,12 +634,18 @@ function SkillsListBody({
   listError,
   errorMessage,
   skills,
+  unfilteredSkillCount,
+  searchQuery,
+  searchActive,
   onOpenSkill,
 }: {
   readonly listLoading: boolean;
   readonly listError: boolean;
   readonly errorMessage: string | null;
   readonly skills: readonly ProviderSkill[];
+  readonly unfilteredSkillCount: number;
+  readonly searchQuery: string;
+  readonly searchActive: boolean;
   readonly onOpenSkill: (skill: ProviderSkill) => void;
 }): ReactNode {
   if (listLoading) {
@@ -636,7 +667,7 @@ function SkillsListBody({
       </div>
     );
   }
-  if (skills.length === 0) {
+  if (unfilteredSkillCount === 0) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
         <Sparkles className="size-5 text-muted-foreground" />
@@ -644,6 +675,14 @@ function SkillsListBody({
           No skills yet. Create one or import from a git URL / folder.
         </p>
       </div>
+    );
+  }
+  if (searchActive && skills.length === 0) {
+    return (
+      <ProviderListSearchEmptyState
+        query={searchQuery}
+        resourceLabel="skills"
+      />
     );
   }
   return (

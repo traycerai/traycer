@@ -100,6 +100,43 @@ describe("supportedTabsFor", () => {
     expect(tabs.indexOf("account")).toBeLessThan(tabs.indexOf("usage"));
   });
 
+  it("places Account and Profiles & Limits ahead of CLI & Args", () => {
+    // People open Providers to sign in / switch profile / check quota; CLI
+    // setup is rarer. The first supported tab is also the default selection.
+    const tabs = supportedTabsFor({
+      providerId: "droid",
+      apiKeySupported: true,
+      advertised: ALL_TABS,
+    });
+    expect(tabs[0]).toBe("account");
+    expect(tabs[1]).toBe("usage");
+    expect(tabs.indexOf("account")).toBeLessThan(tabs.indexOf("general"));
+    expect(tabs.indexOf("usage")).toBeLessThan(tabs.indexOf("general"));
+  });
+
+  it("opens on Profiles & Limits when Account is unsupported", () => {
+    const tabs = supportedTabsFor({
+      providerId: "codex",
+      apiKeySupported: false,
+      advertised: ALL_TABS,
+    });
+    expect(tabs[0]).toBe("usage");
+    expect(tabs).not.toContain("account");
+  });
+
+  it("falls through to the first supported non-account tab when neither account nor usage apply", () => {
+    // cursor drops `general` (empty CLI body) and may advertise no usage.
+    const tabs = supportedTabsFor({
+      providerId: "cursor",
+      apiKeySupported: false,
+      advertised: ["general", "env", "mcp"],
+    });
+    expect(tabs[0]).toBe("env");
+    expect(tabs).not.toContain("general");
+    expect(tabs).not.toContain("account");
+    expect(tabs).not.toContain("usage");
+  });
+
   it("leaves an API-key provider with at least one reachable tab", () => {
     // cursor loses `general` and is advertised nothing else: the derived
     // Account tab is what stops the pane rendering a bare tab rail.
