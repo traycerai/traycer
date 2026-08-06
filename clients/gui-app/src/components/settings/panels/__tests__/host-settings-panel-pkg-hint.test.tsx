@@ -10,6 +10,8 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -18,7 +20,9 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
-const hostScopeMocks = vi.hoisted(() => ({
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+} = vi.hoisted(() => ({
   client: null,
 }));
 

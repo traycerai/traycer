@@ -87,8 +87,8 @@ describe("<SettingsSidebar /> leader hints", () => {
       </KeybindingProvider>,
     );
 
-    expect(await screen.findByText("Overview")).toBeDefined();
-    expect(screen.queryByText("Service")).toBeNull();
+    expect(await screen.findByRole("link", { name: "Overview" })).toBeDefined();
+    expect(screen.queryByRole("link", { name: "Service" })).toBeNull();
   });
 
   it("Overview entry links to /settings/host", async () => {
@@ -99,8 +99,10 @@ describe("<SettingsSidebar /> leader hints", () => {
       </KeybindingProvider>,
     );
 
-    const link = (await screen.findByText("Overview")).closest("a");
-    expect(link?.getAttribute("href")).toBe("/settings/host");
+    const link = await screen.findByRole<HTMLAnchorElement>("link", {
+      name: "Overview",
+    });
+    expect(link.getAttribute("href")).toBe("/settings/host");
   });
 
   it("Sessions entry links to the compatibility /settings/devices route", async () => {

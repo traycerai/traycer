@@ -16,7 +16,10 @@ import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import { leaderHint } from "@/components/ui/leader-digit-shortcuts";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 
@@ -58,7 +61,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
         <Fragment key={group.id}>
           {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
           <SettingsSidebarGroupHeader label={group.label} />
-          {group.id === "host" ? <SettingsSidebarHostPicker /> : null}
+          {group.id === "host" ? (
+            <SettingsSidebarHostPicker scope={scope} />
+          ) : null}
           <div
             className={cn(
               "flex flex-col gap-0.5",
@@ -93,8 +98,13 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
  * The scope control, between the "Host" heading and the sections it governs —
  * the one position that reads as "everything below belongs to this".
  */
-function SettingsSidebarHostPicker(): ReactNode {
-  const scope = useHostScope();
+function SettingsSidebarHostPicker(props: {
+  // Resolved once by the sidebar above — the composition behind `useHostScope`
+  // is six hooks deep, and this component would run all of it a second time
+  // in the same render pass.
+  readonly scope: HostScope;
+}): ReactNode {
+  const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
   // `gap-0.5` matches the section rows below, so the picker reads as the first
   // row of the tier it heads rather than a control docked above it.
@@ -236,8 +246,8 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
 
 function SettingsSidebarRouteItem(props: {
   readonly section: SettingsSection;
-  readonly label: React.ReactNode;
-  readonly badge: React.ReactNode;
+  readonly label: ReactNode;
+  readonly badge: ReactNode;
   readonly unreachable: boolean;
 }) {
   const { section, label, badge, unreachable } = props;

@@ -143,7 +143,7 @@ export function useHostScope(): HostScope {
     queryOptions<HostInstalledRecord | null>({
       queryKey:
         management === null
-          ? ["runner", "host-installed-record", "unavailable"]
+          ? runnerQueryKeys.hostInstalledRecordUnavailable()
           : runnerQueryKeys.hostInstalledRecord(management),
       queryFn:
         management === null

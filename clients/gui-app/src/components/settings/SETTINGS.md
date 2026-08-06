@@ -99,10 +99,11 @@ footer adds one, and everything else about a host lives on that host's Overview
 (`host-scope/host-registry-updates.tsx` holds the registry half of Updates,
 beside the local controller's own region in the SAME card).
 
-**The picker inherits the composer's row anatomy** (`components/home/
-host-workspace-selector/host-section.tsx`): kind glyph, name, status dot,
-check. Two pickers over one concept must not each invent a vocabulary. Search
-appears from six hosts up; below that it is one more thing to skip past.
+**The picker inherits the composer's row anatomy**
+(`components/home/host-workspace-selector/host-section.tsx`): kind glyph, name,
+status dot, check. Two pickers over one concept must not each invent a
+vocabulary. Search appears from six hosts up; below that it is one more thing
+to skip past.
 
 `requiresLocalHost` (Shell, Diagnostics) marks a TRANSPORT limit, never a scope
 one: shell config and `hostLogLevel` are fields of the selected host's own
@@ -178,10 +179,18 @@ Two mechanisms, and the split matters:
   non-usable scope still fires and caches its answer no matter what the gate
   renders, so panels that own host reads check this before mounting them.
 
-Every section in the `host` group mounts the gate - Overview, Shell and
-Diagnostics included. They are the ones that most need it: their bodies are
-backed by the LOCAL bridge, so a `null` scoped host that defaulted to "local"
-put this computer's service console under a host that no longer exists.
+Every section in the `host` group mounts the gate. Shell and Diagnostics wrap
+their host-tied bodies in it whole (Diagnostics keeps its app-scoped rows -
+the desktop log level and the memory capture - outside, since their subject
+never changes with the scope). Overview is the exception that proves the rule:
+most of its body never touches the scoped host's RPC - the local service
+console runs over the CLI bridge and is the RECOVERY surface, and the Updates
+card writes through the account API - so it mounts the whole-panel gate only
+for the unresolved and `vanished` cases, renders its body for `connecting` and
+`unreachable`, and the RPC-backed rows gate themselves inside
+`HostDangerZone`. The reason is the same one that motivates the gate: a `null`
+scoped host that defaulted to "local" once put this computer's service console
+under a host that no longer exists.
 
 **One host model.** The app carries two host lists that need not agree - the
 runtime directory (what this client can dial; it alone knows `websocketUrl`)

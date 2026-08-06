@@ -723,6 +723,7 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
   afterEach(() => {
     cleanup();
     hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.client = null;
   });
 
   it("disarms a pending hook delete when the scoped host changes", async () => {

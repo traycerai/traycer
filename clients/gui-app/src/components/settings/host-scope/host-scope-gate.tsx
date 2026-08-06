@@ -149,6 +149,10 @@ function HostScopeNotice(props: {
 }): ReactNode {
   return (
     <div
+      // The notice swaps in for the panel body without a navigation, so
+      // without a live region a screen reader hears nothing change. `warn`
+      // states interrupt; `idle` states wait their turn.
+      role={props.tone === "warn" ? "alert" : "status"}
       className="flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
       data-testid={props.testId}
     >

@@ -19,7 +19,15 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 // Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
 function selectTab(name: string): void {
@@ -1213,6 +1221,11 @@ describe("<ProvidersSettingsPanel />", () => {
     const order: string[] = [];
     hostScopeMocks.setHostId.mockImplementation(() => {
       order.push("scope-switched");
+    });
+    // The suite's beforeEach only mockClear()s this spy, which keeps the
+    // implementation — drop it here so it cannot leak into later tests.
+    onTestFinished(() => {
+      hostScopeMocks.setHostId.mockReset();
     });
     const unsubscribe = useProvidersFocusStore.subscribe((state, prev) => {
       if (prev.focusProfileId !== null && state.focusProfileId === null) {

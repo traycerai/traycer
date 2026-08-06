@@ -57,7 +57,9 @@ export function HostIdentityCard(props: {
               <h2 className="truncate font-semibold text-foreground text-title-sm">
                 {host.name}
               </h2>
-              {host.isLocalMachine ? <HostTag label="This computer" /> : null}
+              {host.isLocalMachine ? (
+                <HostTag label="This computer" tone={undefined} />
+              ) : null}
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-ui-sm">
               <HostPresenceDot
@@ -228,7 +230,7 @@ export function HostIdRow(props: {
 
 export function HostTag(props: {
   readonly label: string;
-  readonly tone?: "muted" | "accent";
+  readonly tone: "muted" | "accent" | undefined;
 }): ReactNode {
   const accent = props.tone === "accent";
   return (

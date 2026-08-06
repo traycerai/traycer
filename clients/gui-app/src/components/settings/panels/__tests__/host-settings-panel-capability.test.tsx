@@ -109,7 +109,9 @@ describe("Overview capability split without host management", () => {
 
     // The regression: the page-wide gate replaced this, so a registered host
     // with no current route had no update-policy UI anywhere in the app.
-    expect(screen.getByTestId("host-auto-update-host-remote")).not.toBeNull();
+    expect(
+      screen.getByRole("switch", { name: "Turn on auto-update" }),
+    ).not.toBeNull();
     // ...while the genuinely RPC-dependent ROW stays gated and says why. The
     // zone itself still renders: its other row (Remove Traycer) runs over the
     // local CLI bridge, so the gate belongs around the snapshots row, not
@@ -144,9 +146,11 @@ describe("Overview capability split without host management", () => {
     // retarget an update mid-drain. The policy toggle stays: it is a standing
     // preference, not a new target.
     expect(
-      screen.queryByTestId("host-update-version-trigger-host-remote"),
+      screen.queryByRole("button", { name: "Update to version…" }),
     ).toBeNull();
-    expect(screen.getByTestId("host-auto-update-host-remote")).not.toBeNull();
+    expect(
+      screen.getByRole("switch", { name: "Turn on auto-update" }),
+    ).not.toBeNull();
   });
 
   it("offers version pinning once no update is in flight", async () => {
@@ -161,7 +165,7 @@ describe("Overview capability split without host management", () => {
     renderOverview({ host, hostId: host.hostId, status: "unreachable" });
 
     expect(
-      screen.getByTestId("host-update-version-trigger-host-remote"),
+      screen.getByRole("button", { name: "Update to version…" }),
     ).not.toBeNull();
   });
 
@@ -183,7 +187,9 @@ describe("Overview capability split without host management", () => {
     });
 
     expect(screen.getByTestId("host-scope-vanished")).not.toBeNull();
-    expect(screen.queryByTestId("host-auto-update-host-remote")).toBeNull();
+    expect(
+      screen.queryByRole("switch", { name: "Turn on auto-update" }),
+    ).toBeNull();
     expect(screen.queryByTestId("host-danger-zone")).toBeNull();
   });
 });

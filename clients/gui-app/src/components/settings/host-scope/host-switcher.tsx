@@ -226,6 +226,30 @@ export function HostSwitcher(props: {
             </CommandGroup>
           </CommandList>
         </Command>
+        {/* The same "a FAILED list is not an empty account" rule, at its third
+            consumer — the non-empty case. When one source list fails while the
+            other still contributes rows, `hosts` is nonempty, so the empty
+            branch above never runs and nothing said the picture was partial:
+            the sidebar presented half an account as all of it. The rows stay
+            usable; this footer says what is missing and offers the retry. */}
+        {props.listsFailed && !props.isLoading ? (
+          <div
+            className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2"
+            data-testid="settings-host-switcher-partial-failure"
+          >
+            <span className="text-ui-xs text-muted-foreground">
+              Some hosts may be missing
+            </span>
+            <button
+              type="button"
+              onClick={props.onRetryLists}
+              className="shrink-0 rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              data-testid="settings-host-switcher-retry-lists"
+            >
+              Try again
+            </button>
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   );
@@ -257,12 +281,17 @@ function HostSwitcherRow(props: {
       onSelect={props.onSelect}
       data-testid={`settings-host-switcher-option-${host.hostId}`}
       data-scoped={props.scoped ? "true" : "false"}
+      // The check mark below is aria-hidden and `data-scoped` reaches no
+      // assistive tech, so without this a screen reader heard the scoped row
+      // and every other row as the same text.
+      aria-current={props.scoped ? "true" : undefined}
     >
       <HostGlyph
         host={host}
         className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="min-w-0 flex-1 truncate text-ui-sm">{host.name}</span>
+      {props.scoped ? <span className="sr-only">Currently viewing</span> : null}
       {props.active ? <ActiveTag /> : null}
       {/* A host this client cannot dial is still worth listing — it is the
           account's host and its status is real — but saying so up front

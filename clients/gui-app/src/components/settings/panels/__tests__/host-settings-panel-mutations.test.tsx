@@ -27,6 +27,8 @@ import type {
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("sonner", () => ({
@@ -37,8 +39,12 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
-const hostScopeMocks = vi.hoisted(() => ({
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+  hostId: string;
+} = vi.hoisted(() => ({
   client: null,
+  hostId: "host-a",
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -47,12 +53,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        hostId: hostScopeMocks.hostId,
+      }),
   };
 });
 
 afterEach(() => {
   cleanup();
+  hostScopeMocks.hostId = "host-a";
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.info).mockClear();
@@ -98,6 +109,44 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+  });
+
+  it("disarms an open restart confirmation when the scoped host changes", async () => {
+    // The dialogs live outside the local-console conditional, so without the
+    // scope-keyed remount a host switch left this confirmation mounted and
+    // armed at the LOCAL bridge while the page described another machine —
+    // confirming it restarted a host that was no longer the dialog's visible
+    // subject.
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const { management } = makeManagement({ restartHost });
+    const host = makeHost(management, makeLocalHostSnapshot());
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    // Fresh elements per render: reusing one element tree lets React bail out
+    // on referentially identical children, and the panel would never re-read
+    // the changed scope.
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={host}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+
+    fireEvent.click(await waitForButton("Restart"));
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).toBeTruthy();
+
+    hostScopeMocks.hostId = "host-b";
+    view.rerender(makeUi());
+
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(restartHost).not.toHaveBeenCalled();
   });
 
   // Field RCA 2026-07-28: a busy host denying the restart surfaced as a

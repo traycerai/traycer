@@ -387,7 +387,7 @@ function SettingsLocalAppStateSection() {
     <>
       <SettingsRow
         label="Local app state"
-        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared separately above."
+        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared from the host's own Overview page."
         control={
           <Button
             type="button"

@@ -22,16 +22,24 @@ function registryItem(overrides: Partial<HostListItem>): HostListItem {
     displayName: "host-a",
     platform: "darwin-arm64",
     kind: "personal",
+    publicKey: "pk",
+    createdAt: new Date(0).toISOString(),
     updatePolicy: "manual",
     status: {
-      online: false,
-      lastSeenAt: new Date(0).toISOString(),
-      version: "1.4.2",
-      updateState: "current",
+      // A long-expired lease: the registry's answer for this host is "Offline,
+      // last seen 3h ago", which is what the local snapshot must outrank.
+      presenceLease: "expired",
+      hostRelayAttached: false,
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      busy: false,
       busySessionCount: 0,
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: new Date(0).toISOString(),
     },
     ...overrides,
-  } as HostListItem;
+  };
 }
 
 const BASE = {

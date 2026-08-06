@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
@@ -59,7 +59,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     // pre-existing host as the new machine.
     expect(screen.queryByTestId("settings-host-switcher-empty-add")).toBeNull();
 
-    screen.getByTestId("settings-host-switcher-retry-lists").click();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetryLists).toHaveBeenCalledTimes(1);
   });
 
@@ -81,6 +81,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     renderEmpty({ isLoading: true, listsFailed: true });
 
     expect(screen.getByTestId("settings-host-switcher-empty")).not.toBeNull();
+    expect(screen.getByText("Finding your hosts…")).not.toBeNull();
     expect(
       screen.queryByTestId("settings-host-switcher-lists-failed"),
     ).toBeNull();
@@ -105,5 +106,33 @@ describe("<HostSwitcher /> empty vs failed", () => {
       screen.queryByTestId("settings-host-switcher-lists-failed"),
     ).toBeNull();
     expect(screen.getByTestId("settings-host-switcher")).not.toBeNull();
+  });
+
+  it("surfaces a partial failure inside the popover while hosts are in hand", () => {
+    // One source list failed while the other still contributed rows: the
+    // union is nonempty, so the empty branch never runs — but presenting
+    // half an account as all of it is the same false claim. The rows stay
+    // usable; the footer names the gap and offers the retry.
+    const onRetryLists = vi.fn();
+    render(
+      <HostSwitcher
+        hosts={[hostScopeOptionFixture({ hostId: "host-a", name: "Host A" })]}
+        selected={null}
+        activeHostId={null}
+        onSelect={() => undefined}
+        onAddHost={() => undefined}
+        isLoading={false}
+        listsFailed
+        onRetryLists={onRetryLists}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(
+      screen.getByTestId("settings-host-switcher-partial-failure"),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetryLists).toHaveBeenCalledTimes(1);
   });
 });

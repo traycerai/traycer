@@ -229,8 +229,8 @@ function useObservedHeight(): {
  * another host's worktrees never swaps the app-wide active host or reloads the
  * Epic list - and never affects the branch-prefix default above, which is not
  * host-scoped. This panel used to carry its own host `<Select>` in the
- * toolbar; that slot now holds an inert readout naming the scoped host, with
- * the refresh control beside it.
+ * toolbar; that slot is gone entirely — the sidebar names the scoped host,
+ * and the toolbar keeps only the refresh control and its own filters.
  */
 export function WorktreesSettingsPanel(): ReactNode {
   const scope = useHostScope();

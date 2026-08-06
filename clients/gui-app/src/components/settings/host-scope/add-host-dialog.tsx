@@ -16,6 +16,8 @@ import {
 import { formatPlatform } from "@/components/settings/host-scope/host-scope-model";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 const INSTALL_COMMAND = "curl -fsSL traycer.ai/install | sh";
@@ -174,7 +176,14 @@ function AddHostDialogBody(): ReactNode {
         </DialogDescription>
       </DialogHeader>
 
-      <div className="flex gap-1" role="tablist" aria-label="Install platform">
+      {/* Radio semantics, not tabs: the two buttons pick one value of two,
+          and nothing here is a tabpanel with `aria-controls` wiring or the
+          arrow-key movement a real tablist owes its users. */}
+      <div
+        className="flex gap-1"
+        role="radiogroup"
+        aria-label="Install platform"
+      >
         <PlatformTab
           label="macOS / Linux"
           selected={platform === "unix"}
@@ -224,8 +233,8 @@ function PlatformTab(props: {
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={props.selected}
+      role="radio"
+      aria-checked={props.selected}
       onClick={props.onSelect}
       className={cn(
         "rounded-md px-2.5 py-1 text-ui-xs transition-colors",
@@ -240,7 +249,15 @@ function PlatformTab(props: {
 }
 
 function CommandBlock(props: { readonly command: string }): ReactNode {
-  const [copied, setCopied] = useState(false);
+  // The hook, not a hand-rolled writeText + timeout: it withholds the success
+  // check when the write rejects (denied permission, insecure context) and
+  // clears its reset timer on unmount, both of which the inline version got
+  // wrong.
+  const clipboard = useClipboardCopy({
+    resetMs: 1600,
+    onSuccess: null,
+    onError: () => toast.error("Couldn't copy the command"),
+  });
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
       <code className="min-w-0 flex-1 overflow-x-auto font-mono text-code-xs text-foreground">
@@ -252,13 +269,9 @@ function CommandBlock(props: { readonly command: string }): ReactNode {
         size="sm"
         className="size-7 shrink-0 p-0"
         aria-label={`Copy: ${props.command}`}
-        onClick={() => {
-          void navigator.clipboard.writeText(props.command);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1600);
-        }}
+        onClick={() => clipboard.copy(props.command)}
       >
-        {copied ? (
+        {clipboard.copied ? (
           <Check className="size-3.5 text-emerald-500" />
         ) : (
           <Copy className="size-3.5" />

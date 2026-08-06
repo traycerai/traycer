@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
@@ -14,6 +14,34 @@ import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fi
  */
 describe("<HostScopeGate /> empty and failed states", () => {
   afterEach(cleanup);
+
+  it("renders the panel body once the scope is ready", () => {
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({ status: "ready" })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
+    );
+
+    expect(screen.getByTestId("body")).not.toBeNull();
+    expect(screen.queryByTestId("skeleton")).toBeNull();
+  });
+
+  it("renders the skeleton, not the body, while the scope is connecting", () => {
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({ status: "connecting" })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
+    );
+
+    expect(screen.getByTestId("skeleton")).not.toBeNull();
+    expect(screen.queryByTestId("body")).toBeNull();
+  });
 
   it("offers no return action when the unreachable host is already the active one", async () => {
     // Asking `connectable` before `isFollowing` made `unreachable` reachable
@@ -104,7 +132,7 @@ describe("<HostScopeGate /> empty and failed states", () => {
     expect(screen.queryByTestId("host-scope-empty")).toBeNull();
     expect(screen.queryByTestId("body")).toBeNull();
 
-    screen.getByTestId("host-scope-retry-lists").click();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retryLists).toHaveBeenCalledTimes(1);
   });
 

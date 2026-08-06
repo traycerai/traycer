@@ -48,6 +48,7 @@ import {
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
@@ -88,12 +89,23 @@ interface SettingsTerminalOutcomeState {
 
 export function HostSettingsPanel() {
   const runnerHost = useRunnerHost();
+  const scope = useHostScope();
   const management = runnerHost.hostManagement;
+  // Keyed by scoped host, both variants: every piece of page state below — an
+  // open restart confirmation, a busy-force prompt, a half-typed rename —
+  // belongs to ONE host. `HostRegistryUpdates` already buys this per-row;
+  // without it here, a scope switch while a confirmation was open left the
+  // dialog mounted and armed at the local bridge under another host's page.
+  const scopeKey = scope.hostId ?? "unresolved";
   if (management === null) {
-    return <HostSettingsPanelWithoutManagement />;
+    return <HostSettingsPanelWithoutManagement key={scopeKey} />;
   }
   return (
-    <HostSettingsPanelInner management={management} runnerHost={runnerHost} />
+    <HostSettingsPanelInner
+      key={scopeKey}
+      management={management}
+      runnerHost={runnerHost}
+    />
   );
 }
 
@@ -195,6 +207,27 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const [terminalOutcome, setTerminalOutcome] =
     useState<SettingsTerminalOutcomeState | null>(null);
   const localHost = useLocalHostSnapshot(runnerHost);
+  const hostIdCopy = useClipboardCopy({
+    resetMs: 1600,
+    onSuccess: () => toast.success("Host ID copied"),
+    onError: () => toast.error("Couldn't copy the host ID"),
+  });
+
+  // The scoped host is the SUBJECT of this page. The local service console
+  // below renders only when that subject is the host running on this computer
+  // — a remote host has no local service to install, restart or register, and
+  // pretending otherwise is what produced two cards describing one host in two
+  // dialects.
+  // `?? false`, never `?? true`. A null host means the scope resolved to
+  // NOTHING — vanished, unreachable, or still loading — and defaulting that to
+  // "yes, this is your machine" put this computer's install / restart /
+  // deregister-service console on screen under a host that no longer exists.
+  // The gate below withholds the body in those states; this is the second
+  // line, so a future caller that forgets the gate fails closed.
+  // Declared before the queries because it also gates the five local-bridge
+  // queries: their results render only in the local branch, so a remote scope
+  // was paying five CLI-bridge calls per visit for data nothing displayed.
+  const scopedIsLocalMachine = scope.host?.isLocalMachine ?? false;
 
   // Canonical two-lane `HostControllerStatus` (Host Update Layer Redesign
   // Tech Plan), shared with the landing-page banner, the tray/menu, and any
@@ -222,6 +255,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       ),
       queryFn: () => management.availableVersions({ includePreReleases }),
       staleTime: 5 * 60 * 1000,
+      enabled: scopedIsLocalMachine,
     }),
   );
 
@@ -230,6 +264,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostRegistryUpdate(management),
       queryFn: () => management.registryCheck({ force: false }),
       staleTime: 60 * 60 * 1000,
+      enabled: scopedIsLocalMachine,
     }),
   );
 
@@ -238,6 +273,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostInstalledRecord(management),
       queryFn: () => management.installedRecord(),
       staleTime: 30_000,
+      enabled: scopedIsLocalMachine,
     }),
   );
 
@@ -246,6 +282,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostCliManifest(management),
       queryFn: () => management.cliManifest(),
       staleTime: 5 * 60 * 1000,
+      enabled: scopedIsLocalMachine,
     }),
   );
 
@@ -258,6 +295,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostName(management),
       queryFn: () => management.getHostName(),
       staleTime: 30_000,
+      enabled: scopedIsLocalMachine,
     }),
   );
 
@@ -531,19 +569,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     }
   };
 
-  // The scoped host is the SUBJECT of this page. The local service console
-  // below renders only when that subject is the host running on this computer
-  // — a remote host has no local service to install, restart or register, and
-  // pretending otherwise is what produced two cards describing one host in two
-  // dialects.
-  // `?? false`, never `?? true`. A null host means the scope resolved to
-  // NOTHING — vanished, unreachable, or still loading — and defaulting that to
-  // "yes, this is your machine" put this computer's install / restart /
-  // deregister-service console on screen under a host that no longer exists.
-  // The gate below withholds the body in those states; this is the second
-  // line, so a future caller that forgets the gate fails closed.
-  const scopedIsLocalMachine = scope.host?.isLocalMachine ?? false;
-
   // ONE Updates card, holding both halves of a host's update story.
   //
   // They are genuinely two mechanisms — the local controller stages and
@@ -643,10 +668,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
               <ThisWindowCard scope={scope} host={scope.host} />
               <HostIdRow
                 hostId={scope.host.hostId}
-                onCopy={(value) => {
-                  void navigator.clipboard.writeText(value);
-                  toast.success("Host ID copied");
-                }}
+                onCopy={(value) => hostIdCopy.copy(value)}
               />
             </HostIdentityCard>
           )}

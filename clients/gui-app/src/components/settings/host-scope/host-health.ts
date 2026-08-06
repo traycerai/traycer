@@ -22,8 +22,8 @@ import {
  *
  * The split is now by MEANING rather than by data source:
  *
- *   - `state` is the coarse thing a person acts on. There are six, and they
- *     are mutually exclusive.
+ *   - `state` is the coarse thing a person acts on. There are seven, and
+ *     they are mutually exclusive.
  *   - `detail` carries the honest nuance the old design spent a row of pills
  *     on ("re-establishing its tunnel", "last seen 3h ago"). It is a sentence
  *     fragment, never a status word competing with `state`.

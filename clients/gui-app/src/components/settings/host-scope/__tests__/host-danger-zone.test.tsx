@@ -1,5 +1,19 @@
-import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  describe,
+  expect,
+  it,
+  vi,
+  afterEach,
+  beforeEach,
+  type Mock,
+} from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -23,8 +37,19 @@ import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zon
  * confirmation is open cannot re-point the wipe at another host.
  */
 
-const mutateSpy = vi.fn();
-const capturedQueryClients: Array<HostClient<HostRpcRegistry> | null> = [];
+// `vi.hoisted` so the values exist when the hoisted `vi.mock` factory below
+// runs; the binding is annotated (matching `runnerHostMock`) rather than cast,
+// since this file deliberately carries no `as` at all.
+const {
+  mutateSpy,
+  capturedQueryClients,
+}: {
+  readonly mutateSpy: Mock;
+  readonly capturedQueryClients: Array<HostClient<HostRpcRegistry> | null>;
+} = vi.hoisted(() => ({
+  mutateSpy: vi.fn(),
+  capturedQueryClients: [],
+}));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: {
@@ -192,7 +217,7 @@ describe("HostDangerZone", () => {
     const { rerender } = render(<HostDangerZone scope={scopeB} />);
 
     // Arm against host-b.
-    fireEvent.click(screen.getByTestId("settings-clear-file-edit-snapshots"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
 
     // The scope moves underneath the open dialog — another window changed the
     // active host, or the sidebar picked a different one.
@@ -206,7 +231,14 @@ describe("HostDangerZone", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    // The dialog's confirm shares its accessible name with the row's trigger,
+    // so the click is scoped to the dialog rather than relying on the modal
+    // marking the page behind it aria-hidden.
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Clear snapshots",
+      }),
+    );
 
     // Refused, not retargeted. Retargeting would wipe host-c's snapshots on a
     // confirmation the user gave about host-b.
@@ -223,13 +255,20 @@ describe("HostDangerZone", () => {
     });
     render(<HostDangerZone scope={scope} />);
 
-    fireEvent.click(screen.getByTestId("settings-clear-file-edit-snapshots"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear snapshots" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Clear snapshots",
+      }),
+    );
 
     expect(mutateSpy).toHaveBeenCalledTimes(1);
   });
 
   it("offers Remove Traycer only for this computer's host", () => {
+    // The bridge must be present: without it the row is withheld for a reason
+    // unrelated to locality, and this absence assertion would pass vacuously.
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
     render(
       <HostDangerZone
         scope={hostScopeFixture({

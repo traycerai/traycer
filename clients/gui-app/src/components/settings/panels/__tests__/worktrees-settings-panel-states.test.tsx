@@ -410,7 +410,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     });
   });
 
-  it("renders the scoped-host readout alongside the full toolbar once the list is populated", async () => {
+  it("renders the full toolbar without any host selector or host readout once the list is populated", async () => {
     state.hosts = [
       host({ hostId: "host-a", label: "Host A" }),
       host({ hostId: "host-b", label: "Host B" }),

@@ -72,7 +72,9 @@ describe("<AddHostDialog /> arrival", () => {
 
     expect(screen.getByTestId("add-host-arrived")).not.toBeNull();
     // ...and the copy claims registration, not a connection that is not there.
-    expect(screen.getByText("Office Linux is registered")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Office Linux is registered" }),
+    ).not.toBeNull();
     expect(screen.queryByText(/ready to run agents/)).toBeNull();
   });
 
@@ -92,7 +94,9 @@ describe("<AddHostDialog /> arrival", () => {
 
     render(<AddHostDialog />);
 
-    expect(screen.getByText("Office Linux is connected")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Office Linux is connected" }),
+    ).not.toBeNull();
     expect(screen.getByText(/ready to run agents/)).not.toBeNull();
   });
 
@@ -140,7 +144,9 @@ describe("<AddHostDialog /> arrival", () => {
     rerender(<AddHostDialog />);
 
     expect(screen.getByTestId("add-host-arrived")).not.toBeNull();
-    expect(screen.getByText("Office Linux is connected")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Office Linux is connected" }),
+    ).not.toBeNull();
   });
 
   it("does not announce a directory-only row that never registered", async () => {
