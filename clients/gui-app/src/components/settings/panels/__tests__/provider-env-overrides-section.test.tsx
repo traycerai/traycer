@@ -51,9 +51,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
         /Applied to native configuration operations, such as MCP setup,\s*but not chat turns/,
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(/Applied when Traycer spawns the/),
-    ).toBeNull();
+    expect(screen.queryByText(/Applied when Traycer spawns the/)).toBeNull();
   });
 
   it("uses the native-config-only copy for any providerId when the descriptor says so", () => {
@@ -79,9 +77,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     expect(
       screen.getByText(/Applied when Traycer spawns the Cursor harness/),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(/but not chat turns/),
-    ).toBeNull();
+    expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 
   it("uses the harness spawn copy when envOverrideScope is omitted (old hosts)", () => {
@@ -93,8 +89,6 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
     expect(
       screen.getByText(/Applied when Traycer spawns the Codex harness/),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(/but not chat turns/),
-    ).toBeNull();
+    expect(screen.queryByText(/but not chat turns/)).toBeNull();
   });
 });

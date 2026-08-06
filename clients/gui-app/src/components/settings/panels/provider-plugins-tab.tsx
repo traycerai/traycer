@@ -87,7 +87,8 @@ function pluginCapabilityFlags(
   // Per-scope gates match the MCP tab: a verb advertised only for global must
   // not appear while the user is viewing project (and vice versa).
   const canRemove = caps.actionScopes.remove.includes(effectiveScope);
-  const canEnableDisable = caps.actionScopes.setEnabled.includes(effectiveScope);
+  const canEnableDisable =
+    caps.actionScopes.setEnabled.includes(effectiveScope);
   const canAddAtScope = caps.actionScopes.add.includes(effectiveScope);
   const isReadOnly =
     caps.addModes.length === 0 ||
@@ -296,13 +297,7 @@ function ProviderPluginsTabBody({
         },
       );
     },
-    [
-      effectiveScope,
-      listWorkspaceRoot,
-      markPending,
-      mutate,
-      providerId,
-    ],
+    [effectiveScope, listWorkspaceRoot, markPending, mutate, providerId],
   );
 
   return (
@@ -318,7 +313,6 @@ function ProviderPluginsTabBody({
         reloadHint={reloadHint}
         localError={localError}
       />
-
 
       <PluginsScopeToolbar
         multiScope={multiScope}
@@ -618,7 +612,8 @@ function PluginRow({
   readonly onRemove: () => void;
 }): ReactNode {
   const canRemove = caps.actionScopes.remove.includes(effectiveScope);
-  const canEnableDisable = caps.actionScopes.setEnabled.includes(effectiveScope);
+  const canEnableDisable =
+    caps.actionScopes.setEnabled.includes(effectiveScope);
   const sourceBadge = plugin.source ?? null;
   // Gated on the list's own `hasIcon`, so rows with no artwork never make the
   // request. Per row rather than batched: each resolves independently and the

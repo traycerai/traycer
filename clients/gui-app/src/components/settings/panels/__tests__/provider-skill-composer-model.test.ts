@@ -33,9 +33,7 @@ function capsWith(
 
 describe("skillAuthoring", () => {
   it("opens both paths when both actions advertise the selected scope", () => {
-    expect(
-      skillAuthoring(capsWith(["global"], ["global"]), "global"),
-    ).toEqual({
+    expect(skillAuthoring(capsWith(["global"], ["global"]), "global")).toEqual({
       canWrite: true,
       canImport: true,
       canAuthor: true,

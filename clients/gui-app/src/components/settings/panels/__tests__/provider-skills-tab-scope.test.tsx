@@ -155,8 +155,7 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => ({
     data: {
-      content:
-        "---\nname: find-skills\ndescription: \"Helps\"\n---\n\n# Body\n",
+      content: '---\nname: find-skills\ndescription: "Helps"\n---\n\n# Body\n',
       truncated: false,
       error: null,
     },

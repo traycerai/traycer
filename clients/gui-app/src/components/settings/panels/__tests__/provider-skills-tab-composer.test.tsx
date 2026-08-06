@@ -17,9 +17,8 @@ const skillMocks = vi.hoisted(() => ({
 // resolution does not require a QueryClient. Dynamic import: `vi.mock` is
 // hoisted above static imports.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
-  const { GLOBAL_ONLY_NATIVE_SCOPE } = await import(
-    "@/components/settings/panels/__tests__/provider-native-scope-test-mocks"
-  );
+  const { GLOBAL_ONLY_NATIVE_SCOPE } =
+    await import("@/components/settings/panels/__tests__/provider-native-scope-test-mocks");
   return {
     useProviderNativeScope: () => GLOBAL_ONLY_NATIVE_SCOPE,
   };

@@ -161,7 +161,8 @@ function renderSectionWith(
       <ProviderCliCandidatesSection state={state} providers={providers} />
     </TooltipProvider>,
   );
-}afterEach(() => {
+}
+afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
