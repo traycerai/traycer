@@ -93,7 +93,14 @@ export function HostRegistryUpdates(props: {
             {pill.label}
           </span>
         )}
-        <UpdateNowControl hostId={item.hostId} mutation={mutation} />
+        {/* `deriveUpdateAffordance` withholds this while the host is `pending`
+            or `updating` — draining sessions, or mid-swap. `MyHostsList`
+            honoured that flag; this rendered the control unconditionally and
+            left `showUpdateNowInput` computed and unread, so a second
+            desired-version write could retarget an update already in flight. */}
+        {affordance.showUpdateNowInput ? (
+          <UpdateNowControl hostId={item.hostId} mutation={mutation} />
+        ) : null}
       </div>
       {affordance.applyNowLabel === null ? null : (
         <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">

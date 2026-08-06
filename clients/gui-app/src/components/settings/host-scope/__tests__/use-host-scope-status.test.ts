@@ -161,6 +161,16 @@ describe("deriveHostScopeStatus", () => {
     expect(isHostScopeUsable("following")).toBe(true);
   });
 
+  it("refuses to follow an active host whose route went unavailable", () => {
+    // The active host keeps its id when its directory entry flips to
+    // `unavailable`, so `isFollowing` stays true. Answering `following` first
+    // let the ACTIVE host alone bypass the availability rule the model applies
+    // to every other row: `connectable` was correctly false and RPC panels
+    // mounted regardless, on the ambient client, against a route the transport
+    // refuses. `following` is a claim about the CLIENT, not about the pick.
+    expect(derive({ isFollowing: true, host: UNROUTABLE })).toBe("unreachable");
+  });
+
   it("marks exactly the two client-bearing states usable", () => {
     // The list is the contract: adding a state must force a decision here
     // rather than defaulting into "usable".

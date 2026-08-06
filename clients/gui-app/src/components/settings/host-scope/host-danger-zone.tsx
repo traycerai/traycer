@@ -15,6 +15,10 @@ import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-cle
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostQueryKeys, snapshotsMutationKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
@@ -40,6 +44,16 @@ export function HostDangerZone(props: {
 }): ReactNode {
   const { scope } = props;
   if (scope.host === null) return null;
+  // The two rows sit on DIFFERENT capability planes, and one gate around both
+  // was the last place this branch still confused them.
+  //
+  // Clearing snapshots is host RPC and needs a live route, so it stays behind
+  // the gate — which also keeps the gate's explanation of WHY it is missing.
+  // Removing Traycer is the local CLI bridge (`hostManagement.uninstallTraycer()`)
+  // and needs no route at all; the moment someone reaches for it is precisely
+  // the moment there isn't one, on a host that is stopped, broken or wedged.
+  // Gating it too took the only way to remove a broken install out of the app
+  // that installed it, in the one state anyone wants it.
   return (
     <SettingsGroup
       title="Danger zone"
@@ -47,7 +61,12 @@ export function HostDangerZone(props: {
       dataTestId="host-danger-zone"
       fill={false}
     >
-      <ClearFileEditSnapshotsRow scope={scope} />
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
+        <ClearFileEditSnapshotsRow scope={scope} />
+      </HostScopeGate>
       {scope.host.isLocalMachine ? <RemoveTraycerRow /> : null}
     </SettingsGroup>
   );

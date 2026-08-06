@@ -6,6 +6,7 @@ import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-regist
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -54,6 +55,13 @@ export function EpicSessionLifecycleBridge(
       // it is "follow the active host", so this returns the surface to its
       // default rather than emptying it.
       useSettingsHostScopeStore.getState().setScopedHostId(null);
+      // The Add-host dialog is module-level too, and it carries more than a
+      // boolean: `knownHostIds` is the snapshot the arrival watcher diffs
+      // against to decide which machine is NEW. Left standing across a switch
+      // it reopens for account B unasked, holding account A's fleet — so a
+      // host B already owns is absent from that snapshot and gets announced as
+      // the machine that just connected.
+      useAddHostDialogStore.getState().closeDialog();
     }
   }, []);
 

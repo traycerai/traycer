@@ -34,8 +34,18 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: () => ({ mutate: mutateSpy, isPending: false }),
 }));
 
+// Mutable so a test can put this shell on the desktop branch. `RemoveTraycerRow`
+// returns null without the bridge, so with a fixed `null` here the local
+// half of this component could never render and its gating went unexercised.
+const runnerHostMock: { hostManagement: object | null } = vi.hoisted(() => ({
+  hostManagement: null,
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ hostManagement: null, traycerCli: null }),
+  useRunnerHost: () => ({
+    hostManagement: runnerHostMock.hostManagement,
+    traycerCli: null,
+  }),
 }));
 
 vi.mock("@/hooks/runner/use-runner-uninstall-traycer-mutation", () => ({
@@ -73,6 +83,7 @@ function remoteHost(hostId: string): HostScopeOption {
 beforeEach(() => {
   mutateSpy.mockClear();
   capturedQueryClients.length = 0;
+  runnerHostMock.hostManagement = null;
 });
 
 // Explicit: without it a previous test's tree stays mounted and `getByTestId`
@@ -93,8 +104,11 @@ describe("HostDangerZone", () => {
   });
 
   it("never reads through a client once the scoped host has vanished", () => {
-    // The assertion the deleted test made, restored: no client, therefore no
-    // read or write can reach the previously-active host.
+    // The assertion the deleted test made, restored — and now satisfied a
+    // stronger way. The snapshots row is host RPC, so an unusable scope does
+    // not mount it at all rather than mounting it with a null client. Either
+    // way the guarantee is the one that matters: nothing here can reach the
+    // previously-active host.
     render(
       <HostDangerZone
         scope={hostScopeFixture({
@@ -105,8 +119,57 @@ describe("HostDangerZone", () => {
         })}
       />,
     );
-    expect(capturedQueryClients).not.toHaveLength(0);
-    expect(capturedQueryClients.every((client) => client === null)).toBe(true);
+    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(capturedQueryClients).toHaveLength(0);
+  });
+
+  it("keeps Remove Traycer reachable while this computer's host is down", () => {
+    // The regression, and the one that mattered most: `RemoveTraycerRow` calls
+    // `hostManagement.uninstallTraycer()` over the LOCAL CLI bridge, not host
+    // RPC. Gating the whole zone on a dialable route took the only way to
+    // remove a broken install out of the app precisely when the host is
+    // stopped or wedged — the sole state anyone reaches for it in.
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-local",
+            name: "This Mac",
+            isLocalMachine: true,
+            connectable: false,
+          }),
+          status: "unreachable",
+          client: null,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("settings-remove-traycer")).not.toBeNull();
+    // ...while the genuinely RPC-backed row stays gated, mounts no read, and
+    // says why it is missing instead of just disappearing.
+    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(capturedQueryClients).toHaveLength(0);
+    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+  });
+
+  it("explains the missing rows for an unreachable host that is not this one", () => {
+    // The counterweight to loosening the gate: a host with no route and no
+    // local bridge must not silently drop the region — that reads as "there is
+    // nothing to do here" rather than "this host cannot be reached".
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    render(
+      <HostDangerZone
+        scope={hostScopeFixture({
+          host: remoteHost("host-b"),
+          status: "unreachable",
+          client: null,
+        })}
+      />,
+    );
+    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
+    expect(screen.queryByTestId("settings-remove-traycer")).toBeNull();
   });
 
   it("refuses to clear when the scope moves to another host after arming", () => {

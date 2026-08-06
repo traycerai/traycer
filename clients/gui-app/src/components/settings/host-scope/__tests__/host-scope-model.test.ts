@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { HostPresenceHealth } from "@traycer/protocol/host/host-status";
-import { buildHostScopeOptions } from "@/components/settings/host-scope/host-scope-model";
+import type {
+  HostListItem,
+  HostPresenceHealth,
+} from "@traycer/protocol/host/host-status";
+import {
+  buildHostScopeOptions,
+  resolveScopedHost,
+  type HostScopeOption,
+} from "@/components/settings/host-scope/host-scope-model";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
 
 /**
@@ -31,19 +39,57 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   };
 }
 
-function connectableFor(directoryEntry: HostDirectoryEntry): boolean {
+function buildOne(input: {
+  readonly entry: HostDirectoryEntry | null;
+  readonly item: HostListItem | null;
+  readonly localHostId: string | null;
+  readonly remoteHostsPlanRestricted: boolean;
+}): HostScopeOption {
   const [option] = buildHostScopeOptions({
-    directory: [directoryEntry],
-    registry: [],
+    directory: input.entry === null ? [] : [input.entry],
+    registry: input.item === null ? [] : [input.item],
     presenceHealth: HEALTHY,
-    localHostId: null,
+    localHostId: input.localHostId,
     activeHostId: null,
     localService: undefined,
     hasLiveSession: () => false,
     viewerCheck: () => null,
+    remoteHostsPlanRestricted: input.remoteHostsPlanRestricted,
     nowMs: 0,
   });
-  return option.connectable;
+  return option;
+}
+
+function connectableFor(directoryEntry: HostDirectoryEntry): boolean {
+  return buildOne({
+    entry: directoryEntry,
+    item: null,
+    localHostId: null,
+    remoteHostsPlanRestricted: false,
+  }).connectable;
+}
+
+function registryItem(displayName: string | null): HostListItem {
+  return {
+    hostId: "host-a",
+    displayName,
+    platform: "darwin-arm64",
+    kind: "personal",
+    publicKey: "pk",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatePolicy: "manual",
+    status: {
+      presenceLease: "fresh",
+      hostRelayAttached: true,
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      busy: false,
+      busySessionCount: 0,
+      updateState: "current",
+      appVersion: "1.4.2",
+      lastSeenAt: "2026-01-01T00:00:00Z",
+    },
+  };
 }
 
 describe("buildHostScopeOptions connectable", () => {
@@ -82,5 +128,171 @@ describe("buildHostScopeOptions connectable", () => {
         });
       }
     }
+  });
+
+  it("refuses a remote route the account's plan does not include", () => {
+    // The relay URL is present and `available`, but attaching is refused
+    // server-side. The header and workspace pickers already disable these
+    // rows; Settings classified the route as usable and mounted RPC panels
+    // whose every call could only fail.
+    expect(
+      buildOne({
+        entry: entry({ kind: "remote" }),
+        item: null,
+        localHostId: null,
+        remoteHostsPlanRestricted: true,
+      }).connectable,
+    ).toBe(false);
+  });
+
+  it("does not let the remote plan gate touch this machine", () => {
+    // The gate is about the relay, so a local host must stay administrable on
+    // any plan — otherwise a free-plan user loses their own recovery surface.
+    expect(
+      buildOne({
+        entry: entry({ hostId: "host-a", kind: "local" }),
+        item: null,
+        localHostId: "host-a",
+        remoteHostsPlanRestricted: true,
+      }).connectable,
+    ).toBe(true);
+  });
+});
+
+describe("resolveScopedHost", () => {
+  const PINNED = hostScopeOptionFixture({ hostId: "host-pinned" });
+  const ACTIVE = hostScopeOptionFixture({ hostId: "host-active" });
+
+  function resolve(input: {
+    readonly hosts: readonly HostScopeOption[];
+    readonly scopedHostId: string | null;
+    readonly listsResolved: boolean;
+    readonly listsFailed: boolean;
+  }): { readonly hostId: string | null; readonly vanishedHostId: string | null } {
+    const result = resolveScopedHost({
+      hosts: input.hosts,
+      scopedHostId: input.scopedHostId,
+      activeHostId: ACTIVE.hostId,
+      listsResolved: input.listsResolved,
+      listsFailed: input.listsFailed,
+    });
+    return {
+      hostId: result.host?.hostId ?? null,
+      vanishedHostId: result.vanishedHostId,
+    };
+  }
+
+  it("withholds the vanished verdict when a host list failed", () => {
+    // The fix-induced regression. Counting a rejection as "settled" is right
+    // for leaving `connecting`, but wrong as evidence of ABSENCE: a directory
+    // failure hides every directory-only host, so the pinned host is missing
+    // from the union for a reason that has nothing to do with it. Claiming
+    // `vanished` here tells someone their machine is no longer registered on
+    // the strength of a request that never came back.
+    expect(
+      resolve({
+        hosts: [ACTIVE],
+        scopedHostId: PINNED.hostId,
+        listsResolved: true,
+        listsFailed: true,
+      }),
+    ).toEqual({ hostId: null, vanishedHostId: null });
+  });
+
+  it("still names a host that genuinely left a healthy list", () => {
+    // The counterweight: suppressing the verdict on failure must not suppress
+    // it when both lists answered cleanly, or deregistering a host would go
+    // unreported and the surface would sit blank.
+    expect(
+      resolve({
+        hosts: [ACTIVE],
+        scopedHostId: PINNED.hostId,
+        listsResolved: true,
+        listsFailed: false,
+      }),
+    ).toEqual({ hostId: null, vanishedHostId: PINNED.hostId });
+  });
+
+  it("says nothing at all while the lists are still in flight", () => {
+    expect(
+      resolve({
+        hosts: [],
+        scopedHostId: PINNED.hostId,
+        listsResolved: false,
+        listsFailed: false,
+      }),
+    ).toEqual({ hostId: null, vanishedHostId: null });
+  });
+
+  it("never silently retargets a failed pick at the active host", () => {
+    // The whole reason this resolution exists: a pick that cannot be honoured
+    // resolves to NOTHING. Falling through to the active host would aim an
+    // administration surface — and any destructive dialog on it — at a machine
+    // the user never chose.
+    for (const listsFailed of [true, false]) {
+      expect(
+        resolve({
+          hosts: [ACTIVE],
+          scopedHostId: PINNED.hostId,
+          listsResolved: true,
+          listsFailed,
+        }).hostId,
+      ).toBeNull();
+    }
+  });
+
+  it("follows the active host when nothing was pinned", () => {
+    expect(
+      resolve({
+        hosts: [ACTIVE, PINNED],
+        scopedHostId: null,
+        listsResolved: true,
+        listsFailed: false,
+      }),
+    ).toEqual({ hostId: ACTIVE.hostId, vanishedHostId: null });
+  });
+});
+
+describe("buildHostScopeOptions name resolution", () => {
+  it("prefers this machine's fresh directory label over a stale registry name", () => {
+    // Renaming the local host rewrites its directory label at once, while the
+    // registry only catches up after a check-in and the ~15s poll. Preferring
+    // the registry left the sidebar showing the old name for tens of seconds
+    // after a rename the user had just watched succeed.
+    expect(
+      buildOne({
+        entry: entry({ hostId: "host-a", kind: "local", label: "New Name" }),
+        item: registryItem("Stale Registry Name"),
+        localHostId: "host-a",
+        remoteHostsPlanRestricted: false,
+      }).name,
+    ).toBe("New Name");
+  });
+
+  it("still prefers the registry name for a host that is not this machine", () => {
+    // The registry display name is what "Edit name" writes for remote hosts,
+    // so the exception must stay scoped to the local machine.
+    expect(
+      buildOne({
+        entry: entry({ hostId: "host-a", label: "directory-label" }),
+        item: registryItem("Deliberate Name"),
+        localHostId: null,
+        remoteHostsPlanRestricted: false,
+      }).name,
+    ).toBe("Deliberate Name");
+  });
+
+  it("falls back to the registry name for a local host that is down", () => {
+    // While the local host is stopped the directory carries the registry
+    // twin's label, so the local branch resolves to the registry name rather
+    // than to nothing.
+    expect(
+      buildOne({
+        entry: entry({ hostId: "host-a", kind: "local", label: "" }),
+        item: registryItem("Registry Name"),
+        localHostId: "host-a",
+        remoteHostsPlanRestricted: false,
+      }).name,
+    ).toBe("Registry Name");
   });
 });

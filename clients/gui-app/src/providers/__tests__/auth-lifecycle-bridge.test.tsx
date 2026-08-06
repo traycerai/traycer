@@ -6,6 +6,7 @@ import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -99,6 +100,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // Module-level store: without this a leaked pick would travel between the
     // cases below and the scope assertions would stop meaning anything.
     useSettingsHostScopeStore.getState().setScopedHostId(null);
+    useAddHostDialogStore.getState().closeDialog();
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -222,6 +224,61 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("closes the Add-host dialog and drops its fleet snapshot on user-switch", () => {
+    // The dialog store is module-level and carries more than `open`:
+    // `knownHostIds` is the snapshot its arrival watcher diffs against to
+    // decide which machine is NEW. Reset only the scope and account B mounts
+    // Settings into A's open dialog holding A's fleet — so a host B already
+    // owns is absent from that snapshot and gets announced as the machine that
+    // just connected.
+    useAddHostDialogStore.getState().openDialog(["host-owned-by-alice"]);
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com");
+    });
+
+    expect(useAddHostDialogStore.getState().open).toBe(false);
+    expect(useAddHostDialogStore.getState().knownHostIds).toEqual([]);
+  });
+
+  it("closes the Add-host dialog on sign-out", () => {
+    useAddHostDialogStore.getState().openDialog(["host-owned-by-alice"]);
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-out", null);
+    });
+
+    expect(useAddHostDialogStore.getState().open).toBe(false);
+  });
+
+  it("leaves an open Add-host dialog alone when the identity has not changed", () => {
+    // The counterweight: without it, a bridge that closed the dialog on every
+    // render would satisfy both cases above while making the dialog impossible
+    // to keep open.
+    useAddHostDialogStore.getState().openDialog(["host-a"]);
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    expect(useAddHostDialogStore.getState().open).toBe(true);
+    expect(useAddHostDialogStore.getState().knownHostIds).toEqual(["host-a"]);
   });
 
   it("keeps the Settings host scope when the same identity merely re-mounts", () => {

@@ -158,16 +158,12 @@ function HostSettingsPanelWithoutManagement() {
               </div>
             </SettingsGroup>
           )}
-          {/* Snapshots and Remove Traycer travel over the host's own RPC, not
-              the CLI bridge, so a shell without the CLI can still run them —
-              but only while there IS a route, which is why this one region
-              keeps the gate the rest of the panel no longer needs. */}
-          <HostScopeGate
-            scope={scope}
-            skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-          >
-            <HostDangerZone scope={scope} />
-          </HostScopeGate>
+          {/* Not gated from out here. The two rows inside sit on different
+              capability planes — clearing snapshots is host RPC, removing
+              Traycer is the local CLI bridge — so the region gates its own
+              rows and renders nothing when it has neither. In this shell there
+              is no CLI bridge at all, so only the snapshots row can appear. */}
+          <HostDangerZone scope={scope} />
         </div>
       )}
     </SettingsPanelShell>
@@ -791,14 +787,12 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
             host is the wrong place to manage the collection it belongs to.
             The switcher in the sidebar owns both.
 
-            Gated, alone on this page: snapshots and Remove Traycer are host RPC
-            calls, so they need a live route and not merely a resolved host. */}
-        <HostScopeGate
-          scope={scope}
-          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-        >
-          <HostDangerZone scope={scope} />
-        </HostScopeGate>
+            Not gated from out here either: clearing snapshots is host RPC and
+            needs a live route, but removing Traycer runs over the local CLI
+            bridge and is exactly what someone reaches for when the service is
+            stopped or broken. A gate around both took the recovery action away
+            in the only state that needs it, so the region gates its own rows. */}
+        <HostDangerZone scope={scope} />
       </div>
       )}
 

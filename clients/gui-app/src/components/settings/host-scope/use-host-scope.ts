@@ -8,6 +8,7 @@ import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
@@ -24,6 +25,7 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import {
   buildHostScopeOptions,
   findHostOption,
+  resolveScopedHost,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 
@@ -90,6 +92,9 @@ export function useHostScope(): HostScope {
   const directoryQuery = useHostDirectoryList();
   const registryQuery = useRegisteredHosts();
   const localSnapshot = useLocalHostSnapshot(runnerHost);
+  // Same gate the header and workspace pickers consult, so Settings cannot
+  // offer a remote route the other two surfaces already refuse.
+  const remoteHostsPlanRestricted = useRemoteHostsPlanRestricted();
 
   const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
   const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
@@ -157,9 +162,18 @@ export function useHostScope(): HostScope {
         localService,
         hasLiveSession: hasReadyRemoteSession,
         viewerCheck: getViewerReachabilityCheck,
+        remoteHostsPlanRestricted,
         nowMs,
       }),
-    [directory, registry, localHostId, activeHostId, localService, nowMs],
+    [
+      directory,
+      registry,
+      localHostId,
+      activeHostId,
+      localService,
+      remoteHostsPlanRestricted,
+      nowMs,
+    ],
   );
 
   // `data !== undefined` rather than `!isLoading`, because a background refetch
@@ -171,36 +185,23 @@ export function useHostScope(): HostScope {
     { hasData: registry !== undefined, isError: registryQuery.isError },
   );
   const listsResolved = lists.resolved;
+  const listsFailed = lists.failed;
 
-  // Resolution order matters, and the `vanished` branch is the load-bearing
-  // one. An explicit pick that is no longer in the list must NOT quietly
-  // resolve to the active host: that is a silent retarget of an administration
-  // surface, and it is exactly how a destructive action ends up aimed at a
-  // machine the user never chose. It resolves to nothing, and the caller is
-  // obliged to say so.
-  const resolved = useMemo((): {
-    readonly host: HostScopeOption | null;
-    readonly vanishedHostId: string | null;
-  } => {
-    if (scopedHostId !== null) {
-      const picked = findHostOption(hosts, scopedHostId);
-      if (picked !== null) return { host: picked, vanishedHostId: null };
-      // Still loading is not the same as gone, and the question is whether BOTH
-      // source lists have answered — not whether the union happens to be
-      // non-empty. Keying on `hosts.length` got this wrong in both directions:
-      // a registry-only host was declared vanished the instant the directory
-      // resolved first, and deregistering your ONLY host emptied the union so
-      // the verdict could never fire at all.
-      if (!listsResolved) return { host: null, vanishedHostId: null };
-      return { host: null, vanishedHostId: scopedHostId };
-    }
-    const active = findHostOption(hosts, activeHostId);
-    if (active !== null) return { host: active, vanishedHostId: null };
-    // No explicit pick and no active host: administer the first machine
-    // rather than rendering a pane the user cannot act on. This is a default,
-    // not a fallback from a pick — nothing was overridden.
-    return { host: hosts[0] ?? null, vanishedHostId: null };
-  }, [hosts, scopedHostId, activeHostId, listsResolved]);
+  // Still loading is not the same as gone, and a list that FAILED cannot prove
+  // a host was removed. Both rules — and the reason the `vanished` verdict is
+  // never allowed to resolve silently to the active host — live in
+  // `resolveScopedHost`, where a test can reach them.
+  const resolved = useMemo(
+    () =>
+      resolveScopedHost({
+        hosts,
+        scopedHostId,
+        activeHostId,
+        listsResolved,
+        listsFailed,
+      }),
+    [hosts, scopedHostId, activeHostId, listsResolved, listsFailed],
+  );
 
   const host = resolved.host;
   const isFollowing =
@@ -255,7 +256,7 @@ export function useHostScope(): HostScope {
       binding?.directory.selectById(hostId);
     },
     isLoading: directoryQuery.isLoading || registryQuery.isLoading,
-    listsFailed: lists.failed,
+    listsFailed,
     retryLists: () => {
       void directoryQuery.refetch();
       void registryQuery.refetch();

@@ -63,6 +63,12 @@ export interface BuildHostScopeOptionsInput {
   readonly localService: ServiceStatusSnapshot | undefined;
   readonly hasLiveSession: (hostId: string) => boolean;
   readonly viewerCheck: (hostId: string) => ViewerReachabilityCheckLike | null;
+  /**
+   * The account's plan does not include remote hosts. Their relay URLs still
+   * appear in the directory, but attaching is refused server-side, so the route
+   * is not usable even though it looks like one.
+   */
+  readonly remoteHostsPlanRestricted: boolean;
   readonly nowMs: number;
 }
 
@@ -79,27 +85,10 @@ export function buildHostScopeOptions(
     const isLocalMachine = hostId === input.localHostId;
     return {
       hostId,
-      name: resolveHostName(hostId, entry, item),
+      name: resolveHostName(hostId, entry, item, isLocalMachine),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
-      // A directory entry with no websocket URL is a listing, not a route:
-      // `buildTransientHostClient` returns null for it, so offering it as an
-      // administrable target would produce a picker row that can never load.
-      //
-      // `status` is half of that question, not a detail. The repository's
-      // canonical dialability rule lives in `dialableHostEndpoint` /
-      // `hostTransportKey`, and BOTH refuse an entry that is not `available`
-      // even when it still carries a URL — a stale address left behind by a
-      // host that went away. `buildTransientHostClient` does not re-check it,
-      // so URL-only would hand back a live-looking client whose every call
-      // hangs: the scope would read `ready`, the panels would mount, and the
-      // Add-host dialog would announce a machine as connected and ready to run
-      // agents. Asking the same question the transport asks is what keeps this
-      // model from disagreeing with the layer that actually dials.
-      connectable:
-        entry !== null &&
-        entry.websocketUrl !== null &&
-        entry.status === "available",
+      connectable: isAdministrableRoute(entry, input.remoteHostsPlanRestricted),
       registered: item !== null,
       platform: item?.platform ?? null,
       version: item?.status.appVersion ?? entry?.version ?? null,
@@ -123,18 +112,66 @@ export function buildHostScopeOptions(
 }
 
 /**
+ * Can this row be administered over the host's own RPC right now?
+ *
+ * A directory entry with no websocket URL is a listing, not a route:
+ * `buildTransientHostClient` returns null for it, so offering it as an
+ * administrable target would produce a picker row that can never load.
+ *
+ * `status` is half of that question, not a detail. The repository's canonical
+ * dialability rule lives in `dialableHostEndpoint` / `hostTransportKey`, and
+ * BOTH refuse an entry that is not `available` even when it still carries a
+ * URL — a stale address left behind by a host that went away.
+ * `buildTransientHostClient` does not re-check it, so a URL-only test handed
+ * back a live-looking client whose every call hangs: the scope read `ready`,
+ * panels mounted, and the Add-host dialog announced a machine as connected and
+ * ready to run agents. Asking the same question the transport asks is what
+ * keeps this model from disagreeing with the layer that actually dials.
+ *
+ * The plan gate is the same kind of claim. A remote host on a plan without
+ * remote hosts advertises a relay URL the server refuses to attach
+ * (`plan_restricted`); the header and workspace pickers already disable those
+ * rows. Registry-backed administration is account-level and unaffected, so it
+ * keeps rendering — the entitlement costs the RPC route, not the whole host.
+ */
+function isAdministrableRoute(
+  entry: HostDirectoryEntry | null,
+  remoteHostsPlanRestricted: boolean,
+): boolean {
+  if (entry === null || entry.websocketUrl === null) return false;
+  if (entry.status !== "available") return false;
+  return !(remoteHostsPlanRestricted && entry.kind === "remote");
+}
+
+/**
  * A name a person recognizes, in descending order of how deliberate it is:
  * the registry display name (which is what "Edit name" writes), then the
  * directory label, then the raw id as a last resort.
+ *
+ * THIS MACHINE is the exception, and it has to be. Renaming the local host
+ * writes the local name file and reloads the desktop snapshot immediately, so
+ * its directory label is correct the moment the rename returns — while the
+ * registry's `displayName` only catches up after a cloud check-in and the next
+ * ~15s registry poll. Preferring the registry there meant the summary card
+ * showed the new name while the sidebar picker, reading this, kept showing the
+ * old one for tens of seconds after a rename the user had just watched succeed.
+ *
+ * This is safe while the local host is DOWN, too: the directory then carries
+ * `bootingLocalEntry`, whose label is copied from the registry twin, so the
+ * local branch resolves to the registry name anyway rather than to nothing.
  */
 function resolveHostName(
   hostId: string,
   entry: HostDirectoryEntry | null,
   item: HostListItem | null,
+  isLocalMachine: boolean,
 ): string {
+  const directoryLabel =
+    entry !== null && entry.label.length > 0 ? entry.label : null;
+  if (isLocalMachine && directoryLabel !== null) return directoryLabel;
   const registryName = item?.displayName ?? null;
   if (registryName !== null && registryName.length > 0) return registryName;
-  if (entry !== null && entry.label.length > 0) return entry.label;
+  if (directoryLabel !== null) return directoryLabel;
   return hostId;
 }
 
@@ -148,6 +185,63 @@ function compareHostOptions(a: HostScopeOption, b: HostScopeOption): number {
   if (a.isLocalMachine !== b.isLocalMachine) return a.isLocalMachine ? -1 : 1;
   if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
   return a.name.localeCompare(b.name);
+}
+
+export interface ScopeResolution {
+  readonly host: HostScopeOption | null;
+  /** The id that was picked but is no longer listed. Only ever a real verdict. */
+  readonly vanishedHostId: string | null;
+}
+
+/**
+ * Turn an explicit pick (or its absence) into the host this surface administers.
+ *
+ * Resolution order matters, and the `vanished` branch is the load-bearing one.
+ * An explicit pick that is no longer in the list must NOT quietly resolve to
+ * the active host: that is a silent retarget of an administration surface, and
+ * it is exactly how a destructive action ends up aimed at a machine the user
+ * never chose. It resolves to nothing, and the caller is obliged to say so.
+ *
+ * Two conditions have to be true before that verdict may be spoken, and they
+ * are different questions:
+ *
+ *   - both lists have ANSWERED (`listsResolved`) — still loading is not gone;
+ *   - neither answered with an ERROR (`listsFailed`) — a failed source cannot
+ *     testify that a host was removed. A directory failure hides every
+ *     directory-only host and a registry failure hides every registry-only one,
+ *     so the pinned host is missing from the union for a reason that has
+ *     nothing to do with it.
+ *
+ * Lives here rather than inside `useHostScope` for the same reason
+ * `hostListReadiness` does: every panel suite mocks that hook wholesale, so a
+ * rule written inside it is a rule no test can reach.
+ */
+export function resolveScopedHost(input: {
+  readonly hosts: readonly HostScopeOption[];
+  readonly scopedHostId: string | null;
+  readonly activeHostId: string | null;
+  readonly listsResolved: boolean;
+  readonly listsFailed: boolean;
+}): ScopeResolution {
+  if (input.scopedHostId !== null) {
+    const picked = findHostOption(input.hosts, input.scopedHostId);
+    if (picked !== null) return { host: picked, vanishedHostId: null };
+    // Keying on `hosts.length` got this wrong in both directions: a
+    // registry-only host was declared vanished the instant the directory
+    // resolved first, and deregistering your ONLY host emptied the union so the
+    // verdict could never fire at all.
+    if (!input.listsResolved) return { host: null, vanishedHostId: null };
+    // Withholding the verdict here resolves to the list-error notice instead,
+    // which offers a retry and claims nothing about the host.
+    if (input.listsFailed) return { host: null, vanishedHostId: null };
+    return { host: null, vanishedHostId: input.scopedHostId };
+  }
+  const active = findHostOption(input.hosts, input.activeHostId);
+  if (active !== null) return { host: active, vanishedHostId: null };
+  // No explicit pick and no active host: administer the first machine rather
+  // than rendering a pane the user cannot act on. This is a default, not a
+  // fallback from a pick — nothing was overridden.
+  return { host: input.hosts[0] ?? null, vanishedHostId: null };
 }
 
 export function findHostOption(

@@ -112,9 +112,59 @@ describe("Overview capability split without host management", () => {
     // The regression: the page-wide gate replaced this, so a registered host
     // with no current route had no update-policy UI anywhere in the app.
     expect(screen.getByTestId("host-auto-update-host-remote")).not.toBeNull();
-    // ...while the genuinely RPC-dependent region stays gated, and says so.
-    expect(screen.queryByTestId("host-danger-zone")).toBeNull();
+    // ...while the genuinely RPC-dependent ROW stays gated and says why. The
+    // zone itself still renders: its other row (Remove Traycer) runs over the
+    // local CLI bridge, so the gate belongs around the snapshots row, not
+    // around the region.
+    expect(screen.queryByTestId("settings-clear-file-edit-snapshots")).toBeNull();
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+  });
+
+  it("withholds version pinning while an update is already in flight", async () => {
+    const { hostScopeOptionFixture } = await import(
+      "@/components/settings/host-scope/host-scope-fixture"
+    );
+    const draining: HostListItem = {
+      ...REGISTRY_ITEM,
+      status: {
+        ...REGISTRY_ITEM.status,
+        updateState: "pending",
+        busySessionCount: 2,
+      },
+    };
+    const host = hostScopeOptionFixture({
+      hostId: "host-remote",
+      isLocalMachine: false,
+      item: draining,
+    });
+
+    renderOverview({ host, hostId: host.hostId, status: "unreachable" });
+
+    // `deriveUpdateAffordance` withholds the input for `pending` / `updating`,
+    // and this rendered it anyway — so a second desired-version write could
+    // retarget an update mid-drain. The policy toggle stays: it is a standing
+    // preference, not a new target.
+    expect(
+      screen.queryByTestId("host-update-version-trigger-host-remote"),
+    ).toBeNull();
+    expect(screen.getByTestId("host-auto-update-host-remote")).not.toBeNull();
+  });
+
+  it("offers version pinning once no update is in flight", async () => {
+    const { hostScopeOptionFixture } = await import(
+      "@/components/settings/host-scope/host-scope-fixture"
+    );
+    const host = hostScopeOptionFixture({
+      hostId: "host-remote",
+      isLocalMachine: false,
+      item: REGISTRY_ITEM,
+    });
+
+    renderOverview({ host, hostId: host.hostId, status: "unreachable" });
+
+    expect(
+      screen.getByTestId("host-update-version-trigger-host-remote"),
+    ).not.toBeNull();
   });
 
   it("says nothing at all about a vanished host", async () => {

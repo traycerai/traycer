@@ -111,15 +111,24 @@ export function deriveHostScopeStatus(input: {
   readonly listsResolved: boolean;
 }): HostScopeStatus {
   if (input.vanishedHostId !== null) return "vanished";
-  if (input.isFollowing) return "following";
   // No host AND no answer yet from the lists is the one genuine pending state
   // this surface has: a cold Settings before either source has replied.
+  // (`isFollowing` implies a host, so this order changes nothing for it.)
   if (input.host === null) {
     return input.listsResolved ? "unreachable" : "connecting";
   }
   // No route exists and none is being built — this is terminal, not pending,
   // and must not render as a spinner that never resolves.
+  //
+  // This is asked BEFORE `following` on purpose. `following` is a claim about
+  // the CLIENT — "the ambient one is the right one to read through" — not about
+  // the pick, and it stops being true the moment the active host's entry goes
+  // `unavailable` while keeping its id. Answering `following` first let exactly
+  // that case bypass the availability rule the model had just been fixed to
+  // enforce: `connectable` was correctly false, and the active host alone
+  // ignored it, mounting RPC panels on a route the transport refuses.
   if (!input.host.connectable) return "unreachable";
+  if (input.isFollowing) return "following";
   if (input.overrideClient !== null) return "ready";
   // Connectable, but no client. The transient client is built SYNCHRONOUSLY
   // (`createRequester` is a Proxy), so the only way to get here is a missing
