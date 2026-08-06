@@ -25,6 +25,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { DesktopHostControllerStatusBridge } from "@/lib/windows/types";
+import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -193,6 +194,23 @@ function queryHostUpdateBanner(): HTMLElement | null {
   });
 }
 
+/**
+ * Synchronize on host-controller status query completion (and the cache
+ * update that drives the banner render). Negative "stays hidden" assertions
+ * must wait here first: while the query is still loading, `status` is
+ * undefined and the banner is null for the wrong reason.
+ */
+async function waitForHostControllerStatusReady(
+  management: IHostManagement,
+  queryClient: QueryClient,
+): Promise<void> {
+  const queryKey = runnerQueryKeys.hostControllerStatus(management);
+  await waitFor(() => {
+    expect(management.getHostControllerStatus).toHaveBeenCalled();
+    expect(queryClient.getQueryState(queryKey)?.status).toBe("success");
+  });
+}
+
 describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -214,8 +232,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
 
   it("stays hidden when up to date (no debt, activation:'activated')", async () => {
     const management = makeManagement({ status: UP_TO_DATE_STATUS });
-    renderBanner(makeHost(management));
-    await new Promise((r) => setTimeout(r, 20));
+    const queryClient = renderBanner(makeHost(management));
+    await waitForHostControllerStatusReady(management, queryClient);
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
@@ -228,8 +246,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
         updateReady: false,
       },
     });
-    renderBanner(makeHost(management));
-    await new Promise((r) => setTimeout(r, 20));
+    const queryClient = renderBanner(makeHost(management));
+    await waitForHostControllerStatusReady(management, queryClient);
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
@@ -250,8 +268,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     const management = makeManagement({
       status: { ...UP_TO_DATE_STATUS, activation: "unavailable" },
     });
-    renderBanner(makeHost(management));
-    await new Promise((r) => setTimeout(r, 20));
+    const queryClient = renderBanner(makeHost(management));
+    await waitForHostControllerStatusReady(management, queryClient);
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
@@ -473,8 +491,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       },
     });
     const management = makeManagement({ status: READY_STATUS });
-    renderBanner(makeHost(management));
-    await new Promise((r) => setTimeout(r, 20));
+    const queryClient = renderBanner(makeHost(management));
+    await waitForHostControllerStatusReady(management, queryClient);
     expect(queryHostUpdateBanner()).toBeNull();
   });
 

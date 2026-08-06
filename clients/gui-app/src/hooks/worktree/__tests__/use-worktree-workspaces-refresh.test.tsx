@@ -140,9 +140,8 @@ describe("useWorktreeWorkspacesRefresh", () => {
       wrapper: fixture.Wrapper,
     });
 
-    await waitFor(() => {
-      expect(fixture.calls().length).toBe(1);
-    });
+    await fixture.waitForHeldRequest("cacheOnly", 1);
+    expect(fixture.calls().length).toBe(1);
     fixture.setNext({ branch: "main", resolvedAt: 7_000 });
     await act(async () => {
       await rendered.result.current.refresh.refresh();
@@ -151,10 +150,13 @@ describe("useWorktreeWorkspacesRefresh", () => {
       expect(rendered.result.current.branch).toBe("main");
     });
 
-    // The held read now settles, carrying the pre-checkout branch.
-    await act(async () => {
+    // The held read now settles, carrying the pre-checkout branch. Wait until
+    // that reconciliation has finished before asserting the forced value holds.
+    act(() => {
       fixture.releaseHeldReads();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await waitFor(() => {
+      expect(fixture.isFetching()).toBe(0);
     });
 
     expect(rendered.result.current.branch).toBe("main");
@@ -181,14 +183,17 @@ describe("useWorktreeWorkspacesRefresh", () => {
     fixture.setBranches(["main"]);
     fixture.holdBranchReads();
     let settled = false;
-    await act(async () => {
-      const inFlight = rendered.result.current.refresh.refresh().then(() => {
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh.refresh().then(() => {
         settled = true;
       });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      // The summary is back, but the branch list is still in flight - and this
-      // is the moment the old code called the refresh done.
-      expect(settled).toBe(false);
+    });
+    // The summary is back, but the branch list is still held - and this is the
+    // moment the old code called the refresh done.
+    await fixture.waitForHeldRequest("branch", 1);
+    expect(settled).toBe(false);
+    await act(async () => {
       fixture.releaseHeldReads();
       await inFlight;
     });
@@ -217,12 +222,20 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // answering `feature/login` - which is what the new scope's own read gets.
     fixture.setDiskOnly({ branch: "main", resolvedAt: 7_000 });
     fixture.holdForcedReads();
-    await act(async () => {
-      const inFlight = rendered.result.current.refresh.refresh();
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh.refresh();
       // The user adds a folder while the forced read is in flight. The new key
       // issues its own cache-only read and settles STALE.
       rendered.rerender([REPO, OTHER_REPO]);
-      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    await fixture.waitForHeldRequest("forced", 1);
+    await waitFor(() => {
+      expect(fixture.branchInCacheFor([REPO, OTHER_REPO])).toBe(
+        "feature/login",
+      );
+    });
+    await act(async () => {
       fixture.releaseHeldReads();
       await inFlight;
     });
@@ -281,11 +294,19 @@ describe("useWorktreeWorkspacesRefresh", () => {
 
     fixture.setDiskOnly({ branch: "main", resolvedAt: 7_000 });
     fixture.holdForcedReads();
-    await act(async () => {
-      const inFlight = rendered.result.current.refresh.refresh();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh.refresh();
+    });
+    // First force is in flight under the host that will leave.
+    await fixture.waitForHeldRequest("forced", 1);
+    act(() => {
       fixture.swapHost();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    // Follow-up force against the host now on screen is also held (hold is
+    // still armed), so wait for that successive arrival before releasing.
+    await fixture.waitForHeldRequest("forced", 2);
+    await act(async () => {
       fixture.releaseHeldReads();
       await inFlight;
     });
@@ -313,15 +334,30 @@ describe("useWorktreeWorkspacesRefresh", () => {
 
     fixture.setDiskOnly({ branch: "main", resolvedAt: 7_000 });
     fixture.holdForcedReads();
-    await act(async () => {
-      const inFlight = rendered.result.current.refresh.refresh();
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh.refresh();
       rendered.rerender([REPO, OTHER_REPO]);
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      // The moved scope's re-read settles LATER than the branch list, whose
-      // invalidation is awaited either way - otherwise that await alone would
-      // mask a discarded one.
-      fixture.slowCacheOnlyReads();
-      fixture.releaseHeldReads();
+    });
+    await fixture.waitForHeldRequest("forced", 1);
+    // New scope's own cache-only read must settle STALE before we arm holds on
+    // the post-force re-read; otherwise that mount read would be held too.
+    await waitFor(() => {
+      expect(fixture.branchInCacheFor([REPO, OTHER_REPO])).toBe(
+        "feature/login",
+      );
+    });
+    // Hold the moved scope's re-read so it settles only when we release it -
+    // later than the branch list, whose invalidation is awaited either way.
+    // Otherwise awaiting branches alone would mask a discarded current-key
+    // invalidation.
+    fixture.holdCacheOnlyReads();
+    act(() => {
+      fixture.releaseHeldOfKind("forced");
+    });
+    await fixture.waitForHeldRequest("cacheOnly", 1);
+    await act(async () => {
+      fixture.releaseHeldOfKind("cacheOnly");
       await inFlight;
     });
 
@@ -435,6 +471,9 @@ function workspaceSummary(args: {
   };
 }
 
+/** Held host-read kinds this fixture can arm, await, and release. */
+type HeldRequestKind = "cacheOnly" | "forced" | "branch";
+
 function createFixture(): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
@@ -451,8 +490,8 @@ function createFixture(): {
    * itself finished, rather than what becomes true shortly after.
    */
   readonly branchInCacheFor: (paths: ReadonlyArray<string>) => string | null;
-  /** Makes cache-only reads settle later than the branch-list read. */
-  readonly slowCacheOnlyReads: () => void;
+  /** In-flight TanStack queries+mutations; 0 means reconciliation settled. */
+  readonly isFetching: () => number;
   readonly setNext: (next: {
     readonly branch: string;
     readonly resolvedAt: number | null;
@@ -466,7 +505,22 @@ function createFixture(): {
   readonly holdCacheOnlyReads: () => void;
   readonly holdForcedReads: () => void;
   readonly holdBranchReads: () => void;
+  /**
+   * Resolves when `count` held requests of `kind` arrive in its current hold
+   * window. Re-arming a kind starts a new window, so this stays relative to the
+   * request race the test is controlling rather than earlier holds.
+   */
+  readonly waitForHeldRequest: (
+    kind: HeldRequestKind,
+    count: number,
+  ) => Promise<void>;
+  /** Releases every held kind and stops holding. */
   readonly releaseHeldReads: () => void;
+  /**
+   * Releases only one held kind (and stops holding it). Other kinds stay
+   * held so a test can order settlement deterministically.
+   */
+  readonly releaseHeldOfKind: (kind: HeldRequestKind) => void;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -481,13 +535,68 @@ function createFixture(): {
   let cachedBranch = branch;
   let cachedResolvedAt: number | null = resolvedAt;
   let holdCacheOnly = false;
-  let slowCacheOnly = false;
   let holdForced = false;
   let holdBranches = false;
   // Bounded so a regression that chases the host forever fails the count
   // assertion instead of spinning the suite.
   let swapsLeft = 0;
-  const held: Array<() => void> = [];
+  const heldByKind: Record<HeldRequestKind, Array<() => void>> = {
+    cacheOnly: [],
+    forced: [],
+    branch: [],
+  };
+  const arrivalCount: Record<HeldRequestKind, number> = {
+    cacheOnly: 0,
+    forced: 0,
+    branch: 0,
+  };
+  const arrivalWaiters: Record<
+    HeldRequestKind,
+    Array<{ readonly target: number; readonly resolve: () => void }>
+  > = {
+    cacheOnly: [],
+    forced: [],
+    branch: [],
+  };
+
+  const noteArrival = (kind: HeldRequestKind): void => {
+    arrivalCount[kind] += 1;
+    const count = arrivalCount[kind];
+    const remaining: Array<{
+      readonly target: number;
+      readonly resolve: () => void;
+    }> = [];
+    for (const waiter of arrivalWaiters[kind]) {
+      if (count >= waiter.target) {
+        waiter.resolve();
+      } else {
+        remaining.push(waiter);
+      }
+    }
+    arrivalWaiters[kind] = remaining;
+  };
+
+  const hold = (kind: HeldRequestKind, release: () => void): void => {
+    heldByKind[kind].push(release);
+    noteArrival(kind);
+  };
+
+  const armHold = (kind: HeldRequestKind): void => {
+    // Counts are scoped to the active hold window. A test can release a kind,
+    // re-arm it later, and wait for the next request without an earlier arrival
+    // immediately satisfying the new wait.
+    arrivalCount[kind] = 0;
+  };
+
+  const releaseKind = (kind: HeldRequestKind): void => {
+    if (kind === "cacheOnly") holdCacheOnly = false;
+    if (kind === "forced") holdForced = false;
+    if (kind === "branch") holdBranches = false;
+    const pending = [...heldByKind[kind]];
+    heldByKind[kind].length = 0;
+    for (const release of pending) release();
+  };
+
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-workspaces-refresh",
@@ -517,7 +626,7 @@ function createFixture(): {
           };
           if (holdForced) {
             return new Promise((resolve) => {
-              held.push(() => {
+              hold("forced", () => {
                 resolve(settle());
               });
             });
@@ -529,16 +638,9 @@ function createFixture(): {
         const payload = summariesFor(paths, cachedBranch, cachedResolvedAt);
         if (holdCacheOnly) {
           return new Promise((resolve) => {
-            held.push(() => {
+            hold("cacheOnly", () => {
               resolve(payload);
             });
-          });
-        }
-        if (slowCacheOnly) {
-          return new Promise((resolve) => {
-            setTimeout(() => {
-              resolve(payload);
-            }, 50);
           });
         }
         return Promise.resolve(payload);
@@ -554,7 +656,7 @@ function createFixture(): {
         };
         if (holdBranches) {
           return new Promise((resolve) => {
-            held.push(() => {
+            hold("branch", () => {
               resolve(payload);
             });
           });
@@ -599,9 +701,6 @@ function createFixture(): {
           : mockLocalHostEntry,
       );
     },
-    slowCacheOnlyReads: () => {
-      slowCacheOnly = true;
-    },
     branchInCacheFor: (paths) => {
       // Built with the hook's own key builders, so the assertion cannot drift
       // from the entry the rows actually render out of.
@@ -616,6 +715,7 @@ function createFixture(): {
       );
       return data?.workspaces[0]?.worktrees[0]?.branch ?? null;
     },
+    isFetching: () => queryClient.isFetching() + queryClient.isMutating(),
     hostQueryKeys: () =>
       queryClient
         .getQueryCache()
@@ -635,26 +735,37 @@ function createFixture(): {
       resolvedAt = next.resolvedAt;
     },
     holdForcedReads: () => {
+      armHold("forced");
       holdForced = true;
     },
     holdBranchReads: () => {
+      armHold("branch");
       holdBranches = true;
     },
     setBranches: (names) => {
       branchNames = names;
     },
     holdCacheOnlyReads: () => {
+      armHold("cacheOnly");
       holdCacheOnly = true;
+    },
+    waitForHeldRequest: (kind, count) => {
+      if (arrivalCount[kind] >= count) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        arrivalWaiters[kind].push({ target: count, resolve });
+      });
     },
     releaseHeldReads: () => {
       // Stops holding too, or the refetch a release provokes would be captured
       // by the same hold and never settle.
-      holdCacheOnly = false;
-      holdForced = false;
-      holdBranches = false;
-      const pending = [...held];
-      held.length = 0;
-      for (const release of pending) release();
+      releaseKind("cacheOnly");
+      releaseKind("forced");
+      releaseKind("branch");
+    },
+    releaseHeldOfKind: (kind) => {
+      releaseKind(kind);
     },
   };
 }
