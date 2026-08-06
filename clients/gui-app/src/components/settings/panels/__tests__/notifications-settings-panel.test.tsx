@@ -22,7 +22,7 @@ import type {
 import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 const hostScopeMocks = vi.hoisted(() => ({
-  client: null as unknown,
+  client: null,
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this

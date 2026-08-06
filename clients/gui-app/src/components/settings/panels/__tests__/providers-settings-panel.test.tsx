@@ -588,7 +588,7 @@ vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
 const hostScopeMocks = vi.hoisted(() => ({
-  client: null as unknown,
+  client: null,
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this

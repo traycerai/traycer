@@ -16,15 +16,21 @@ export function HostGlyph(props: {
   readonly host: HostScopeOption;
   readonly className: string | undefined;
 }): ReactNode {
-  const Icon = glyphFor(props.host);
-  return <Icon className={cn("shrink-0", props.className)} aria-hidden />;
-}
-
-function glyphFor(host: HostScopeOption): typeof Cloud {
-  if (host.isLocalMachine) return Laptop;
-  if (host.entry?.kind === "remote") return Cloud;
-  if (host.entry?.kind === "mock") return Server;
-  return MonitorSmartphone;
+  // Each branch returns a fixed element rather than picking a component and
+  // rendering it as `<Icon />`. Selecting the TYPE at render time makes it a
+  // component created during render, which remounts the subtree whenever the
+  // host changes kind (and trips `react-hooks/static-components`).
+  const className = cn("shrink-0", props.className);
+  if (props.host.isLocalMachine) {
+    return <Laptop className={className} aria-hidden />;
+  }
+  if (props.host.entry?.kind === "remote") {
+    return <Cloud className={className} aria-hidden />;
+  }
+  if (props.host.entry?.kind === "mock") {
+    return <Server className={className} aria-hidden />;
+  }
+  return <MonitorSmartphone className={className} aria-hidden />;
 }
 
 const DOT_TONE = {

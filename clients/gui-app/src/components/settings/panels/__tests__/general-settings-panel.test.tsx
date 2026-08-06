@@ -27,10 +27,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import {
-  localSnapshotClearScopeKey,
-  useLocalSnapshotClearStore,
-} from "@/stores/settings/local-snapshot-clear-store";
+import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 
 interface CapturedHostQueryArgs {
   readonly method: string;

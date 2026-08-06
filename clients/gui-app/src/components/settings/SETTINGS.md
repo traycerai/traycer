@@ -69,6 +69,83 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
   multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
   unchanged regardless of density.
 
+## Scope: the organising idea
+
+Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
+load-bearing rather than cosmetic.
+
+- **App** - General, Appearance, Keybindings, plus Shell and Diagnostics, which
+  are backed by the local CLI / desktop bridges and so can only ever describe
+  the machine the app runs on (they carry a quiet `this machine` tag).
+- **Account** - Sessions.
+- **Machine** - headed by THE host switcher (`host-scope/host-switcher.tsx`).
+  Everything under it - Overview, Providers, Worktrees, Notifications, Agent
+  selection - is scoped by that one selection.
+
+This replaced a flat list in which "Appearance" (this app), "Sessions" (your
+account) and "Providers" (one specific machine) were indistinguishable peers,
+and in which FOUR sections had each grown their own host `<Select>`: Providers
+(header), Worktrees (toolbar), General -> File Edit Snapshots (a settings row,
+directly above a destructive button) and Agent selection (floating above the
+editor). They differed in width, placement and scoping mechanism while doing
+one job.
+
+**Two host relationships, kept apart by grammar.** Merging them is the defect
+the whole surface guards against:
+
+- **Viewing** (`stores/settings/settings-host-scope-store.ts`) - which machine
+  Settings is administering. Free, reversible, no effect outside Settings.
+  Renders as neutral chrome; never accent-coloured.
+- **Active for this window** (`HostDirectoryService.selectById`, read through
+  `useReactiveActiveHostId`) - which machine this window talks to for ambient
+  work: notification indicators, the bell, rate limits, the resource monitor,
+  and where newly started work lands. Changed ONLY by a labelled verb that
+  states its consequence ("Use this machine in this window"), never as a
+  dropdown side effect. Always wears the accent.
+
+`useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
+host-scoped panel reads. Its status enum is the safety contract, because three
+of its states look identical if you only check `client !== null`:
+
+| Status | `client` | The panel must |
+|---|---|---|
+| `following` | ambient | render normally - the ambient client IS the scoped host's |
+| `connecting` | `null` | render its loading shape, NEVER the ambient client's data |
+| `unreachable` | `null` | say so - terminal, not pending; never a spinner that cannot resolve |
+| `vanished` | `null` | say the machine was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
+| `ready` | scoped | render normally |
+
+The invariant every consumer owes: **a visible host name must always match the
+client used by every read, stream and mutation beneath it.** `HostScopeGate`
+(`host-scope/host-scope-gate.tsx`) enforces this centrally so each panel does
+not re-derive it; `HostScopeLine` is the inert readout that names the machine
+at the point of the content.
+
+**One host model.** The app carries two host lists that need not agree - the
+runtime directory (what this client can dial; it alone knows `websocketUrl`)
+and the cloud registry (what the account owns; it alone knows presence leases,
+platform, update state). Every old picker was built on exactly one of them and
+was therefore blind to a real class of host. `buildHostScopeOptions`
+(`host-scope/host-scope-model.ts`) is their UNION keyed by `hostId`, recording
+`connectable` / `registered` so a row present in only one list renders honestly
+instead of being dropped or faked. NOTE: `HostDirectoryEntry.kind` is
+`local|remote|mock` while `HostListItem.kind` is `personal|sandbox` - same
+field name, disjoint values. The merged model deliberately exposes neither
+directly.
+
+**One health vocabulary.** `deriveHostHealth` (`host-scope/host-health.ts`)
+replaced two disjoint dialects that described the same machine: the
+registry-backed presence words and the local service words ("Running" /
+"Stopped" / "Not installed"). It keeps a coarse `state` a person acts on plus a
+`detail` fragment carrying the nuance the old design spent a row of pills on.
+`stopped` and `not-installed` stay distinct from `offline` because they are the
+two a person can act on; for the local machine the live service snapshot
+outranks the cloud lease. It DELEGATES to `deriveHostPresence`
+(`panels/my-hosts-model.ts`) rather than re-deriving it - that function's
+invariants (no green dot without live evidence; live-session evidence outranks
+the lease; an expired lease under degraded presence reads "unknown", never a
+false "Offline") are tested and load-bearing.
+
 ## Sections
 
 - `General` App behavior, agent activity, and local data controls, divided
