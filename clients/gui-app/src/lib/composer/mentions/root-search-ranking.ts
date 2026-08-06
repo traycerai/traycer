@@ -1,5 +1,5 @@
 import type { IFuseOptions } from "fuse.js";
-import { searchFuzzyMatches } from "../fuzzy-ranking";
+import { resortByNameTier, searchFuzzyMatches } from "../fuzzy-ranking";
 import type { MentionMenuEntry, MentionProviderId } from "./providers";
 
 /**
@@ -53,11 +53,17 @@ export function rankRootSearchEntries(
   if (candidates.length === 0 || trimmedQuery.length === 0) {
     return candidates.map((candidate) => candidate.entry);
   }
-  const matches = searchFuzzyMatches(
-    candidates,
+  // Tier on the label (filename/title), not the full path: a deep path-
+  // segment hit in `detail` still surfaces via the last tier instead of
+  // competing with literal label hits, and the provider boost only orders
+  // rows within a tier — it can no longer push a substring hit above a
+  // label-prefix hit.
+  const matches = resortByNameTier(
+    searchFuzzyMatches(candidates, trimmedQuery, FUSE_KEYS, (candidate, score) =>
+      score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
+    ),
     trimmedQuery,
-    FUSE_KEYS,
-    (candidate, score) => score * PROVIDER_SCORE_BOOSTS[candidate.providerId],
+    (candidate) => candidate.entry.label,
   );
   const matchedIndices = new Set(matches.map((match) => match.refIndex));
   const unmatched = candidates.filter(

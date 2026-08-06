@@ -26,6 +26,33 @@ const BASE_FUSE_OPTIONS = {
  * rows. `adjustScore` lets a caller re-weight a match by what produced it
  * (e.g. per-provider boosts); pass null to rank on the raw score.
  */
+/**
+ * Re-sorts fuzzy matches into literal-hit tiers on the row's primary text
+ * (command name, mention label): prefix, then substring, then everything
+ * else (fuzzy or secondary-field matches). The shared Fuse pass runs with
+ * `ignoreLocation` — needed so deep path segments still match — which erases
+ * the prefix advantage, and a short query weak-matches most rows, clustering
+ * scores into noise. A user typing into a completion menu expects literal
+ * name hits first. `toSorted` is stable, so score/input order carries
+ * through within a tier, keeping typo tolerance inside each tier.
+ */
+export function resortByNameTier<T>(
+  matches: ReadonlyArray<ScoredFuzzyMatch<T>>,
+  query: string,
+  textOf: (item: T) => string,
+): ReadonlyArray<ScoredFuzzyMatch<T>> {
+  const lowerQuery = query.toLowerCase();
+  const tierOf = (item: T): number => {
+    const text = textOf(item).toLowerCase();
+    if (text.startsWith(lowerQuery)) return 0;
+    if (text.includes(lowerQuery)) return 1;
+    return 2;
+  };
+  return matches.toSorted(
+    (left, right) => tierOf(left.item) - tierOf(right.item),
+  );
+}
+
 export function searchFuzzyMatches<T>(
   items: ReadonlyArray<T>,
   query: string,

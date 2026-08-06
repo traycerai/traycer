@@ -80,6 +80,41 @@ describe("rankRootSearchEntries", () => {
     ).toEqual(["a1", "f1"]);
   });
 
+  it("ranks a label-prefix hit above a shorter label-substring hit with a better fuse score", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "oauth.ts" }),
+      candidate("files", { id: "f2", label: "authorization-helpers.test.ts" }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "authorization-helpers.test.ts",
+      "oauth.ts",
+    ]);
+  });
+
+  it("does not let the provider boost push a label-substring hit above a label-prefix hit", () => {
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "oauth rollout plan" }),
+      candidate("files", { id: "f1", label: "auth-helpers.ts" }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "auth-helpers.ts",
+      "oauth rollout plan",
+    ]);
+  });
+
+  it("keeps unmatched rows appended after all tiered rows", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "zz-unrelated.bin" }),
+      candidate("files", { id: "f2", label: "oauth.ts" }),
+      candidate("artifacts", { id: "a1", label: "Auth spec" }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "Auth spec",
+      "oauth.ts",
+      "zz-unrelated.bin",
+    ]);
+  });
+
   it("appends source-matched rows the client cannot re-match instead of dropping them", () => {
     const candidates = [
       candidate("files", {

@@ -1,5 +1,5 @@
 import type { IFuseOptions } from "fuse.js";
-import { searchFuzzyMatches } from "./fuzzy-ranking";
+import { resortByNameTier, searchFuzzyMatches } from "./fuzzy-ranking";
 import type { SlashCommand } from "./types";
 
 /**
@@ -16,10 +16,11 @@ const FUSE_KEYS: NonNullable<IFuseOptions<SlashCommand>["keys"]> = [
 ];
 
 /**
- * Filters and ranks the slash-command catalog for a typed query in one fuzzy
- * pass, best match first — the same Fuse tolerance the `@` mention root
- * search uses, replacing the exact-substring filter (which dropped any query
- * with a typo) and its coarse prefix/substring tiers.
+ * Filters and ranks the slash-command catalog for a typed query: one fuzzy
+ * pass with the same Fuse tolerance the `@` mention root search uses
+ * (replacing the exact-substring filter, which dropped any query with a
+ * typo), then the shared stable resort into name prefix/substring tiers so a
+ * completion-style query like `/an` ranks literal name hits first.
  *
  * Unlike root `@` search there is no upstream matcher: the whole catalog is
  * fetched and matched only here, so this pass is the filter and rows that
@@ -35,7 +36,8 @@ export function rankSlashCommands(
   if (commands.length === 0 || trimmedQuery.length === 0) {
     return commands;
   }
-  return searchFuzzyMatches(commands, trimmedQuery, FUSE_KEYS, null).map(
+  const matches = searchFuzzyMatches(commands, trimmedQuery, FUSE_KEYS, null);
+  return resortByNameTier(matches, trimmedQuery, (command) => command.name).map(
     (match) => match.item,
   );
 }

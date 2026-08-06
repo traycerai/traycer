@@ -80,6 +80,39 @@ describe("rankSlashCommands", () => {
     expect(rankedNames(commands, "skill")).toEqual(["frontend-design"]);
   });
 
+  it("ranks name-prefix hits above substring and description-only hits for a short query", () => {
+    const commands = [
+      command({
+        name: "brandkit",
+        description: "Brand guidelines and identity decks",
+      }),
+      command({
+        name: "review-animations",
+        description: "Review current animation changes",
+      }),
+      command({
+        name: "traycer-changeset-walkthrough",
+        description: "Walk through a changeset with the user",
+      }),
+      command({
+        name: "animation-vocabulary",
+        description: "Name a motion effect",
+      }),
+    ];
+    expect(rankedNames(commands, "an")[0]).toBe("animation-vocabulary");
+  });
+
+  it("ranks a name-substring hit above a description-only hit", () => {
+    const commands = [
+      command({
+        name: "compact",
+        description: "Summarize the plan so far",
+      }),
+      command({ name: "tech-plan", description: "Settle the approach" }),
+    ];
+    expect(rankedNames(commands, "plan")).toEqual(["tech-plan", "compact"]);
+  });
+
   it("keeps equal-quality matches in input (alphabetical) order", () => {
     const commands = [
       command({ name: "agent-review", description: "" }),
