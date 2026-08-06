@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appLocalNotificationsKey } from "@/lib/persist";
 import {

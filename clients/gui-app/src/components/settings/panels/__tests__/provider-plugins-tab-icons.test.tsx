@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ProviderPlugin } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { cleanup, render, screen } from "@testing-library/react";

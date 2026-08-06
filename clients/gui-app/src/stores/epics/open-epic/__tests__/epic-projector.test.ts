@@ -3,7 +3,6 @@
  * mutating a Y.Doc through the public store API and asserting the
  * projected slices match a reference projection of the live doc.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
