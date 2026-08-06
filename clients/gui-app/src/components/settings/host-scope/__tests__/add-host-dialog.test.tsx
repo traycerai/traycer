@@ -149,6 +149,68 @@ describe("<AddHostDialog /> arrival", () => {
     ).not.toBeNull();
   });
 
+  it("announces a host that finished enrolling before the first clean read", async () => {
+    // Open during a failed list: the baseline waits for the retry, and a
+    // fast machine can register INSIDE that window — landing in the first
+    // clean read, where set membership alone swallows it as pre-existing
+    // forever. The registry's createdAt breaks the tie: enrolled after this
+    // dialog opened means it is the arrival being watched for, while the
+    // recovered pre-existing host (old or absent createdAt) stays silent.
+    const preExisting = await hostOption({
+      hostId: "host-old",
+      name: "Old Faithful",
+      registered: true,
+      connectable: true,
+    });
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    const fastEnroller = hostScopeOptionFixture({
+      hostId: "host-fast",
+      name: "Office Linux",
+      registered: true,
+      connectable: true,
+      item: {
+        hostId: "host-fast",
+        displayName: "Office Linux",
+        platform: "linux-x64",
+        kind: "personal",
+        publicKey: "pk",
+        createdAt: new Date().toISOString(),
+        updatePolicy: "manual",
+        status: {
+          presenceLease: "fresh",
+          hostRelayAttached: true,
+          viewerReachability: "unknown",
+          clientCloud: "ok",
+          busy: false,
+          busySessionCount: 0,
+          updateState: "current",
+          appVersion: "1.4.2",
+          lastSeenAt: new Date().toISOString(),
+        },
+      },
+    });
+    scopeMocks.scope = { hosts: [], isLoading: false, listsFailed: true };
+    useAddHostDialogStore.getState().openDialog([]);
+
+    const { rerender } = render(<AddHostDialog />);
+    expect(screen.queryByTestId("add-host-arrived")).toBeNull();
+
+    // The retry lands with BOTH: the failed list's pre-existing host and the
+    // machine that enrolled during the failure window.
+    scopeMocks.scope = {
+      hosts: [preExisting, fastEnroller],
+      isLoading: false,
+      listsFailed: false,
+    };
+    rerender(<AddHostDialog />);
+
+    expect(screen.getByTestId("add-host-arrived")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Office Linux is connected" }),
+    ).not.toBeNull();
+  });
+
   it("does not announce a directory-only row that never registered", async () => {
     // The counterweight the old `&& connectable` half was protecting: a row
     // this client can dial but the account does not know is not an enrollment.

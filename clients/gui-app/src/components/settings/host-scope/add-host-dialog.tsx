@@ -23,6 +23,12 @@ import { cn } from "@/lib/utils";
 const INSTALL_COMMAND = "curl -fsSL traycer.ai/install | sh";
 const WINDOWS_COMMAND = "irm traycer.ai/install.ps1 | iex";
 const LOGIN_COMMAND = "traycer login";
+/**
+ * Tolerance when comparing a registry `createdAt` (server clock) against the
+ * dialog's open time (client clock) — see the enrollment-beat-the-baseline
+ * arm of the arrival check.
+ */
+const ENROLLED_DURING_OPEN_SLACK_MS = 2 * 60_000;
 
 /**
  * Adding a host, as something you WATCH happen.
@@ -85,10 +91,18 @@ function AddHostDialogBody(): ReactNode {
   // over a host that was already in the account. Registration is the
   // enrollment claim; the route is a separate fact the banner copy states
   // honestly either way.
+  //
+  // And a third rule the first two conspire to need: enrollment can BEAT the
+  // deferred baseline. Waiting for a clean read is what stops pre-existing
+  // hosts from being announced, but a fast machine can finish enrolling
+  // inside that same window and land in the baseline — swallowed forever by
+  // set membership. The registry's `createdAt` breaks the tie: a baseline
+  // host enrolled after this dialog opened is the arrival being watched for.
   const listsSettled = !scope.isLoading && !scope.listsFailed;
   const [baseline, setBaseline] = useState<readonly string[] | null>(() =>
     listsSettled ? knownHostIds : null,
   );
+  const [openedAtMs] = useState(() => Date.now());
   // Filled during render, not in an effect — the documented "adjusting state
   // when data changes" shape: React re-renders before committing, and the
   // arrival check below never sees a settled list without a baseline.
@@ -99,11 +113,29 @@ function AddHostDialogBody(): ReactNode {
   const arrived = useMemo(() => {
     if (baseline === null) return null;
     const known = new Set(baseline);
+    const openSnapshot = new Set(knownHostIds);
     return (
-      scope.hosts.find((host) => !known.has(host.hostId) && host.registered) ??
-      null
+      scope.hosts.find((host) => {
+        // Present when this dialog opened means not an arrival, however the
+        // rest resolves — the person watched it exist before running anything.
+        if (!host.registered || openSnapshot.has(host.hostId)) return false;
+        if (!known.has(host.hostId)) return true;
+        // In the baseline, but only because enrollment BEAT the first clean
+        // read: a dialog opened during a failed or in-flight list waits for
+        // the retry, and a fast host can register inside that window. Set
+        // membership cannot tell that host from a pre-existing one the retry
+        // merely revealed — the registry's enrollment time can. The slack
+        // absorbs modest client/server clock skew without readmitting
+        // long-standing hosts.
+        if (host.item === null) return false;
+        const createdAtMs = Date.parse(host.item.createdAt);
+        return (
+          Number.isFinite(createdAtMs) &&
+          createdAtMs >= openedAtMs - ENROLLED_DURING_OPEN_SLACK_MS
+        );
+      }) ?? null
     );
-  }, [scope.hosts, baseline]);
+  }, [scope.hosts, baseline, knownHostIds, openedAtMs]);
 
   if (arrived !== null) {
     return (
