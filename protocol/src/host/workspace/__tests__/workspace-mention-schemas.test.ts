@@ -11,6 +11,8 @@ import {
   workspacePathMentionSuggestionsRequestSchema,
   workspaceReadFileRequestSchema,
   workspaceReadFileResponseSchema,
+  workspaceWriteFileRequestSchema,
+  workspaceWriteFileResponseSchema,
   workspaceWorktreeMentionSuggestionsResponseSchema,
 } from "@traycer/protocol/host/index";
 
@@ -150,6 +152,51 @@ describe("workspace mention host schemas", () => {
     ).toBe(true);
   });
 
+  it("requires SHA-256 revisions for conflict-safe workspace writes", () => {
+    const revision = "a".repeat(64);
+    expect(
+      workspaceWriteFileRequestSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        expectedRevision: revision,
+        content: "export const app = false;\n",
+      }).success,
+    ).toBe(true);
+    expect(
+      workspaceWriteFileRequestSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        expectedRevision: "not-a-revision",
+        content: "export const app = false;\n",
+      }).success,
+    ).toBe(false);
+    expect(
+      workspaceWriteFileResponseSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        status: "saved",
+        revision,
+      }).success,
+    ).toBe(true);
+    expect(
+      workspaceWriteFileResponseSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        status: "conflict",
+        currentRevision: "b".repeat(64),
+        error: "changed",
+      }).success,
+    ).toBe(true);
+    expect(
+      workspaceWriteFileResponseSchema.safeParse({
+        workspacePath: "/repo",
+        filePath: "src/app.tsx",
+        status: "error",
+        error: "write failed",
+      }).success,
+    ).toBe(true);
+  });
+
   it("registers single-purpose workspace mention methods at v1.0", () => {
     expect(
       hostRpcRegistry["workspace.listFileTree"][1].versions[0].contract
@@ -161,6 +208,10 @@ describe("workspace mention host schemas", () => {
     ).toEqual({ major: 1, minor: 0 });
     expect(
       hostRpcRegistry["workspace.readFile"][1].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+    expect(
+      hostRpcRegistry["workspace.writeFile"][1].versions[0].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
     expect(

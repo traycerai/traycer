@@ -1,8 +1,8 @@
 import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
-import { toCliError } from "./errors";
+import { CLI_ERROR_CODES, toCliError } from "./errors";
+import { finishAndExit, isProcessFatal } from "./exit";
 import { createOutput, type Output, type ProgressInfo } from "./output";
-import { flushStdio } from "./std-write";
 import {
   type RawRunnerFlags,
   readonlyEnv,
@@ -45,7 +45,10 @@ export type CommandFn = (ctx: CommandContext) => Promise<CommandResult>;
 //   5. On throw: emit the terminal `result` event with status=error and
 //      exit with the code on the CliError (or 1 for unknown errors).
 //
-// The runner owns process.exit - callers should not exit themselves.
+// The runner owns process termination - callers should not exit themselves.
+// It terminates through `finishAndExit`, which records the code on
+// `process.exitCode` and lets the loop end rather than calling
+// `process.exit()`; see exit.ts for the win32 teardown abort that motivates it.
 export async function runCommand(
   fn: CommandFn,
   flags: RawRunnerFlags,
@@ -81,19 +84,34 @@ export async function runCommand(
       errorFromUnknown(err),
     );
     output.emitError(cliErr.code, cliErr.message, cliErr.details);
-    try {
-      await Sentry.flush(2000);
-    } catch (flushErr) {
-      runtime.logger.warn("Sentry flush failed after command error", {
-        errorName: errorFromUnknown(flushErr).name,
-        errorMessage: errorFromUnknown(flushErr).message,
-      });
-      // best-effort; do not let a flush failure prevent exit
-    }
-    // The error envelope was just written to a possibly-piped stdout;
-    // `process.exit` would drop everything past the 64 KiB pipe buffer.
-    await flushStdio();
-    process.exit(cliErr.exitCode);
+    // The error envelope was just written to a possibly-piped stdout, and the
+    // Sentry client is still live. `finishAndExit` flushes the first and shuts
+    // down the second before letting the loop end - see exit.ts for why the
+    // process no longer tears itself down here.
+    await finishAndExit(cliErr.exitCode);
+    return;
+  }
+  // A process-fatal handler (unhandled rejection / uncaught exception) may
+  // have fired WHILE this command was running. Draining is what makes that
+  // survivable - the command keeps going and can still return a result - but
+  // the process has already failed, and Desktop now trusts a terminal `ok`
+  // over a non-zero exit. Emitting success here would report a failed
+  // install/update/ensure as successful, so report what actually happened.
+  if (isProcessFatal()) {
+    runtime.logger.error(
+      "CLI command completed after a process-fatal failure",
+      { commandExitCode: result.exitCode, emittedAsJson: runtime.json },
+      // The originating error was already captured and logged by the fatal
+      // handler; this record is about the result being suppressed.
+      null,
+    );
+    output.emitError(
+      CLI_ERROR_CODES.UNEXPECTED,
+      "the CLI process failed while this command was running",
+      { commandExitCode: result.exitCode },
+    );
+    await finishAndExit(1);
+    return;
   }
   runtime.logger.info("CLI command completed", {
     exitCode: result.exitCode,
@@ -105,10 +123,9 @@ export async function runCommand(
   } else if (result.human !== null && !runtime.quiet) {
     output.human(result.human);
   }
-  // Terminal `result` line just went out. This is the flush the
-  // `host available --include-pre-releases` truncation turned on: without
-  // it, any payload over 64 KiB reaches Desktop as half a JSON line with
-  // exit code 0. See std-write.ts.
-  await flushStdio();
-  process.exit(result.exitCode);
+  // Terminal `result` line just went out. `finishAndExit` still flushes it
+  // first - that is the flush the `host available --include-pre-releases`
+  // truncation turned on, and it is unrelated to the teardown abort the rest
+  // of that helper addresses. See std-write.ts and exit.ts.
+  await finishAndExit(result.exitCode);
 }

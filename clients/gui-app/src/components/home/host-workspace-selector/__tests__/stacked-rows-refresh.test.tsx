@@ -7,7 +7,6 @@
  * unmounts on close and mounts fresh on every open - which makes MOUNT its
  * intent edge, the counterpart of the picker popover's `onOpenChange`.
  */
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";

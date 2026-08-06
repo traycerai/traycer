@@ -18,6 +18,8 @@ import {
   gitGetFileDiffResponseSchema,
   gitGetFileDiffsRequestSchema,
   gitGetFileDiffsResponseSchema,
+  gitGetFileContentsRequestSchema,
+  gitGetFileContentsResponseSchema,
   gitGetCapabilitiesResponseSchema,
   gitSubscribeStatusRequestSchema,
   gitSubscribeStatusRequestSchemaV12,
@@ -56,6 +58,17 @@ export const gitGetFileDiffsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: gitGetFileDiffsRequestSchema,
   responseSchema: gitGetFileDiffsResponseSchema,
+});
+
+/**
+ * Optional post-v1 edit hydration. A client asks only after the user enters
+ * edit mode; older hosts omit the capability and remain read-only.
+ */
+export const gitGetFileContentsV10 = defineRpcContract({
+  method: "git.getFileContents",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: gitGetFileContentsRequestSchema,
+  responseSchema: gitGetFileContentsResponseSchema,
 });
 
 // ---- Submodule-aware v1.1 ------------------------------------------------ //

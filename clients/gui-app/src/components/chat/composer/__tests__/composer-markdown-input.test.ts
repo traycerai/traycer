@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { fireEvent, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";

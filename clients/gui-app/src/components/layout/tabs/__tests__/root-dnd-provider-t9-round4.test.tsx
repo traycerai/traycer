@@ -9,7 +9,6 @@
  * drop) against real draggable/droppable payload shapes, so a mutation at
  * the wiring layer - not just the pure helpers - turns them red.
  */
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

@@ -9,7 +9,6 @@
  * the acknowledgment write, and the toast surface are spied, because those
  * are the observable effects whose ORDER relative to the bind is the point.
  */
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";

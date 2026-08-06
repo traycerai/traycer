@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { KeybindingProvider } from "@/providers/keybinding-provider";

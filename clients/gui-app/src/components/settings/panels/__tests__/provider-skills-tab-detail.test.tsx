@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type {
   ProviderNativeScope,
   ProviderSkill,
@@ -79,12 +78,18 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   }),
 }));
 
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
+
 // The dialog reads SKILL.md off disk. Mocked at the hook so the suite can say
 // what came back - including the failure shape `workspace.readFile` actually
 // uses, which RESOLVES with `content: null` and an `error` string rather than
 // rejecting.
 vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: (
+    _client: null,
     workspacePath: string | null,
     filePath: string | null,
   ) => {

@@ -14,7 +14,6 @@
  * Geometry is injected per element; the scroll DECISIONS under test remain
  * the component's own.
  */
-import "../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,

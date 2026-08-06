@@ -293,10 +293,31 @@ export async function runTraycerCliPlainJson<T>(
       timeoutMs: 10_000,
     });
   } catch (err) {
+    const stdout =
+      err !== null && typeof err === "object" && "stdout" in err
+        ? String((err as { stdout: unknown }).stdout ?? "")
+        : "";
     const stderr =
       err !== null && typeof err === "object" && "stderr" in err
         ? String((err as { stderr: unknown }).stderr ?? "")
         : "";
+    // Same rule the envelope wrappers apply, in the shape this one speaks:
+    // a complete, parseable document on stdout IS the answer, and a non-zero
+    // exit arriving behind it describes the CLI's teardown rather than the
+    // work (int#4840). Keyed on "stdout parses as complete JSON" - a positive
+    // test - so a truncated or absent payload still throws below.
+    //
+    // No production path routes through this helper today (see the docstring);
+    // this closes the seam so a future plain-JSON command does not have to
+    // rediscover the same failure.
+    const salvaged = parseCompleteJson<T>(stdout);
+    if (salvaged !== null) {
+      log.warn("[traycer-cli] non-zero exit after complete plain JSON", {
+        args: augmented,
+        stderrTail: stderr.slice(-512),
+      });
+      return salvaged.value;
+    }
     const baseMessage = err instanceof Error ? err.message : String(err);
     const stderrTail = stderr.slice(-2048);
     // Node's child_process error message is just `Command failed: <cmd>`;
@@ -745,6 +766,33 @@ async function streamTraycerCliJsonWithInvocation<T>(
         );
         return;
       }
+      // A completed terminal `ok` line is the outcome, even if the process
+      // then exited non-zero. The runner emits that line and calls its
+      // terminator on the very next statement (traycer-cli's runner.ts), so
+      // nothing meaningful runs afterwards that a later exit code could be
+      // reporting - a non-zero code arriving behind it describes the CLI's
+      // own teardown, not the work. `traycer host doctor` is the intentional
+      // case (ok envelope + exitCode 1 whenever an issue is error/fatal), and
+      // the win32 SEA teardown abort was the accidental one (int#4840): both
+      // used to surface here as a failed install/update/`host ensure` after
+      // the operation had already succeeded.
+      //
+      // Keyed on `sawTerminalOk` - a positive test for the tolerated
+      // condition - rather than on "the exit code was non-zero, try to
+      // recover". A run that exits non-zero WITHOUT a terminal ok still
+      // fails below, exactly as before. `runTraycerCliJsonWithInvocation`
+      // has made the same call on the non-streaming path since it shipped.
+      if (sawTerminalOk) {
+        if (typeof exitCode === "number" && exitCode !== 0) {
+          log.warn("[traycer-cli] non-zero exit after a successful result", {
+            args: augmentedArgs,
+            exitCode,
+            stderrTail: stderrTail.slice(-512),
+          });
+        }
+        resolve({ data: terminalResult as T });
+        return;
+      }
       if (typeof exitCode === "number" && exitCode !== 0) {
         reject(
           new TraycerCliError(
@@ -760,22 +808,20 @@ async function streamTraycerCliJsonWithInvocation<T>(
         );
         return;
       }
-      if (!sawTerminalOk) {
-        reject(
-          new TraycerCliError(
-            {
-              message: `traycer-cli emitted no terminal result for: ${augmentedArgs.join(" ")}`,
-              code: null,
-              details: null,
-              exitCode,
-              stderrTail,
-            },
-            null,
-          ),
-        );
-        return;
-      }
-      resolve({ data: terminalResult as T });
+      // Exited 0 but never emitted a terminal line - the CLI ran and stayed
+      // silent. Distinct from the non-zero case above, and the message says so.
+      reject(
+        new TraycerCliError(
+          {
+            message: `traycer-cli emitted no terminal result for: ${augmentedArgs.join(" ")}`,
+            code: null,
+            details: null,
+            exitCode,
+            stderrTail,
+          },
+          null,
+        ),
+      );
     });
   });
 }
@@ -853,6 +899,24 @@ function parseNdjsonEvent(value: unknown): NdjsonEvent | null {
  * contract as streamed long-running ones - projector functions never
  * see the `{type:"result", status:"ok", data:...}` outer shape.
  */
+/**
+ * Parse `stdout` as one complete JSON document, or return `null`.
+ *
+ * Wrapped in an object rather than returned bare so a payload that is itself
+ * `null` stays distinguishable from "did not parse" - the caller's salvage
+ * decision hinges on exactly that difference.
+ */
+function parseCompleteJson<T>(stdout: string): { readonly value: T } | null {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return null;
+  try {
+    return { value: JSON.parse(trimmed) as T };
+  } catch {
+    // Truncated or non-JSON: not a complete answer, so not salvageable.
+    return null;
+  }
+}
+
 function extractTerminalEnvelope(
   stdout: string,
   stderrTail: string,

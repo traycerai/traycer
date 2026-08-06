@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProvidersPluginsList } from "@/hooks/providers/use-providers-plugins-list-query";
