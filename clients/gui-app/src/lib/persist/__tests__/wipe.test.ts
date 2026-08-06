@@ -23,6 +23,7 @@ vi.mock("@/lib/composer/prompt-stash-channel", () => ({
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 function createMockStorage(seed: Record<string, string>): Storage {
   const map = new Map<string, string>(Object.entries(seed));
@@ -227,15 +228,55 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(order).toEqual(["hostClear"]);
     expect(reloadSpy).not.toHaveBeenCalled();
   });
+
+  it("does not tear down file-edit runtimes when `hostClear` rejects (mounted editors keep working)", async () => {
+    const teardownSpy = vi
+      .spyOn(fileEditRuntimeRegistry, "teardown")
+      .mockResolvedValue(undefined);
+    const hostClear = vi.fn(() => Promise.reject(new Error("clear failed")));
+
+    await expect(clearAllPersistedStores({ hostClear })).rejects.toThrow(
+      "clear failed",
+    );
+
+    expect(teardownSpy).not.toHaveBeenCalled();
+  });
+
+  it("tears down file-edit runtimes AFTER `hostClear` succeeds, before the storage sweep", async () => {
+    const order: string[] = [];
+    const teardownSpy = vi
+      .spyOn(fileEditRuntimeRegistry, "teardown")
+      .mockImplementation(() => {
+        order.push("teardown");
+        return Promise.resolve();
+      });
+    const hostClear = vi.fn(() => {
+      order.push("hostClear");
+      return Promise.resolve();
+    });
+    vi.spyOn(localStorageMock, "removeItem").mockImplementation(() => {
+      order.push("local:removeItem");
+    });
+
+    await clearAllPersistedStores({ hostClear });
+
+    expect(teardownSpy).toHaveBeenCalledTimes(1);
+    const hostClearIndex = order.indexOf("hostClear");
+    const teardownIndex = order.indexOf("teardown");
+    const sweepIndex = order.indexOf("local:removeItem");
+    expect(hostClearIndex).toBeLessThan(teardownIndex);
+    expect(teardownIndex).toBeLessThan(sweepIndex);
+  });
 });
 
-describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
-  // A mix of: two real per-window landing-image partitions, a same-prefix db
-  // that is NOT a landing-image db, and an unrelated db. Only the two
-  // `traycer-gui-app:*:landing-images` entries must be deleted.
+describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
+  // A mix of app-owned per-window partitions, a same-prefix db that is not one
+  // of ours, and an unrelated db. Only the known renderer stores are deleted.
   const DB_NAMES = [
     "traycer-gui-app:default:landing-images",
     "traycer-gui-app:window-7:landing-images",
+    "traycer-gui-app:default:file-edit-recovery",
+    "traycer-gui-app:window-7:file-edit-recovery",
     "traycer-gui-app:some-other-store",
     "unrelated-app-db",
   ];
@@ -264,7 +305,7 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes landing-image partitions plus the fixed prompt-stash db name; unrelated dbs survive", async () => {
+  it("deletes only known renderer dbs (landing-image, file-edit-recovery, prompt-stash); same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
@@ -278,6 +319,8 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
         "traycer-gui-app:default:landing-images",
         "traycer-gui-app:prompt-stash",
         "traycer-gui-app:window-7:landing-images",
+        "traycer-gui-app:default:file-edit-recovery",
+        "traycer-gui-app:window-7:file-edit-recovery",
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
@@ -343,7 +386,7 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     expect(deleteIndex).toBeLessThan(reloadIndex);
   });
 
-  it("still reloads when a landing-image db deletion errors (best-effort)", async () => {
+  it("still reloads when a renderer db deletion errors (best-effort)", async () => {
     // The first partition's delete fires `onerror`; the second succeeds. A single
     // erroring delete must NOT abort the wipe or the reload.
     const value = {

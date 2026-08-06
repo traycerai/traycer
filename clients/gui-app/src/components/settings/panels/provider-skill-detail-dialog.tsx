@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
+import { useHostClient } from "@/lib/host";
 import { TraycerMarkdown } from "@/markdown";
 import { cn } from "@/lib/utils";
 import {
@@ -76,7 +77,8 @@ export function ProviderSkillDetailDialog(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const { skill, removal } = props;
-  const fileQuery = useWorkspaceReadFile(skill.path, SKILL_ENTRY_FILE);
+  const client = useHostClient();
+  const fileQuery = useWorkspaceReadFile(client, skill.path, SKILL_ENTRY_FILE);
 
   return (
     <Dialog

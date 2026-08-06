@@ -10,10 +10,10 @@
  * and paints them with the same CSS Custom Highlight API so multiple matches on
  * one line are individually visible and the active one stands out.
  *
- * The concatenated text content of the code container equals the file content
- * verbatim for both render paths - the plain `<pre>` fallback (a single text
- * node) and Shiki output (line spans joined by `\n` text nodes) - so a flat
- * walk of the container's text nodes yields a faithful offset map.
+ * A regular source container can be mapped with a flat text-node walk. Diffs
+ * renders each source line as a sibling grid row inside its shadow root, so
+ * that path inserts a virtual newline between `[data-line-index]` rows while
+ * building the same raw-file offset map.
  */
 
 const FIND_HIGHLIGHT_NAME_PREFIX = "traycer-source-find-match";
@@ -55,19 +55,19 @@ function getOrCreateHighlightEntry(root: HTMLElement): SourceHighlightEntry {
   const entry: SourceHighlightEntry = {
     matchName: `${FIND_HIGHLIGHT_NAME_PREFIX}-${id}`,
     activeName: `${FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX}-${id}`,
-    styleElement: createHighlightStyleElement(root.ownerDocument, id),
+    styleElement: createHighlightStyleElement(root, id),
   };
   sourceHighlightEntries.set(root, entry);
   return entry;
 }
 
 function createHighlightStyleElement(
-  doc: Document,
+  root: HTMLElement,
   id: number,
 ): HTMLStyleElement {
   const matchName = `${FIND_HIGHLIGHT_NAME_PREFIX}-${id}`;
   const activeName = `${FIND_HIGHLIGHT_ACTIVE_NAME_PREFIX}-${id}`;
-  const style = doc.createElement("style");
+  const style = root.ownerDocument.createElement("style");
   style.dataset.traycerSourceFindHighlight = matchName;
   style.textContent = [
     `::highlight(${matchName}) {`,
@@ -79,7 +79,12 @@ function createHighlightStyleElement(
     "color: var(--primary-foreground);",
     "}",
   ].join("\n");
-  doc.head.append(style);
+  const styleRoot = root.getRootNode();
+  if (typeof ShadowRoot !== "undefined" && styleRoot instanceof ShadowRoot) {
+    styleRoot.append(style);
+  } else {
+    root.ownerDocument.head.append(style);
+  }
   return style;
 }
 
@@ -89,16 +94,50 @@ interface TextNodeSpan {
 }
 
 function collectTextSpans(root: HTMLElement): readonly TextNodeSpan[] {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const lineNodes = Array.from(
+    root.querySelectorAll<HTMLElement>("[data-line][data-line-index]"),
+  );
+  if (lineNodes.length > 0) return collectLineSeparatedTextSpans(lineNodes);
+  return collectFlatTextSpans(root, 0).spans;
+}
+
+function collectLineSeparatedTextSpans(
+  lineNodes: readonly HTMLElement[],
+): readonly TextNodeSpan[] {
   const spans: TextNodeSpan[] = [];
   let offset = 0;
+  for (const line of lineNodes) {
+    const collected =
+      line.textContent === "\n"
+        ? { spans: [], endOffset: offset }
+        : collectFlatTextSpans(line, offset);
+    spans.push(...collected.spans);
+    // Diffs renders source lines as sibling grid rows rather than placing a
+    // newline text node between them. Account for that virtual separator so
+    // raw-file offsets still map to the right token nodes.
+    offset = collected.endOffset + 1;
+  }
+  return spans;
+}
+
+function collectFlatTextSpans(
+  root: HTMLElement,
+  initialOffset: number,
+): { readonly spans: readonly TextNodeSpan[]; readonly endOffset: number } {
+  const walker = root.ownerDocument.createTreeWalker(
+    root,
+    NodeFilter.SHOW_TEXT,
+    null,
+  );
+  const spans: TextNodeSpan[] = [];
+  let offset = initialOffset;
   let node = walker.nextNode() as Text | null;
   while (node !== null) {
     spans.push({ node, start: offset });
     offset += node.data.length;
     node = walker.nextNode() as Text | null;
   }
-  return spans;
+  return { spans, endOffset: offset };
 }
 
 // Resolves an absolute character position to a (text node, in-node offset)

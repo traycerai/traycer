@@ -15,6 +15,77 @@ import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fi
 describe("<HostScopeGate /> empty and failed states", () => {
   afterEach(cleanup);
 
+  it("offers no return action when the unreachable host is already the active one", async () => {
+    // Asking `connectable` before `isFollowing` made `unreachable` reachable
+    // for the ACTIVE host, which turned this action into a no-op: "Back to X"
+    // while already on X, calling `returnToActive` to clear an override that
+    // is already null. Nothing changes, including the notice the user is
+    // looking at. An action that cannot alter the state it is offered against
+    // is worse than none — it reads as the way out.
+    const { hostScopeOptionFixture } = await import(
+      "@/components/settings/host-scope/host-scope-fixture"
+    );
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      name: "This Mac",
+      isActive: true,
+      connectable: false,
+    });
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({
+          host: active,
+          hostId: active.hostId,
+          status: "unreachable",
+          activeHostId: active.hostId,
+          activeHost: active,
+          isViewingActive: true,
+        })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
+    );
+
+    // The explanation still renders — only the dead button is withheld.
+    expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
+    expect(screen.queryByTestId("body")).toBeNull();
+  });
+
+  it("still offers the way back when the unreachable host is not the active one", async () => {
+    // The counterweight: withholding the action for the active host must not
+    // withhold it for a pick that genuinely has somewhere to return to.
+    const { hostScopeOptionFixture } = await import(
+      "@/components/settings/host-scope/host-scope-fixture"
+    );
+    render(
+      <HostScopeGate
+        scope={hostScopeFixture({
+          host: hostScopeOptionFixture({
+            hostId: "host-picked",
+            name: "Studio Linux",
+            connectable: false,
+          }),
+          hostId: "host-picked",
+          status: "unreachable",
+          activeHostId: "host-active",
+          activeHost: hostScopeOptionFixture({
+            hostId: "host-active",
+            name: "This Mac",
+            isActive: true,
+          }),
+          isViewingActive: false,
+        })}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        <div data-testid="body" />
+      </HostScopeGate>,
+    );
+
+    expect(screen.getByTestId("host-scope-return-to-active")).not.toBeNull();
+  });
+
   it("says the list failed, and offers a retry, rather than claiming an empty account", () => {
     const retryLists = vi.fn();
     render(

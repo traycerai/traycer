@@ -105,22 +105,28 @@ export function HostScopeGate(props: {
             ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
             : "No connection is available to this host."
         }
-        // Unconditional. This used to be gated on `!scope.isViewingActive`,
-        // which is dead: `isViewingActive` IS `isFollowing`, and the status
-        // derivation returns "following" before it can ever return
-        // "unreachable" — so the null arm could not be reached. Stating the
-        // action plainly beats a condition that reads like it protects
-        // something and does not.
+        // Gated on `!scope.isViewingActive` — and that arm is live now, though
+        // it genuinely was dead when this was written. The reasoning then was
+        // that `deriveHostScopeStatus` answers "following" before it can ever
+        // answer "unreachable", so the active host could not reach this branch.
+        // Asking `connectable` BEFORE `isFollowing` — so an active host whose
+        // directory entry goes `unavailable` stops mounting RPC panels — made
+        // the combination reachable, and with it a button offering to take you
+        // "Back to" the host you are already on by clearing an override that is
+        // already null. There is nothing to return to, so nothing is offered:
+        // the notice above already names the host and says why it is stuck.
         action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.returnToActive}
-            data-testid="host-scope-return-to-active"
-          >
-            Back to {scope.activeHost?.name ?? "your active host"}
-          </Button>
+          scope.isViewingActive ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={scope.returnToActive}
+              data-testid="host-scope-return-to-active"
+            >
+              Back to {scope.activeHost?.name ?? "your active host"}
+            </Button>
+          )
         }
         testId="host-scope-unreachable"
       />
