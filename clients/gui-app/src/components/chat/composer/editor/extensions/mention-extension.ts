@@ -88,6 +88,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
         kind: "mention",
         slashTrigger: null,
         slashScopeForProps: null,
+        suggestionPluginKey: mentionSuggestionPluginKey,
       }),
       command: ({ editor, range, props }) => {
         const item = props as ComposerPickerItem;

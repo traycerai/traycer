@@ -37,6 +37,12 @@ export interface MentionNoMatchCloseInput {
   readonly matchedCount: number | null;
   readonly loading: boolean;
   readonly fetching: boolean;
+  /**
+   * True when any requested source's query is in error. A failed source
+   * proves nothing empty — its rows were never seen — so an errored search
+   * must not read as "settled with zero matches".
+   */
+  readonly sourcesErrored: boolean;
 }
 
 /**
@@ -58,5 +64,9 @@ export function shouldCloseMentionForNoMatches(
   // been issued, so their loading/fetching flags are meaningless for it.
   if (input.query !== input.debouncedQuery) return false;
   if (input.loading || input.fetching) return false;
+  // A source that failed never returned its rows; "no matches" cannot be
+  // concluded from an incomplete search, so the menu stays open (the other
+  // dismissal rules still apply).
+  if (input.sourcesErrored) return false;
   return input.matchedCount === 0;
 }

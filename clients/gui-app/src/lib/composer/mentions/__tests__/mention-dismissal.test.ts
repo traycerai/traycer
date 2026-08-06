@@ -41,6 +41,7 @@ function closeInput(
     matchedCount: 0,
     loading: false,
     fetching: false,
+    sourcesErrored: false,
     ...overrides,
   };
 }
@@ -81,6 +82,12 @@ describe("shouldCloseMentionForNoMatches", () => {
     ).toBe(false);
     expect(
       shouldCloseMentionForNoMatches(closeInput({ stepKind: "provider" })),
+    ).toBe(false);
+  });
+
+  it("stays open when any source errored - a failed search proves nothing empty", () => {
+    expect(
+      shouldCloseMentionForNoMatches(closeInput({ sourcesErrored: true })),
     ).toBe(false);
   });
 

@@ -267,11 +267,13 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     data: workspaceEntries,
     isLoading: workspaceLoading,
     isFetching: workspaceFetching,
+    error: workspaceError,
   } = useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
   const {
     data: remoteEpicEntries,
     isLoading: epicLoading,
     isFetching: epicFetching,
+    error: epicError,
   } = useEpicMentionEntries({
     requests: epicRequests,
   });
@@ -413,6 +415,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // root search matched nothing, the menu closes the way Escape would.
   // Session-scoped close, so a session that already yielded cannot shut its
   // successor's menu.
+  const sourcesErrored =
+    active &&
+    ((workspaceRequests.length > 0 && workspaceError !== null) ||
+      (epicRequests.length > 0 && epicError !== null));
+
   const dismissForNoMatches =
     active &&
     shouldCloseMentionForNoMatches({
@@ -422,11 +429,21 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       matchedCount: stepEntries.matchedCount,
       loading,
       fetching,
+      sourcesErrored,
     });
 
   useEffect(() => {
     if (!dismissForNoMatches || sessionId === null) return;
-    pickerStore.getState().closeSession(sessionId);
+    const state = pickerStore.getState();
+    // Prefer the session's dismissal handle: it also ends the tiptap
+    // suggestion session, so the zero-match close cannot leak into the next
+    // `@` occurrence. Bare `closeSession` is the fallback for owners that
+    // registered no handle.
+    if (state.dismiss !== null) {
+      state.dismiss();
+      return;
+    }
+    state.closeSession(sessionId);
   }, [dismissForNoMatches, pickerStore, sessionId]);
 }
 

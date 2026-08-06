@@ -138,6 +138,16 @@ export interface ComposerPickerState {
   readonly fetching: boolean;
   readonly commit: ComposerPickerCommit | null;
   /**
+   * Session-owned dismissal handle: closes the picker AND ends the owning
+   * tiptap suggestion session (via its plugin exit meta), so the dismissal
+   * cannot leak into the next trigger occurrence the way a bare
+   * `closeSession` would - the plugin would stay active and route the next
+   * occurrence's updates into this dead session. Registered by the
+   * suggestion render like `commit`; null when the owner has no such handle
+   * (callers fall back to `closeSession`).
+   */
+  readonly dismiss: (() => void) | null;
+  /**
    * True when the active kind's catalog query FAILED (currently only the
    * slash-command catalog reports this). The menu renders a "couldn't load"
    * row with a Retry action instead of claiming "no matching" results -
@@ -193,6 +203,7 @@ export interface ComposerPickerActions {
     readonly range: ComposerPickerRange;
     readonly query: string;
     readonly commit: ComposerPickerCommit;
+    readonly dismiss: (() => void) | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly updateRange: (input: {
@@ -257,6 +268,7 @@ const INITIAL_STATE: ComposerPickerState = {
   loading: false,
   fetching: false,
   commit: null,
+  dismiss: null,
   loadFailed: false,
   retryLoad: null,
   clientRect: null,
@@ -339,6 +351,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
       range,
       query,
       commit,
+      dismiss,
       clientRect,
     }) => {
       set({
@@ -359,6 +372,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         loading: false,
         fetching: false,
         commit,
+        dismiss,
         loadFailed: false,
         retryLoad: null,
         clientRect,

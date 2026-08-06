@@ -1,3 +1,5 @@
+import type { Editor } from "@tiptap/core";
+import type { PluginKey } from "@tiptap/pm/state";
 import type { SuggestionProps } from "@tiptap/suggestion";
 import { isDismissedMentionQuery } from "@/lib/composer/mentions/mention-dismissal";
 import { activePickerItemDisabledReason } from "./composer-picker-store";
@@ -15,6 +17,17 @@ export interface ComposerSuggestionRenderArgs {
   readonly slashTrigger: ComposerSlashTrigger | null;
   readonly slashScopeForProps:
     ((props: SuggestionProps) => ComposerSlashScope) | null;
+  /**
+   * The suggestion plugin's own key, for dismissals that must survive the
+   * NEXT `@` occurrence. Closing only the picker store leaves the tiptap
+   * session active, and when its matcher later lands on a different `@` it
+   * fires `onUpdate` on this same renderer - whose store session is already
+   * dead - so the new menu can never open. Dispatching the plugin's
+   * `{ exit: true }` meta records the dismissed range instead, and a fresh
+   * `@` elsewhere starts a fresh `onStart`. Null for the slash pickers,
+   * which have no query-content dismissal rules.
+   */
+  readonly suggestionPluginKey: PluginKey | null;
 }
 
 let nextSessionId = 0;
@@ -42,13 +55,25 @@ export function createComposerSuggestionRender<
     // to keep a departing session from writing over a newer one.
     nextSessionId += 1;
     const sessionId = nextSessionId;
+    // Ends the tiptap suggestion session itself (see `suggestionPluginKey`).
+    // Deferred: dismissals fire inside the plugin's own update cycle, and
+    // dispatching a transaction synchronously would re-enter it.
+    const exitPluginSession = (editor: Editor): void => {
+      const pluginKey = args.suggestionPluginKey;
+      if (pluginKey === null) return;
+      queueMicrotask(() => {
+        if (editor.isDestroyed) return;
+        const { view } = editor;
+        view.dispatch(view.state.tr.setMeta(pluginKey, { exit: true }));
+      });
+    };
     return {
       onStart(props) {
         latestProps = props;
-        // A pasted "@ ..." or "@x, y" is already prose; never open for it.
-        // The session still runs (tiptap owns it), but with no `openPicker`
-        // this session never owns the store, so its later updates no-op.
+        // A pasted "@ ..." or "@x, y" is already prose; never open for it,
+        // and end the plugin session so a later `@` elsewhere can start over.
         if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+          exitPluginSession(props.editor);
           return;
         }
         const slashScope = args.slashScopeForProps?.(props) ?? null;
@@ -63,6 +88,15 @@ export function createComposerSuggestionRender<
             if (latestProps === null) return;
             latestProps.command(item as TItem);
           },
+          // Dismissal handle for pickers with post-open close rules (the
+          // mention hook's zero-match rule): closes the store now and the
+          // plugin session with it, so the dismissal cannot leak into the
+          // next `@` occurrence.
+          dismiss: () => {
+            args.pickerStore.getState().closeSession(sessionId);
+            if (latestProps === null) return;
+            exitPluginSession(latestProps.editor);
+          },
           clientRect: props.clientRect ?? null,
         });
       },
@@ -70,11 +104,12 @@ export function createComposerSuggestionRender<
       onUpdate(props) {
         latestProps = props;
         // The typed query turned into prose (leading space, `,`/`;`, double
-        // space): dismiss exactly like Escape. `closeSession` clears the
-        // store's owner, so this session's further updates no-op and the menu
-        // stays closed for this `@` occurrence.
+        // space): close the menu now and end the plugin session. The plugin
+        // records the dismissed range, so this `@` occurrence stays dismissed
+        // while a new `@` elsewhere opens fresh.
         if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
           args.pickerStore.getState().closeSession(sessionId);
+          exitPluginSession(props.editor);
           return;
         }
         const slashScope = args.slashScopeForProps?.(props) ?? null;

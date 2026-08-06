@@ -171,6 +171,44 @@ describe("mention menu dismissal", () => {
     expect(pickerStore.getState().open).toBe(false);
   });
 
+  it("opens a fresh menu for a second @ after punctuation dismissal", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@auth");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+    editor.commands.insertContent(", ");
+    await flush();
+    expect(pickerStore.getState().open).toBe(false);
+
+    editor.commands.insertContent("@lib");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().kind).toBe("mention");
+    expect(pickerStore.getState().query).toBe("lib");
+  });
+
+  it("opens a fresh menu for a second @ after a zero-match dismissal via the session handle", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@zzz");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+    // The mention item hook calls this handle when the root search settles on
+    // zero real matches; it must end the plugin session, not just the store.
+    const dismiss = pickerStore.getState().dismiss;
+    expect(dismiss).not.toBeNull();
+    if (dismiss === null) return;
+    dismiss();
+    await flush();
+    expect(pickerStore.getState().open).toBe(false);
+
+    editor.commands.insertContent(" @lib");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().query).toBe("lib");
+  });
+
   it("closes on a double space but keeps single-space queries open", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("@release notes");
