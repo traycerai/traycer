@@ -52,6 +52,13 @@ interface ControllableSession extends IRemoteSession<
   /** How many availability listeners are attached RIGHT NOW - the whole point. */
   readonly availabilityListenerCount: number;
   readonly closeCalls: number;
+  /**
+   * Settable, because "already ready when the binding subscribes" is a state
+   * the cache produces routinely (a warm keep-warm hit) and one in which NO
+   * boundary will ever be emitted - `subscribeAvailabilityRecovered` reports a
+   * recovery, not the current state.
+   */
+  ready: boolean;
   emitReady(): void;
   emitClosed(): void;
 }
@@ -60,7 +67,8 @@ function controllableSession(): ControllableSession {
   const availability = new Set<() => void>();
   const closed = new Set<() => void>();
   let closeCalls = 0;
-  return {
+  const session: ControllableSession = {
+    ready: false,
     get availabilityListenerCount() {
       return availability.size;
     },
@@ -81,7 +89,7 @@ function controllableSession(): ControllableSession {
     // Never "closed": a released session lingers, which is exactly the state
     // this file is about. A closed one would just be rebuilt.
     isClosed: () => false,
-    isReady: () => false,
+    isReady: () => session.ready,
     sendUnary: vi.fn(() => Promise.resolve({}) as never),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
@@ -102,6 +110,7 @@ function controllableSession(): ControllableSession {
       closeCalls += 1;
     },
   };
+  return session;
 }
 
 const REMOTE_HOST_ID = "remote-host-b";
@@ -289,6 +298,66 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       h.requestLocal();
     }
     // Every visit's listener is settled: each delivered its boundary and left.
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.dispose();
+  });
+
+  it("detaches on release when the session was ALREADY ready at subscribe time", () => {
+    // The warm keep-warm hit: the cache hands this binding a session that is
+    // already up. `subscribeAvailabilityRecovered` reports a RECOVERY, not the
+    // current state, so no boundary will ever arrive for it - the orphan would
+    // wait on one forever and never detach.
+    const h = harness();
+    h.session.ready = true;
+
+    h.requestRemote();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.requestLocal();
+    // Nothing was owed, so nothing is kept waiting.
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.dispose();
+  });
+
+  it("does not accumulate listeners across picker switches over a WARM session", () => {
+    // The accumulation the previous test's single case adds up to, and the one
+    // actually reachable in the app: after the first visit the session stays
+    // ready, so every later visit adopts it warm and would strand a listener.
+    const h = harness();
+    h.requestRemote();
+    h.session.emitReady();
+    h.requestLocal();
+    h.session.ready = true;
+
+    for (let visit = 0; visit < 5; visit += 1) {
+      h.requestRemote();
+      h.requestLocal();
+    }
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    // A later real reconnect therefore invalidates ONCE, not once per visit.
+    const recoveredBefore = h.recovered.length;
+    h.requestRemote();
+    h.session.ready = false;
+    h.session.emitReady();
+    expect(h.recovered.length).toBe(recoveredBefore + 1);
+
+    h.dispose();
+  });
+
+  it("still keeps an orphan attached when the session is NOT yet ready", () => {
+    // The negative control: the readiness check must not swallow the case the
+    // orphan exists for - a session still dialing when the picker flipped away
+    // owes its boundary to the queries that already errored against it.
+    const h = harness();
+    h.requestRemote();
+    h.requestLocal();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
     expect(h.session.availabilityListenerCount).toBe(0);
 
     h.dispose();

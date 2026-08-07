@@ -382,7 +382,13 @@ class RuntimeHostMessenger<
     hostId: string,
   ): () => void {
     let released = false;
-    let deliveredBoundary = false;
+    // Whether this listener is still WAITING on a boundary. That is the whole
+    // reason a released binding's listener is allowed to outlive it - it owes
+    // the queries one invalidation - so it is also the exact condition for
+    // detaching. Tracked as "owed" rather than "delivered" because the two
+    // differ on the warm-cache path below, where a boundary is never owed and
+    // therefore never delivered either.
+    let boundaryOwed = true;
     let detached = false;
     let unsubscribeAvailability: (() => void) | null = null;
     let unsubscribeClosed: (() => void) | null = null;
@@ -395,16 +401,30 @@ class RuntimeHostMessenger<
       unsubscribeClosed?.();
     };
     unsubscribeAvailability = session.subscribeAvailabilityRecovered(() => {
-      deliveredBoundary = true;
+      boundaryOwed = false;
       this.onRemoteAvailabilityRecovered(hostId);
       if (released) {
         detach();
       }
     });
     unsubscribeClosed = session.onClosed(detach);
+    // An ALREADY-ready session owes nothing: `subscribeAvailabilityRecovered`
+    // fires on a recovery, not on the current state, so a binding that adopts a
+    // warm cached session would otherwise wait forever for a boundary that has
+    // already happened - and, since it never arrives, never detach on release.
+    // Every picker visit would then leave one more listener on a session some
+    // other consumer keeps alive, and the next real reconnect would fan out one
+    // duplicate invalidation per abandoned visit.
+    //
+    // Read AFTER subscribing, so the check cannot fall in the gap: a session
+    // that becomes ready in between has already run the listener above and
+    // cleared the flag, and re-clearing it here is a no-op.
+    if (session.isReady()) {
+      boundaryOwed = false;
+    }
     return () => {
       released = true;
-      if (deliveredBoundary) {
+      if (!boundaryOwed) {
         detach();
       }
     };

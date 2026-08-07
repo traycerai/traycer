@@ -454,13 +454,28 @@ function ProvidersPanelBody({
     // independent stream connection need not emit any recovery event - so
     // showing it as "connecting" would park the panel on a spinner that never
     // resolves and offers no way to report the fault.
-    if (query.error instanceof RetryableTransportError) {
+    //
+    // REMOTE only, for exactly the same reason. A spinner is a promise that
+    // something will refetch, and only the remote path can keep it: the
+    // messenger holds a remote binding for the selected host whose ready
+    // boundary invalidates this query (`subscribeRemoteAvailability` ->
+    // `onRemoteAvailabilityRecovered`). A local host has no such binding, and
+    // by the time this error arrives the retry wrapper has already spent its
+    // whole budget - its final attempt rethrows unchanged, so "retryable" here
+    // describes what the class of failure WAS, not that anything is still
+    // retrying. The only thing that could refetch a local host is a durable
+    // stream tab that happens to be bound to it, which Settings cannot assume
+    // exists. So local falls through to the actionable card, which at worst
+    // shows a recoverable fault with a way out and is replaced the moment a
+    // recovery invalidation does land.
+    if (
+      query.error instanceof RetryableTransportError &&
+      !isSelectedHostLocal
+    ) {
       return (
         <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
           <MutedAgentSpinner />
-          {isSelectedHostLocal
-            ? "Reconnecting to the host…"
-            : "Connecting to the remote host…"}
+          Connecting to the remote host…
         </div>
       );
     }

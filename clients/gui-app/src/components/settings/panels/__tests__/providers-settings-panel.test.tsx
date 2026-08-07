@@ -1428,7 +1428,15 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
   });
 
-  it("describes a local host's transport failure as reconnecting rather than a host fault", () => {
+  it("keeps an actionable failure card for an EXHAUSTED local transport failure", () => {
+    // A spinner is a promise that something will refetch, and on a local host
+    // nothing can keep it. The remote path has the messenger's own binding,
+    // whose ready boundary invalidates this query; a local host has no such
+    // binding, `useHostQuery` pins `retry: false`, and by the time this error
+    // surfaces the retry wrapper has already spent its budget - its final
+    // attempt rethrows unchanged, so the class says what the failure WAS, not
+    // that anything is still retrying. Showing "Reconnecting…" here parked the
+    // panel on a permanent spinner with no way to report the fault.
     providerMocks.listResult.isError = true;
     providerMocks.listResult.error = new RetryableTransportError({
       code: "RPC_ERROR",
@@ -1444,8 +1452,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText("Reconnecting to the host…")).toBeDefined();
-    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
   });
 
   it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
