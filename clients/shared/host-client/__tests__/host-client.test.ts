@@ -89,6 +89,16 @@ function makeContext(userId: string, bearer: string): RequestContext {
   });
 }
 
+/**
+ * Availability reports are coalesced per host per microtask tick (see
+ * `HostClient.deliverAvailabilityRecovered`), so their invalidation/change
+ * event lands one microtask after the notify call. One awaited resolved
+ * promise is exactly that boundary.
+ */
+async function flushAvailabilityCoalescing(): Promise<void> {
+  await Promise.resolve();
+}
+
 function buildHostClientWithMock(): {
   client: HostClient<typeof registry>;
   invalidator: RecordingInvalidator;
@@ -321,9 +331,10 @@ describe("HostClient", () => {
     );
   });
 
-  it("invalidates on availability recovery only when a host is bound", () => {
+  it("invalidates on availability recovery only when a host is bound", async () => {
     const { client, invalidator, events } = buildHostClientWithMock();
     client.notifyAvailabilityRecovered();
+    await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual([]);
     expect(events).toEqual([]);
 
@@ -332,12 +343,13 @@ describe("HostClient", () => {
     events.length = 0;
 
     client.notifyAvailabilityRecovered();
+    await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["mock-local"]);
     expect(events).toHaveLength(1);
     expect(events[0].reason).toBe("availability-recovered");
   });
 
-  it("explicit-host recovery invalidates a NON-active host's scope without announcing an active-host change", () => {
+  it("explicit-host recovery invalidates a NON-active host's scope without announcing an active-host change", async () => {
     const { client, invalidator, events } = buildHostClientWithMock();
     client.bind(mockLocalHostEntry);
     invalidator.calls.length = 0;
@@ -347,6 +359,7 @@ describe("HostClient", () => {
     // A tab-bound durable stream heartbeats its own host, which need not be
     // the active one; its queries are keyed by THAT id.
     client.notifyHostAvailabilityRecovered("other-host");
+    await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["other-host"]);
     expect(invalidator.options).toEqual([{ refetchActive: true }]);
     expect(events).toEqual([]);
@@ -354,9 +367,63 @@ describe("HostClient", () => {
     // For the active host it is exactly notifyAvailabilityRecovered(),
     // change event included.
     client.notifyHostAvailabilityRecovered("mock-local");
+    await flushAvailabilityCoalescing();
     expect(invalidator.calls).toEqual(["other-host", "mock-local"]);
     expect(events).toHaveLength(1);
     expect(events[0].reason).toBe("availability-recovered");
+  });
+
+  it("un-strands the ACTIVE host's scope without announcing a change", async () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+    client.bind(mockLocalHostEntry);
+    invalidator.calls.length = 0;
+    invalidator.options.length = 0;
+    events.length = 0;
+
+    // The caller is a remote binding that owes a ready boundary for a host
+    // which became active mid-dial. It must still deliver - the active stream
+    // runtime replays nothing to a session that is already ready, so a dropped
+    // boundary strands those queries for good - but it must NOT announce, or
+    // the runtime answers the change by resetting the very binding reporting
+    // the recovery.
+    client.invalidateHostScopeForAvailability("mock-local");
+    await flushAvailabilityCoalescing();
+
+    expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(events).toEqual([]);
+  });
+
+  it("coalesces same-tick availability reports per host into one invalidation and at most one change event", async () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+    client.bind(mockLocalHostEntry);
+    invalidator.calls.length = 0;
+    invalidator.options.length = 0;
+    events.length = 0;
+
+    // One shared session's ready boundary fans out to every consumer wiring
+    // in the same tick: the app-wide stream and a durable tab both notify,
+    // the runtime messenger delivers its change-event-free variant, and an
+    // unrelated host's tab reports too. Per host: ONE invalidation; the
+    // change event survives because at least one caller asked for it.
+    client.notifyAvailabilityRecovered();
+    client.notifyHostAvailabilityRecovered("mock-local");
+    client.invalidateHostScopeForAvailability("mock-local");
+    client.notifyHostAvailabilityRecovered("other-host");
+    await flushAvailabilityCoalescing();
+
+    expect(invalidator.calls.sort()).toEqual(["mock-local", "other-host"]);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe("availability-recovered");
+
+    // The messenger-only variant alone must NOT gain a change event from the
+    // merge machinery when nothing in its tick asked for one.
+    invalidator.calls.length = 0;
+    events.length = 0;
+    client.invalidateHostScopeForAvailability("mock-local");
+    await flushAvailabilityCoalescing();
+    expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(events).toEqual([]);
   });
 
   it("delegates unary requests to the bound messenger", async () => {

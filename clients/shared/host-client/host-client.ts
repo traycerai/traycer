@@ -306,19 +306,21 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * Reports that an endpoint the client already selected has just recovered
    * availability. Invalidates host-scoped cache so active observers refetch
    * against the recovered endpoint. No-op when no host is bound.
+   *
+   * Delivery is coalesced per host per microtask tick (see
+   * {@link deliverAvailabilityRecovered}): one shared remote session's ready
+   * boundary fans out to every consumer wiring (app-wide stream, one per
+   * durable tab transport, the runtime messenger), each of which reports it
+   * here in the same tick with its own cooldown state - without coalescing,
+   * an active host with a few open tabs turns every reconnect boundary into
+   * that many duplicate host-scope invalidations plus change-event fanouts
+   * (each of which resets the runtime messenger's binding).
    */
   notifyAvailabilityRecovered(): void {
     if (this.activeHost === null) {
       return;
     }
-    this.invalidator.invalidateHostScope(this.activeHost.hostId, {
-      refetchActive: true,
-    });
-    this.emitChange({
-      previousHostId: this.activeHost.hostId,
-      currentHostId: this.activeHost.hostId,
-      reason: "availability-recovered",
-    });
+    this.deliverAvailabilityRecovered(this.activeHost.hostId, true);
   }
 
   /**
@@ -335,8 +337,70 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       this.notifyAvailabilityRecovered();
       return;
     }
-    this.invalidator.invalidateHostScope(hostId, {
-      refetchActive: true,
+    this.deliverAvailabilityRecovered(hostId, false);
+  }
+
+  /**
+   * The un-stranding half of {@link notifyHostAvailabilityRecovered} WITHOUT
+   * the active-host change announcement - the same host-scope invalidation the
+   * non-active branch above performs, for a host that happens to be active.
+   *
+   * Exists for one caller: a remote binding that owes a ready boundary for a
+   * host which became active while its first dial was still in flight. Routing
+   * that through the active-host path would emit a `"availability-recovered"`
+   * change event, and the runtime answers a change by resetting the very
+   * binding delivering the news. Dropping it instead is not an option either -
+   * `subscribeAvailabilityRecovered` reports a RECOVERY, not current state, so
+   * the active stream runtime attaching afterwards to an already-ready session
+   * gets no replay and the queries stranded by that dial never refetch.
+   */
+  invalidateHostScopeForAvailability(hostId: string): void {
+    this.deliverAvailabilityRecovered(hostId, false);
+  }
+
+  /**
+   * The choke point every availability-recovered report funnels through, so
+   * one physical ready boundary reaching N wirings costs ONE host-scope
+   * invalidation and at most one change event. Reports for the same host in
+   * the same microtask tick merge; a merged report emits the change event if
+   * ANY of its callers asked for one (the active-host variants do, the
+   * messenger's deliberately does not), and reads the active host at
+   * delivery time so a same-tick unbind cannot announce a stale identity.
+   */
+  private readonly pendingAvailabilityByHost = new Map<
+    string,
+    { emitChangeEvent: boolean }
+  >();
+
+  private deliverAvailabilityRecovered(
+    hostId: string,
+    emitChangeEvent: boolean,
+  ): void {
+    const pending = this.pendingAvailabilityByHost.get(hostId);
+    if (pending !== undefined) {
+      if (emitChangeEvent) {
+        pending.emitChangeEvent = true;
+      }
+      return;
+    }
+    const entry = { emitChangeEvent };
+    this.pendingAvailabilityByHost.set(hostId, entry);
+    queueMicrotask(() => {
+      this.pendingAvailabilityByHost.delete(hostId);
+      this.invalidator.invalidateHostScope(hostId, {
+        refetchActive: true,
+      });
+      if (
+        entry.emitChangeEvent &&
+        this.activeHost !== null &&
+        this.activeHost.hostId === hostId
+      ) {
+        this.emitChange({
+          previousHostId: hostId,
+          currentHostId: hostId,
+          reason: "availability-recovered",
+        });
+      }
     });
   }
 
