@@ -40,6 +40,7 @@ import type { ModelProviderPendingAuthEntry } from "@/stores/settings/model-prov
 import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provider-pending-auth-store";
 import {
   connectChoicesFor,
+  credentialPrecedenceNotice,
   initialConnectChoiceId,
   type ConnectChoice,
 } from "./model-provider-connect-model";
@@ -562,6 +563,10 @@ export function ProviderModelProviderConnectDialog(props: {
   } else {
     body = (
       <ConnectForm
+        precedenceNotice={credentialPrecedenceNotice(
+          entry.source,
+          entry.credentialKey,
+        )}
         choices={choices}
         choice={choice}
         onChoiceChange={handleChoiceChange}
@@ -598,6 +603,13 @@ export function ProviderModelProviderConnectDialog(props: {
 }
 
 function ConnectForm(props: {
+  /**
+   * What already supplies this provider's credential, when something does.
+   * Shown BEFORE the fields rather than gating them: the sign-in is legitimate
+   * and will be stored, it just may not take effect while the other source
+   * outranks it.
+   */
+  readonly precedenceNotice: string | null;
   readonly choices: readonly ConnectChoice[];
   readonly choice: ConnectChoice | null;
   readonly onChoiceChange: (id: string) => void;
@@ -630,6 +642,8 @@ function ConnectForm(props: {
         props.onSubmit();
       }}
     >
+      <PrecedenceNotice notice={props.precedenceNotice} />
+
       <MethodPicker
         choices={props.choices}
         selectedId={choice === null ? "" : choice.id}
@@ -689,6 +703,22 @@ function ConnectForm(props: {
  * A single choice is not a choice: with one way in, the picker would be a
  * control whose only job is to display a constant.
  */
+/**
+ * Shown BEFORE the fields, not in place of them: what already supplies this
+ * provider's credential outranks what the user is about to save, but the
+ * sign-in is still legitimate and still stored.
+ */
+function PrecedenceNotice(props: {
+  readonly notice: string | null;
+}): ReactNode {
+  if (props.notice === null) return null;
+  return (
+    <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-900 dark:text-amber-200">
+      {props.notice}
+    </p>
+  );
+}
+
 function MethodPicker(props: {
   readonly choices: readonly ConnectChoice[];
   readonly selectedId: string;

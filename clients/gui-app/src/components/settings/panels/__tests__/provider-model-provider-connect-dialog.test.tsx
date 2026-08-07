@@ -409,6 +409,40 @@ describe("connect with an API key", () => {
   });
 });
 
+describe("credential precedence", () => {
+  it("warns when something else already supplies the credential, naming it", () => {
+    // Observed live: a stored openai OAuth credential still reports
+    // `source: env` while OPENAI_API_KEY is exported. The sign-in is still
+    // legitimate and still stored - it just will not take effect until the
+    // variable is unset - so this is a warning, not a block.
+    renderDialog({
+      entry: entry({
+        id: "openai",
+        name: "OpenAI",
+        credentialKey: "OPENAI_API_KEY",
+        connected: true,
+        source: "env",
+        methods: [{ type: "oauth", label: "ChatGPT Pro/Plus", prompts: [] }],
+      }),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(
+      screen.getByText(/OPENAI_API_KEY is already set in this host/),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+  });
+
+  it("says nothing for a provider Traycer itself holds the key for", () => {
+    renderDialog({
+      entry: entry({ connected: true, source: "api" }),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(screen.queryByText(/already set in this host/)).toBeNull();
+  });
+});
+
 describe("method picker", () => {
   it("appears only when there is more than one way in", () => {
     // With one route the picker would be a control whose only job is to

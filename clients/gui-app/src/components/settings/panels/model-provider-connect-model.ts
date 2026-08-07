@@ -54,7 +54,7 @@ export function sourceBadgeLabel(
     case "config":
       return "Config file";
     case "custom":
-      return "Plugin";
+      return "Custom";
   }
 }
 
@@ -70,7 +70,7 @@ export function sourceBadgeHint(
     case "config":
       return `This credential comes from a ${providerLabel} config file, so it's managed outside Traycer.`;
     case "custom":
-      return "This credential comes from a provider plugin, so it's managed outside Traycer.";
+      return `This provider is loaded by a custom ${providerLabel} loader.`;
   }
 }
 
@@ -93,44 +93,53 @@ export function readOnlySourceLabel(
     case "env":
       return "Set by environment";
     case "config":
-    case "custom":
       return "Set in config file";
+    case "custom":
+      // NOT "Set in config file": a `custom` loader is frequently fed by the
+      // provider's own auth store (xai signs in through OAuth and still reports
+      // `custom`), so naming a file the user should go and edit sends them
+      // somewhere the credential is not.
+      return "Set by a custom loader";
     case "api":
       return null;
   }
 }
 
 /**
- * Why a read-only row cannot be changed from here, and what WOULD change it.
+ * What a user should know before signing a provider in that ALREADY has a
+ * credential from somewhere else - or null when there is nothing to warn about.
  *
- * The label alone ("Set by environment") states the owner; this states the
- * consequence and the way out, because otherwise the row is a dead end: no
- * Connect, no Remove, and no hint that the credential the user is about to go
- * looking for is being outranked rather than ignored.
+ * This used to gate the affordance rather than annotate it: a row sourced from
+ * the environment offered no Connect at all, on the reasoning that OpenCode
+ * resolves env before its own auth store, so a key stored from here would be
+ * shadowed and the click would appear to work while changing nothing.
  *
- * This is not hypothetical precedence. OpenCode resolves env before its own
- * auth store, so a provider with BOTH reports `env` - observed live: an account
- * holding a stored `openai` OAuth credential still reports `source: "env"`
- * while `OPENAI_API_KEY` is exported. Signing in again from here would succeed,
- * write a credential, and change nothing the user can see, which is why the row
- * offers no button and says this instead.
+ * The precedence is real - observed live, an account holding a stored `openai`
+ * OAuth credential still reports `source: "env"` while OPENAI_API_KEY is
+ * exported - but blocking was the wrong response to it. Setting up a provider
+ * and choosing which credential wins are different decisions: a user may
+ * legitimately want the OAuth sign-in in place for when the variable is not
+ * exported, or intend to unset it afterwards. OpenCode's own app lets you
+ * configure any provider regardless of where its current credential comes from,
+ * and ours refusing to was a restriction we invented.
  *
- * `credentialKey` names the actual variable when we have it - "unset the env
- * var" is not an instruction anyone can follow without it.
+ * So the row keeps its Connect button and the dialog says this instead.
  */
-export function readOnlySourceHint(
-  source: ModelProviderSource,
+export function credentialPrecedenceNotice(
+  source: ModelProviderSource | null,
   credentialKey: string | null,
 ): string | null {
   switch (source) {
     case "env":
       return credentialKey === null
-        ? "An environment variable on this host provides this credential and takes precedence over anything saved here."
-        : `${credentialKey} is set in this host's environment and takes precedence over anything saved here. Unset it and reconnect to sign in from Traycer.`;
+        ? "An environment variable on this host already provides this credential, and it takes precedence - what you save here will not take effect until that variable is unset."
+        : `${credentialKey} is already set in this host's environment and takes precedence. What you save here will not take effect until that variable is unset.`;
     case "config":
+      return "An OpenCode config file already provides this credential and takes precedence. What you save here will not take effect until it is removed there.";
     case "custom":
-      return "An OpenCode config file provides this credential and takes precedence over anything saved here. Remove it there to sign in from Traycer.";
+      return "This provider is loaded by a custom loader, which may already supply its credential.";
     case "api":
+    case null:
       return null;
   }
 }

@@ -349,7 +349,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.queryByText("Environment")).toBeNull();
   });
 
-  it("shows an env-sourced credential as read-only, with NO write affordance", () => {
+  it("shows an env-sourced credential's origin while keeping it configurable", () => {
     renderTab({
       result: {
         ok: true,
@@ -373,11 +373,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(
       screen.queryByRole("button", { name: "Remove saved Groq key" }),
     ).toBeNull();
-    // Read-only means the WRITE affordance too. A "Replace" here would store a
-    // key into the auth store that the env var keeps shadowing - the click
-    // would appear to work and change nothing, and un-shadowing is explicitly
-    // out of v1 scope.
-    expect(screen.queryByRole("button", { name: /Replace/ })).toBeNull();
+    // Connect STAYS: `source` is a status, not a permission. Setting a
+    // provider up and choosing which credential wins are different decisions,
+    // and the dialog carries the precedence warning.
+    expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
   });
 
   it("names the controlling party per source", () => {
@@ -406,9 +405,13 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getAllByText("Set in config file")).toHaveLength(2);
+    expect(screen.getByText("Set in config file")).toBeTruthy();
+    // `custom` gets its OWN line: that loader is frequently fed by the auth
+    // store (xai signs in through OAuth and still reports `custom`), so
+    // pointing at a config file would send the user where the credential isn't.
+    expect(screen.getByText("Set by a custom loader")).toBeTruthy();
     expect(screen.getByText("Config file")).toBeTruthy();
-    expect(screen.getByText("Plugin")).toBeTruthy();
+    expect(screen.getByText("Custom")).toBeTruthy();
     expect(screen.queryByText("Managed outside Traycer")).toBeNull();
   });
 
@@ -432,7 +435,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
   });
 
-  it("explains what OUTRANKS a read-only credential, naming the variable", () => {
+  it("labels an env-sourced row without taking its Connect away", () => {
     // Observed live: an account with a stored openai OAuth credential still
     // reports `source: env` while OPENAI_API_KEY is exported. Without this the
     // row is a dead end - no Connect, no Remove, and no hint that signing in
@@ -456,11 +459,11 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    const label = screen.getByTestId("model-provider-read-only-label");
-    expect(label.textContent).toBe("Set by environment");
-    // The hint rides the tooltip; jsdom cannot open Radix content, so the
-    // trigger wiring is the structural proof (see the remove-button test).
-    expect(label.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(screen.getByTestId("model-provider-source-label").textContent).toBe(
+      "Set by environment",
+    );
+    // Still configurable - the warning belongs in the dialog, not in a block.
+    expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
   });
 
   it("gates the disconnect affordance on canDisconnect ALONE", () => {

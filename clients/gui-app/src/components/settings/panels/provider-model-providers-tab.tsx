@@ -31,7 +31,6 @@ import {
   useModelProviderPendingAuthStore,
 } from "@/stores/settings/model-provider-pending-auth-store";
 import {
-  readOnlySourceHint,
   readOnlySourceLabel,
   sortModelProviderEntries,
   sourceBadgeHint,
@@ -489,22 +488,15 @@ function ModelProviderRow(props: {
   // and a later host may answer the two differently - reading either one for
   // the other is how a button appears that the host will refuse.
   const showDisconnect = props.canDisconnect && entry.canDisconnect;
-  // A credential Traycer did not write and cannot remove: an env var, an
-  // OpenCode config block, or a provider plugin. The row is READ-ONLY, which
-  // has to include the write affordance as well as the remove one - a
-  // "Replace" here would store a key into the auth store that the env var
-  // keeps shadowing, so the click appears to work and changes nothing. Undoing
-  // that shadowing is explicitly out of v1 scope (the host cannot even read
-  // its own auth store), so the honest surface is no button and a line saying
-  // where the credential actually comes from.
-  const externallyManaged =
+  // Where the credential CURRENTLY in effect comes from. This is a status, not
+  // a permission: the row still offers Connect, because setting a provider up
+  // and choosing which credential wins are different decisions (see
+  // `credentialPrecedenceNotice`). Only Remove is gated, and by the host's
+  // `canDisconnect` rather than by this.
+  const externallySourced =
     entry.connected && entry.source !== null && entry.source !== "api";
   const readOnlyLabel =
     entry.source === null ? null : readOnlySourceLabel(entry.source);
-  const readOnlyHint =
-    entry.source === null
-      ? null
-      : readOnlySourceHint(entry.source, entry.credentialKey);
   return (
     <li className="rounded-lg border border-border/60">
       <div className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5">
@@ -542,22 +534,15 @@ function ModelProviderRow(props: {
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {props.busy ? <MutedAgentSpinner /> : null}
-          {externallyManaged && readOnlyLabel !== null ? (
-            <TooltipWrapper
-              label={readOnlyHint}
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
+          {externallySourced && readOnlyLabel !== null ? (
+            <span
+              className="text-ui-xs text-muted-foreground"
+              data-testid="model-provider-source-label"
             >
-              <span
-                className="cursor-help text-ui-xs text-muted-foreground underline decoration-dotted underline-offset-2"
-                data-testid="model-provider-read-only-label"
-              >
-                {readOnlyLabel}
-              </span>
-            </TooltipWrapper>
+              {readOnlyLabel}
+            </span>
           ) : null}
-          {props.connectable && !externallyManaged ? (
+          {props.connectable ? (
             <Button
               type="button"
               size="sm"

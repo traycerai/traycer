@@ -860,22 +860,32 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       provider's store, and the row may well come back CONNECTED from an env
       var or config block underneath, so promising a disconnect would overstate
       what the button does.
-    - **An externally-sourced row is read-only in BOTH directions.** `env` /
-      `config` / `custom` carry neither Remove nor Connect/Replace. Dropping the
-      remove button and keeping the write one was the tempting half-measure and
-      is worse than either: writing a key into OpenCode's auth store while an
-      env var still shadows it succeeds at the host and changes nothing the user
-      can see, and undoing that shadowing is explicitly out of v1 scope (the
-      host cannot read its own auth store — see the plan's "Credential source
-      display" decision).
-      - **The trailing label names the controlling PARTY, not the restriction**
-        (`readOnlySourceLabel`): `env` → "Set by environment", `config` /
-        `custom` → "Set in config file". It used to read "Managed outside
-        Traycer" for all three, which spent the row's last words restating the
-        badge in the negative — telling the user what they could not do here
-        rather than who owns the credential. `config` and `custom` share a line
-        because both resolve to something edited in OpenCode's own files; the
-        badge is what still distinguishes them.
+    - **`source` is a STATUS, not a permission.** An `env` / `config` / `custom`
+      row shows where its current credential comes from ("Set by environment",
+      "Set in config file", "Set by a custom loader") and still offers Connect.
+      An earlier pass blocked the write affordance on those rows, reasoning that
+      OpenCode resolves env before its own auth store so a key saved here would
+      be shadowed and the click would appear to work while changing nothing.
+      The precedence is real — observed live, an account holding a stored
+      `openai` OAuth credential still reports `source: "env"` while
+      `OPENAI_API_KEY` is exported — but blocking was the wrong response to it.
+      Setting a provider up and choosing which credential wins are different
+      decisions: a user may want the OAuth sign-in in place for when the
+      variable is not exported, or intend to unset it afterwards. OpenCode's own
+      app configures any provider regardless of its current source, and ours
+      refusing to was a restriction we invented. The connect dialog now leads
+      with a warning naming what outranks it (`credentialPrecedenceNotice`,
+      naming the actual variable) instead.
+      `custom` gets its own wording rather than sharing the config-file line:
+      that loader is frequently fed by the auth store — `xai` signs in through
+      OAuth and still reports `custom` — so pointing at a file would send the
+      user where the credential is not.
+    - **KNOWN HOST GAP:** `canDisconnect` is `source === "api"` host-side, so a
+      `custom`-loader provider whose credential really is in OpenCode's auth
+      store (again `xai`) shows no Remove, while OpenCode's own app offers one.
+      The wire contract already anticipates a host that reads the auth store
+      answering `hasStoredCredential` / `canDisconnect` differently; the client
+      gates on `canDisconnect` alone and needs no change when it does.
     - **`credentialKey` is the credential's home**, and the reason it is on the
       wire: the host's connect contract wants exactly ONE input keyed by the
       provider's models.dev env var, and only the host knows which member of a
