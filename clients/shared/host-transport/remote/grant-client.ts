@@ -49,9 +49,26 @@ export interface AttachGrant {
  */
 export type AttachGrantResult =
   | { readonly kind: "ok"; readonly grant: AttachGrant }
-  | { readonly kind: "unauthorized"; readonly detail: string }
+  | ({ readonly kind: "unauthorized" } & AttachGrantFailure)
   | { readonly kind: "plan-restricted" }
-  | { readonly kind: "network-error"; readonly detail: string };
+  | ({ readonly kind: "network-error" } & AttachGrantFailure);
+
+/**
+ * Why a mint failed, split along the line `DialFailureLog` dedups on.
+ *
+ * `detail` is the STABLE classification (the status, the failure class) and
+ * doubles as that log's dedup key, so it must stay identical across retries of
+ * the same fault. `bodySnippet` is whatever the server actually said, which is
+ * routinely per-request — a proxy request id, a timestamp, a varying backend
+ * message. Folding the two together would make every single retry look like a
+ * cause change, bypass the log's throttle, and re-create the
+ * ~120-lines-per-hour flood it exists to prevent. `""` when the response
+ * carried no usable text.
+ */
+interface AttachGrantFailure {
+  readonly detail: string;
+  readonly bodySnippet: string;
+}
 
 /**
  * Reads a 401/403 body TEXT looking for the attach-grant entitlement denial
@@ -74,13 +91,59 @@ function isPlanRestrictedBody(bodyText: string): boolean {
   return (body as Record<string, unknown>).reason === "plan_restricted";
 }
 
-/** The response body as text, or `""` when it cannot be read. Never throws. */
+/**
+ * Hard cap on how much of a FAILURE body is pulled off the wire at all. Only
+ * {@link BODY_SNIPPET_CAP} characters of it ever survive into a log line, and a
+ * 5xx here enters the session's forever-retrying mint loop — so buffering a
+ * whole error page or a proxy's HTML on every attempt allocates its full size
+ * over and over inside the renderer for text nobody reads. Sized far above any
+ * real authn error body so {@link isPlanRestrictedBody} still parses a
+ * complete JSON document.
+ */
+const BODY_READ_CAP_BYTES = 64 * 1024;
+
+/**
+ * The response body as text, or `""` when it cannot be read. Never throws.
+ *
+ * Reads from the body STREAM and stops at {@link BODY_READ_CAP_BYTES} rather
+ * than calling `response.text()`, which would materialize and decode the whole
+ * body before anything downstream got the chance to truncate it. The remainder
+ * is cancelled, not drained.
+ *
+ * `response.text()` is used only when the response exposes no stream at all (a
+ * body-less response) — there is nothing to bound in that case.
+ */
 async function readBodyText(response: Response): Promise<string> {
-  try {
-    return await response.text();
-  } catch {
-    return "";
+  const body = response.body;
+  if (body === null || body === undefined) {
+    try {
+      return await response.text();
+    } catch {
+      return "";
+    }
   }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytesRead = 0;
+  try {
+    while (bytesRead < BODY_READ_CAP_BYTES) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      bytesRead += chunk.value.byteLength;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+  } catch {
+    // Whatever arrived before the stream broke is still worth logging.
+  } finally {
+    // Releases the connection instead of leaving the rest of an oversized
+    // body to be drained into memory we just decided not to read.
+    await reader.cancel().catch(() => undefined);
+  }
+  return text;
 }
 
 /**
@@ -89,6 +152,9 @@ async function readBodyText(response: Response): Promise<string> {
  * missing-signing-key 500 did exactly that), so it is worth carrying — capped
  * because it comes off the wire. NEVER applied to a 2xx body: that carries
  * the grant itself and must not reach a log line.
+ *
+ * Returned BARE (no leading separator): it travels as dial-failure-log
+ * *context*, which the log formats itself — see {@link AttachGrantFailure}.
  */
 const BODY_SNIPPET_CAP = 200;
 
@@ -98,8 +164,8 @@ function bodySnippet(body: string): string {
     return "";
   }
   return collapsed.length <= BODY_SNIPPET_CAP
-    ? ` - ${collapsed}`
-    : ` - ${collapsed.slice(0, BODY_SNIPPET_CAP)}...`;
+    ? collapsed
+    : `${collapsed.slice(0, BODY_SNIPPET_CAP)}...`;
 }
 
 /**
@@ -152,6 +218,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "network-error",
       detail: `the mint request never completed (${describeFetchFailure(error)})`,
+      bodySnippet: "",
     };
   }
 
@@ -162,14 +229,16 @@ export async function mintAttachGrantViaHttp(
     }
     return {
       kind: "unauthorized",
-      detail: `authn rejected the mint with HTTP ${response.status}${bodySnippet(bodyText)}`,
+      detail: `authn rejected the mint with HTTP ${response.status}`,
+      bodySnippet: bodySnippet(bodyText),
     };
   }
   if (response.status < 200 || response.status >= 300) {
     const bodyText = await readBodyText(response);
     return {
       kind: "network-error",
-      detail: `authn answered HTTP ${response.status}${bodySnippet(bodyText)}`,
+      detail: `authn answered HTTP ${response.status}`,
+      bodySnippet: bodySnippet(bodyText),
     };
   }
 
@@ -181,6 +250,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "network-error",
       detail: `authn answered HTTP ${response.status} with a body that is not valid JSON`,
+      bodySnippet: "",
     };
   }
 
@@ -189,6 +259,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "network-error",
       detail: `authn answered HTTP ${response.status} but the body is not an attach grant`,
+      bodySnippet: "",
     };
   }
   return {
@@ -212,9 +283,11 @@ export type AttachGrantProvision =
    * Signed out / revoked / transient failure — stay in reconnect backoff.
    * `detail` says WHICH, in words, for the session's `DialFailureLog`: the
    * retry cadence is the same for all of them, so this is the only place the
-   * distinction survives.
+   * distinction survives. It is also that log's dedup key, so anything the
+   * server varies per request rides in `bodySnippet` instead — see
+   * {@link AttachGrantFailure}.
    */
-  | { readonly kind: "unavailable"; readonly detail: string };
+  | ({ readonly kind: "unavailable" } & AttachGrantFailure);
 
 /** Injectable grant source the session calls on attach + resume + re-auth. */
 export type AttachGrantProvider = () => Promise<AttachGrantProvision>;
@@ -240,6 +313,7 @@ export function createAttachGrantProvider(deps: {
       return {
         kind: "unavailable",
         detail: "no user bearer available (signed out?)",
+        bodySnippet: "",
       };
     }
     const result = await mintAttachGrantViaHttp(
@@ -253,6 +327,10 @@ export function createAttachGrantProvider(deps: {
     if (result.kind === "plan-restricted") {
       return { kind: "plan-restricted" };
     }
-    return { kind: "unavailable", detail: result.detail };
+    return {
+      kind: "unavailable",
+      detail: result.detail,
+      bodySnippet: result.bodySnippet,
+    };
   };
 }

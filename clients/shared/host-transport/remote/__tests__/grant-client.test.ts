@@ -44,7 +44,7 @@ describe("mintAttachGrantViaHttp", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ role: "client" });
   });
 
-  it("maps 401/403 to unauthorized, with the status + body in the detail", async () => {
+  it("maps 401/403 to unauthorized, with the status in the detail and the body alongside it", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () => jsonResponse({ error: "nope" }, 403)),
@@ -53,7 +53,7 @@ describe("mintAttachGrantViaHttp", () => {
     expect(result).toMatchObject({ kind: "unauthorized" });
     if (result.kind === "unauthorized") {
       expect(result.detail).toContain("HTTP 403");
-      expect(result.detail).toContain("nope");
+      expect(result.bodySnippet).toContain("nope");
     }
   });
 
@@ -223,8 +223,68 @@ describe("mint failure detail", () => {
     expect(provision).toMatchObject({ kind: "unavailable" });
     if (provision.kind === "unavailable") {
       expect(provision.detail).toContain("HTTP 500");
-      expect(provision.detail).toContain("attach-grant");
+      expect(provision.bodySnippet).toContain("attach-grant");
     }
+  });
+
+  it("keeps the body OUT of the dedup key, so a varying body cannot defeat the throttle", async () => {
+    // `detail` is what `DialFailureLog` compares to decide whether anything
+    // changed. Two attempts against the same fault must produce the same
+    // `detail` even when the server tags each response differently - otherwise
+    // every retry reads as a cause change and the throttle is bypassed.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ error: "internal", request_id: "req-1" }, 500),
+      ),
+    );
+    const first = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ error: "internal", request_id: "req-2" }, 500),
+      ),
+    );
+    const second = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    if (first.kind !== "network-error" || second.kind !== "network-error") {
+      throw new Error("expected two network-error results");
+    }
+    expect(first.detail).toBe(second.detail);
+    expect(first.bodySnippet).not.toBe(second.bodySnippet);
+    expect(first.bodySnippet).toContain("req-1");
+  });
+
+  it("stops READING an oversized body rather than buffering it to truncate it", async () => {
+    // The 200-character log cap is not a memory cap: `response.text()` would
+    // decode the whole body first, and a 5xx here enters the session's
+    // forever-retrying mint loop. This body never ends, so anything that
+    // buffers it to completion hangs here instead of returning.
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
+    let chunksPulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        chunksPulled += 1;
+        controller.enqueue(chunk);
+      },
+      cancel: () => {
+        cancelled = true;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(body, { status: 502 })),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    if (result.kind !== "network-error") {
+      throw new Error(`expected network-error, got ${result.kind}`);
+    }
+    expect(result.detail).toContain("HTTP 502");
+    expect(result.bodySnippet.length).toBeLessThan(300);
+    // A couple of 64 KiB chunks at most, and the rest of the stream released
+    // rather than drained into memory nobody reads.
+    expect(chunksPulled).toBeLessThanOrEqual(3);
+    expect(cancelled).toBe(true);
   });
 
   it("never echoes a 2xx body - it carries the grant", async () => {
@@ -238,6 +298,7 @@ describe("mint failure detail", () => {
     expect(result).toMatchObject({ kind: "network-error" });
     if (result.kind === "network-error") {
       expect(result.detail).not.toContain("secret-grant-bytes");
+      expect(result.bodySnippet).toBe("");
     }
   });
 });

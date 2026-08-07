@@ -780,7 +780,8 @@ describe("RemoteSession dial-failure logging", () => {
           mintCalls += 1;
           return Promise.resolve({
             kind: "unavailable" as const,
-            detail: "authn answered HTTP 500 - signing key missing",
+            detail: "authn answered HTTP 500",
+            bodySnippet: "signing key missing",
           });
         },
       });
@@ -866,6 +867,7 @@ describe("RemoteSession dial-failure logging", () => {
             return Promise.resolve({
               kind: "unavailable" as const,
               detail: "authn answered HTTP 500",
+              bodySnippet: "",
             });
           }
           return Promise.resolve({

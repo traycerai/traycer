@@ -15,6 +15,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
+  type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
@@ -337,32 +338,85 @@ class RuntimeHostMessenger<
     // queries that raced this session's dial and errored pre-send - this
     // binding is the only session holder for a non-active, non-tab host, so
     // nothing else can deliver that evidence.
-    const unsubscribeAvailability =
-      built.remoteTransport.session.subscribeAvailabilityRecovered(() => {
-        this.onRemoteAvailabilityRecovered(target.hostId);
-      });
+    const releaseAvailability = this.subscribeRemoteAvailability(
+      built.remoteTransport.session,
+      target.hostId,
+    );
     this.remoteBinding = {
       key: nextKey,
       transport: built.remoteTransport,
-      unsubscribeAvailability,
+      releaseAvailability,
     };
     return built.messenger;
+  }
+
+  /**
+   * Forwards `session`'s availability-recovered events for `hostId`, and
+   * returns a RELEASE function - deliberately not an unsubscribe.
+   *
+   * This messenger holds ONE remote binding, and any request for a local or
+   * different host replaces it (see `request`). Since the session cache keeps
+   * a released session warm rather than closing it, a session that was still
+   * dialing when the slot flipped goes on to reach its first ready boundary -
+   * and that boundary is the only evidence that un-strands the queries which
+   * already errored against it. Detaching at replacement time would drop
+   * precisely the event this wiring exists to deliver, in precisely the
+   * interleaving (a background active-host request landing mid-dial) that
+   * makes it necessary.
+   *
+   * So a released subscription stays attached, fires at most once more, and
+   * then removes itself. It is also removed if the session closes without ever
+   * getting ready - a session-level fatal, or the keep-warm linger expiring -
+   * so a churning host picker cannot accumulate listeners.
+   */
+  private subscribeRemoteAvailability(
+    session: IRemoteSession<Registry, HostStreamRpcRegistry>,
+    hostId: string,
+  ): () => void {
+    let released = false;
+    let detached = false;
+    let unsubscribeAvailability: (() => void) | null = null;
+    let unsubscribeClosed: (() => void) | null = null;
+    const detach = (): void => {
+      if (detached) {
+        return;
+      }
+      detached = true;
+      unsubscribeAvailability?.();
+      unsubscribeClosed?.();
+    };
+    unsubscribeAvailability = session.subscribeAvailabilityRecovered(() => {
+      this.onRemoteAvailabilityRecovered(hostId);
+      if (released) {
+        detach();
+      }
+    });
+    unsubscribeClosed = session.onClosed(detach);
+    return () => {
+      released = true;
+    };
   }
 
   private closeRemoteTransport(): void {
     if (this.remoteBinding === null) {
       return;
     }
-    this.remoteBinding.unsubscribeAvailability();
-    this.remoteBinding.transport.session.close();
+    const binding = this.remoteBinding;
     this.remoteBinding = null;
+    binding.releaseAvailability();
+    binding.transport.session.close();
   }
 }
 
 interface RemoteBinding<Registry extends VersionedRpcRegistry> {
   readonly key: string;
   readonly transport: RemoteHostTransport<Registry, HostStreamRpcRegistry>;
-  readonly unsubscribeAvailability: () => void;
+  /**
+   * Orphans this binding's availability forwarding rather than detaching it -
+   * see `subscribeRemoteAvailability` for why the listener has to outlive the
+   * binding.
+   */
+  readonly releaseAvailability: () => void;
 }
 
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {
