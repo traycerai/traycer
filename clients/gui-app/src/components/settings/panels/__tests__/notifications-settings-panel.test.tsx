@@ -41,9 +41,8 @@ const hostScopeMocks: {
 // host OPTION is built from the mock's hostId so `scope.host.hostId` — the
 // gate's remount key — tracks it, not just `scope.hostId`.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture, hostScopeOptionFixture } = await import(
-    "@/components/settings/host-scope/host-scope-fixture"
-  );
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
   return {
     useHostScope: () =>
       hostScopeFixture({

@@ -741,21 +741,23 @@ const FULL_TABS: ProviderNativeCapabilities = {
   plugins: {
     addModes: ["cli-source"],
     marketplaceBrowse: false,
+    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // plain "every workspace" line instead of a trigger with locationLabel).
     actionScopes: {
-      list: ["global"],
-      add: ["global"],
-      remove: ["global"],
-      setEnabled: ["global"],
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      remove: [...BOTH_SCOPES],
+      setEnabled: [...BOTH_SCOPES],
     },
     traycerSessionToolsNotice: false,
   },
   skills: {
     actionScopes: {
-      list: ["global"],
-      add: ["global"],
-      create: ["global"],
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      create: [...BOTH_SCOPES],
       import: [],
-      remove: ["global"],
+      remove: [...BOTH_SCOPES],
     },
   },
 };
@@ -1247,10 +1249,14 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     // Not consumed here: the pane stays on the rail's first provider rather
-    // than opening the deep link's target on the wrong machine.
+    // than opening the deep link's target on the wrong machine. The probe is
+    // that provider's DEFAULT tab, which is the first entry of
+    // PROVIDER_TAB_ORDER it supports - "Profiles & Limits" here, since
+    // FULL_TABS advertises `usage` and `providerState` leaves the API key
+    // unsupported so no Account tab precedes it.
     expect(
       screen
-        .getByRole("tab", { name: "CLI & Args" })
+        .getByRole("tab", { name: "Profiles & Limits" })
         .getAttribute("data-state"),
     ).toBe("active");
     expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
@@ -1387,6 +1393,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -1402,14 +1410,95 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("hides the CLI-candidates picker for Amp - a selected path is never consulted", () => {
+  it("shows the CLI & Args tab and empty-state notice for amp (no longer id-hidden)", () => {
+    // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
+    // premise that those two have no user-selectable binary. Both spawn the
+    // Traycer-resolved binary for MCP write verbs, so the table is the only
+    // route out of the F2 dead end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
           providerId: "amp",
-          selected: { kind: "bundled" },
+          selected: { kind: "path" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: ["general", "env", "mcp", "plugins", "skills"],
+            mcp: SAMPLE_MCP,
+            plugins: null,
+            skills: null,
+          },
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
+    expect(
+      screen.getByText(
+        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("link", { name: "Amp installation guide" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+  });
+
+  it("shows the CLI & Args tab and candidates table for cursor when a path is available", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/cursor-agent",
+              version: "0.50.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: [
+              "general",
+              "env",
+              "usage",
+              "mcp",
+              "plugins",
+              "skills",
+            ],
+            mcp: {
+              ...SAMPLE_MCP,
+              perToolBacking: "degraded-server-level",
+              instructionsSource: "none",
+            },
+            plugins: {
+              addModes: ["read-only"],
+              marketplaceBrowse: false,
+              actionScopes: {
+                list: ["global"],
+                add: [],
+                remove: [],
+                setEnabled: [],
+              },
+              traycerSessionToolsNotice: true,
+            },
+            skills: null,
+          },
         }),
       ],
     };
@@ -1420,8 +1509,15 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
     expect(
-      screen.queryByRole("button", { name: "Add custom path" }),
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/cursor-agent",
+      }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/No Cursor CLI was found on this machine/),
     ).toBeNull();
   });
 
@@ -1450,6 +1546,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    selectTab("CLI & Args");
 
     const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
       name: "Select /usr/local/bin/hermes",
@@ -1480,13 +1578,15 @@ describe("<ProvidersSettingsPanel />", () => {
       </RunnerHostContext.Provider>,
     );
 
+    selectTab("CLI & Args");
+
     expect(
       screen.getByText(
-        "Hermes must be installed on this machine. It ships without a bundled binary.",
+        "No Hermes Agent CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", {
-      name: "Hermes installation guide",
+      name: "Hermes Agent installation guide",
     });
     expect(guide.getAttribute("href")).toBe(
       "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
@@ -1785,6 +1885,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -2091,6 +2192,57 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(useProvidersFocusStore.getState().focusTab).toBeNull();
   });
 
+  it("opens the FOCUSED provider's own first tab when no focusTab is given", () => {
+    // The "Add API key" CTA sets `focusHarnessId` and no `focusTab`, so the
+    // initial tab falls out of the default rule. That default is now
+    // provider-dependent (account -> usage -> ...), which makes deriving it
+    // from the RAIL'S FIRST provider actively wrong: opencode has no API key
+    // and defaults to `usage`, and because amp also advertises `usage` the
+    // stale value survives `resolveTabForProvider` and the pane settles on
+    // "Profiles & Limits" - never showing the key field the CTA exists to
+    // reach.
+    useProvidersFocusStore.getState().setFocusHarnessId("amp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+    ).toBe("active");
+    // Discriminating: "Profiles & Limits" is rendered and selectable for amp,
+    // so this is the deep link picking the right one of two live tabs rather
+    // than the wrong one being absent.
+    expect(
+      screen
+        .getByRole("tab", { name: "Profiles & Limits" })
+        .getAttribute("data-state"),
+    ).toBe("inactive");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+  });
+
   it("ignores focusTab when the target provider does not support it", () => {
     useProvidersFocusStore.getState().setFocusHarnessId("cursor");
     useProvidersFocusStore.getState().setFocusTab("general");
@@ -2127,11 +2279,20 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     selectTab("Plugins");
-    expect(screen.getByText("Installed plugins")).toBeDefined();
+    // F5 replaced the "Installed plugins" heading with the shared scope
+    // picker. Match the MCP suite's aria-label idiom so this both identifies
+    // the Plugins tab body and covers the control the heading used to stand
+    // in for.
+    expect(
+      screen.getByRole("button", { name: /^Plugins location/ }),
+    ).toBeDefined();
 
     selectTab("Skills");
     expect(
       screen.getByText(/Invoked by the agent when relevant/),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /^Skills location/ }),
     ).toBeDefined();
   });
 
@@ -4723,8 +4884,10 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
+    // Profiles & Limits is now the default first tab for providers without an
+    // API-key Account tab, so startSignIn opens the dialog immediately. That
+    // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
+    // fail getByRole("tab") without { hidden: true }.
     expect(
       screen
         .getByRole("button", { name: "Claude Code", hidden: true })
@@ -5007,7 +5170,13 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Opening the sign-in page…")).toBeDefined();
   });
 
-  it("does not offer the share-skills-and-plugins checkbox for a provider without the overlay mechanism (codex)", () => {
+  it("does not offer the share-skills-and-plugins checkbox for codex (overlay layout, not a bug)", () => {
+    // Codex's exclusion is CORRECT: seedManagedProfileDir honours
+    // shareSkillsAndPlugins only on the partial-overlay layout branch
+    // (profile-seeding.ts), and codex takes the overlay branch whose seeding
+    // never reads the flag. Offering the checkbox here would send a request
+    // the host silently discards. Do not "fix" this by adding codex to
+    // PROVIDER_SHARES_SKILLS_AND_PLUGINS without changing the host layout.
     providerMocks.listResult.data = {
       providers: [
         {

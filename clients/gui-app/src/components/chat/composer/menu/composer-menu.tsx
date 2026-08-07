@@ -354,7 +354,17 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           ref={listRef}
           id={menuId}
           role="listbox"
-          className="max-h-[70vh] overflow-y-auto py-1"
+          // The first menu (mention categories, slash commands) stays compact:
+          // tall enough for the full category roster without a scrollbar,
+          // while typed-query results scroll behind the cap. A provider
+          // submenu mirrors a bounded roster (terminals, git refs), so it
+          // grows to the viewport cap instead of scrolling.
+          className={cn(
+            "overflow-y-auto py-1",
+            kind === "mention" && step.kind === "provider"
+              ? "max-h-[70vh]"
+              : "max-h-[min(50vh,16rem)]",
+          )}
         >
           <ComposerMenuBody
             renderedItems={renderedItems}

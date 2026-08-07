@@ -885,6 +885,26 @@ const providerCliStateBaseShape = {
   // now as a dormant field: no Phase-1 host ever populates it, always
   // null/undefined. See `managedInstallState` above for why it's `.optional()`.
   advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  // Whether the host resolved a runnable CLI binary for this provider - the
+  // SAME `resolveEffectiveCliIdentity(...).path !== null` that decides whether
+  // `applyBinaryAbsentGate` strips this provider's CLI-routed write verbs from
+  // `nativeCapabilities`. False means those verbs were subtracted, and the UI
+  // owes the user a reason: without it a binary-less amp shows an MCP tab with
+  // no Add button, no Delete and no auth actions, and nothing anywhere saying
+  // why.
+  //
+  // Deliberately NOT derived client-side from `candidates`. The resolver's
+  // fallback order (selected custom -> bundled -> PATH, each only if
+  // `available`) is not the same question as "is any candidate available" - an
+  // available-but-unselected custom path satisfies the second and not the
+  // first - and re-deriving host resolution rules in the renderer is precisely
+  // the drift this field exists to stop.
+  //
+  // `.catch(true).optional()` for the reason `managedInstallState` is optional,
+  // with `true` as the quiet default: an old host omits the key, and assuming
+  // "resolved" reproduces today's exact behavior (no notice) rather than
+  // accusing every provider on an old host of a missing binary.
+  cliBinaryResolved: z.boolean().catch(true).optional(),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2101,6 +2121,7 @@ export type DowngradableToV10ProviderState = (
   managedInstallState?: ProviderCliState["managedInstallState"];
   versionVisibility?: ProviderCliState["versionVisibility"];
   advisory?: ProviderCliState["advisory"];
+  cliBinaryResolved?: ProviderCliState["cliBinaryResolved"];
   loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
 };
 
@@ -2118,6 +2139,7 @@ export function downgradeProviderCliStateToV10(
   // - `nativeCapabilities` (v3.1 / v2.1+) — CRITICAL silent-data-loss trap
   // - `managedInstallState` / `versionVisibility` / `advisory` — the
   //   provider-pack-registry fields.
+  // - `cliBinaryResolved` — the binary-absent explanation field.
   const {
     availabilityPending: _availabilityPending,
     profiles: _profiles,
@@ -2125,6 +2147,7 @@ export function downgradeProviderCliStateToV10(
     managedInstallState: _managedInstallState,
     versionVisibility: _versionVisibility,
     advisory: _advisory,
+    cliBinaryResolved: _cliBinaryResolved,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
