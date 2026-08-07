@@ -42,14 +42,23 @@ interface HookActivityIdentity {
  *
  * The `stop` edge still rides `agent.tui.recordActivity`. The `start` edge
  * (the `UserPromptSubmit` hook chain) is the roles-snapshot-delivery pull
- * point: it calls `agent.tui.promptSubmitted@1.0` instead, an optional unary
- * method that does both jobs in one round trip - it records the same
- * activity edge `recordActivity` would have, then runs the host's
- * roles-digest-cursor check. A non-null `pendingPromptContext` in the
- * response is emitted on stdout as the `UserPromptSubmit` `additionalContext`
- * envelope (`{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
- * "additionalContext":"..."}}`), which Claude Code appends to the outgoing
- * prompt; `null` (nothing to deliver) means no stdout at all.
+ * point FOR ENVELOPE-CONSUMING PROVIDERS ONLY (Claude, and Codex via its
+ * Claude-compatible hook runner): it calls `agent.tui.promptSubmitted@1.0`
+ * instead, an optional unary method that does both jobs in one round trip -
+ * it records the same activity edge `recordActivity` would have, then runs
+ * the host's roles-digest-cursor check. A non-null `pendingPromptContext` in
+ * the response is emitted on stdout as the `UserPromptSubmit`
+ * `additionalContext` envelope (`{"hookSpecificOutput":{"hookEventName":
+ * "UserPromptSubmit","additionalContext":"..."}}`), which the provider
+ * appends to the outgoing prompt; `null` (nothing to deliver) means no
+ * stdout at all.
+ *
+ * Every OTHER provider's `start` edge stays on plain `recordActivity`: the
+ * response contract lets the host advance its roles cursor when it returns
+ * pending context, so calling `promptSubmitted` from a hook whose stdout is
+ * NOT injected into the prompt (OpenCode's in-process plugin consumes no
+ * hook stdout) would acknowledge a snapshot the model never receives -
+ * a silent permanent delivery loss, not a degrade.
  *
  * `promptSubmitted` is registered with `degrade: { kind: "unsupported" }`
  * (a brand-new method, not a new minor of `recordActivity`): against a host
@@ -118,11 +127,20 @@ export function buildAgentActivityFromHookCommand(opts: {
       observedHarnessSessionId,
     };
 
-    if (event === "stop") {
-      const stopResult = await callRecordActivity(identity, "stop");
-      if (stopResult === "host-unreachable") return noop("host-unreachable");
+    // Only providers whose hook runner injects this command's stdout into
+    // the outgoing prompt may take the promptSubmitted pull path - the host
+    // advances its roles cursor when it hands back pending context, so a
+    // provider that discards stdout (OpenCode's in-process plugin) would
+    // silently strand the snapshot as "delivered". Those stay on the plain
+    // activity edge.
+    const consumesPromptEnvelope =
+      identity.harnessId === "claude" || identity.harnessId === "codex";
+
+    if (event === "stop" || !consumesPromptEnvelope) {
+      const edgeResult = await callRecordActivity(identity, event);
+      if (edgeResult === "host-unreachable") return noop("host-unreachable");
       return {
-        data: { accepted: stopResult.accepted, reason: null },
+        data: { accepted: edgeResult.accepted, reason: null },
         human: null,
         exitCode: 0,
       };

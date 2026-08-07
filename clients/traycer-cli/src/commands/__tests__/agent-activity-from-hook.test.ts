@@ -153,7 +153,11 @@ describe("buildAgentActivityFromHookCommand - start edge (promptSubmitted)", () 
     });
   });
 
-  it("reads stdin for an env-identified opencode hook (root-session form)", async () => {
+  it("routes an opencode start through recordActivity, never promptSubmitted", async () => {
+    // OpenCode's in-process plugin consumes no hook stdout, so the pull path
+    // would let the host advance its roles cursor for a snapshot the model
+    // never receives. The start edge must stay a plain activity edge - with
+    // no stdout, since anything printed may surface back into the TUI.
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ session_id: "ses-oc-live-2" })],
@@ -165,15 +169,18 @@ describe("buildAgentActivityFromHookCommand - start edge (promptSubmitted)", () 
       agentId: null,
       harnessSessionId: null,
     });
-    await fn(makeCtx());
+    const result = await fn(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.tui.promptSubmitted", {
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
       epicId: "epic-1",
       tuiAgentId: "agent-1",
       harnessSessionId: null,
       harnessId: "opencode",
+      event: "start",
       observedHarnessSessionId: "ses-oc-live-2",
     });
+    expect(result.human).toBeNull();
   });
 
   it("never reads stdin for a session-id-keyed opencode hook", async () => {
@@ -193,11 +200,12 @@ describe("buildAgentActivityFromHookCommand - start edge (promptSubmitted)", () 
     });
     await fn(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("agent.tui.promptSubmitted", {
+    expect(rpcMock).toHaveBeenCalledWith("agent.tui.recordActivity", {
       epicId: null,
       tuiAgentId: null,
       harnessSessionId: "ses-oc-1",
       harnessId: "opencode",
+      event: "start",
       observedHarnessSessionId: null,
     });
   });
