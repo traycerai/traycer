@@ -174,7 +174,6 @@ import {
   managedCommandDeleteV10,
   managedCommandStartV10,
   managedCommandStopV10,
-  managedCommandSubscribeListV10,
   managedCommandSubscribeOutputV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
@@ -5776,8 +5775,8 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
 
 export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
   defineFloorAwareVersionedRpcRegistry(
-  RELEASED_FLOOR_METHOD_NAMES,
-  HOST_RPC_REGISTRY_DEFINITION,
+    RELEASED_FLOOR_METHOD_NAMES,
+    HOST_RPC_REGISTRY_DEFINITION,
   );
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
@@ -5924,19 +5923,11 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // The "Monitors & Shells" surface: one stream per epic for the list, one per
-  // command for its output. Both brand-new at 1.0 - a host that lacks the
-  // managed-command subsystem rejects the open as an unknown method.
-  "managedCommand.subscribeList": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: managedCommandSubscribeListV10,
-        },
-      },
-    },
-  },
+  // The "Monitors & Shells" surface: one stream per command for its output.
+  // Brand-new at 1.0 - a host that lacks the managed-command subsystem rejects
+  // the open as an unknown method. The SET of a chat's commands is not a method
+  // here: it rides `chat.subscribe@1.6` (see the re-entry note in
+  // `host/managed-command/subscribe.ts` for what a global panel would re-add).
   "managedCommand.subscribeOutput": {
     1: {
       latestMinor: 0,

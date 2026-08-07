@@ -14,7 +14,6 @@ import {
 export const LEFT_PANEL_IDS = [
   "chats",
   "terminals",
-  "managed-commands",
   "artifacts",
   "git-diff",
   "pull-requests",
@@ -155,7 +154,6 @@ export function clampSidebarWidthPx(widthPx: number): number {
 export const DEFAULT_LEFT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats", "artifacts"] },
   { panelIds: ["terminals"] },
-  { panelIds: ["managed-commands"] },
   { panelIds: ["git-diff"] },
   { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
@@ -329,18 +327,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-function isLeftPanelGroup(value: unknown): value is LeftPanelGroup {
+function isPersistedPanelGroupShape(
+  value: unknown,
+): value is { readonly panelIds: ReadonlyArray<unknown> } {
   if (!isRecord(value)) return false;
-  if (!Array.isArray(value.panelIds)) return false;
-  return value.panelIds.every(isLeftPanelId);
+  return Array.isArray(value.panelIds);
 }
 
+/**
+ * Sidebar grouping as some build of the app wrote it. Only structure is
+ * rejected here; an id this build does not know is dropped, and the group with
+ * it once nothing is left in it.
+ *
+ * Removing a panel has to be as gentle as adding one. Rejecting the whole
+ * value over one unknown id sends a user who had ever rearranged their sidebar
+ * straight back to defaults on the release that retires a panel - and every
+ * such user carries the retired id, because it shipped in the defaults.
+ */
 function readPersistedPanelGroups(
   value: unknown,
 ): ReadonlyArray<LeftPanelGroup> | null {
   if (!Array.isArray(value)) return null;
-  if (!value.every(isLeftPanelGroup)) return null;
-  return value;
+  if (!value.every(isPersistedPanelGroupShape)) return null;
+  return value.flatMap((group) => {
+    const panelIds = group.panelIds.filter(isLeftPanelId);
+    return panelIds.length === 0 ? [] : [{ panelIds }];
+  });
 }
 
 function getPersistedPanelSectionCollapsedByPanelId(

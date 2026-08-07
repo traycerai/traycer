@@ -1,7 +1,23 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+
+// The one faked boundary: the host RPCs behind the managed-command rows. This
+// suite is about how background items nest and read; the managed-command
+// surfaces have their own suite.
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
+    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+  }),
+);
+
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 describe("<BackgroundItemsPanel />", () => {
   afterEach(() => {
@@ -560,21 +576,26 @@ function panelElement(input: {
   readonly onStopItem: (taskId: string) => string | null;
   readonly onStopAll: () => string | null;
 }) {
+  // The panel only ever mounts inside a chat tile, and its managed-command
+  // rows act on that tile's host - so the provider is part of its contract,
+  // not test scaffolding.
   return (
-    <BackgroundItemsPanel
-      items={input.items}
-      epicId="epic-1"
-      chatId="chat-1"
-      canAct
-      readOnly={false}
-      pendingStopTaskIds={new Set()}
-      stopAllPending={false}
-      scrollRegionMaxHeightClass="max-h-96"
-      separated={false}
-      onItemClick={input.onItemClick}
-      onStopItem={input.onStopItem}
-      onStopAll={input.onStopAll}
-    />
+    <TabHostProvider hostId="host-1">
+      <BackgroundItemsPanel
+        items={input.items}
+        epicId="epic-1"
+        chatId="chat-1"
+        canAct
+        readOnly={false}
+        pendingStopTaskIds={new Set()}
+        stopAllPending={false}
+        scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
+        onItemClick={input.onItemClick}
+        onStopItem={input.onStopItem}
+        onStopAll={input.onStopAll}
+      />
+    </TabHostProvider>
   );
 }
 

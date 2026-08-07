@@ -41,7 +41,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
-import { useManagedCommand } from "@/stores/managed-commands/managed-command-list-registry";
+import { useManagedCommandInEpic } from "@/stores/managed-commands/managed-commands-for-chat";
 import {
   deriveEpicSyncPillState,
   type EpicHostDirtyState,
@@ -797,9 +797,9 @@ export function useEpicTabDisplayTitle(
     sessionId: isTerminal ? node.id : null,
   });
   // An output window's tile carries no label at all (its persisted shape is
-  // just the command pointer), so the kind-explicit title comes from the live
-  // list stream - and follows a rename the agent makes.
-  const managedCommand = useManagedCommand(
+  // just the command pointer), so the kind-explicit title comes from the owning
+  // chat's live set - and follows a rename the agent makes.
+  const managedCommand = useManagedCommandInEpic(
     epicId,
     node.type === "managed-command-output" ? node.id : "",
   );

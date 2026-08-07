@@ -827,9 +827,17 @@ function queuedMessageRowActionState(
 function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (isOptimisticQueuedItem(item)) return "Queuing";
   if (item.kind === "managed-command") {
-    // Only "pending" | "paused" ever occur; the badge is the row's provenance
-    // marker, so a pending item needs no additional label.
-    return item.status === "paused" ? "Paused" : null;
+    // The badge is the row's provenance marker, so an ordinary next-turn
+    // pending item needs no additional label. `steering` is the handover
+    // window: the digest is being delivered into the running turn, and the
+    // cancel lever has closed - the label is what tells the user why the
+    // row's controls went away. A pending SAME-TURN item is aimed at the
+    // running turn ("Will deliver", the delivery-vocabulary sibling of the
+    // received-agent rows' "Will steer"), so the user knows the cancel
+    // window is the current turn, not some later one.
+    if (item.status === "steering") return "Delivering";
+    if (item.status === "paused") return "Paused";
+    return item.delivery === "same_turn" ? "Will deliver" : null;
   }
   if (item.status === "steer_requested") {
     return item.steerRequest?.mode === "interrupt_restart"
@@ -866,7 +874,7 @@ function QueuedMessageStatusBadge(props: {
         <LivePulse
           size="xs"
           tone="active"
-          ariaLabel="Steering queued message"
+          ariaLabel={`${props.label} queued message`}
           className={undefined}
         />
       ) : null}
