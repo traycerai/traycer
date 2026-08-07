@@ -734,6 +734,39 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(hasReadyRemoteSession(retired.hostId)).toBe(false);
   });
 
+  it("supersedes the previous USER's session for the same host", () => {
+    // The user dimension of the same retirement. This process has one
+    // signed-in user at a time, so an entry under another userId is always a
+    // sign-in that has since ended - and `hasReadyRemoteSession` matches on
+    // hostId across users, so left current it would report the host Online
+    // off the signed-out user's connection while the new user is still
+    // dialing. The epoch label cannot be relied on to catch this (two
+    // contexts can both degenerate to "no-bearer"), so the user mismatch
+    // itself must retire the entry.
+    // Both contexts sit on the SAME degenerate epoch, same key, same relay:
+    // every equality in the parallel-entry guard holds except the user, so
+    // this passes only if the user mismatch alone retires the entry.
+    const previousUser: RemoteSessionIdentity = {
+      ...freshIdentity(),
+      authEpoch: "no-bearer",
+    };
+    const staleSession = fakeSession();
+    staleSession.ready = true;
+    acquireRemoteSession(previousUser, () => staleSession).close();
+    expect(hasReadyRemoteSession(previousUser.hostId)).toBe(true);
+
+    const nextUser: RemoteSessionIdentity = {
+      ...previousUser,
+      userId: "user-2",
+    };
+    const dialing = fakeSession();
+    dialing.ready = false;
+    acquireRemoteSession(nextUser, () => dialing);
+
+    expect(staleSession.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(previousUser.hostId)).toBe(false);
+  });
+
   it("keeps the one-shot/durable split parallel WITHIN one auth epoch", () => {
     // The counterpart, so the epoch check reads as a narrowing rather than a
     // blanket "any key difference supersedes": two entries that differ only in

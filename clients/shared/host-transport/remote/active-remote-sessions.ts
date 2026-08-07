@@ -109,9 +109,10 @@ interface CacheEntry {
   lingerTimer: TimerHandle | null;
   /**
    * Set once this entry's identity has been SUPERSEDED - the host re-keyed or
-   * moved, or the auth context that built it was retired, and a newer identity
-   * for the same host and user has been acquired since (whatever recovery
-   * policy that acquire wanted; see {@link closeSupersededIdentities}). Sticky:
+   * moved, or the auth context (credential lease or signed-in user) that built
+   * it was retired, and a newer identity for the same host has been acquired
+   * since (whatever recovery policy that acquire wanted; see
+   * {@link closeSupersededIdentities}). Sticky:
    * supersession is a fact about the identity, not about the successor's
    * health, so a successor that later dies does not make this session current
    * again - its key still embeds the OLD public key or the retired epoch, so it
@@ -285,10 +286,11 @@ export function acquireRemoteSession<
 }
 
 /**
- * Closes any zero-reference entry this acquire SUPERSEDES: same host and user,
- * but a different host public key or relay attach URL - i.e. the host re-keyed
- * or its endpoint moved, and the render layer has just rebuilt its transport
- * onto the new identity.
+ * Closes any zero-reference entry this acquire SUPERSEDES: same host, but a
+ * different host public key or relay attach URL (the host re-keyed or its
+ * endpoint moved), a retired auth epoch, or a previous signed-in user - i.e.
+ * the render layer has just rebuilt its transport onto the new identity or
+ * auth context.
  *
  * Supersession is a property of the PHYSICAL identity (`hostPublicKey` +
  * `relayAttachUrl`) and is judged independently of `authRecovery`. The two are
@@ -324,32 +326,38 @@ function closeSupersededIdentities(
     if (key === currentKey) {
       continue;
     }
-    if (
-      entry.identity.hostId !== identity.hostId ||
-      entry.identity.userId !== identity.userId
-    ) {
-      // A different host, or a different signed-in user on this host: an
-      // independent session, and not ours to judge.
+    if (entry.identity.hostId !== identity.hostId) {
+      // A different host: an independent session, and not ours to judge.
       continue;
     }
     if (
+      entry.identity.userId === identity.userId &&
       entry.identity.hostPublicKey === identity.hostPublicKey &&
       entry.identity.relayAttachUrl === identity.relayAttachUrl &&
       entry.identity.authEpoch === identity.authEpoch
     ) {
-      // Same physical identity AND the same auth context. `key !== currentKey`
-      // therefore means it differs ONLY in `authRecovery` - the deliberate
-      // one-shot/durable split, both current, neither superseding the other.
+      // Same user, same physical identity AND the same auth context.
+      // `key !== currentKey` therefore means it differs ONLY in `authRecovery`
+      // - the deliberate one-shot/durable split, both current, neither
+      // superseding the other.
       //
-      // The epoch has to be equal for that reasoning to hold. Two entries from
-      // DIFFERENT contexts are not parallel: the older one belongs to a signed-
-      // out session whose credential lease is gone. Leaving it current would
-      // reproduce, through the auth dimension, exactly what supersession fixes
-      // for a rotated key - `hasReadyRemoteSession` matches on `hostId` alone,
-      // so the retired entry would report the host Online and pass its scope
-      // gate while the live context is still dialing or has already failed,
-      // and would hold an obsolete authenticated connection open for the rest
-      // of the window.
+      // Every one of those equalities has to hold for that reasoning to apply.
+      // Two entries from DIFFERENT auth contexts are not parallel: the older
+      // one belongs to a signed-out session whose credential lease is gone.
+      // Leaving it current would reproduce, through the auth dimension,
+      // exactly what supersession fixes for a rotated key -
+      // `hasReadyRemoteSession` matches on `hostId` alone, so the retired
+      // entry would report the host Online and pass its scope gate while the
+      // live context is still dialing or has already failed, and would hold
+      // an obsolete authenticated connection open for the rest of the window.
+      //
+      // A different USER is that same retirement one dimension over. This
+      // process has a single signed-in user at a time, so an entry under
+      // another `userId` was necessarily built by a sign-in that has since
+      // ended - never a live parallel context. `userId` sits in THIS guard
+      // rather than the skip above so the verdict does not ride on the epoch
+      // label alone: even where two contexts' epochs could read equal (the
+      // no-bearer degenerate case), the user mismatch still retires the entry.
       continue;
     }
     entry.superseded = true;
