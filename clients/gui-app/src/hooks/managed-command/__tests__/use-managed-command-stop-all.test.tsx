@@ -134,13 +134,12 @@ describe("useManagedCommandStopAll", () => {
       expect(result.current.isError).toBe(true);
     });
 
-    // Nothing was sent and nothing was manufactured: one failure, carrying
-    // the actual reason rather than an uninformative "2 of 2" count.
+    // Nothing was sent and nothing was manufactured: one typed failure routed
+    // through the host-error policy (its rendered form is the fallback copy,
+    // since a client-unavailable error carries no user-facing message).
     expect(stoppedCommandIds).toEqual([]);
     expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError).toHaveBeenCalledWith(
-      expect.stringContaining("unavailable"),
-    );
+    expect(toastError).toHaveBeenCalledWith("Couldn't stop them.");
   });
 
   it("says a partial failure once, naming how many of how many", async () => {
@@ -169,7 +168,7 @@ describe("useManagedCommandStopAll", () => {
     );
   });
 
-  it("still says it once when the host refuses every one of them", async () => {
+  it("routes a wholesale failure through the host-error policy, once", async () => {
     refusedCommandIds.add("cmd-1");
     refusedCommandIds.add("cmd-2");
     const { result } = renderHook(() => useManagedCommandStopAll("chat-1"), {
@@ -190,9 +189,10 @@ describe("useManagedCommandStopAll", () => {
     // The whole point: a host that fails everything is ONE piece of news, not
     // one per row.
     expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError).toHaveBeenCalledWith(
-      "Couldn't stop 2 of 2 monitors and shells.",
-    );
+    // All rejections share one systemic cause, so the TYPED error is thrown
+    // and the standard policy renders it - not the count, which is reserved
+    // for partial failures with mixed causes.
+    expect(toastError).toHaveBeenCalledWith("Couldn't stop them.");
   });
 
   it("reports a batch in flight to every observer, not just its own", async () => {

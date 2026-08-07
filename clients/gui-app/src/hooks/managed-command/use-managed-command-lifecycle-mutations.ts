@@ -4,11 +4,11 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
+import {
   HostRpcError,
-  ResponseOfMethod,
+  withHostRpcErrorBoundary,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   useHostClient,
@@ -173,15 +173,33 @@ export function useManagedCommandStopAll(
           ),
         ),
       );
-      const failed = outcomes.filter(
-        (outcome) => outcome.status === "rejected",
-      ).length;
-      if (failed === 0) return;
+      const rejections = outcomes.filter(
+        (outcome): outcome is PromiseRejectedResult =>
+          outcome.status === "rejected",
+      );
+      if (rejections.length === 0) return;
+      // A batch that failed WHOLESALE almost always failed for one systemic
+      // reason (revoked access, host gone, method unsupported). Throw the
+      // typed error so the standard host-error policy - recoverable-
+      // unauthorized suppression, upgrade/reconnect guidance, dedup - applies
+      // exactly as it does on the per-row path. A partial failure has mixed
+      // causes, so the honest summary there is the count.
+      const representative: unknown = rejections[0].reason;
+      if (
+        rejections.length === outcomes.length &&
+        representative instanceof HostRpcError
+      ) {
+        throw representative;
+      }
       throw new Error(
-        `Couldn't stop ${failed} of ${outcomes.length} monitors and shells.`,
+        `Couldn't stop ${rejections.length} of ${outcomes.length} monitors and shells.`,
       );
     },
     onError: (error) => {
+      if (error instanceof HostRpcError) {
+        toastFromHostError(error, "Couldn't stop them.");
+        return;
+      }
       toast.error(error.message);
     },
   });
