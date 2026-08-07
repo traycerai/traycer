@@ -109,13 +109,14 @@ interface CacheEntry {
   lingerTimer: TimerHandle | null;
   /**
    * Set once this entry's identity has been SUPERSEDED - the host re-keyed or
-   * moved, and a newer PHYSICAL identity for the same host and user has been
-   * acquired since (whatever recovery policy that acquire wanted; see
-   * {@link closeSupersededIdentities}). Sticky: supersession is a fact about
-   * the identity, not about the successor's health, so a successor that later
-   * dies does not make this session current again - its key still embeds the
-   * OLD public key, so it can never re-handshake and can never be re-acquired
-   * by the render layer.
+   * moved, or the auth context that built it was retired, and a newer identity
+   * for the same host and user has been acquired since (whatever recovery
+   * policy that acquire wanted; see {@link closeSupersededIdentities}). Sticky:
+   * supersession is a fact about the identity, not about the successor's
+   * health, so a successor that later dies does not make this session current
+   * again - its key still embeds the OLD public key or the retired epoch, so it
+   * can never re-handshake, or never re-mint, and can never be re-acquired by
+   * the render layer.
    *
    * A marked entry is barred from BOTH things the cache does for a live entry:
    * it never lingers (see `release`) and it never answers
@@ -333,11 +334,22 @@ function closeSupersededIdentities(
     }
     if (
       entry.identity.hostPublicKey === identity.hostPublicKey &&
-      entry.identity.relayAttachUrl === identity.relayAttachUrl
+      entry.identity.relayAttachUrl === identity.relayAttachUrl &&
+      entry.identity.authEpoch === identity.authEpoch
     ) {
-      // Same physical identity. `key !== currentKey` therefore means it differs
-      // ONLY in `authRecovery` - the deliberate one-shot/durable split, both
-      // current, neither superseding the other.
+      // Same physical identity AND the same auth context. `key !== currentKey`
+      // therefore means it differs ONLY in `authRecovery` - the deliberate
+      // one-shot/durable split, both current, neither superseding the other.
+      //
+      // The epoch has to be equal for that reasoning to hold. Two entries from
+      // DIFFERENT contexts are not parallel: the older one belongs to a signed-
+      // out session whose credential lease is gone. Leaving it current would
+      // reproduce, through the auth dimension, exactly what supersession fixes
+      // for a rotated key - `hasReadyRemoteSession` matches on `hostId` alone,
+      // so the retired entry would report the host Online and pass its scope
+      // gate while the live context is still dialing or has already failed,
+      // and would hold an obsolete authenticated connection open for the rest
+      // of the window.
       continue;
     }
     entry.superseded = true;
@@ -362,11 +374,12 @@ function closeSupersededIdentities(
  * A SUPERSEDED entry never counts, whoever still holds it. Free ones are gone
  * from the map already (see {@link closeSupersededIdentities}); a held one is
  * still here but is pinned to a public key or relay URL the host has moved off,
- * so reporting the host Online off it would be attributing liveness to a
- * connection the host's CURRENT identity does not have - exactly the thing that
- * renders a still-dialing (or already failing) host as Online and passes its
- * scope gate. Ignoring it costs only a brief false negative while the current
- * identity finishes dialing, which is the safe direction.
+ * or to a signed-out auth context, so reporting the host Online off it would be
+ * attributing liveness to a connection the host's CURRENT identity does not
+ * have - exactly the thing that renders a still-dialing (or already failing)
+ * host as Online and passes its scope gate. Ignoring it costs only a brief
+ * false negative while the current identity finishes dialing, which is the safe
+ * direction.
  */
 export function hasReadyRemoteSession(hostId: string): boolean {
   for (const entry of entriesByKey.values()) {

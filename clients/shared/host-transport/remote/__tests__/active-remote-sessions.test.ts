@@ -708,6 +708,52 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(builds).toBe(2);
   });
 
+  it("supersedes a RETIRED auth epoch instead of leaving it to report Online", () => {
+    // Partitioning alone is not enough. The retired entry is the same physical
+    // identity - same key, same relay - so the "differs only in authRecovery"
+    // branch would wave it through as a parallel current entry, and
+    // `hasReadyRemoteSession` matches on hostId alone. That reproduces through
+    // the auth dimension exactly what supersession fixes for a rotated key: the
+    // signed-out session reports the host Online, and passes its scope gate,
+    // while the live context is still dialing.
+    const retired = freshIdentity();
+    const staleSession = fakeSession();
+    staleSession.ready = true;
+    acquireRemoteSession(retired, () => staleSession).close();
+    expect(hasReadyRemoteSession(retired.hostId)).toBe(true);
+
+    const signedInAgain: RemoteSessionIdentity = {
+      ...retired,
+      authEpoch: "lease-2",
+    };
+    const dialing = fakeSession();
+    dialing.ready = false;
+    acquireRemoteSession(signedInAgain, () => dialing);
+
+    expect(staleSession.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(retired.hostId)).toBe(false);
+  });
+
+  it("keeps the one-shot/durable split parallel WITHIN one auth epoch", () => {
+    // The counterpart, so the epoch check reads as a narrowing rather than a
+    // blanket "any key difference supersedes": two entries that differ only in
+    // `authRecovery` under the SAME context are both current and neither may
+    // close the other.
+    const durable = freshIdentity();
+    const durableSession = fakeSession();
+    durableSession.ready = true;
+    acquireRemoteSession(durable, () => durableSession).close();
+
+    const oneShot: RemoteSessionIdentity = {
+      ...durable,
+      authRecovery: "terminal",
+    };
+    acquireRemoteSession(oneShot, () => fakeSession());
+
+    expect(durableSession.closeCalls).toBe(0);
+    expect(hasReadyRemoteSession(durable.hostId)).toBe(true);
+  });
+
   it("still shares one connection across a token refresh within a context", () => {
     // The other half of the rule, and the reason the epoch is keyed on the
     // bearer SOURCE rather than the token: a same-user refresh rotates the
