@@ -1,5 +1,4 @@
 import {
-  Activity,
   Files,
   FolderTree,
   GitBranch,
@@ -77,16 +76,6 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       id: "terminals",
       title: "Terminals",
       icon: Terminal,
-      isAutoVisible: () => true,
-      forcedOnHint: null,
-      supportsHeaderSearch: false,
-    },
-    {
-      // The one surface that names both kinds; every row inside it is
-      // kind-explicit instead (`UI.md` §3).
-      id: "managed-commands",
-      title: "Monitors & Shells",
-      icon: Activity,
       isAutoVisible: () => true,
       forcedOnHint: null,
       supportsHeaderSearch: false,

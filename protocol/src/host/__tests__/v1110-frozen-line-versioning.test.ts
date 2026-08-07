@@ -179,10 +179,13 @@ describe("providers.list request lines 1.0..7.0 <-> latest", () => {
   // `serverName`/`forceRefresh` and `pluginIcon` adds `pluginId`/`theme` - a
   // downgrade that reshaped the union could drop those and still look correct
   // against an `mcp`-only assertion.
-  const V70_QUERY_CASES: Record<
-    NativeListQueryV70["kind"],
-    NativeListQueryV70
-  > = {
+  const V70_QUERY_CASES: {
+    // Mapped over the discriminant with `Extract`, not `Record<kind, union>`:
+    // the latter accepts ANY arm under ANY key, so a payload filed under the
+    // wrong `kind` would type-check and quietly test one arm twice while
+    // reporting the other's name.
+    [K in NativeListQueryV70["kind"]]: Extract<NativeListQueryV70, { kind: K }>;
+  } = {
     mcp: {
       kind: "mcp",
       providerId: "claude-code",

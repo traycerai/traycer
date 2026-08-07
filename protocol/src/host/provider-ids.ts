@@ -19,6 +19,7 @@ export const providerIdSchema = z.enum([
   "pi",
   "hermes",
   "omp",
+  "huggingface",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -96,5 +97,17 @@ export const providerIdSchemaV70 = z.enum([
   "pi",
   "hermes",
   "omp",
+  // `huggingface` is ON this line, not projected away from it. It was added to
+  // the live enum by #1011 after the v8.0 freeze cut, and v7.0 is unreleased -
+  // no non-RC `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract -
+  // so #1011 grew v7.0 legitimately, exactly as `config_unreadable` did. The
+  // v7→v6 bridge on `main` says the same thing from the other side: its
+  // comment reads "drop post-v6.0 providers (currently `huggingface`)", which
+  // is only true if huggingface belongs to v7.0.
+  //
+  // Same expiry as everywhere else in this transition: once a release ships a
+  // major-7 contract, a provider added to the live enum must be projected away
+  // by the v8→v7 bridge instead of mirrored here.
+  "huggingface",
 ]);
 export type ProviderIdV70 = z.infer<typeof providerIdSchemaV70>;

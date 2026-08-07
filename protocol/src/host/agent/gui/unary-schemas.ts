@@ -6,6 +6,7 @@ import {
   guiHarnessIdSchemaV30,
   guiHarnessIdSchemaV40,
   guiHarnessIdSchemaV50,
+  guiHarnessIdSchemaV60,
 } from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
@@ -256,6 +257,24 @@ export const guiHarnessOptionSchemaV50 = guiHarnessOptionSchema.extend({
 });
 export const listGuiHarnessesResponseSchemaV50 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV50),
+});
+
+// ── Frozen protocol-v6.0 catalog row + response (with omp, pre-Hugging Face) ─
+// v6.0 shipped with omp in `cli-v1.1.9` / `host-v1.1.9` (both tagged
+// 2026-07-29); the v7.0 line of `agent.gui.listHarnesses` adds Hugging Face,
+// and the v7→v6 downgrade bridge filters it out for already-shipped v6.0
+// callers so their strict decode never sees a value it can't parse.
+//
+// The row body reuses the live `guiHarnessOptionSchema` for the same reason
+// `guiHarnessOptionSchemaV50` does - the two lines differ only by the id enum,
+// verified against the `cli-v1.1.9` tree, where this whole file is
+// byte-identical to HEAD. Pinning the id here keeps a future `.extend()` on
+// the live row from leaking into this shipped line.
+export const guiHarnessOptionSchemaV60 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV60,
+});
+export const listGuiHarnessesResponseSchemaV60 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV60),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

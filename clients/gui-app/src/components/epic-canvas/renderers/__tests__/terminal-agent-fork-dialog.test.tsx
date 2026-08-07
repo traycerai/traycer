@@ -22,6 +22,7 @@ import {
   useSeededWorkspaceSnapshotStore,
 } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { modLabel } from "@/lib/keybindings/platform";
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
@@ -215,6 +216,35 @@ describe("<TerminalAgentForkDialog />", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
+  });
+
+  it("forks the terminal agent with Cmd+Enter", async () => {
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "fork",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    const forkButton = screen.getByRole("button", { name: "Fork" });
+    expect(forkButton.textContent).toContain(modLabel());
+    expect(forkButton.textContent).toContain("↵");
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("submits folderless when the live picker removes the seed's last folder", async () => {

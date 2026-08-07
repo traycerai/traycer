@@ -6,7 +6,11 @@ import {
   hostGetRateLimitUsageDowngradeV3ToV1,
   hostGetRateLimitUsageDowngradeV3ToV2,
   hostGetRateLimitUsageUpgradeV20ToV21,
+  hostGetRateLimitUsageDowngradeV4ToV1,
+  hostGetRateLimitUsageDowngradeV4ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV3,
   hostGetRateLimitUsageUpgradeV21ToV30,
+  hostGetRateLimitUsageUpgradeV30ToV40,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -20,6 +24,7 @@ import {
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
+  rateLimitUsageResponseSchemaV40,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -905,7 +910,7 @@ describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", ()
     expect(rateLimitUsageResponseSchemaV30.parse(upgraded)).toEqual(response);
   });
 
-  it("registers host.getRateLimitUsage major 3.0 in the host registry", () => {
+  it("registers host.getRateLimitUsage majors 2.1 and 3.0 in the host registry", () => {
     expect(
       hostRpcRegistry["host.getRateLimitUsage"][3].versions[0].contract
         .schemaVersion,
@@ -914,5 +919,193 @@ describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", ()
       hostRpcRegistry["host.getRateLimitUsage"][2].versions[1].contract
         .schemaVersion,
     ).toEqual({ major: 2, minor: 1 });
+  });
+});
+
+describe("host.getRateLimitUsage v4.0 Hugging Face freeze + downgrade bridges", () => {
+  const huggingFaceAvailable = {
+    provider: "huggingface" as const,
+    available: true as const,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  // The spend-only shape: an account with no included allowance and no spend
+  // limit. Every derived field is null rather than a misleading zero.
+  const huggingFaceSpendOnly = {
+    ...huggingFaceAvailable,
+    includedUsd: null,
+    remainingIncludedUsd: null,
+    limitUsd: null,
+    remainingLimitUsd: null,
+    numRequests: null,
+    periodStart: null,
+    periodEnd: null,
+  };
+
+  const huggingFaceUnavailable = {
+    provider: "huggingface" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const openRouterAvailable = {
+    provider: "openrouter" as const,
+    available: true as const,
+    limit: null,
+    limitRemaining: null,
+    dailySpend: null,
+    weeklySpend: null,
+    monthlySpend: null,
+    totalCredits: 10,
+    totalUsage: 1,
+    balance: 9,
+  };
+
+  // The freeze itself: v3.0 is what cli-v1.1.8 through cli-v1.1.10 shipped, so
+  // it must REJECT the arm the live union accepts. This is the assertion that
+  // fails if anyone repoints v3.0 back at the live union.
+  it("accepts a Hugging Face arm on the live union and rejects it on the frozen v3.0 schema", () => {
+    for (const snapshot of [huggingFaceAvailable, huggingFaceSpendOnly]) {
+      expect(providerRateLimitsSchema.parse(snapshot)).toEqual(snapshot);
+      expect(
+        rateLimitUsageResponseSchemaV40.parse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: snapshot,
+        }),
+      ).toMatchObject({ providerRateLimits: snapshot });
+      expect(() =>
+        rateLimitUsageResponseSchemaV30.parse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: snapshot,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("requires usedUsd - the one field the endpoint always carries", () => {
+    const { usedUsd: _omitted, ...withoutUsed } = huggingFaceAvailable;
+    expect(() => providerRateLimitsSchema.parse(withoutUsed)).toThrow();
+  });
+
+  it("degrades a Hugging-Face-available snapshot through the 4.0 -> 3.0 bridge", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: huggingFaceAvailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    expect(() =>
+      rateLimitUsageResponseSchemaV30.parse(result.value),
+    ).not.toThrow();
+  });
+
+  it("passes non-Hugging-Face arms and null through the 4.0 -> 3.0 bridge unchanged", () => {
+    for (const snapshot of [openRouterAvailable, null]) {
+      const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+        rateLimitUsageResponseSchemaV40.parse({
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: snapshot,
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(snapshot);
+    }
+  });
+
+  it("passes an already-unavailable Hugging Face snapshot through unchanged", () => {
+    const result = hostGetRateLimitUsageDowngradeV4ToV3.downgradeResponse(
+      rateLimitUsageResponseSchemaV40.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: huggingFaceUnavailable,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+  });
+
+  it("degrades Hugging Face down the 4.0 -> 2.1 and 4.0 -> 1.2 bridges too", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: huggingFaceAvailable,
+    });
+    for (const bridge of [
+      hostGetRateLimitUsageDowngradeV4ToV2,
+      hostGetRateLimitUsageDowngradeV4ToV1,
+    ]) {
+      const result = bridge.downgradeResponse(response);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+  });
+
+  it("degrades Hugging Face through the host registry major 4 -> 3 / 2 / 1 paths", () => {
+    const response = rateLimitUsageResponseSchemaV40.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: huggingFaceAvailable,
+    });
+    const registry = hostRpcRegistry["host.getRateLimitUsage"];
+    // One call per literal target: a union-typed `target` widens the helper's
+    // return across every major's shape, and major 1's earliest minors carry
+    // no `providerRateLimits` key at all.
+    const toV3 = downgradeResponseAcrossMajors(registry, 4, 3, response);
+    expect(toV3.ok).toBe(true);
+    if (toV3.ok) {
+      expect(toV3.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+    const toV2 = downgradeResponseAcrossMajors(registry, 4, 2, response);
+    expect(toV2.ok).toBe(true);
+    if (toV2.ok) {
+      expect(toV2.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+    const toV1 = downgradeResponseAcrossMajors(registry, 4, 1, response);
+    expect(toV1.ok).toBe(true);
+    if (toV1.ok) {
+      expect(toV1.value.providerRateLimits).toEqual(huggingFaceUnavailable);
+    }
+  });
+
+  it("upgrades a v3.0 response to v4.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: openRouterAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV30ToV40.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV40.parse(upgraded)).toEqual(response);
+  });
+
+  it("registers host.getRateLimitUsage major 4.0 as the latest line", () => {
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][4].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
+    expect(
+      Object.keys(
+        hostRpcRegistry["host.getRateLimitUsage"][4]
+          .downgradePathsFromLatest as Record<string, unknown>,
+      ).sort(),
+    ).toEqual(["1", "2", "3"]);
   });
 });

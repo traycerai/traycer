@@ -24,7 +24,8 @@ import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-li
  * batch (the popover's "Refresh all") may fan out its distinct profile pulls in
  * parallel before the next queue item begins.
  *
- * `httpFetch` providers (openrouter, kilocode) NEVER touch this queue - their
+ * `httpFetch` providers (openrouter, kilocode, huggingface) NEVER touch this
+ * queue - their
  * observers opt into the table-owned fixed cadence directly.
  *
  * The queue is a plain module holding process-wide state. The long-lived app

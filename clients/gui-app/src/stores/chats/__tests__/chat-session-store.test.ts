@@ -13,6 +13,7 @@ import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -346,6 +347,7 @@ interface SnapshotFrameInput {
   readonly settings?: ChatRunSettings | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
+  readonly managedCommands?: ReadonlyArray<ManagedCommand>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
 }
 
@@ -387,6 +389,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [...input.pendingFileEditApprovals],
       accumulatedFileChanges: [],
+      managedCommands: [...(input.managedCommands ?? [])],
       ...(input.backgroundItems === undefined
         ? {}
         : { backgroundItems: [...input.backgroundItems] }),
@@ -430,6 +433,7 @@ function emitSnapshotWithWorktree(
       pendingInterviews: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
       worktreeBinding,
       missingWorktreePaths: [],
     },
@@ -3728,6 +3732,7 @@ describe("createChatSessionStore", () => {
         missingWorktreePaths: [],
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
+        managedCommands: [],
       },
     });
     callbacks.onTurnStateChanged({
@@ -3892,6 +3897,7 @@ describe("createChatSessionStore", () => {
         missingWorktreePaths: [],
         pendingFileEditApprovals: [],
         accumulatedFileChanges: [],
+        managedCommands: [],
       },
     });
 
@@ -5881,5 +5887,111 @@ describe("turn-settled stranded-send reconciliation", () => {
     const state = harness.handle.store.getState();
     expect(state.pendingUserMessages).toEqual([]);
     expect(state.failedSendRestoration).toBeNull();
+  });
+});
+
+describe("the chat's managed commands", () => {
+  function monitor(over: Partial<ManagedCommand>): ManagedCommand {
+    return {
+      id: "cmd-1",
+      kind: "monitor",
+      description: "deploy watcher",
+      status: { state: "running", pid: 4410, startedAtMs: 10 },
+      chatId: CHAT_ID,
+      createdAtMs: 10,
+      updatedAtMs: 10,
+      ...over,
+    };
+  }
+
+  function seededHarness(commands: ReadonlyArray<ManagedCommand>): Harness {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      managedCommands: commands,
+    });
+    return harness;
+  }
+
+  it("reads as an empty set before the host has said anything", () => {
+    const harness = createHarness();
+
+    // Not `undefined`: a host with no managed-command subsystem owns no
+    // commands, so there is no "unknown" for a consumer to branch on.
+    expect(harness.handle.store.getState().managedCommands).toEqual([]);
+    harness.handle.dispose();
+  });
+
+  it("takes the set from the snapshot", () => {
+    const harness = seededHarness([monitor({ id: "cmd-1" })]);
+
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
+  });
+
+  it("replaces the whole set on a managedCommandsChanged frame", () => {
+    const harness = seededHarness([
+      monitor({ id: "cmd-1" }),
+      monitor({ id: "cmd-2" }),
+    ]);
+
+    harness.callbacks().onManagedCommandsChanged({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      managedCommands: [monitor({ id: "cmd-3" })],
+    });
+
+    // The frame is the set, not a delta: `cmd-1` and `cmd-2` are gone because
+    // the host stopped naming them, with no removal frame anywhere.
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-3"]);
+    harness.handle.dispose();
+  });
+
+  it("fills in from a frame after a snapshot that arrived empty", () => {
+    // The host's boot window: the subsystem has not enumerated yet, so the
+    // snapshot honestly carries nothing and the frame follows. Both are plain
+    // assignments - neither needs to know about the other.
+    const harness = seededHarness([]);
+    expect(harness.handle.store.getState().managedCommands).toEqual([]);
+
+    harness.callbacks().onManagedCommandsChanged({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      managedCommands: [monitor({ id: "cmd-late" })],
+    });
+
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-late"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another chat", () => {
+    const harness = seededHarness([monitor({ id: "cmd-1" })]);
+
+    harness.callbacks().onManagedCommandsChanged({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: "some-other-chat",
+      managedCommands: [],
+    });
+
+    expect(
+      harness.handle.store.getState().managedCommands.map((c) => c.id),
+    ).toEqual(["cmd-1"]);
+    harness.handle.dispose();
   });
 });

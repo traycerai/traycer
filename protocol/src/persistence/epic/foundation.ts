@@ -75,6 +75,7 @@ export const guiHarnessIdSchema = z.enum([
   "pi",
   "hermes",
   "omp",
+  "huggingface",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 

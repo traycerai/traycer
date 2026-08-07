@@ -27,6 +27,14 @@ import {
   tryProjectProviderNativeCapabilitiesToV70,
   providerMcpCapabilitiesSchema,
   providerMcpCapabilitiesSchemaV70,
+  providerMcpServerSchema,
+  providerMcpServerSchemaV70,
+  providerMcpToolSchema,
+  providerMcpToolSchemaV70,
+  providerPluginSchema,
+  providerPluginSchemaV70,
+  providerSkillSchema,
+  providerSkillSchemaV70,
   providerModelProvidersCapabilitiesSchema,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70,
@@ -85,15 +93,20 @@ import {
  */
 function unwrapSchema(schema: z.ZodType): z.ZodType {
   let current: z.ZodType = schema;
-  for (;;) {
-    const def: unknown = current.def;
-    if (typeof def !== "object" || def === null || !("innerType" in def)) {
-      return current;
-    }
-    const inner: unknown = def.innerType;
+  while (
+    current instanceof z.ZodNullable ||
+    current instanceof z.ZodOptional ||
+    current instanceof z.ZodDefault ||
+    current instanceof z.ZodCatch
+  ) {
+    // `.unwrap()` is typed against zod's internal base, so narrow rather than
+    // cast - the point of using the public accessor was to stop reaching into
+    // `def`, not to trade one escape hatch for another.
+    const inner: unknown = current.unwrap();
     if (!(inner instanceof z.ZodType)) return current;
     current = inner;
   }
+  return current;
 }
 
 const MCP_CAPABILITIES = {
@@ -475,7 +488,10 @@ describe("the four Model Providers methods are optional capabilities", () => {
       const entry = hostRpcRegistry[method];
       expect(entry).toBeDefined();
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(entry[1].versions[0]).toBeDefined();
+      expect(entry[1].versions[0].contract.schemaVersion).toEqual({
+        major: 1,
+        minor: 0,
+      });
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
     },
   );
@@ -755,6 +771,10 @@ describe("providers.modelProviderAuth actions", () => {
       methodIndex: 0,
       key: "sk-secret",
       inputs: { resourceName: "my-resource" },
+      // Present in the INPUT on purpose: asserting the parse drops a key the
+      // payload never carried proves nothing. A client still sending the old
+      // field must have it stripped, not passed through.
+      credentialKey: "AZURE_API_KEY",
     });
     expect(parsed.action).toBe("connect");
     if (parsed.action !== "connect") return;
@@ -1364,6 +1384,14 @@ describe("the v7.0 freeze goes all the way down", () => {
     ],
     ["native list query", nativeListQuerySchema, nativeListQuerySchemaV70],
     ["native list result", nativeListResultSchema, nativeListResultSchemaV70],
+    // The row schemas the list result is BUILT from. Covered by the result
+    // pair transitively, and named individually anyway: a failure on the
+    // aggregate points at a 300-line union diff, while a failure here points
+    // at the row that moved.
+    ["mcp tool row", providerMcpToolSchema, providerMcpToolSchemaV70],
+    ["mcp server row", providerMcpServerSchema, providerMcpServerSchemaV70],
+    ["plugin row", providerPluginSchema, providerPluginSchemaV70],
+    ["skill row", providerSkillSchema, providerSkillSchemaV70],
     [
       "env override scope",
       providerEnvOverrideScopeSchema,
@@ -1428,6 +1456,23 @@ describe("the v7.0 freeze goes all the way down", () => {
       code: "config_unreadable",
       detail: "redacted parse error",
     });
+  });
+
+  it("the tab projection agrees with the frozen enum, member for member", () => {
+    // `projectTabToV70` is an exhaustive SWITCH, so a new live tab fails to
+    // compile until someone decides its side of the cut. What a switch cannot
+    // check is whether that decision matches the frozen enum - so this does:
+    // every live tab the projection keeps must be one v7.0 can decode, and
+    // every tab it drops must be one v7.0 cannot.
+    for (const tab of providerSettingsTabSchema.options) {
+      const kept = projectProviderNativeCapabilitiesToV70({
+        ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+        supportedTabs: [tab],
+      }).supportedTabs;
+      expect(kept, tab).toEqual(
+        providerSettingsTabSchemaV70.safeParse(tab).success ? [tab] : [],
+      );
+    }
   });
 
   it("keeps the frozen provider-id enum out of the live one's future", () => {
@@ -1518,4 +1563,56 @@ describe("an unrepresentable row degrades per row, never per response", () => {
       downgraded.value.providers.map((provider) => provider.providerId),
     ).toEqual(["claude-code"]);
   });
+});
+
+describe("no downgrade hop fails a whole response over one unsupported provider", () => {
+  // The class the v8 -> v6 hop belonged to. `z.array` fails WHOLE on one bad
+  // element, so a frozen line's id enum rejecting a newer provider does not
+  // drop that provider - it throws the entire `providers.list` response for
+  // that peer, taking every healthy provider with it.
+  //
+  // Latent since v8.0 opened and reachable the instant `huggingface` merged.
+  // Asserted across EVERY hop rather than the one that was wrong, because the
+  // next provider id will arrive the same way this one did.
+  const FROZEN_RESPONSES = {
+    1: providersListResponseSchemaV10,
+    2: providersListResponseSchemaV20,
+    3: providersListResponseSchemaV30,
+    4: providersListResponseSchemaV40,
+    5: providersListResponseSchemaV50,
+    6: providersListResponseSchemaV60,
+    7: providersListResponseSchemaV70,
+  } as const;
+
+  // `huggingface` is post-v6.0, so majors 1-6 must drop it and v7.0 must keep
+  // it - the same split main's own v7→v6 bridge comment describes.
+  const newestProvider = providerCliStateSchema.parse({
+    ...providerState("huggingface"),
+    nativeCapabilities: OPENCODE_CAPABILITIES,
+  });
+
+  it.each([1, 2, 3, 4, 5, 6, 7] as const)(
+    "8.0 -> v%i.0 answers rather than throwing when the list carries a newer provider",
+    (targetMajor) => {
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        8,
+        targetMajor,
+        { providers: [newestProvider, claudeState], native: null },
+      );
+      // `ok`, not a thrown error. This is the whole assertion.
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) return;
+      expect(
+        FROZEN_RESPONSES[targetMajor].safeParse(downgraded.value).success,
+      ).toBe(true);
+      // The healthy provider survives either way; the newer one appears only
+      // on the line whose enum names it.
+      const ids = downgraded.value.providers.map(
+        (provider) => provider.providerId,
+      );
+      expect(ids).toContain("claude-code");
+      expect(ids.includes("huggingface")).toBe(targetMajor >= 7);
+    },
+  );
 });

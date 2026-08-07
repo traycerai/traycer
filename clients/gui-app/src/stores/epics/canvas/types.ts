@@ -284,7 +284,7 @@ export interface SnapshotDiffTileRef {
  * A pointer, not a copy: `id` IS the command id (so opening the same command
  * twice focuses the one window, via the canvas's content-id dedup) and
  * `hostId` is the host that owns it. Kind, description and status are
- * deliberately absent - they are live state the list stream answers, and a
+ * deliberately absent - they are live state the owning chat's stream answers, and a
  * window restored days later must not render a description the agent renamed
  * or a status the command left. `name` is the kind-free fallback the tab strip
  * shows only until the stream answers.

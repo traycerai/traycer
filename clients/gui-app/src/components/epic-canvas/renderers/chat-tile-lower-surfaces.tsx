@@ -37,7 +37,7 @@ import {
 } from "@/lib/chat/chat-lower-scroll-budget";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
-import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-command-list-registry";
+import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-commands-for-chat";
 import { cn } from "@/lib/utils";
 import type {
   PendingInterviewView,

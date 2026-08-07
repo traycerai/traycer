@@ -284,12 +284,18 @@ false "Offline") are tested and load-bearing.
     and `terminalFontSize` are clamped 10-24. `theme-provider.tsx` applies
     `uiFontFamily`/`codeFontFamily` as inline overrides of
     `--traycer-font-ui`/`--traycer-font-mono` (chosen font + the default
-    stack as fallback), removing the override when `null`. The terminal host
-    (`terminal-tile-xterm.tsx`) resolves its own effective font
-    (`terminalFontFamily ?? codeFontFamily`) and size
-    (`terminalFontSize ?? codeFontSize`) directly from the store rather than
-    reading computed CSS, and live-syncs both into `term.options` (see
-    `resolveEffectiveFontFamily` and `useTerminalAppearanceSync`). The
+    stack as fallback), removing the override when `null`. The effective
+    TERMINAL font (`terminalFontFamily ?? codeFontFamily`,
+    `terminalFontSize ?? codeFontSize`) is resolved once by
+    `useEffectiveTerminalFont` (`hooks/settings/`) and applied inline by its
+    three consumers - the xterm host, this panel's `TerminalPreview`, and the
+    managed-command output window (`managed-command-output-tile.tsx`, whose
+    content is a program's stdout and so is terminal output too). None of
+    them can read it from CSS: `--traycer-font-mono` carries the CODE font,
+    so `font-mono` would silently ignore a Terminal override, and xterm
+    measures glyph cells on a canvas where CSS variables do not resolve at
+    all. `terminal-tile-xterm.tsx` additionally live-syncs both values into
+    `term.options` (see `useTerminalAppearanceSync`). The
     `@pierre/diffs` diff viewer follows the code font via
     `--diffs-font-family` / `--diffs-font-size` set on `[data-diffs-host]` in
     `diff-tokens-css.ts`.

@@ -9,6 +9,7 @@ import {
   useManagedCommandDelete,
   useManagedCommandStart,
   useManagedCommandStop,
+  useManagedCommandStopAllIsPending,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,10 @@ export function ManagedCommandLifecycleActions(
   const { command, epicId, hostId } = props;
   const start = useManagedCommandStart();
   const stop = useManagedCommandStop();
+  // The command's chat may be running a Stop all batch that already carries
+  // this command - gating here, at the shared action, covers every surface
+  // that renders a stop (menu row, output window, panel row) with one rule.
+  const stopAllPending = useManagedCommandStopAllIsPending(command.chatId);
   const remove = useManagedCommandDelete();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const variables = { hostId, epicId, commandId: command.id };
@@ -46,7 +51,7 @@ export function ManagedCommandLifecycleActions(
         <ActionButton
           label="Stop"
           icon={<Square aria-hidden className="size-3.5" />}
-          isPending={stop.isPending}
+          isPending={stop.isPending || stopAllPending}
           testId={`managed-command-stop-${command.id}`}
           onClick={() => {
             stop.mutate(variables);
@@ -105,13 +110,18 @@ export function ManagedCommandStopAction(props: {
   readonly className: string | undefined;
 }) {
   const stop = useManagedCommandStop();
+  // Same one rule as ManagedCommandLifecycleActions: a batch already carrying
+  // this command must not race a row press.
+  const stopAllPending = useManagedCommandStopAllIsPending(
+    props.command.chatId,
+  );
   if (props.command.status.state !== "running") return null;
   return (
     <span className={cn("flex shrink-0 items-center", props.className)}>
       <ActionButton
         label="Stop"
         icon={<Square aria-hidden className="size-3.5" />}
-        isPending={stop.isPending}
+        isPending={stop.isPending || stopAllPending}
         testId={`managed-command-stop-${props.command.id}`}
         onClick={() => {
           stop.mutate({

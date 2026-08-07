@@ -6,6 +6,7 @@ import {
   listAgentsResponseSchemaV30,
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
+  listAgentsResponseSchemaV60,
 } from "@traycer/protocol/host/agent/shared";
 import {
   listGuiHarnessesResponseSchemaV10,
@@ -14,6 +15,7 @@ import {
   listGuiHarnessesResponseSchemaV30,
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
+  listGuiHarnessesResponseSchemaV60,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   providersListResponseSchemaV10,
@@ -49,11 +51,13 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@3.0": listGuiHarnessesResponseSchemaV30,
   "agent.gui.listHarnesses@4.0": listGuiHarnessesResponseSchemaV40,
   "agent.gui.listHarnesses@5.0": listGuiHarnessesResponseSchemaV50,
+  "agent.gui.listHarnesses@6.0": listGuiHarnessesResponseSchemaV60,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
   "agent.list@4.0": listAgentsResponseSchemaV40,
   "agent.list@5.0": listAgentsResponseSchemaV50,
+  "agent.list@6.0": listAgentsResponseSchemaV60,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,

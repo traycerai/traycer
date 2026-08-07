@@ -13,6 +13,7 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   opencode: "ANTHROPIC_API_KEY",
   traycer: "ANTHROPIC_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+  huggingface: "HF_TOKEN",
   cursor: "CURSOR_API_KEY",
   grok: "XAI_API_KEY",
   qwen: "OPENAI_API_KEY",

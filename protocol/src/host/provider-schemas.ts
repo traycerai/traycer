@@ -201,6 +201,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   pi: "Pi",
   hermes: "Hermes Agent",
   omp: "Oh My Pi",
+  huggingface: "Hugging Face",
 };
 
 /**
@@ -2726,6 +2727,22 @@ export function upgradeProviderCliStateListToV70(
   )[],
 ): ProviderCliStateV70[] {
   return states.map(upgradeProviderCliStateToV70);
+}
+
+/**
+ * Drop post-v6.0 providers (currently `huggingface`) for an already-shipped
+ * v6.0 client, and strip the provider-pack-registry fields the frozen v6.0
+ * state does not model. Same filter-by-reparse shape as the older bridges: an
+ * entry whose id is not in the frozen v6.0 enum simply does not survive the
+ * parse.
+ */
+export function downgradeProviderCliStateListToV60(
+  states: readonly unknown[],
+): ProviderCliStateV60[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV60.safeParse(state);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 

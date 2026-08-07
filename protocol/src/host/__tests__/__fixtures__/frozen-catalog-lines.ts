@@ -595,6 +595,112 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
       ],
       "additionalProperties": false
     },
+    "agent.gui.listHarnesses@6.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes",
+                  "omp"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "tui"
+                  ]
+                }
+              },
+              "requiresApiKey": {
+                "type": "boolean"
+              },
+              "supportedPermissionModes": {
+                "default": [
+                  "supervised",
+                  "auto_accept_edits",
+                  "full_access"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "full_access"
+                  ]
+                }
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "enabled",
+              "available",
+              "error",
+              "modes",
+              "requiresApiKey",
+              "supportedPermissionModes",
+              "availabilityPending"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
     "agent.list@1.0": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -1271,6 +1377,161 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "devin",
                       "pi",
                       "hermes"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isSelf": {
+                "type": "boolean"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "readTranscript": {
+                    "type": "boolean"
+                  },
+                  "sendMessage": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "readTranscript",
+                  "sendMessage"
+                ],
+                "additionalProperties": false
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "folderPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "isWorktree": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "hostId",
+              "isLocal",
+              "surface",
+              "harnessId",
+              "isSelf",
+              "title",
+              "capabilities",
+              "active",
+              "folderPaths",
+              "isWorktree"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "caller",
+        "scope",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    "agent.list@6.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "caller": {
+          "type": "object",
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "canSendMessages": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "agentId",
+            "canSendMessages"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "user",
+            "all"
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parentId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostId": {
+                "type": "string"
+              },
+              "isLocal": {
+                "type": "boolean"
+              },
+              "surface": {
+                "type": "string",
+                "enum": [
+                  "gui",
+                  "tui"
+                ]
+              },
+              "harnessId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "codex",
+                      "opencode",
+                      "traycer",
+                      "cursor",
+                      "grok",
+                      "qwen",
+                      "kiro",
+                      "droid",
+                      "kimi",
+                      "copilot",
+                      "kilocode",
+                      "openrouter",
+                      "amp",
+                      "devin",
+                      "pi",
+                      "hermes",
+                      "omp"
                     ]
                   },
                   {
@@ -4534,7 +4795,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   "devin",
                   "pi",
                   "hermes",
-                  "omp"
+                  "omp",
+                  "huggingface"
                 ]
               },
               "enabled": {

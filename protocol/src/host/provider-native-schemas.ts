@@ -2049,13 +2049,45 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
  * throws, the degrading form returns null, and the decision is routed to
  * whoever grew the enum by a red test rather than a field incident.
  */
+/**
+ * One tab's projection onto v7.0: itself, or `null` when v7.0 has no such tab.
+ *
+ * An exhaustive switch, deliberately, rather than the filter this replaces.
+ * That filter narrowed with `(tab): tab is ProviderSettingsTabV70 => tab !==
+ * "modelProviders"` - an ASSERTING predicate whose body only happened to be
+ * true. Add a second live-only tab and it keeps compiling while quietly
+ * promising v7.0 a tab id it cannot decode, which is the whole failure this
+ * transition exists to prevent, reintroduced by the projection itself.
+ *
+ * A switch over the live union has no such slack: a new member fails to
+ * compile until someone writes down which side of the cut it falls on. The
+ * frozen enum is not consulted here, so the two could in principle disagree -
+ * `provider-model-providers-compat.test.ts` pins them against each other.
+ */
+function projectTabToV70(
+  tab: ProviderSettingsTab,
+): ProviderSettingsTabV70 | null {
+  switch (tab) {
+    case "general":
+    case "env":
+    case "usage":
+    case "mcp":
+    case "plugins":
+    case "skills":
+      return tab;
+    case "modelProviders":
+      return null;
+  }
+}
+
 function v70CapabilityInput(capabilities: ProviderNativeCapabilities): unknown {
   const { modelProviders: _modelProviders, ...rest } = capabilities;
   return {
     ...rest,
-    supportedTabs: capabilities.supportedTabs.filter(
-      (tab): tab is ProviderSettingsTabV70 => tab !== "modelProviders",
-    ),
+    supportedTabs: capabilities.supportedTabs.flatMap((tab) => {
+      const projected = projectTabToV70(tab);
+      return projected === null ? [] : [projected];
+    }),
   };
 }
 

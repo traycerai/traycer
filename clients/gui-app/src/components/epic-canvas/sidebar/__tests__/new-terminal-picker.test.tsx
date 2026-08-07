@@ -22,6 +22,7 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
+import { modLabel } from "@/lib/keybindings/platform";
 
 const selectById = vi.fn();
 const refreshDirectory = vi.fn(() => Promise.resolve([]));
@@ -273,6 +274,23 @@ describe("<NewTerminalPicker />", () => {
     expect(terminals).toHaveLength(1);
     expect(terminals[0].hostId).toBe("host-2");
     expect(terminals[0].cwd).toBe("/work/traycer-wt/feature-x");
+  });
+
+  it("launches the selected terminal with Cmd+Enter", () => {
+    const tabId = openPicker();
+
+    const launchButton = screen.getByRole("button", { name: "Launch" });
+    expect(launchButton.textContent).toContain(modLabel());
+    expect(launchButton.textContent).toContain("↵");
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    const terminals = tabTiles(tabId).filter(
+      (tile) => tile.type === "terminal",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].hostId).toBe("host-1");
+    expect(terminals[0].cwd).toBe("/work/traycer");
   });
 
   it("selects nothing and keeps Launch disabled when every row is disabled", () => {

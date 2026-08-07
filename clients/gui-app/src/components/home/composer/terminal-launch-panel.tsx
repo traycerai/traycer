@@ -20,6 +20,8 @@ import {
   providerPackPreparingLabel,
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
+import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 interface TerminalLaunchPanelProps {
   /** Toolbar store shared with the chat composer, so a model/mode picked here
@@ -146,6 +148,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
     selection.profileId,
     startDisabled,
   ]);
+  usePrimaryActionShortcut(activityEnabled, start);
 
   return (
     <div className="flex flex-col">
@@ -218,8 +221,11 @@ function StartButton(props: StartButtonProps) {
       variant="secondary"
       // Match the chat composer's `size-8` (h-8) send button so the terminal
       // toolbar row is the same height as the chat toolbar (no switch flicker).
-      className="h-8"
+      // Traycer Green gives popovers and secondary buttons the same color, so
+      // add dialog-local contrast without changing the landing-page treatment.
+      className="h-8 in-data-[slot=dialog-content]:bg-input/60 in-data-[slot=dialog-content]:hover:bg-input/80"
       aria-label="Start agent"
+      aria-keyshortcuts="Meta+Enter Control+Enter"
       aria-disabled={hasHint || undefined}
       disabled={hasHint ? false : disabled}
       onClick={() => {
@@ -228,6 +234,7 @@ function StartButton(props: StartButtonProps) {
       }}
     >
       Start
+      <PrimaryActionShortcutHint />
     </Button>
   );
   if (!hasHint) return button;

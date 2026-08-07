@@ -2,7 +2,6 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
-import type { ManagedCommandListStreamCallbacks } from "@traycer-clients/shared/host-transport/managed-command-list-stream-client";
 import type { ChatLowerSurfaceTopSpacing } from "@/components/chat/chat-pinned-stack";
 
 /**
@@ -26,7 +25,9 @@ vi.mock(
   () => ({
     useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
   }),
 );
 
@@ -55,9 +56,11 @@ import {
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { ManagedCommandListStreamMount } from "@/providers/managed-command-list-stream-mount";
-import { __setManagedCommandListStreamClientFactoryForTests } from "@/providers/managed-command-list-stream-factory-override";
-import { managedCommandListRegistry } from "@/stores/managed-commands/managed-command-list-registry";
+import {
+  disposeManagedCommandChatSessions,
+  installManagedCommandChatSession,
+  type ManagedCommandChatSessionStub,
+} from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
@@ -105,19 +108,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 
 let epicHandle: OpenEpicStoreHandle;
 
-function installListStub(): { emit: () => ManagedCommandListStreamCallbacks } {
-  let captured: ManagedCommandListStreamCallbacks | null = null;
-  __setManagedCommandListStreamClientFactoryForTests((_epicId, callbacks) => {
-    captured = callbacks;
-    return { close: () => undefined };
-  });
-  return {
-    emit: () => {
-      if (captured === null) throw new Error("list callbacks not wired");
-      return captured;
-    },
-  };
-}
+let chatSession: ManagedCommandChatSessionStub;
 
 function surfacesProps(): ChatLowerInteractionSurfacesProps {
   return {
@@ -180,7 +171,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
     todo: null,
     restoreContext: RESTORE_CONTEXT,
     // The harness session reports nothing of its own - the whole point of the
-    // case: everything below the transcript comes from the command list.
+    // case: everything below the transcript comes from the chat's commands.
     backgroundItems: [],
     backgroundStopPendingTaskIds: new Set(),
     backgroundStopAllPending: false,
@@ -198,15 +189,8 @@ function renderInChatTile(node: ReactNode): void {
   );
 }
 
-function renderSurfaces(): { emit: () => ManagedCommandListStreamCallbacks } {
-  const stub = installListStub();
-  renderInChatTile(
-    <>
-      <ManagedCommandListStreamMount epicId={EPIC_ID} />
-      <ChatLowerInteractionSurfaces {...surfacesProps()} />
-    </>,
-  );
-  return stub;
+function renderSurfaces(): void {
+  renderInChatTile(<ChatLowerInteractionSurfaces {...surfacesProps()} />);
 }
 
 function composerTopSpacing(): string | null {
@@ -214,6 +198,10 @@ function composerTopSpacing(): string | null {
 }
 
 beforeEach(() => {
+  chatSession = installManagedCommandChatSession({
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+  });
   epicHandle = createOpenEpicStore({
     epicId: EPIC_ID,
     streamClientFactory: noopStreamClientFactory,
@@ -230,18 +218,17 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  __setManagedCommandListStreamClientFactoryForTests(null);
-  managedCommandListRegistry.disposeAll();
+  disposeManagedCommandChatSessions();
   epicHandle.dispose();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 describe("background section and composer spacing", () => {
   it("keeps the composer flush when a managed command is the only background work", () => {
-    const stub = renderSurfaces();
+    renderSurfaces();
 
     act(() => {
-      stub.emit().onSnapshot([RUNNING_MONITOR]);
+      chatSession.setCommands([RUNNING_MONITOR]);
     });
 
     expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
@@ -252,10 +239,10 @@ describe("background section and composer spacing", () => {
   });
 
   it("pays the normal top spacing when nothing is docked above the composer", () => {
-    const stub = renderSurfaces();
+    renderSurfaces();
 
     act(() => {
-      stub.emit().onSnapshot([]);
+      chatSession.setCommands([]);
     });
 
     expect(screen.queryByTestId("chat-lower-dock")).toBeNull();
