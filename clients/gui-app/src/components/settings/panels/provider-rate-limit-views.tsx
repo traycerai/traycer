@@ -1051,8 +1051,43 @@ export function HuggingFaceRateLimitView({
             value={data.numRequests}
             format={(value) => value.toLocaleString()}
           />
+          <HuggingFacePeriodRow
+            periodStart={data.periodStart}
+            periodEnd={data.periodEnd}
+          />
         </>
       ) : null}
+    </div>
+  );
+}
+
+// Hugging Face dates the usage window it reports, so the detail view says which
+// period the figures cover - the same orientation grok's billing-period row
+// gives. Rendered only when both bounds are present and parseable: the endpoint
+// is schema-less, so an unparseable value degrades to no row rather than to
+// "Invalid Date". The wire carries ISO strings here, not the epoch ms grok
+// uses, hence the separate formatter.
+function HuggingFacePeriodRow({
+  periodStart,
+  periodEnd,
+}: {
+  readonly periodStart: string | null;
+  readonly periodEnd: string | null;
+}): ReactNode {
+  if (periodStart === null || periodEnd === null) return null;
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const format = (value: Date): string =>
+    value.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  return (
+    <div className="flex items-center justify-between text-ui-sm">
+      <span className="text-muted-foreground">Billing period</span>
+      <span className="font-medium text-foreground">{`${format(start)} - ${format(end)}`}</span>
     </div>
   );
 }

@@ -454,8 +454,12 @@ export function projectProfileUsage(
     return emptyDetailProjection(retained, envelope, input);
   }
 
+  // The credit providers derive severity from the PROJECTED window, not from
+  // `classifyProviderRateLimits`: that helper reads `providerRateLimitWindows`,
+  // which is empty for a credit provider by design, so it answers "unknown" and
+  // the branch below would discard the credit bar we just projected.
   const severity =
-    retained.provider === "openrouter"
+    retained.provider === "openrouter" || retained.provider === "huggingface"
       ? compactWindow.severity
       : classifyProviderRateLimits(retained, input.now);
   if (severity === "unknown") {

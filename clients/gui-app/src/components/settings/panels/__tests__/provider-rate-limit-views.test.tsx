@@ -686,6 +686,22 @@ describe("HuggingFaceRateLimitView", () => {
     expect(screen.getByText("$2.00 / $2.00")).toBeTruthy();
   });
 
+  it("renders the billing period the figures cover", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("drops the billing period rather than rendering Invalid Date", () => {
+    // The endpoint is schema-less, so an unparseable bound degrades to no row.
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, periodEnd: "not-a-date" }}
+        variant="settings"
+      />,
+    );
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
   it("condenses the Overview to the bar and the headline figure", () => {
     render(
       <HuggingFaceRateLimitView
