@@ -58,16 +58,22 @@ export type AttachGrantResult =
  *
  * `detail` is the STABLE classification (the status, the failure class) and
  * doubles as that log's dedup key, so it must stay identical across retries of
- * the same fault. `bodySnippet` is whatever the server actually said, which is
- * routinely per-request — a proxy request id, a timestamp, a varying backend
- * message. Folding the two together would make every single retry look like a
- * cause change, bypass the log's throttle, and re-create the
- * ~120-lines-per-hour flood it exists to prevent. `""` when the response
- * carried no usable text.
+ * the same fault. `context` is the per-attempt text — whatever the server said
+ * (a proxy request id, a timestamp, a varying backend message) or, for a
+ * transport-level throw, the address THIS attempt happened to resolve.
+ * Folding the two together would make every single retry look like a cause
+ * change, bypass the log's throttle, and re-create the ~120-lines-per-hour
+ * flood it exists to prevent.
+ *
+ * `context` is a COMPLETE phrase, not a fragment: it names its own source
+ * ("authn said: …" vs "connect ECONNREFUSED …"), because the two failure
+ * families reach the log through the same field and attributing a DNS failure
+ * to something authn said would be worse than saying nothing. `""` when there
+ * is nothing to add beyond `detail`.
  */
 interface AttachGrantFailure {
   readonly detail: string;
-  readonly bodySnippet: string;
+  readonly context: string;
 }
 
 /**
@@ -163,36 +169,69 @@ async function readBodyText(response: Response): Promise<string> {
  * because it comes off the wire. NEVER applied to a 2xx body: that carries
  * the grant itself and must not reach a log line.
  *
- * Returned BARE (no leading separator): it travels as dial-failure-log
- * *context*, which the log formats itself — see {@link AttachGrantFailure}.
+ * Returned as a complete, self-attributing phrase — see the `context` note on
+ * {@link AttachGrantFailure} for why the source is named here rather than
+ * bolted on by the log.
  */
 const BODY_SNIPPET_CAP = 200;
 
-function bodySnippet(body: string): string {
+function authnSaid(body: string): string {
   const collapsed = body.replace(/\s+/g, " ").trim();
   if (collapsed.length === 0) {
     return "";
   }
-  return collapsed.length <= BODY_SNIPPET_CAP
-    ? collapsed
-    : `${collapsed.slice(0, BODY_SNIPPET_CAP)}...`;
+  const snippet =
+    collapsed.length <= BODY_SNIPPET_CAP
+      ? collapsed
+      : `${collapsed.slice(0, BODY_SNIPPET_CAP)}...`;
+  return `authn said: ${snippet}`;
 }
 
 /**
  * Node/Chromium `fetch` throws a bare `TypeError: fetch failed`-style error
  * and hangs the discriminating reason (DNS, refused, TLS, the timeout signal)
  * off `cause` where one exists. Unwrap one level so those read differently.
+ *
+ * Split, for the same reason the response path is: the cause's MESSAGE carries
+ * per-attempt text — `connect ECONNREFUSED 10.0.0.1:443` names the address this
+ * attempt happened to resolve, so a multi-address endpoint rotates it on every
+ * retry of ONE unchanged outage. Only `classification` may reach the dedup key;
+ * the message rides along as context nothing compares.
  */
-function describeFetchFailure(error: unknown): string {
+interface FetchFailureDescription {
+  /** Error class plus the cause's `code` — stable across retries of one fault. */
+  readonly classification: string;
+  /** The human text, addresses and all. Reported, never compared. */
+  readonly message: string;
+}
+
+function describeFetchFailure(error: unknown): FetchFailureDescription {
   if (!(error instanceof Error)) {
-    return String(error);
+    // Nothing here is trustworthy as a key: a thrown string or object has no
+    // class to speak of, so the whole value is context and the key is the fact
+    // that something non-Error came out.
+    return { classification: "a non-Error throw", message: String(error) };
   }
-  const head = error.name === "Error" ? error.message : error.name;
   const cause: unknown = error.cause;
   if (!(cause instanceof Error)) {
-    return head;
+    return { classification: error.name, message: error.message };
   }
-  return `${head}: ${cause.message}`;
+  // `code` is the stable discriminator (`ECONNREFUSED` / `ENOTFOUND` / the TLS
+  // error code); `cause.name` is the fallback when the platform did not attach
+  // one, and is stable for the same reason `error.name` is.
+  const code = readErrorCode(cause);
+  return {
+    classification: `${error.name} [${code ?? cause.name}]`,
+    message: `${error.message}: ${cause.message}`,
+  };
+}
+
+function readErrorCode(error: Error): string | null {
+  if (!("code" in error)) {
+    return null;
+  }
+  const code: unknown = error.code;
+  return typeof code === "string" ? code : null;
 }
 
 function attachGrantUrl(authnBaseUrl: string, hostId: string): string {
@@ -225,10 +264,11 @@ export async function mintAttachGrantViaHttp(
       signal: AbortSignal.timeout(GRANT_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
+    const failure = describeFetchFailure(error);
     return {
       kind: "network-error",
-      detail: `the mint request never completed (${describeFetchFailure(error)})`,
-      bodySnippet: "",
+      detail: `the mint request never completed (${failure.classification})`,
+      context: failure.message,
     };
   }
 
@@ -240,7 +280,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "unauthorized",
       detail: `authn rejected the mint with HTTP ${response.status}`,
-      bodySnippet: bodySnippet(bodyText),
+      context: authnSaid(bodyText),
     };
   }
   if (response.status < 200 || response.status >= 300) {
@@ -248,7 +288,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "network-error",
       detail: `authn answered HTTP ${response.status}`,
-      bodySnippet: bodySnippet(bodyText),
+      context: authnSaid(bodyText),
     };
   }
 
@@ -260,7 +300,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "network-error",
       detail: `authn answered HTTP ${response.status} with a body that is not valid JSON`,
-      bodySnippet: "",
+      context: "",
     };
   }
 
@@ -269,7 +309,7 @@ export async function mintAttachGrantViaHttp(
     return {
       kind: "network-error",
       detail: `authn answered HTTP ${response.status} but the body is not an attach grant`,
-      bodySnippet: "",
+      context: "",
     };
   }
   return {
@@ -294,7 +334,7 @@ export type AttachGrantProvision =
    * `detail` says WHICH, in words, for the session's `DialFailureLog`: the
    * retry cadence is the same for all of them, so this is the only place the
    * distinction survives. It is also that log's dedup key, so anything the
-   * server varies per request rides in `bodySnippet` instead — see
+   * varies per attempt rides in `context` instead — see
    * {@link AttachGrantFailure}.
    */
   | ({ readonly kind: "unavailable" } & AttachGrantFailure);
@@ -323,7 +363,7 @@ export function createAttachGrantProvider(deps: {
       return {
         kind: "unavailable",
         detail: "no user bearer available (signed out?)",
-        bodySnippet: "",
+        context: "",
       };
     }
     const result = await mintAttachGrantViaHttp(
@@ -340,7 +380,7 @@ export function createAttachGrantProvider(deps: {
     return {
       kind: "unavailable",
       detail: result.detail,
-      bodySnippet: result.bodySnippet,
+      context: result.context,
     };
   };
 }

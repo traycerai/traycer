@@ -75,6 +75,22 @@ interface CacheEntry {
   refCount: number;
   /** Armed while the entry lingers at refCount 0; null while consumers hold it. */
   lingerTimer: TimerHandle | null;
+  /**
+   * Set once this entry's identity has been SUPERSEDED - the host re-keyed or
+   * moved, and a newer identity for the same host/user/policy has been
+   * acquired since. Sticky: supersession is a fact about the identity, not
+   * about the successor's health, so a successor that later dies does not make
+   * this session current again (its key still embeds the OLD public key, so it
+   * can never re-handshake and can never be re-acquired by the render layer).
+   *
+   * A marked entry is barred from BOTH things the cache does for a live entry:
+   * it never lingers (see `release`) and it never answers
+   * {@link hasReadyRemoteSession} for its host. Needed because
+   * {@link closeSupersededIdentities} can only close the entries that are free
+   * AT THAT MOMENT - one still held by a consumer has to carry the verdict
+   * forward itself, since nothing sweeps again after it is released.
+   */
+  superseded: boolean;
 }
 
 // Matches the `TRANSPORT_KEY_SEPARATOR` convention elsewhere in this codebase
@@ -144,7 +160,12 @@ export function acquireRemoteSession<
   }
   if (entry === undefined) {
     closeSupersededIdentities(identity, key);
-    entry = { session: createSession(), refCount: 0, lingerTimer: null };
+    entry = {
+      session: createSession(),
+      refCount: 0,
+      lingerTimer: null,
+      superseded: false,
+    };
     entriesByKey.set(key, entry);
   }
   if (entry.lingerTimer !== null) {
@@ -177,6 +198,20 @@ export function acquireRemoteSession<
     }
     entry.refCount -= 1;
     if (entry.refCount > 0) {
+      return;
+    }
+    if (entry.superseded) {
+      // Marked while this consumer still held it: the host re-keyed or moved
+      // underneath a live reference, so `closeSupersededIdentities` could not
+      // take it then and nothing sweeps again now. Close it HERE, at the only
+      // other moment it is free. Lingering would buy nothing that keep-warm
+      // exists for - this key can never be re-acquired - and would cost the
+      // two things that motivated closing superseded identities in the first
+      // place: an authenticated relay socket held open for the rest of the
+      // window, and a ready session answering `hasReadyRemoteSession` for a
+      // host whose CURRENT identity may still be dialing or already failing.
+      entriesByKey.delete(key);
+      entry.session.close();
       return;
     }
     // Keep-warm: defer the real teardown by the linger window. The entry
@@ -226,15 +261,19 @@ export function acquireRemoteSession<
  * evidence attributed to a host whose current identity may still be dialing or
  * already failing, which is enough to render it Online and pass its scope gate.
  *
- * Entries at refCount > 0 are left alone: a consumer still holds them, and
- * tearing a live session out from under it is not this function's call.
+ * A session a consumer still HOLDS is not torn out from under it - that is not
+ * this function's call - but it is still marked {@link CacheEntry.superseded},
+ * because this is the only sweep there will ever be: supersession is detected
+ * on the NEWER identity's cache miss, which has already happened by the time
+ * that consumer releases. Without the mark, the release path would linger an
+ * obsolete ready session for the full window and keep answering for the host.
  */
 function closeSupersededIdentities(
   identity: RemoteSessionIdentity,
   currentKey: string,
 ): void {
   for (const [key, entry] of [...entriesByKey]) {
-    if (key === currentKey || entry.refCount > 0) {
+    if (key === currentKey) {
       continue;
     }
     const [hostId, userId, , , authRecovery] = key.split(KEY_SEPARATOR);
@@ -249,6 +288,11 @@ function closeSupersededIdentities(
       // be a supersession, and `key !== currentKey` already establishes that.)
       continue;
     }
+    entry.superseded = true;
+    if (entry.refCount > 0) {
+      // Still held. `release` closes it the moment its last consumer lets go.
+      continue;
+    }
     if (entry.lingerTimer !== null) {
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = null;
@@ -261,14 +305,24 @@ function closeSupersededIdentities(
 /**
  * True if the cached session for `hostId` (any signed-in user) is currently
  * ready. A lingering keep-warm session (refCount 0, window not yet expired)
- * counts: it is a live, attached connection, so it is honest evidence - and a
- * session whose identity has been SUPERSEDED is closed at that moment (see
- * {@link closeSupersededIdentities}) rather than left to answer for the host
- * it can no longer serve.
+ * counts: it is a live, attached connection, so it is honest evidence.
+ *
+ * A SUPERSEDED entry never counts, whoever still holds it. Free ones are gone
+ * from the map already (see {@link closeSupersededIdentities}); a held one is
+ * still here but is pinned to a public key or relay URL the host has moved off,
+ * so reporting the host Online off it would be attributing liveness to a
+ * connection the host's CURRENT identity does not have - exactly the thing that
+ * renders a still-dialing (or already failing) host as Online and passes its
+ * scope gate. Ignoring it costs only a brief false negative while the current
+ * identity finishes dialing, which is the safe direction.
  */
 export function hasReadyRemoteSession(hostId: string): boolean {
   for (const [key, entry] of entriesByKey) {
-    if (keyHostId(key) === hostId && entry.session.isReady()) {
+    if (
+      keyHostId(key) === hostId &&
+      !entry.superseded &&
+      entry.session.isReady()
+    ) {
       return true;
     }
   }

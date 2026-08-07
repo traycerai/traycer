@@ -484,6 +484,70 @@ describe("hasReadyRemoteSession", () => {
     expect(stale.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
   });
+
+  it("does not answer off an identity superseded while a consumer STILL HELD it", () => {
+    // The rotation the sweep cannot act on: the old identity has a live
+    // consumer at the moment the new one is acquired, so it is skipped. That
+    // skip is the whole point of this test - supersession is only ever
+    // detected on the NEWER identity's cache miss, which has already happened
+    // by the time the straggler releases, so nothing sweeps a second time.
+    // Left unmarked, the release lingers an obsolete READY session for the
+    // full window and keeps answering for the host.
+    const identity = freshIdentity();
+    const stale = fakeSession();
+    stale.ready = true;
+    const straggler = acquireRemoteSession(identity, () => stale);
+
+    const rotated = { ...identity, hostPublicKey: "pubkey-rotated" };
+    const dialing = fakeSession();
+    dialing.ready = false;
+    acquireRemoteSession(rotated, () => dialing);
+
+    // Still held, so the sweep left the session alone - correct, tearing a
+    // live session out from under a consumer is not the sweep's call.
+    expect(stale.closeCalls).toBe(0);
+    // ...but it must already have stopped counting as evidence for the host:
+    // it is pinned to a public key the host has moved off, and the CURRENT
+    // identity is still dialing.
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
+
+    straggler.close();
+
+    // Closed AT the release, not lingered - keep-warm exists so a prompt
+    // re-acquire is free, and this key can never be re-acquired.
+    expect(stale.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
+
+    // Nothing left armed to fire into the successor's lifetime, and the
+    // successor coming ready answers for the host on its own merits.
+    dialing.ready = true;
+    vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS * 2);
+    expect(stale.closeCalls).toBe(1);
+    expect(dialing.closeCalls).toBe(0);
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
+  });
+
+  it("keeps counting a HELD session that nothing has superseded", () => {
+    // The negative control for the test above: `superseded` must be set by an
+    // actual rotation, not by merely being held - otherwise the mark would
+    // silently blind the common case, where one consumer holds the host's
+    // current session and Settings should report it Online.
+    const identity = freshIdentity();
+    const current = fakeSession();
+    current.ready = true;
+    const view = acquireRemoteSession(identity, () => current);
+
+    // A second consumer for the SAME identity is a cache hit, not a rotation.
+    const second = acquireRemoteSession(identity, () => {
+      throw new Error("must not construct a second session for one identity");
+    });
+
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
+    view.close();
+    second.close();
+    expect(current.closeCalls).toBe(0);
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
+  });
 });
 
 describe("auth-recovery policy is part of the session identity", () => {

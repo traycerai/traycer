@@ -781,7 +781,7 @@ describe("RemoteSession dial-failure logging", () => {
           return Promise.resolve({
             kind: "unavailable" as const,
             detail: "authn answered HTTP 500",
-            bodySnippet: "signing key missing",
+            context: "signing key missing",
           });
         },
       });
@@ -867,7 +867,7 @@ describe("RemoteSession dial-failure logging", () => {
             return Promise.resolve({
               kind: "unavailable" as const,
               detail: "authn answered HTTP 500",
-              bodySnippet: "",
+              context: "",
             });
           }
           return Promise.resolve({

@@ -53,7 +53,7 @@ describe("mintAttachGrantViaHttp", () => {
     expect(result).toMatchObject({ kind: "unauthorized" });
     if (result.kind === "unauthorized") {
       expect(result.detail).toContain("HTTP 403");
-      expect(result.bodySnippet).toContain("nope");
+      expect(result.context).toContain("nope");
     }
   });
 
@@ -91,9 +91,13 @@ describe("mintAttachGrantViaHttp", () => {
     const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
     expect(result).toMatchObject({ kind: "network-error" });
     if (result.kind === "network-error") {
-      // The thrown error's message survives into the detail - a DNS failure,
-      // a refusal, and the 10s mint timeout must not read identically.
-      expect(result.detail).toContain("boom");
+      // The thrown error's message survives - a DNS failure, a refusal and the
+      // mint timeout must not read identically. It survives in `context`, not
+      // in `detail`: a message is per-attempt text (it carries the address the
+      // attempt resolved), and `detail` is the dedup key. What discriminates
+      // those three in the key is the error class and the cause's `code`, which
+      // is what the fetch-throw dedup tests below pin.
+      expect(result.context).toContain("boom");
     }
   });
 });
@@ -223,7 +227,7 @@ describe("mint failure detail", () => {
     expect(provision).toMatchObject({ kind: "unavailable" });
     if (provision.kind === "unavailable") {
       expect(provision.detail).toContain("HTTP 500");
-      expect(provision.bodySnippet).toContain("attach-grant");
+      expect(provision.context).toContain("attach-grant");
     }
   });
 
@@ -250,8 +254,76 @@ describe("mint failure detail", () => {
       throw new Error("expected two network-error results");
     }
     expect(first.detail).toBe(second.detail);
-    expect(first.bodySnippet).not.toBe(second.bodySnippet);
-    expect(first.bodySnippet).toContain("req-1");
+    expect(first.context).not.toBe(second.context);
+    expect(first.context).toContain("req-1");
+  });
+
+  it("keeps a per-attempt ADDRESS out of the dedup key on the fetch-throw path", async () => {
+    // The other half of the same rule, on the path that never reaches a
+    // response at all. `connect ECONNREFUSED 10.0.0.1:443` names the address
+    // THIS attempt resolved, so a multi-address endpoint (or a proxy pool)
+    // rotates it while the outage never changes - and a `detail` built from
+    // that message would read as a fresh cause on every single retry.
+    const details = new Set<string>();
+    const contexts: string[] = [];
+    for (const address of ["10.0.0.1:443", "10.0.0.2:443", "10.0.0.3:443"]) {
+      const cause = new Error(`connect ECONNREFUSED ${address}`);
+      Object.assign(cause, { code: "ECONNREFUSED" });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async () => {
+          throw new TypeError("fetch failed", { cause });
+        }),
+      );
+      const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+      if (result.kind !== "network-error") {
+        throw new Error(`expected network-error, got ${result.kind}`);
+      }
+      details.add(result.detail);
+      contexts.push(result.context);
+    }
+    // One unchanged fault: one unchanged key.
+    expect(details.size).toBe(1);
+    expect([...details][0]).toContain("ECONNREFUSED");
+    // ...and the address is still REPORTED, just as context rather than as
+    // identity - so a reader can still see which endpoint refused.
+    expect(contexts).toEqual([
+      "fetch failed: connect ECONNREFUSED 10.0.0.1:443",
+      "fetch failed: connect ECONNREFUSED 10.0.0.2:443",
+      "fetch failed: connect ECONNREFUSED 10.0.0.3:443",
+    ]);
+  });
+
+  it("separates two DIFFERENT network faults, so the key is not stable-by-being-useless", async () => {
+    // Guards the obvious over-correction: collapsing every fetch throw to one
+    // constant would also dedup perfectly, and would hide a DNS failure
+    // turning into a refusal.
+    const refused = new Error("connect ECONNREFUSED 10.0.0.1:443");
+    Object.assign(refused, { code: "ECONNREFUSED" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => {
+        throw new TypeError("fetch failed", { cause: refused });
+      }),
+    );
+    const first = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+
+    const notFound = new Error("getaddrinfo ENOTFOUND authn.test");
+    Object.assign(notFound, { code: "ENOTFOUND" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => {
+        throw new TypeError("fetch failed", { cause: notFound });
+      }),
+    );
+    const second = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+
+    if (first.kind !== "network-error" || second.kind !== "network-error") {
+      throw new Error("expected two network-error results");
+    }
+    expect(first.detail).not.toBe(second.detail);
+    expect(first.detail).toContain("ECONNREFUSED");
+    expect(second.detail).toContain("ENOTFOUND");
   });
 
   it("stops READING an oversized body rather than buffering it to truncate it", async () => {
@@ -280,7 +352,7 @@ describe("mint failure detail", () => {
       throw new Error(`expected network-error, got ${result.kind}`);
     }
     expect(result.detail).toContain("HTTP 502");
-    expect(result.bodySnippet.length).toBeLessThan(300);
+    expect(result.context.length).toBeLessThan(300);
     // A couple of 64 KiB chunks at most, and the rest of the stream released
     // rather than drained into memory nobody reads.
     expect(chunksPulled).toBeLessThanOrEqual(3);
@@ -319,7 +391,7 @@ describe("mint failure detail", () => {
       0,
     );
     expect(decodedBytes).toBeLessThanOrEqual(64 * 1024);
-    expect(result.bodySnippet.length).toBeLessThan(300);
+    expect(result.context.length).toBeLessThan(300);
     decodeSpy.mockRestore();
   });
 
@@ -334,7 +406,7 @@ describe("mint failure detail", () => {
     expect(result).toMatchObject({ kind: "network-error" });
     if (result.kind === "network-error") {
       expect(result.detail).not.toContain("secret-grant-bytes");
-      expect(result.bodySnippet).toBe("");
+      expect(result.context).toBe("");
     }
   });
 });

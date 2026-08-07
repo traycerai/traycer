@@ -642,13 +642,13 @@ export class RemoteSession<
       const retryInMs = this.scheduleReconnect();
       this.dialFailures.recordFailure({
         cause: `could not mint an attach grant: ${provision.detail}`,
-        // The server's own text goes in the CONTEXT, never the cause: it
-        // routinely carries a per-request id or timestamp, and a cause that
-        // differs on every attempt would defeat this log's throttle entirely.
-        context:
-          provision.bodySnippet === ""
-            ? ""
-            : `authn said: ${provision.bodySnippet}`,
+        // The per-attempt text goes in the CONTEXT, never the cause: a server
+        // body routinely carries a request id or timestamp, and a socket-level
+        // throw carries the address THIS attempt resolved, so a cause built
+        // from either would differ on every attempt and defeat this log's
+        // throttle entirely. It arrives already attributed to its source — see
+        // `AttachGrantFailure` — so it is passed through, not re-worded.
+        context: provision.context,
         retryInMs,
       });
       return;
