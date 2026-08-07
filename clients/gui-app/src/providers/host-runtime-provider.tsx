@@ -16,6 +16,7 @@ import type {
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -296,12 +297,21 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       });
 
       const activeRuntime = runtime;
-      const runtimeTransportUnsubscribe =
-        runtimeMessenger === null
-          ? null
-          : activeRuntime.hostClient.onChange(() => {
-              runtimeMessenger.reset();
-            });
+      const requestContextProvider = auth.getRequestContextProvider();
+      const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
+        () => {
+          runtimeMessenger?.reset();
+          if (requestContextProvider.current() === null) {
+            // Sign-out. Supersession is otherwise only detected when someone
+            // ACQUIRES a session, so without this sweep a retired user's
+            // still-attached sessions keep answering `hasReadyRemoteSession`
+            // for up to the keep-warm window - rendering hosts Online to
+            // whoever signs in next, off connections that can never mint
+            // again (the transition released their credential lease).
+            retireAllRemoteSessions();
+          }
+        },
+      );
       void (async () => {
         let phase = "auth.start";
         try {
@@ -341,10 +351,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         } catch (error) {
           appLogger.error("[host-runtime] startup failed", { phase }, error);
           runtimeMessenger?.dispose();
-          runtimeTransportUnsubscribe?.();
+          runtimeTransportUnsubscribe();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
+          // The messenger's availability callback guards on `runtime === null`;
+          // without this reset that guard could never fire.
+          runtime = null;
           if (!isDisposed()) {
             setLatestBindingSnapshot(null);
             setBinding(null);
@@ -356,10 +369,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       return () => {
         lifecycle.disposed = true;
         runtimeMessenger?.dispose();
-        runtimeTransportUnsubscribe?.();
+        runtimeTransportUnsubscribe();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();
+        // The messenger's availability callback guards on `runtime === null`;
+        // without this reset that guard could never fire.
+        runtime = null;
         setLatestBindingSnapshot(null);
         setBinding(null);
       };

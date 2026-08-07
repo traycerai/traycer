@@ -202,6 +202,21 @@ class RuntimeHostMessenger<
   // instead of capturing one authority's bearer - a bearer rotated in place
   // for the same context then reaches the next `open` frame unchanged.
   private currentBearer: OpenFrameBearerSource | null = null;
+  // Terminal. `reset()` is a recoverable release; `dispose()` is the end of
+  // this messenger's life, after which a request must not silently rebuild a
+  // remote binding no caller remains to ever release.
+  private disposed = false;
+  /**
+   * At most ONE released-but-still-owed availability listener per host. A new
+   * subscription for the same host takes over the old orphan's debt: the
+   * boundary exists to un-strand queries via a host-scope invalidation, and
+   * one invalidation serves every generation's stranded queries alike -
+   * whereas keeping each generation's orphan would fan out one duplicate
+   * invalidation per picker visit that released mid-dial (the exact pile-up
+   * the orphan design promises not to build), and would double-deliver when a
+   * re-visit adopts the SAME still-dialing session from the keep-warm cache.
+   */
+  private readonly owedOrphanDetachByHost = new Map<string, () => void>();
 
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
     this.registry = params.registry;
@@ -226,6 +241,10 @@ class RuntimeHostMessenger<
     params: RequestOfMethod<Registry, Method>,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const disposedRejection = this.rejectIfDisposed(method);
+    if (disposedRejection !== null) {
+      return disposedRejection;
+    }
     const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
@@ -253,6 +272,10 @@ class RuntimeHostMessenger<
     responseTimeoutMs: number,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const disposedRejection = this.rejectIfDisposed(method);
+    if (disposedRejection !== null) {
+      return disposedRejection;
+    }
     const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
@@ -284,8 +307,22 @@ class RuntimeHostMessenger<
     );
   }
 
+  /**
+   * Terminal teardown. Unlike `reset()`, this HARD-detaches the binding's
+   * availability listener instead of orphaning it: an orphan exists to carry
+   * one owed boundary to a runtime that is still there to receive it, and
+   * after dispose there is no such runtime - a late boundary would fire this
+   * messenger's callback into a torn-down provider closure. The detach also
+   * drops any prior orphan still owed for other hosts, and the `disposed`
+   * flag keeps a stray late request from rebuilding a binding that nothing
+   * remains to release.
+   */
   dispose(): void {
-    this.closeRemoteTransport();
+    this.disposed = true;
+    for (const detach of [...this.owedOrphanDetachByHost.values()]) {
+      detach();
+    }
+    this.teardownRemoteTransport();
   }
 
   reset(): void {
@@ -298,6 +335,16 @@ class RuntimeHostMessenger<
   ): IHostMessenger<Registry> | null {
     const nextKey = remoteTransportKey(target);
     if (nextKey === null) {
+      return null;
+    }
+    if (authority.abortSignal.aborted) {
+      // A retired authority must never reach the session cache: the cache's
+      // supersession sweep treats the acquiring identity as the NEWEST
+      // context, so an acquire under a stale lease's epoch would mark the
+      // LIVE entry superseded and build a doomed successor. The retrying
+      // wrapper already throws pre-dispatch on an aborted authority, but that
+      // gate lives three layers up - this seam is where the assumption is
+      // load-bearing, so it must not depend on who composed the wrappers.
       return null;
     }
     // Publish this request's bearer before any dial so both a cache hit and a
@@ -338,14 +385,14 @@ class RuntimeHostMessenger<
     // queries that raced this session's dial and errored pre-send - this
     // binding is the only session holder for a non-active, non-tab host, so
     // nothing else can deliver that evidence.
-    const releaseAvailability = this.subscribeRemoteAvailability(
+    const availability = this.subscribeRemoteAvailability(
       built.remoteTransport.session,
       target.hostId,
     );
     this.remoteBinding = {
       key: nextKey,
       transport: built.remoteTransport,
-      releaseAvailability,
+      availability,
     };
     return built.messenger;
   }
@@ -371,16 +418,28 @@ class RuntimeHostMessenger<
    *
    * The orphan is owed exactly ONE outstanding boundary. A binding that
    * already saw one has nothing left to carry: the queries it would un-strand
-   * were re-armed then, so release detaches it on the spot. Otherwise a
-   * picker toggling between this host and another would pile up one permanent
-   * listener per visit on a session some other consumer (the active host, a
-   * bound tab) keeps open indefinitely, and every later reconnect would fan
-   * out that many duplicate host-scope invalidations.
+   * were re-armed then, so release detaches it on the spot. And per HOST there
+   * is at most one orphan at a time: subscribing a new binding for the same
+   * host takes over the previous orphan's debt (see
+   * `owedOrphanDetachByHost`), because one host-scope invalidation un-strands
+   * every generation's queries alike. Otherwise a picker toggling between an
+   * UNREACHABLE host and another would pile up one permanent listener per
+   * visit on a session that never gets ready but is kept alive (a bound tab,
+   * or re-visits landing inside the keep-warm linger), and the host's
+   * eventual recovery would fan out that many duplicate invalidations - and a
+   * re-visit that warm-adopts the SAME still-dialing session would deliver
+   * one boundary twice, once through the orphan and once through the current
+   * listener.
    */
   private subscribeRemoteAvailability(
     session: IRemoteSession<Registry, HostStreamRpcRegistry>,
     hostId: string,
-  ): () => void {
+  ): AvailabilitySubscription {
+    const previousOrphanDetach = this.owedOrphanDetachByHost.get(hostId);
+    if (previousOrphanDetach !== undefined) {
+      // This subscription carries the host's debt from here on.
+      previousOrphanDetach();
+    }
     let released = false;
     // Whether this listener is still WAITING on a boundary. That is the whole
     // reason a released binding's listener is allowed to outlive it - it owes
@@ -397,6 +456,9 @@ class RuntimeHostMessenger<
         return;
       }
       detached = true;
+      if (this.owedOrphanDetachByHost.get(hostId) === detach) {
+        this.owedOrphanDetachByHost.delete(hostId);
+      }
       unsubscribeAvailability?.();
       unsubscribeClosed?.();
     };
@@ -422,34 +484,79 @@ class RuntimeHostMessenger<
     if (session.isReady()) {
       boundaryOwed = false;
     }
-    return () => {
-      released = true;
-      if (!boundaryOwed) {
-        detach();
-      }
+    return {
+      release: () => {
+        released = true;
+        if (!boundaryOwed) {
+          detach();
+          return;
+        }
+        // Now an orphan: record its detach so the host's NEXT subscription
+        // (which takes over the debt) or `dispose()` can retire it.
+        this.owedOrphanDetachByHost.set(hostId, detach);
+      },
+      detach,
     };
   }
 
+  /**
+   * Release the binding for reuse: the physical session goes back to the
+   * keep-warm cache and a still-owed availability listener stays attached as
+   * the host's orphan. This is the replacement/reset path - for terminal
+   * teardown see `teardownRemoteTransport`.
+   */
   private closeRemoteTransport(): void {
     if (this.remoteBinding === null) {
       return;
     }
     const binding = this.remoteBinding;
     this.remoteBinding = null;
-    binding.releaseAvailability();
+    binding.availability.release();
     binding.transport.session.close();
   }
+
+  private teardownRemoteTransport(): void {
+    if (this.remoteBinding === null) {
+      return;
+    }
+    const binding = this.remoteBinding;
+    this.remoteBinding = null;
+    binding.availability.detach();
+    binding.transport.session.close();
+  }
+
+  private rejectIfDisposed(method: string): Promise<never> | null {
+    if (!this.disposed) {
+      return null;
+    }
+    return Promise.reject(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Host messenger has been disposed",
+        requestId: this.requestId(),
+        method,
+        fatalDetails: null,
+      }),
+    );
+  }
+}
+
+/**
+ * The two ways a binding's availability forwarding can end. `release` orphans
+ * a still-owed listener rather than detaching it - see
+ * `subscribeRemoteAvailability` for why it has to outlive the binding on the
+ * replacement path. `detach` removes it unconditionally, for terminal
+ * teardown where no runtime remains to receive a late boundary.
+ */
+interface AvailabilitySubscription {
+  readonly release: () => void;
+  readonly detach: () => void;
 }
 
 interface RemoteBinding<Registry extends VersionedRpcRegistry> {
   readonly key: string;
   readonly transport: RemoteHostTransport<Registry, HostStreamRpcRegistry>;
-  /**
-   * Orphans this binding's availability forwarding rather than detaching it -
-   * see `subscribeRemoteAvailability` for why the listener has to outlive the
-   * binding.
-   */
-  readonly releaseAvailability: () => void;
+  readonly availability: AvailabilitySubscription;
 }
 
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {

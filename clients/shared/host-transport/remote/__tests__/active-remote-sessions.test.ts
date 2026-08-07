@@ -7,6 +7,7 @@ import {
   acquireRemoteSession,
   hasReadyRemoteSession,
   remoteSessionRefCountForTest,
+  retireAllRemoteSessions,
   type RemoteSessionIdentity,
 } from "../active-remote-sessions";
 
@@ -732,6 +733,54 @@ describe("auth-recovery policy is part of the session identity", () => {
 
     expect(staleSession.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(retired.hostId)).toBe(false);
+  });
+
+  it("retireAllRemoteSessions retires free AND held entries at the auth boundary", () => {
+    // Supersession is otherwise detected only at acquire time, and a read-only
+    // surface never acquires - so on sign-out, without this sweep, a retired
+    // user's still-attached session would keep answering
+    // `hasReadyRemoteSession` for the whole linger window.
+    const lingering = freshIdentity();
+    const lingeringSession = fakeSession();
+    lingeringSession.ready = true;
+    acquireRemoteSession(lingering, () => lingeringSession).close();
+
+    const held = freshIdentity();
+    const heldSession = fakeSession();
+    heldSession.ready = true;
+    const heldView = acquireRemoteSession(held, () => heldSession);
+
+    expect(hasReadyRemoteSession(lingering.hostId)).toBe(true);
+    expect(hasReadyRemoteSession(held.hostId)).toBe(true);
+
+    retireAllRemoteSessions();
+
+    // The free entry closes outright; the held one stops answering
+    // IMMEDIATELY and closes the moment its last consumer lets go.
+    expect(lingeringSession.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(lingering.hostId)).toBe(false);
+    expect(heldSession.closeCalls).toBe(0);
+    expect(hasReadyRemoteSession(held.hostId)).toBe(false);
+
+    heldView.close();
+    expect(heldSession.closeCalls).toBe(1);
+  });
+
+  it("drops a session that closed underneath at release instead of lingering the corpse", () => {
+    // A session-level fatal closes the shared session in place while a
+    // consumer still holds the view. Arming a keep-warm linger on the corpse
+    // at release would occupy the key for the window with an entry no acquire
+    // can ever adopt - release must treat it like a superseded entry and drop
+    // it on the spot.
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+
+    session.closedUnderneath = true;
+    view.close();
+
+    // Closed at release, not parked behind a linger timer.
+    expect(session.closeCalls).toBe(1);
   });
 
   it("supersedes the previous USER's session for the same host", () => {

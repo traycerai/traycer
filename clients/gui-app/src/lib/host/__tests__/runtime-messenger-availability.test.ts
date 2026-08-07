@@ -67,6 +67,7 @@ function controllableSession(): ControllableSession {
   const availability = new Set<() => void>();
   const closed = new Set<() => void>();
   let closeCalls = 0;
+  let terminallyClosed = false;
   const session: ControllableSession = {
     ready: false,
     get availabilityListenerCount() {
@@ -76,19 +77,31 @@ function controllableSession(): ControllableSession {
       return closeCalls;
     },
     emitReady: () => {
+      // Mirror production ordering: the phase flips to ready BEFORE the
+      // boundary listeners run, so a listener that re-reads `isReady()` sees
+      // the state its notification describes.
+      session.ready = true;
       for (const listener of [...availability]) {
         listener();
       }
     },
     emitClosed: () => {
+      terminallyClosed = true;
+      session.ready = false;
       for (const listener of [...closed]) {
         listener();
       }
+      // Deliberately does NOT clear the listener sets, though a real session
+      // does: `availabilityListenerCount` assertions must keep measuring
+      // whether the code under test detached, not whether the fake swept.
     },
     start: vi.fn(),
-    // Never "closed": a released session lingers, which is exactly the state
-    // this file is about. A closed one would just be rebuilt.
-    isClosed: () => false,
+    // False while merely RELEASED - a released session lingers, which is
+    // exactly the state this file is about - but true once `emitClosed` has
+    // fired, matching a real session that is already closed when it notifies
+    // its closed-listeners. NOT flipped by `close()`, which plays the cache
+    // view's release, not a terminal close.
+    isClosed: () => terminallyClosed,
     isReady: () => session.ready,
     sendUnary: vi.fn(() => Promise.resolve({}) as never),
     subscribe: vi.fn(() => {
@@ -99,10 +112,19 @@ function controllableSession(): ControllableSession {
     }),
     notifyBearerRotated: vi.fn(),
     onClosed: (listener) => {
+      // Production refuses new listeners once closed and hands back a noop
+      // unsubscribe; a fake that kept accepting them could mint a
+      // wrong-reason pass for lifecycle tests.
+      if (terminallyClosed) {
+        return () => undefined;
+      }
       closed.add(listener);
       return () => closed.delete(listener);
     },
     subscribeAvailabilityRecovered: (listener) => {
+      if (terminallyClosed) {
+        return () => undefined;
+      }
       availability.add(listener);
       return () => availability.delete(listener);
     },
@@ -163,7 +185,10 @@ function harness(): {
   session: ControllableSession;
   recovered: string[];
   requestRemote: () => void;
+  requestRemoteRaw: () => Promise<unknown>;
+  requestRemoteWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
   requestLocal: () => void;
+  reset: () => void;
   dispose: () => void;
 } {
   const session = controllableSession();
@@ -199,6 +224,22 @@ function harness(): {
         )
         .catch(() => undefined);
     },
+    requestRemoteRaw: () =>
+      binding.messenger.request(
+        "host.status",
+        {},
+        authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+      ),
+    requestRemoteWithSignal: (abortSignal: AbortSignal) =>
+      binding.messenger.request(
+        "host.status",
+        {},
+        {
+          ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+          abortSignal,
+        },
+      ),
+    reset: () => binding.reset(),
     // The local branch dials for real; the dial itself is irrelevant here -
     // what matters is that taking this branch evicts the remote binding first.
     requestLocal: () => {
@@ -378,5 +419,119 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     expect(h.recovered).toEqual([]);
 
     h.dispose();
+  });
+
+  it("a mid-dial re-visit takes over the orphan's debt - one boundary, one delivery", () => {
+    // Without the takeover, the warm re-adopt of the SAME still-dialing
+    // session leaves the old orphan AND the new binding's listener attached,
+    // and the one ready boundary would deliver twice in the same tick.
+    const h = harness();
+    h.requestRemote();
+    h.requestLocal();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.requestRemote();
+    // The new binding's listener now carries the host's debt; the retired
+    // orphan is gone rather than doubling up.
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    h.dispose();
+  });
+
+  it("does not accumulate orphans across visits to a NEVER-ready host", () => {
+    // The documented no-pile-up promise, for the host that never gets ready:
+    // each visit releases while still owed, and each new visit must retire
+    // the previous orphan - otherwise the host's eventual recovery fans out
+    // one invalidation per abandoned visit.
+    const h = harness();
+    for (let visit = 0; visit < 5; visit += 1) {
+      h.requestRemote();
+      h.requestLocal();
+    }
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    h.dispose();
+  });
+
+  it("reset() keeps a still-owed orphan attached", () => {
+    // reset() fires on every hostClient change event - including the
+    // host-bound promotion that lands while this binding's session is still
+    // dialing, which is precisely the window the orphan exists for. Teardown
+    // semantics here would drop the promoted host's first ready boundary.
+    const h = harness();
+    h.requestRemote();
+    h.reset();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    h.dispose();
+  });
+
+  it("dispose() hard-detaches the current binding's listener", () => {
+    // Terminal teardown: after dispose there is no runtime left to receive a
+    // boundary, so unlike reset/replacement the listener must NOT survive as
+    // an orphan - a late delivery would fire into a torn-down provider.
+    const h = harness();
+    h.requestRemote();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.dispose();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([]);
+  });
+
+  it("dispose() also retires an orphan left by a replaced binding", () => {
+    const h = harness();
+    h.requestRemote();
+    h.requestLocal();
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.dispose();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([]);
+  });
+
+  it("refuses an already-aborted authority before it reaches the session cache", async () => {
+    // The cache's supersession sweep treats the acquiring identity as the
+    // NEWEST auth context. A retired (aborted) authority reaching it would
+    // supersede the live entry and build a doomed successor - the retrying
+    // wrapper gates this three layers up, but the assumption is load-bearing
+    // HERE, so the seam enforces it itself.
+    const h = harness();
+    const aborted = new AbortController();
+    aborted.abort();
+
+    await expect(h.requestRemoteWithSignal(aborted.signal)).rejects.toThrow(
+      "does not expose a valid remote transport",
+    );
+    expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.dispose();
+  });
+
+  it("rejects a request after dispose instead of rebuilding a binding", async () => {
+    // A rebuilt post-dispose binding would re-subscribe with nothing left to
+    // ever release it. The messenger's own contract has to refuse, not rely
+    // on upstream fences.
+    const h = harness();
+    h.dispose();
+
+    await expect(h.requestRemoteRaw()).rejects.toThrow(
+      "Host messenger has been disposed",
+    );
+    expect(h.session.availabilityListenerCount).toBe(0);
   });
 });

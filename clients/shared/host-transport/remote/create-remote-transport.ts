@@ -87,6 +87,20 @@ export function createRemoteHostTransport<
     return null;
   }
 
+  const bearerSource = options.bearer();
+  if (bearerSource === null) {
+    // No auth context at build time - the same "unconnectable" degradation as
+    // a malformed public key, NOT a cacheable state. The bearer thunk is a
+    // live read, so a session built now could later dial once a context
+    // appears - while keyed under an epoch label divorced from that context.
+    // At best it burns the linger window in a doomed mint/backoff loop; at
+    // worst it becomes a live session the next real-epoch acquire has to
+    // supersede. Callers hitting this are in a teardown/transition gap (a
+    // sign-out landing between render and effect) and will rebuild once a
+    // context exists.
+    return null;
+  }
+
   const session = acquireRemoteSession(
     {
       hostId: options.hostId,
@@ -99,7 +113,7 @@ export function createRemoteHostTransport<
       authRecovery: options.auth === null ? "terminal" : "revalidate",
       // Same reasoning applied to WHICH auth context wired those closures, not
       // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
-      authEpoch: authEpochFor(options.bearer),
+      authEpoch: authEpochFor(bearerSource),
     },
     () => {
       const grantProvider = createAttachGrantProvider({
@@ -142,17 +156,14 @@ export function createRemoteHostTransport<
  *
  * A `WeakMap` both keeps the label stable for repeat acquires by the same
  * context and lets a retired lease be collected; the counter only ever needs
- * to be distinct, never meaningful. `null` (no bearer available) gets its own
- * fixed label - such a session cannot dial at all, so all of them may share.
+ * to be distinct, never meaningful. A `null` source never reaches here -
+ * `createRemoteHostTransport` refuses to build (let alone cache) a session
+ * with no auth context - so every label names a real lease.
  */
 const authEpochLabels = new WeakMap<OpenFrameBearerSource, string>();
 let nextAuthEpoch = 0;
 
-function authEpochFor(bearer: BearerSourceProvider): string {
-  const source = bearer();
-  if (source === null) {
-    return "no-bearer";
-  }
+function authEpochFor(source: OpenFrameBearerSource): string {
   const existing = authEpochLabels.get(source);
   if (existing !== undefined) {
     return existing;

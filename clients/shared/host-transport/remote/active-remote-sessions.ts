@@ -63,6 +63,14 @@ export interface RemoteSessionIdentity {
    * durable stream adopting a terminal session silently loses auth recovery -
    * and the factory that would have applied the policy never runs on a cache
    * hit. So the two never share a physical connection.
+   *
+   * WHICH revalidator object wired a `"revalidate"` session is deliberately
+   * NOT part of the identity: every production revalidator wraps the same
+   * per-mount auth service and funnels into its single-flight revalidation,
+   * so two consumers sharing one session share one recovery flow by
+   * construction. A consumer wiring a revalidator with genuinely different
+   * behavior must not share a session with the default ones - that would be
+   * the moment to widen this field, not a reason to key on object identity.
    */
   readonly authRecovery: "revalidate" | "terminal";
   /**
@@ -77,11 +85,13 @@ export interface RemoteSessionIdentity {
    * live creator vouched for them. A lingering session has NO consumers, so it
    * can outlive the context that built it: sign out and back into the same
    * account inside the window and every field above is identical, yet the
-   * adopted session still mints through the previous context's released
-   * credential lease. It fails closed rather than reusing a stale credential
-   * (`CredentialLease.getBearerToken()` throws once released, which the
-   * transport maps to a pre-dial failure) - but it fails PERMANENTLY: the
-   * socket may look fine until its next drop and then never re-attach.
+   * adopted session's closures were wired by the RETIRED context. What that
+   * does depends on the consumer's bearer thunk: one that captured the old
+   * lease object fails closed but PERMANENTLY (`getBearerToken()` throws once
+   * released - the socket may look fine until its next drop and then never
+   * re-attach), while a live-read thunk silently heals onto a context the
+   * session was never keyed or vouched for. Both are wrong things to hand a
+   * new context, which is why the epoch is part of the identity.
    *
    * Keyed on the bearer SOURCE, not the token: same-user refresh rotates the
    * lease in place (`RequestContextProvider.rotateCurrentBearer`) and does not
@@ -196,7 +206,6 @@ export function acquireRemoteSession<
     entry = undefined;
   }
   if (entry === undefined) {
-    closeSupersededIdentities(identity, key);
     entry = {
       session: createSession(),
       identity,
@@ -204,7 +213,14 @@ export function acquireRemoteSession<
       lingerTimer: null,
       superseded: false,
     };
+    // Insert BEFORE sweeping. The sweep's `close()` calls fire `onClosed`
+    // listeners synchronously; a listener that re-entered this function for
+    // the same identity must find this entry (a hit) rather than build a
+    // second session the outer frame would then overwrite - orphaning a
+    // live, never-closable socket. The sweep already excludes `currentKey`,
+    // so it never closes the entry it is sweeping on behalf of.
     entriesByKey.set(key, entry);
+    closeSupersededIdentities(identity, key);
   }
   if (entry.lingerTimer !== null) {
     // Warm hit: the entry was lingering at refCount 0. Adopting it cancels
@@ -238,16 +254,23 @@ export function acquireRemoteSession<
     if (entry.refCount > 0) {
       return;
     }
-    if (entry.superseded) {
-      // Marked while this consumer still held it: the host re-keyed or moved
-      // underneath a live reference, so `closeSupersededIdentities` could not
-      // take it then and nothing sweeps again now. Close it HERE, at the only
-      // other moment it is free. Lingering would buy nothing that keep-warm
-      // exists for - this key can never be re-acquired - and would cost the
-      // two things that motivated closing superseded identities in the first
-      // place: an authenticated relay socket held open for the rest of the
-      // window, and a ready session answering `hasReadyRemoteSession` for a
-      // host whose CURRENT identity may still be dialing or already failing.
+    if (entry.superseded || entry.session.isClosed()) {
+      // Superseded: marked while this consumer still held it - the host
+      // re-keyed or moved underneath a live reference, so
+      // `closeSupersededIdentities` could not take it then and nothing sweeps
+      // again now. Close it HERE, at the only other moment it is free.
+      // Lingering would buy nothing that keep-warm exists for - this key can
+      // never be re-acquired - and would cost the two things that motivated
+      // closing superseded identities in the first place: an authenticated
+      // relay socket held open for the rest of the window, and a ready
+      // session answering `hasReadyRemoteSession` for a host whose CURRENT
+      // identity may still be dialing or already failing.
+      //
+      // Closed: the session went terminally dead (a session-level fatal)
+      // while held. Arming a linger on the corpse would keep a dead entry
+      // occupying the key for the window for no possible adopter - the next
+      // acquire evicts closed entries anyway, so drop it now. (`close()` on
+      // an already-closed session is an idempotent no-op.)
       entriesByKey.delete(key);
       entry.session.close();
       return;
@@ -360,6 +383,38 @@ function closeSupersededIdentities(
       // no-bearer degenerate case), the user mismatch still retires the entry.
       continue;
     }
+    entry.superseded = true;
+    if (entry.refCount > 0) {
+      // Still held. `release` closes it the moment its last consumer lets go.
+      continue;
+    }
+    if (entry.lingerTimer !== null) {
+      clearTimeout(entry.lingerTimer);
+      entry.lingerTimer = null;
+    }
+    entriesByKey.delete(key);
+    entry.session.close();
+  }
+}
+
+/**
+ * Retires EVERY cached session: marks each entry superseded, closing the free
+ * ones outright and leaving held ones to close at their release (the sticky
+ * `superseded` mark carries the verdict, exactly as in
+ * {@link closeSupersededIdentities}).
+ *
+ * For the auth boundary. Supersession is otherwise detected only at ACQUIRE
+ * time, which leaves a hole on sign-out: every consumer releases, the entries
+ * enter the keep-warm linger un-marked, and until someone acquires for a
+ * given host - which a read-only surface never does - a retired user's
+ * still-attached session keeps answering {@link hasReadyRemoteSession} for up
+ * to the full window, rendering the host Online to whoever signs in next off
+ * the signed-out user's connection. The sign-out transition releases the
+ * credential lease, so none of these sessions can mint again anyway; retiring
+ * them at the boundary just makes the cache say so immediately.
+ */
+export function retireAllRemoteSessions(): void {
+  for (const [key, entry] of [...entriesByKey]) {
     entry.superseded = true;
     if (entry.refCount > 0) {
       // Still held. `release` closes it the moment its last consumer lets go.
