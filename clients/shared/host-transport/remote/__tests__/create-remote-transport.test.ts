@@ -45,9 +45,22 @@ describe("createRemoteHostTransport bearer gate", () => {
     // `null` as an unconnectable target, not mint a cache entry.
     expect(transportFor(null)).toBeNull();
 
-    // Non-vacuity contrast: the identical options WITH an auth context build
-    // fine - the null verdict above came from the bearer gate, not from some
-    // other option being malformed.
+    // A RELEASED lease is the same verdict through a different shape: the
+    // source object survives (still labelling the retired epoch) but its
+    // bearer read throws. Letting it into the cache would present the stale
+    // epoch as newest and supersede the live context's entry, while the
+    // session it builds could never mint.
+    const releasedSource: OpenFrameBearerSource = {
+      getBearerToken: () => {
+        throw new Error("credential lease released");
+      },
+      identity: { userId: "user-null-bearer-test" },
+    };
+    expect(transportFor(releasedSource)).toBeNull();
+
+    // Non-vacuity contrast: the identical options WITH a live auth context
+    // build fine - the null verdicts above came from the bearer gate, not
+    // from some other option being malformed.
     const bearerSource: OpenFrameBearerSource = {
       getBearerToken: () => "bearer-token",
       identity: { userId: "user-null-bearer-test" },

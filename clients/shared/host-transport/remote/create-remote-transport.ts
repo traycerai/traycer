@@ -88,16 +88,25 @@ export function createRemoteHostTransport<
   }
 
   const bearerSource = options.bearer();
-  if (bearerSource === null) {
-    // No auth context at build time - the same "unconnectable" degradation as
-    // a malformed public key, NOT a cacheable state. The bearer thunk is a
-    // live read, so a session built now could later dial once a context
-    // appears - while keyed under an epoch label divorced from that context.
-    // At best it burns the linger window in a doomed mint/backoff loop; at
-    // worst it becomes a live session the next real-epoch acquire has to
-    // supersede. Callers hitting this are in a teardown/transition gap (a
-    // sign-out landing between render and effect) and will rebuild once a
-    // context exists.
+  if (bearerSource === null || !canProvideBearer(bearerSource)) {
+    // No usable auth context at build time - the same "unconnectable"
+    // degradation as a malformed public key, NOT a cacheable state. Two
+    // shapes, one verdict:
+    //
+    //  - a NULL source: the bearer thunk is a live read, so a session built
+    //    now could later dial once a context appears - while keyed under an
+    //    epoch label divorced from that context.
+    //  - a RELEASED source (non-null, but its lease has been retired, so
+    //    `getBearerToken()` throws): a stale factory invocation running after
+    //    its context was aborted. Its source object still labels the RETIRED
+    //    epoch, so letting it into the cache would either re-adopt an entry
+    //    supersession already condemned or - worse - present the stale epoch
+    //    as newest on a miss and supersede the CURRENT context's live entry,
+    //    while the session it builds can never mint a grant.
+    //
+    // Callers hitting either are in a teardown/transition gap (a sign-out or
+    // context handoff landing between capture and build) and will rebuild
+    // once a live context exists.
     return null;
   }
 
@@ -172,6 +181,20 @@ function authEpochFor(source: OpenFrameBearerSource): string {
   const label = `lease-${nextAuthEpoch}`;
   authEpochLabels.set(source, label);
   return label;
+}
+
+/**
+ * Whether the source can provide a bearer RIGHT NOW - the same read the mint
+ * path performs per attach (`deriveBearerToken`), probed once at build time.
+ * A released credential lease keeps its object identity (and so its epoch
+ * label) but throws on read; an empty token cannot authorize a mint either.
+ */
+function canProvideBearer(source: OpenFrameBearerSource): boolean {
+  try {
+    return source.getBearerToken().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function deriveBearerToken(bearer: BearerSourceProvider): string | null {
