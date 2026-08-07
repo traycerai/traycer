@@ -17,7 +17,12 @@ describe("model provider error copy", () => {
     expect(
       modelProviderAuthErrorMessage("invalid_input", "expected one of: X"),
     ).toBe("expected one of: X");
-    expect(modelProviderAuthErrorMessage("invalid_input", "   ")).not.toBe("");
+    // A whitespace-only detail is NOT a detail: it must fall through to the
+    // same sentence a null one produces. `not.toBe("")` passed even when the
+    // blank string was handed straight back.
+    expect(modelProviderAuthErrorMessage("invalid_input", "   ")).toBe(
+      modelProviderAuthErrorMessage("invalid_input", null),
+    );
     expect(modelProviderListErrorMessage("server_unavailable", null)).toContain(
       "couldn't be started",
     );

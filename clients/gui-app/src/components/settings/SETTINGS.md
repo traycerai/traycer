@@ -832,19 +832,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         have lit "API key" on ~170 of ~180 rows to say nothing — the failure the
         removed per-tab content dots had. The interesting answer is the rare
         one, so it lives one click away instead.
-        The two buckets deliberately OVERLAP rather than partition: a provider
-        advertising both arms belongs under either, and the handful offering
-        neither (multi-secret or service-account-file credentials) match no
-        filter and stay reachable under All. Filtering runs BEFORE the fuzzy
-        search, so a query cannot quietly re-widen the bucket the user picked.
-    - **Keys entered here land in the PROVIDER's credential store, not
-      Traycer's.** A connect writes OpenCode's own `auth.json` through
-      `auth.set`, and nothing is mirrored into `provider-overrides.json` — so
-      this tab and `opencode auth login` are interchangeable, which was the
-      point. The `api` badge therefore reads **"Saved in OpenCode"** (built from
-      the provider label, so it names whichever module advertises the tab); it
-      used to say "Saved in Traycer", which described the one arrangement the
-      design deliberately avoids.
+        Both buckets read off `methods[]`. The API-key bucket is every row
+        carrying an `api` arm — which, since the host synthesizes a generic key
+        method for any provider whose `/provider/auth` advertises nothing, is
+        nearly all of them; an EMPTY method list means the host offered nothing
+        and belongs in neither bucket. The two deliberately OVERLAP rather than
+        partition: a provider advertising both arms belongs under either.
+        Filtering runs BEFORE the fuzzy search, so a query cannot quietly
+        re-widen the bucket the user picked.
     - **`source` is badged only for a CONNECTED provider, and disconnect is
       gated on `canDisconnect` ALONE.** The host reports `source` as null unless
       connected, so a badge anywhere else would claim a credential origin the

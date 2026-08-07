@@ -8,7 +8,6 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { invalidateAfterModelProviderMutation } from "@/hooks/providers/model-provider-invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
-import { toastFromHostError } from "@/lib/host-error-toast";
 
 export interface CancelModelProviderAuthVariables {
   readonly providerId: ProviderId;
@@ -70,8 +69,10 @@ export function useProvidersCancelModelProviderAuth(): UseMutationResult<
           hostId: context.hostId,
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't cancel the sign-in."),
+      // No `onError` toast. The only consumer renders this failure inline, in
+      // the waiting panel the attempt still owns, and a toast would report the
+      // same failure a second time somewhere the attempt is not - the
+      // inline-error exemption the gui-app guidelines carve out.
     },
   });
 }

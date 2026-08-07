@@ -67,22 +67,22 @@ export function supportsOauthSignIn(entry: ModelProviderEntry): boolean {
 }
 
 /**
- * A provider that can be signed in with a pasted key: one that advertises an
- * `api` method, or one that advertises NOTHING and therefore gets the
- * synthesized plain-key path.
+ * A provider that can be signed in with a pasted key - which is now simply one
+ * that advertises an `api` method.
  *
- * This used to read `credentialKey !== null`. That field is gone - every
- * provider now takes a pasted key unless it advertised a method list saying
- * otherwise - so the question the filter answers is the same but its evidence
- * moved to `methods`. An OAUTH-ONLY provider (`github-copilot`) is the one kind
- * excluded, which is exactly what makes the bucket worth offering.
+ * The host synthesizes exactly that method for every provider whose
+ * `/provider/auth` advertises nothing, so the common case reaches this through
+ * the same branch as a real advertised key arm. An earlier version also treated
+ * an EMPTY method list as key-capable, which was right while the client did the
+ * synthesizing and is wrong now: an empty list means the host offered nothing,
+ * and calling that "takes an API key" would put a row in the bucket that has no
+ * key path at all.
  *
- * A provider can satisfy BOTH this and {@link supportsOauthSignIn} - the two
- * filters are not a partition, and a row offering both should appear under
- * either.
+ * An OAUTH-ONLY provider (`github-copilot`) is the one kind excluded, which is
+ * what makes the bucket worth offering. A provider can satisfy BOTH this and
+ * {@link supportsOauthSignIn} - the two filters are not a partition.
  */
 export function supportsApiKeySignIn(entry: ModelProviderEntry): boolean {
-  if (entry.methods.length === 0) return true;
   return entry.methods.some((method) => method.type === "api");
 }
 

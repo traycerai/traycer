@@ -174,4 +174,16 @@ describe("modelProviderPromptInputs", () => {
       accountId: "acct-1",
     });
   });
+
+  it("TRIMS what it sends, matching the answered-check", () => {
+    // The predicate trims before deciding a prompt counts as answered, so
+    // untrimmed values passed the submit gate and reached upstream with their
+    // padding intact - the form said complete and the provider got something
+    // subtly different from what the field displayed.
+    const answers = new Map(defaultModelProviderPromptAnswers(PROMPTS));
+    answers.set("accountId", "  acct-123  ");
+    expect(modelProviderPromptInputs(PROMPTS, answers).accountId).toBe(
+      "acct-123",
+    );
+  });
 });

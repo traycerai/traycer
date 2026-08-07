@@ -125,6 +125,7 @@ export function readOnlySourceLabel(
  */
 export function credentialPrecedenceNotice(
   source: ModelProviderSource | null,
+  providerLabel: string,
 ): string | null {
   switch (source) {
     case "env":
@@ -134,7 +135,10 @@ export function credentialPrecedenceNotice(
       // the general statement.
       return "An environment variable on this host already provides this credential, and it takes precedence - what you save here will not take effect until that variable is unset.";
     case "config":
-      return "An OpenCode config file already provides this credential and takes precedence. What you save here will not take effect until it is removed there.";
+      // Possessive rather than "A/An {label}": the article cannot be derived
+      // from an arbitrary provider name, and "A OpenCode config file" is what
+      // interpolating one blindly produces.
+      return `${providerLabel}'s own config file already provides this credential and takes precedence. What you save here will not take effect until it is removed there.`;
     case "custom":
       return "This provider is loaded by a custom loader, which may already supply its credential.";
     case "api":
@@ -199,29 +203,21 @@ export type ConnectChoice = {
 /**
  * The choices a provider offers, and why some of them are shown but disabled.
  *
- * Two gates now, not three:
+ * One gate: the capability `actions` list. The host says which verbs it will
+ * accept, and a missing one is shown unavailable rather than hidden, because
+ * "this provider offers OAuth, but not from here" is a fact the user is
+ * entitled to and silently dropping the row would read as the provider not
+ * having it.
  *
- * - the capability `actions` list — the host says which verbs it will accept.
- *   A missing one is shown unavailable rather than hidden, because "this
- *   provider offers OAuth, but not from here" is a fact the user is entitled
- *   to, and silently dropping the row would read as the provider not having it.
- * - the provider advertising ANY method suppresses the synthesized plain-key
- *   path. That one is genuine upstream parity: a provider with a method list
- *   has told us exhaustively how it can be authenticated, and every one that
- *   accepts a pasted key advertises that explicitly — `openai`, `xai`, `poe`,
- *   `gitlab`, `digitalocean` and `snowflake-cortex` all carry their own
- *   "Manually enter API Key" arm. `github-copilot` advertises `['oauth']` and
- *   nothing else, so offering it a key field would invent a path upstream does
- *   not have.
+ * SYNTHESIS LIVES HOST-SIDE. When `/provider/auth` advertises nothing for a
+ * provider, the host puts a generic `{type: "api", label: "API key"}` method in
+ * `methods[]` - so every row arrives with at least one method and this function
+ * only ever maps what it was given. It used to synthesize a plain-key choice
+ * here too, which was correct before the host did it and became a second
+ * source of truth for one field the moment it did.
  *
- * The third gate is GONE. A `credentialKey` on the wire used to decide which
- * providers could be given a key at all, suppressing the field for the few with
- * multi-secret or file-based credentials (Bedrock, both Vertex rows). Upstream
- * has no such notion: `auth.set` takes whatever is pasted, and a credential
- * that cannot work is the user's to discover. Ours refusing was a heuristic
- * standing in for knowledge we do not have, and it cost every provider a
- * classifier that could be wrong in both directions. Every provider without
- * advertised methods now gets the same plain masked field.
+ * An empty `methods` therefore means the HOST offered nothing, not that we
+ * forgot to add something - the caller renders the honest empty state.
  */
 export function connectChoicesFor(
   entry: ModelProviderEntry,
@@ -229,20 +225,7 @@ export function connectChoicesFor(
 ): readonly ConnectChoice[] {
   const canConnect = capabilities.actions.includes("connect");
   const canOauth = capabilities.actions.includes("oauth");
-  const advertisesAnyMethod = entry.methods.length > 0;
   const choices: ConnectChoice[] = [];
-  if (!advertisesAnyMethod) {
-    choices.push({
-      id: "api-key",
-      label: "API key",
-      methodIndex: null,
-      kind: "api",
-      prompts: [],
-      unavailableReason: canConnect
-        ? null
-        : "Saving an API key isn't available on this host.",
-    });
-  }
   entry.methods.forEach((method, index) => {
     choices.push({
       id: `method-${index}`,

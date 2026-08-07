@@ -474,7 +474,12 @@ export function ProviderModelProviderConnectDialog(props: {
   ]);
 
   const handleSubmitCode = useCallback(() => {
-    if (attempt === null || code.trim().length === 0) return;
+    // Guarded HERE, not only on the button: the paste field submits on Enter
+    // too, and two fast Enters would send the same `attemptId` twice. The host
+    // consumes the first, so the second comes back as a failure against an
+    // attempt that actually succeeded - the user is told their code was
+    // rejected when it was not.
+    if (attempt === null || auth.isPending || code.trim().length === 0) return;
     setErrorMessage(null);
     auth.mutate(
       {
@@ -530,16 +535,24 @@ export function ProviderModelProviderConnectDialog(props: {
     );
   }, [applyResult, attempt, cancelAuth, entry.id, forgetAttempt, providerId]);
 
-  // Two mutually exclusive bodies, resolved as statements rather than a ternary
-  // inside the JSX: the surface a live attempt owns is not a variant of the
-  // form, it replaces it.
+  // Three mutually exclusive bodies, resolved as statements rather than nested
+  // ternaries inside the JSX: the surface a live attempt owns is not a variant
+  // of the form, it replaces it.
   //
-  // There is no third "this provider offers nothing" body any more. It existed
-  // for the rows whose `credentialKey` was null and which advertised no method
-  // - and with that classifier gone, a provider advertising nothing gets the
-  // synthesized plain-key path, so `choices` is never empty.
+  // The empty case is reachable again, and means something different than it
+  // used to. Synthesis moved host-side, so this file no longer invents a
+  // plain-key choice for a row that arrived without methods - an empty
+  // `choices` now means the HOST offered nothing for this provider, which is
+  // worth saying rather than rendering a picker with no options in it.
   let body: ReactNode;
-  if (attempt !== null) {
+  if (choices.length === 0) {
+    body = (
+      <p className="text-ui-xs text-muted-foreground">
+        {entry.name} advertises no sign-in method Traycer can drive. Sign in
+        with the provider&apos;s own CLI and it will appear as connected here.
+      </p>
+    );
+  } else if (attempt !== null) {
     body = (
       <OauthWaitingPanel
         attempt={attempt}
@@ -560,7 +573,10 @@ export function ProviderModelProviderConnectDialog(props: {
     body = (
       <ConnectForm
         providerLabel={providerLabel}
-        precedenceNotice={credentialPrecedenceNotice(entry.source)}
+        precedenceNotice={credentialPrecedenceNotice(
+          entry.source,
+          providerLabel,
+        )}
         choices={choices}
         choice={choice}
         onChoiceChange={handleChoiceChange}

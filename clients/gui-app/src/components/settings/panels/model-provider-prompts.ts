@@ -108,6 +108,13 @@ export function unansweredModelProviderPrompts(
  * The wire payload for a method's prompted fields, keyed by prompt key. HIDDEN
  * prompts contribute nothing - a field the user never saw is not an answer, and
  * sending its seeded default would be a client bug dressed as data.
+ *
+ * Answers are TRIMMED, matching the predicate that decides whether a prompt
+ * counts as answered. Without that, `"  acct-123  "` passes the
+ * whitespace-trimming check and then reaches upstream with the padding intact -
+ * the submit button says the form is complete and the provider is handed
+ * something subtly different from what the field displayed. The credential
+ * itself is already trimmed at its own call site.
  */
 export function modelProviderPromptInputs(
   prompts: readonly ModelProviderPrompt[],
@@ -115,7 +122,7 @@ export function modelProviderPromptInputs(
 ): ModelProviderAuthInputs {
   const inputs: Record<string, string> = {};
   for (const prompt of visibleModelProviderPrompts(prompts, answers)) {
-    inputs[prompt.key] = answers.get(prompt.key) ?? "";
+    inputs[prompt.key] = (answers.get(prompt.key) ?? "").trim();
   }
   return inputs;
 }

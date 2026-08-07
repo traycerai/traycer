@@ -141,7 +141,10 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
     hasStoredCredential: false,
     canDisconnect: false,
     connected: false,
-    methods: [],
+    // What the host really sends when `/provider/auth` advertises nothing: it
+    // synthesizes this generic key method itself, so the client never sees an
+    // empty list for an ordinary provider.
+    methods: [{ type: "api", label: "API key", prompts: [] }],
     ...overrides,
   };
 }
@@ -209,20 +212,26 @@ afterEach(() => {
 });
 
 describe("connectChoicesFor", () => {
-  it("offers the plain API-key path to every provider that advertises nothing", () => {
-    // No classifier decides this any more. `credentialKey` used to gate it and
-    // withheld the field from the few multi-secret / file-credential providers
-    // (Bedrock, both Vertex rows); upstream has no such notion - `auth.set`
-    // takes whatever is pasted - so they get the same field as everyone else.
-    expect(connectChoicesFor(entry({}), FULL_CAPS).map((c) => c.id)).toEqual([
-      "api-key",
-    ]);
+  it("maps the host's synthesized key method like any other", () => {
+    // Synthesis is host-side now, so this only ever maps what it was given -
+    // and every provider, Bedrock included, arrives with the same generic key
+    // method rather than a classifier deciding who deserves one.
+    expect(connectChoicesFor(entry({}), FULL_CAPS).map((c) => c.label)).toEqual(
+      ["API key"],
+    );
     expect(
       connectChoicesFor(
         entry({ id: "amazon-bedrock", name: "Amazon Bedrock" }),
         FULL_CAPS,
-      ).map((c) => c.id),
-    ).toEqual(["api-key"]);
+      ).map((c) => c.label),
+    ).toEqual(["API key"]);
+  });
+
+  it("offers NOTHING when the host offered nothing", () => {
+    // An empty method list no longer means "we forgot to synthesize"; it means
+    // the host had nothing for this provider, and inventing a field here would
+    // put back the second source of truth the host now owns.
+    expect(connectChoicesFor(entry({ methods: [] }), FULL_CAPS)).toEqual([]);
   });
 
   it("shows an advertised method the host cannot run as UNAVAILABLE, never hidden", () => {
@@ -278,14 +287,6 @@ describe("connectChoicesFor", () => {
     ]);
   });
 
-  it("KEEPS the plain path for the ~170 providers that advertise nothing", () => {
-    // The common case: no method list at all, so the models.dev env var is the
-    // only way in - and prompting for it is exactly what the CLI does.
-    expect(
-      connectChoicesFor(entry({ methods: [] }), FULL_CAPS).map((c) => c.id),
-    ).toEqual(["api-key"]);
-  });
-
   it("leaves an advertised api method usable - nothing gates it now", () => {
     // This used to be marked unavailable whenever the classifier returned null
     // for the provider. The host takes the pasted value regardless, so the only
@@ -318,7 +319,10 @@ describe("connect with an API key", () => {
       action: {
         action: "connect",
         modelProviderId: "anthropic",
-        methodIndex: null,
+        // The host's synthesized key method is a real entry in `methods[]`, so
+        // it is addressed by INDEX like any other. `methodIndex: null` still
+        // reaches the same host path; we simply have an index to send now.
+        methodIndex: 0,
         // `key` is the pasted SECRET - upstream's `ApiAuth.key`, which reads
         // like an identifier and is not one. No env-var name travels any more.
         key: "sk-secret",
@@ -434,7 +438,19 @@ describe("credential precedence", () => {
     expect(
       screen.getByText(/environment variable on this host already provides/),
     ).toBeTruthy();
+    // A warning, not a block: the sign-in is still offered.
     expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+  });
+
+  it("names the provider in the config-file notice", () => {
+    renderDialog({
+      entry: entry({ connected: true, source: "config" }),
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    expect(
+      screen.getByText(/OpenCode's own config file already provides/),
+    ).toBeTruthy();
   });
 
   it("says nothing for a provider Traycer itself holds the key for", () => {
@@ -443,7 +459,10 @@ describe("credential precedence", () => {
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
     });
-    expect(screen.queryByText(/already set in this host/)).toBeNull();
+    // "takes precedence" is the phrase every notice shares, so its absence is
+    // the assertion that NO notice rendered - not that one particular wording
+    // happened to change.
+    expect(screen.queryByText(/takes precedence/)).toBeNull();
   });
 });
 
@@ -526,6 +545,48 @@ describe("OAuth code flow", () => {
         code: "pasted-code",
       },
     });
+  });
+
+  it("does not double-submit one attempt on two fast Enters", () => {
+    // The button is disabled while the mutation is pending; the paste field's
+    // Enter handler was not, so a second Enter sent the SAME attemptId again.
+    // The host consumes the first, so the second returns a failure against an
+    // attempt that actually succeeded - the user is told their code was
+    // rejected when it was not.
+    mocks.authIsPending = false;
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    settle(mocks.authCalls[0], {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/device",
+      method: "code",
+      instructions: null,
+    });
+    const field = screen.getByLabelText("Paste the code");
+    fireEvent.change(field, { target: { value: "pasted-code" } });
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(mocks.authCalls).toHaveLength(2);
+
+    // The submit is now in flight; a second Enter must not reach the host.
+    mocks.authIsPending = true;
+    cleanup();
+    // Re-render with the pending flag set, drive Enter again on a live attempt.
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    const before = mocks.authCalls.length;
+    fireEvent.keyDown(screen.getByRole("button", { name: "Continue" }), {
+      key: "Enter",
+    });
+    expect(mocks.authCalls).toHaveLength(before);
   });
 
   it("re-prompts on code_rejected and KEEPS the attempt", () => {

@@ -251,7 +251,13 @@ export function ProviderModelProvidersTab(props: {
 
       <ModelProvidersBody
         listPending={listQuery.isPending}
-        listError={listQuery.isError ? listQuery.error.message : null}
+        // Redacted like every other host string this tab renders. A transport
+        // error message is host-authored text on a credential surface, and the
+        // one place it was passed through raw is the one place nobody thought
+        // of it as such.
+        listError={
+          listQuery.isError ? redactLogText(listQuery.error.message) : null
+        }
         result={result}
         packPreparing={packPreparing}
         providerLabel={providerLabel}
