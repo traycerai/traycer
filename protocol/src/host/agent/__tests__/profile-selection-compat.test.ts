@@ -608,7 +608,7 @@ describe("optional-method capability negotiation", () => {
     ).toEqual({ major: 3, minor: 0 });
   });
 
-  it("keeps every released profile-method major frozen and advertises the omp-inclusive v3.0 line", () => {
+  it("keeps every released profile-method major frozen and installs the Hugging-Face-inclusive v4.0 line", () => {
     expect(
       hostRpcRegistry["agent.listProviderProfiles"][1].versions[0].contract
         .schemaVersion,
@@ -634,6 +634,21 @@ describe("optional-method capability negotiation", () => {
       hostRpcRegistry["agent.getProviderProfileRateLimits"][3].versions[0]
         .contract.schemaVersion,
     ).toEqual({ major: 3, minor: 0 });
+    // The Hugging-Face-inclusive lines: the v3.0 lines above are frozen
+    // pre-huggingface (cli-v1.1.9 shipped them), v4.0 carries the id. Asserted
+    // so an accidental repin of a v4.0 contract fails here rather than only in
+    // the tag-based compat gate.
+    expect(
+      hostRpcRegistry["agent.listProviderProfiles"][4].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.getProviderProfileRateLimits"][4].versions[0]
+        .contract.schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.configure"][4].versions[0].contract.schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
   });
 });
 
@@ -1067,16 +1082,19 @@ describe("Epic Mode removal — agentMode is RETAINED on the released wires", ()
     ["v3.0 -> v2.0", agentConfigureDowngradeV30ToV20],
     ["v3.0 -> v1.0", agentConfigureDowngradeV30ToV10],
     ["v2.0 -> v1.0", agentConfigureDowngradeV20ToV10],
-  ])("passes agentMode through unchanged on the frozen %s response", (_label, bridge) => {
-    const result = bridge.downgradeResponse({
-      ...LIVE_RESPONSE,
-      settings: { ...LIVE_RESPONSE.settings, agentMode: "epic" as const },
-    });
+  ])(
+    "passes agentMode through unchanged on the frozen %s response",
+    (_label, bridge) => {
+      const result = bridge.downgradeResponse({
+        ...LIVE_RESPONSE,
+        settings: { ...LIVE_RESPONSE.settings, agentMode: "epic" as const },
+      });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.settings.agentMode).toBe("epic");
-  });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.settings.agentMode).toBe("epic");
+    },
+  );
 
   // v3.0 is itself released (v1.1.8), so a current client and a v1.1.8 host
   // both negotiate 3.0 with NO bridge between them. The key must survive the
