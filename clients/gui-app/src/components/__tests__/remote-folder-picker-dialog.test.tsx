@@ -17,6 +17,7 @@ import type {
   WorkspaceRecentEntry,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { modLabel } from "@/lib/keybindings/platform";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
@@ -422,6 +423,31 @@ describe("<RemoteFolderPickerDialog />", () => {
     fireEvent.click(screen.getByTestId("remote-folder-picker-up"));
     expect(pathInput().value).toBe("/Users/tester/");
     expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
+  });
+
+  it("ignores Enter while an IME composition is active", async () => {
+    // An IME user's Enter commits the composed segment; opening the selected
+    // row instead makes composed folder names untypeable.
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "Enter", isComposing: true });
+    expect(pathInput().value).toBe("/Users/tester/");
+    // The same key OUTSIDE composition still opens the selected row (the
+    // `..` row is selected by default, so it navigates up).
+    fireEvent.keyDown(pathInput(), { key: "Enter" });
+    expect(pathInput().value).toBe("/Users/");
+  });
+
+  it("advertises the platform modifier on Add, not a fixed glyph", async () => {
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    // jsdom is not a Mac, so a hardcoded ⌘ would fail this on the very
+    // platforms whose working shortcut is Ctrl+Enter.
+    expect(
+      screen.getByTestId("remote-folder-picker-add").textContent,
+    ).toContain(modLabel());
   });
 
   it("arrow keys move the active option and Enter opens it", async () => {

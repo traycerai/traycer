@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
+import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useWorkspaceBrowseFolders } from "@/hooks/workspace/use-workspace-browse-folders-query";
@@ -258,7 +259,7 @@ function RemoteFolderPickerBody(): ReactNode {
           onClick={addCurrent}
         >
           Add
-          <Kbd className="ml-1">⌘⏎</Kbd>
+          <PrimaryActionShortcutHint />
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -615,6 +616,11 @@ function handlePickerFieldKeys(
     readonly moveSelection: (delta: number) => void;
   },
 ): void {
+  // An IME owns the keyboard mid-composition: Enter commits the composed
+  // segment and arrows move the candidate selection, so none of these may be
+  // hijacked. Prefer nativeEvent.isComposing: React's KeyboardEvent typing in
+  // this package does not expose isComposing on the synthetic event.
+  if (event.nativeEvent.isComposing) return;
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
     event.preventDefault();
     actions.addCurrent();
