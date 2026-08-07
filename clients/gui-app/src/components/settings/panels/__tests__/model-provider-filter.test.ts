@@ -12,7 +12,6 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
   return {
     id: "anthropic",
     name: "Anthropic",
-    credentialKey: "ANTHROPIC_API_KEY",
     source: null,
     hasStoredCredential: false,
     canDisconnect: false,
@@ -26,29 +25,37 @@ const KEY_ONLY = entry({ id: "anthropic", name: "Anthropic" });
 const OAUTH_ONLY = entry({
   id: "github-copilot",
   name: "GitHub Copilot",
-  credentialKey: null,
   methods: [{ type: "oauth", label: "Sign in with GitHub", prompts: [] }],
 });
 const BOTH = entry({
   id: "openai",
   name: "OpenAI",
-  credentialKey: "OPENAI_API_KEY",
-  methods: [{ type: "oauth", label: "Sign in with OpenAI", prompts: [] }],
+  methods: [
+    { type: "oauth", label: "Sign in with OpenAI", prompts: [] },
+    { type: "api", label: "Manually enter API Key", prompts: [] },
+  ],
 });
-const NEITHER = entry({
+// No longer a "neither" case: a provider advertising nothing now gets the
+// synthesized plain-key path like every other. Kept as the ADVERTISES-NOTHING
+// fixture, which is what the api-key bucket is mostly made of.
+const NO_METHODS = entry({
   id: "amazon-bedrock",
   name: "Amazon Bedrock",
-  credentialKey: null,
   methods: [],
 });
 
-const ALL = [KEY_ONLY, OAUTH_ONLY, BOTH, NEITHER];
+const ALL = [KEY_ONLY, OAUTH_ONLY, BOTH, NO_METHODS];
 
 describe("model provider method filter", () => {
   it("reads support off what the PROVIDER advertises", () => {
     expect(supportsOauthSignIn(OAUTH_ONLY)).toBe(true);
     expect(supportsOauthSignIn(KEY_ONLY)).toBe(false);
+    // Advertising nothing means the synthesized plain-key path applies, which
+    // is what makes this the common case rather than an exception.
     expect(supportsApiKeySignIn(KEY_ONLY)).toBe(true);
+    expect(supportsApiKeySignIn(NO_METHODS)).toBe(true);
+    // The one kind excluded: a provider that advertised a method list with no
+    // key arm in it.
     expect(supportsApiKeySignIn(OAUTH_ONLY)).toBe(false);
   });
 
@@ -77,24 +84,19 @@ describe("model provider method filter", () => {
     ).map((row) => row.id);
     expect(apiKey).toContain("openai");
     expect(apiKey).toContain("anthropic");
+    expect(apiKey).toContain("amazon-bedrock");
   });
 
-  it("leaves a provider offering NEITHER path out of both buckets", () => {
-    // Multi-secret and service-account-file credentials: honestly unreachable
-    // from here, so they match no method filter and stay findable under All.
-    for (const filter of [
-      MODEL_PROVIDER_METHOD_FILTER.Oauth,
-      MODEL_PROVIDER_METHOD_FILTER.ApiKey,
-    ] as const) {
-      expect(
-        filterModelProvidersByMethod(ALL, filter).map((row) => row.id),
-      ).not.toContain("amazon-bedrock");
-    }
+  it("excludes only the providers that advertised a key-less method list", () => {
+    // `github-copilot` advertises `['oauth']` and nothing else. Everything else
+    // reaches the key bucket, which is the point of deleting the classifier
+    // that used to decide otherwise.
     expect(
-      filterModelProvidersByMethod(ALL, MODEL_PROVIDER_METHOD_FILTER.All).map(
-        (row) => row.id,
-      ),
-    ).toContain("amazon-bedrock");
+      filterModelProvidersByMethod(
+        ALL,
+        MODEL_PROVIDER_METHOD_FILTER.ApiKey,
+      ).map((row) => row.id),
+    ).not.toContain("github-copilot");
   });
 
   it("names every option", () => {

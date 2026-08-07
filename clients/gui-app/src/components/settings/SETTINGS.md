@@ -902,27 +902,32 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       (`m.id !== "opencode" || Object.values(m.models).find(v => v.cost?.input)`,
       the same predicate as their `paid()`), not a credential one, so mirroring
       it would import their monetisation rule and still not make us exact.
-    - **`credentialKey` is the credential's home**, and the reason it is on the
-      wire: the host's connect contract wants exactly ONE input keyed by the
-      provider's models.dev env var, and only the host knows which member of a
-      multi-entry `env[]` is the secret. Null for the few providers with no
-      plain-key path (multi-secret, or a service-account file) - those hide the
-      key field entirely rather than offering one the host must reject.
-    - **The plain API-key path disappears when the provider advertises ANY
-      method.** A provider with a method list has told us exhaustively how it
-      can be authenticated, and every one that accepts a pasted key advertises
-      that explicitly — `openai`, `xai`, `poe`, `gitlab`, `digitalocean` and
-      `snowflake-cortex` all carry their own "Manually enter API Key"-style arm,
-      so nothing is lost by deferring to the list.
-      `github-copilot` is the case that separates this from the narrower
-      "suppress only when an `api` method exists" rule: it advertises
-      `['oauth']` and nothing else, while still carrying `env: ['GITHUB_TOKEN']`
-      — an entry that exists for env-var DETECTION, not as a field to type into.
-      Under the narrow rule the dialog offered an "API key" option that
-      `opencode auth login` does not, and a key pasted there would have been
-      stored as a credential that cannot work (Copilot needs its GitHub token
-      exchanged for a Copilot API token, which pasting cannot do). Verified
-      against a live server's `/provider/auth`.
+    - **Every provider gets the same plain masked key field**, unless it
+      advertised a method list saying otherwise. There is no client-side notion
+      of which providers "can" take a pasted key: `connect` sends
+      `{ key, inputs }` where `key` is the SECRET VALUE (upstream's
+      `ApiAuth.key`, which reads like an identifier and is not one) and `inputs`
+      is the prompt answers keyed by prompt key.
+      A `credentialKey` field used to ride the wire, derived host-side from
+      models.dev `env[]`, and the dialog suppressed the key field wherever it
+      came back null — Amazon Bedrock and both Vertex rows. The parity audit
+      called it what it was: a ~130-line heuristic standing in for knowledge we
+      do not have, for a requirement upstream does not have. OpenCode's
+      `auth.set` stores whatever is pasted, and a credential that cannot work is
+      the user's to discover. It is deleted across all three layers.
+    - **The plain path is still suppressed when a provider advertises ANY
+      method** — that rule is genuine upstream parity and stays. A provider with
+      a method list has told us exhaustively how it can be authenticated, and
+      every one that accepts a pasted key advertises that explicitly (`openai`,
+      `xai`, `poe`, `gitlab`, `digitalocean`, `snowflake-cortex` all carry a
+      "Manually enter API Key" arm). `github-copilot` advertises `['oauth']` and
+      nothing else, so synthesizing a key field for it would invent a path
+      upstream does not have. Verified against a live `/provider/auth`.
+      Two consequences worth stating: the env-precedence warning no longer names
+      the variable (that name came from `credentialKey`, and guessing it would
+      be worse than the general statement), and the connect dialog's "this
+      provider offers nothing" body is gone as unreachable — a provider
+      advertising no methods now always has the synthesized key path.
     - **The prompts DSL is evaluated client-side**
       (`model-provider-prompts.ts` - pure, so it is tested without a form).
       Visibility resolves SEQUENTIALLY and only a visible prompt's answer feeds

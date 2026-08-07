@@ -67,18 +67,23 @@ export function supportsOauthSignIn(entry: ModelProviderEntry): boolean {
 }
 
 /**
- * A provider with a usable key path: either its models.dev env var (the plain
- * path) or an advertised `api` method that collects extra fields alongside it.
+ * A provider that can be signed in with a pasted key: one that advertises an
+ * `api` method, or one that advertises NOTHING and therefore gets the
+ * synthesized plain-key path.
+ *
+ * This used to read `credentialKey !== null`. That field is gone - every
+ * provider now takes a pasted key unless it advertised a method list saying
+ * otherwise - so the question the filter answers is the same but its evidence
+ * moved to `methods`. An OAUTH-ONLY provider (`github-copilot`) is the one kind
+ * excluded, which is exactly what makes the bucket worth offering.
  *
  * A provider can satisfy BOTH this and {@link supportsOauthSignIn} - the two
  * filters are not a partition, and a row offering both should appear under
- * either. The handful with neither (multi-secret or service-account-file
- * credentials) match no filter and remain reachable under All, which is honest:
- * neither path is offered for them here.
+ * either.
  */
 export function supportsApiKeySignIn(entry: ModelProviderEntry): boolean {
-  if (entry.credentialKey === null) return false;
-  return true;
+  if (entry.methods.length === 0) return true;
+  return entry.methods.some((method) => method.type === "api");
 }
 
 /**

@@ -88,7 +88,6 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
   return {
     id: "anthropic",
     name: "Anthropic",
-    credentialKey: "ANTHROPIC_API_KEY",
     source: null,
     hasStoredCredential: false,
     canDisconnect: false,
@@ -261,7 +260,6 @@ describe("ProviderModelProvidersTab method filter", () => {
       entry({
         id: "github-copilot",
         name: "GitHub Copilot",
-        credentialKey: null,
         methods: [{ type: "oauth", label: "Sign in with GitHub", prompts: [] }],
       }),
     ],
@@ -447,7 +445,6 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
           entry({
             id: "openai",
             name: "OpenAI",
-            credentialKey: "OPENAI_API_KEY",
             connected: true,
             source: "env",
             canDisconnect: false,

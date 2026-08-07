@@ -125,13 +125,14 @@ export function readOnlySourceLabel(
  */
 export function credentialPrecedenceNotice(
   source: ModelProviderSource | null,
-  credentialKey: string | null,
 ): string | null {
   switch (source) {
     case "env":
-      return credentialKey === null
-        ? "An environment variable on this host already provides this credential, and it takes precedence - what you save here will not take effect until that variable is unset."
-        : `${credentialKey} is already set in this host's environment and takes precedence. What you save here will not take effect until that variable is unset.`;
+      // No longer names the variable: `credentialKey` carried that, and it went
+      // with the classifier. The provider's own env var name is not something
+      // the client can know without one, and guessing it would be worse than
+      // the general statement.
+      return "An environment variable on this host already provides this credential, and it takes precedence - what you save here will not take effect until that variable is unset.";
     case "config":
       return "An OpenCode config file already provides this credential and takes precedence. What you save here will not take effect until it is removed there.";
     case "custom":
@@ -198,34 +199,29 @@ export type ConnectChoice = {
 /**
  * The choices a provider offers, and why some of them are shown but disabled.
  *
- * Three gates, each for a different reason and none of them collapsible into
- * the others:
+ * Two gates now, not three:
  *
- * - `credentialKey === null` — this provider has no plain-API-key path at all
- *   (a multi-secret or file-based credential). Every choice that would have to
- *   write one is unusable, including an ADVERTISED `api` method: the host's
- *   connect contract requires exactly one input keyed by the credential's env
- *   var, and there is no such key to send.
  * - the capability `actions` list — the host says which verbs it will accept.
  *   A missing one is shown unavailable rather than hidden, because "this
  *   provider offers OAuth, but not from here" is a fact the user is entitled
  *   to, and silently dropping the row would read as the provider not having it.
- * - nothing offered at all — no key path and no methods. The caller renders the
- *   honest empty state instead of an empty picker.
+ * - the provider advertising ANY method suppresses the synthesized plain-key
+ *   path. That one is genuine upstream parity: a provider with a method list
+ *   has told us exhaustively how it can be authenticated, and every one that
+ *   accepts a pasted key advertises that explicitly — `openai`, `xai`, `poe`,
+ *   `gitlab`, `digitalocean` and `snowflake-cortex` all carry their own
+ *   "Manually enter API Key" arm. `github-copilot` advertises `['oauth']` and
+ *   nothing else, so offering it a key field would invent a path upstream does
+ *   not have.
  *
- * The plain path is suppressed whenever the provider advertises ANY method.
- * A provider with a method list has told us exhaustively how it can be
- * authenticated, and every one that accepts a pasted key says so with an `api`
- * method of its own - `openai`, `xai`, `poe`, `gitlab`, `digitalocean` and
- * `snowflake-cortex` all carry an explicit "Manually enter API Key"-style arm.
- *
- * `github-copilot` is the case that separates this rule from the narrower
- * "suppress only when an `api` method exists": it advertises `['oauth']` and
- * nothing else, so upstream is saying there is NO manual key path - and its
- * `env` entry (`GITHUB_TOKEN`) exists for env-var DETECTION, not as a field to
- * type into. Under the narrow rule we offered an "API key" option the CLI does
- * not, which would have stored a credential that cannot work: Copilot needs the
- * GitHub token exchanged for a Copilot API token, which pasting cannot do.
+ * The third gate is GONE. A `credentialKey` on the wire used to decide which
+ * providers could be given a key at all, suppressing the field for the few with
+ * multi-secret or file-based credentials (Bedrock, both Vertex rows). Upstream
+ * has no such notion: `auth.set` takes whatever is pasted, and a credential
+ * that cannot work is the user's to discover. Ours refusing was a heuristic
+ * standing in for knowledge we do not have, and it cost every provider a
+ * classifier that could be wrong in both directions. Every provider without
+ * advertised methods now gets the same plain masked field.
  */
 export function connectChoicesFor(
   entry: ModelProviderEntry,
@@ -235,7 +231,7 @@ export function connectChoicesFor(
   const canOauth = capabilities.actions.includes("oauth");
   const advertisesAnyMethod = entry.methods.length > 0;
   const choices: ConnectChoice[] = [];
-  if (entry.credentialKey !== null && !advertisesAnyMethod) {
+  if (!advertisesAnyMethod) {
     choices.push({
       id: "api-key",
       label: "API key",
@@ -257,7 +253,6 @@ export function connectChoicesFor(
       unavailableReason: unavailableReasonFor(method, {
         canConnect,
         canOauth,
-        hasCredentialKey: entry.credentialKey !== null,
       }),
     });
   });
@@ -266,19 +261,12 @@ export function connectChoicesFor(
 
 function unavailableReasonFor(
   method: ModelProviderAuthMethod,
-  gates: {
-    readonly canConnect: boolean;
-    readonly canOauth: boolean;
-    readonly hasCredentialKey: boolean;
-  },
+  gates: { readonly canConnect: boolean; readonly canOauth: boolean },
 ): string | null {
   if (method.type === "oauth") {
     return gates.canOauth
       ? null
       : "Browser sign-in isn't available on this host.";
-  }
-  if (!gates.hasCredentialKey) {
-    return "This provider's credential can't be entered here — sign in with its CLI.";
   }
   return gates.canConnect
     ? null

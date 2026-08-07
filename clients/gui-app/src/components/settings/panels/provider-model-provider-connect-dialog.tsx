@@ -2,7 +2,6 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import type {
-  ModelProviderAuthInput,
   ModelProviderAuthResult,
   ModelProviderEntry,
   ModelProviderPrompt,
@@ -439,21 +438,17 @@ export function ProviderModelProviderConnectDialog(props: {
             action: "startOauth",
             modelProviderId: entry.id,
             methodIndex: choice.methodIndex,
-            inputs: [...promptInputs],
+            inputs: promptInputs,
           },
         },
         { onSuccess: (data) => applyStartResult(data.result) },
       );
       return;
     }
-    // The credential rides as ONE input keyed by the provider's own env-var
-    // name - the host's rule, and the reason `credentialKey` is on the wire at
-    // all. Everything else must match the selected method's prompt keys.
-    if (entry.credentialKey === null) return;
-    const inputs: ModelProviderAuthInput[] = [
-      { key: entry.credentialKey, value: secret.trim() },
-      ...promptInputs,
-    ];
+    // `key` is the pasted SECRET, not a key name - upstream's `ApiAuth.key`,
+    // which reads like an identifier and is not one. The client no longer says
+    // anything about where the credential belongs: the provider's own store
+    // takes whatever is sent.
     auth.mutate(
       {
         providerId,
@@ -461,7 +456,8 @@ export function ProviderModelProviderConnectDialog(props: {
           action: "connect",
           modelProviderId: entry.id,
           methodIndex: choice.methodIndex,
-          inputs,
+          key: secret.trim(),
+          inputs: promptInputs,
         },
       },
       { onSuccess: (data) => applyResult(data.result, false) },
@@ -534,18 +530,16 @@ export function ProviderModelProviderConnectDialog(props: {
     );
   }, [applyResult, attempt, cancelAuth, entry.id, forgetAttempt, providerId]);
 
-  // Three mutually exclusive bodies, resolved as statements rather than nested
-  // ternaries inside the JSX: the surface a live attempt owns is not a variant
-  // of the form, it replaces it.
+  // Two mutually exclusive bodies, resolved as statements rather than a ternary
+  // inside the JSX: the surface a live attempt owns is not a variant of the
+  // form, it replaces it.
+  //
+  // There is no third "this provider offers nothing" body any more. It existed
+  // for the rows whose `credentialKey` was null and which advertised no method
+  // - and with that classifier gone, a provider advertising nothing gets the
+  // synthesized plain-key path, so `choices` is never empty.
   let body: ReactNode;
-  if (choices.length === 0) {
-    body = (
-      <p className="text-ui-xs text-muted-foreground">
-        {entry.name} advertises no sign-in method Traycer can drive. Sign in
-        with the provider&apos;s own CLI and it will appear as connected here.
-      </p>
-    );
-  } else if (attempt !== null) {
+  if (attempt !== null) {
     body = (
       <OauthWaitingPanel
         attempt={attempt}
@@ -565,10 +559,8 @@ export function ProviderModelProviderConnectDialog(props: {
   } else {
     body = (
       <ConnectForm
-        precedenceNotice={credentialPrecedenceNotice(
-          entry.source,
-          entry.credentialKey,
-        )}
+        providerLabel={providerLabel}
+        precedenceNotice={credentialPrecedenceNotice(entry.source)}
         choices={choices}
         choice={choice}
         onChoiceChange={handleChoiceChange}
@@ -605,6 +597,7 @@ export function ProviderModelProviderConnectDialog(props: {
 }
 
 function ConnectForm(props: {
+  readonly providerLabel: string;
   /**
    * What already supplies this provider's credential, when something does.
    * Shown BEFORE the fields rather than gating them: the sign-in is legitimate
@@ -631,10 +624,7 @@ function ConnectForm(props: {
     choice?.prompts ?? [],
     props.answers,
   );
-  const showCredentialField =
-    choice !== null &&
-    choice.kind === "api" &&
-    props.entry.credentialKey !== null;
+  const showCredentialField = choice !== null && choice.kind === "api";
   return (
     <form
       className="flex flex-col gap-3"
@@ -660,7 +650,7 @@ function ConnectForm(props: {
 
       {showCredentialField ? (
         <CredentialField
-          entry={props.entry}
+          providerLabel={props.providerLabel}
           secret={props.secret}
           onSecretChange={props.onSecretChange}
           disabled={choice.unavailableReason !== null}
@@ -748,14 +738,12 @@ function MethodPicker(props: {
 }
 
 function CredentialField(props: {
-  readonly entry: ModelProviderEntry;
+  readonly providerLabel: string;
   readonly secret: string;
   readonly onSecretChange: (value: string) => void;
   readonly disabled: boolean;
 }): ReactNode {
   const fieldId = useId();
-  const credentialKey = props.entry.credentialKey;
-  if (credentialKey === null) return null;
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={fieldId}>API key</Label>
@@ -765,17 +753,17 @@ function CredentialField(props: {
         autoComplete="off"
         spellCheck={false}
         className="w-full font-mono text-ui-sm"
-        placeholder={credentialKey}
+        placeholder="API key"
         value={props.secret}
         disabled={props.disabled}
         onChange={(event) => props.onSecretChange(event.target.value)}
       />
-      {/* The env var name is the credential's HOME, not just a placeholder: it
-          is where the same key would go if the user exported it instead, and
-          naming it is what makes the two routes recognisably one setting. */}
+      {/* No env-var name any more: that came from `credentialKey`, which went
+          with the classifier that decided which providers could be given a key
+          at all. The destination is still worth stating - it is what makes this
+          tab and the provider's own CLI interchangeable. */}
       <p className="text-ui-xs text-muted-foreground">
-        Stored by {props.entry.name} as <code>{credentialKey}</code>. It is
-        never shown again.
+        Stored by {props.providerLabel}. It is never shown again.
       </p>
     </div>
   );

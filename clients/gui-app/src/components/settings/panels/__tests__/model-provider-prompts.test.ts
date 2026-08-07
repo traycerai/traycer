@@ -169,9 +169,9 @@ describe("modelProviderPromptInputs", () => {
     // client bug dressed as data.
     const answers = new Map(defaultModelProviderPromptAnswers(PROMPTS));
     answers.set("accountId", "acct-1");
-    expect(modelProviderPromptInputs(PROMPTS, answers)).toEqual([
-      { key: "deploymentType", value: "github.com" },
-      { key: "accountId", value: "acct-1" },
-    ]);
+    expect(modelProviderPromptInputs(PROMPTS, answers)).toEqual({
+      deploymentType: "github.com",
+      accountId: "acct-1",
+    });
   });
 });

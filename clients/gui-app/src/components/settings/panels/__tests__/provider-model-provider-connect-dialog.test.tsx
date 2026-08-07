@@ -137,7 +137,6 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
   return {
     id: "anthropic",
     name: "Anthropic",
-    credentialKey: "ANTHROPIC_API_KEY",
     source: null,
     hasStoredCredential: false,
     canDisconnect: false,
@@ -170,7 +169,6 @@ function renderDialog(args: {
 const OAUTH_ONLY = entry({
   id: "github-copilot",
   name: "GitHub Copilot",
-  credentialKey: null,
   methods: [{ type: "oauth", label: "Sign in with GitHub", prompts: [] }],
 });
 
@@ -211,18 +209,20 @@ afterEach(() => {
 });
 
 describe("connectChoicesFor", () => {
-  it("offers the plain API-key path only when the provider has a credential key", () => {
-    // 3 of ~180 providers have none (multi-secret, or a service-account file),
-    // and for those there is no single input the host's connect rule would
-    // accept.
-    expect(connectChoicesFor(entry({}), FULL_CAPS).map((c) => c.id)).toContain(
+  it("offers the plain API-key path to every provider that advertises nothing", () => {
+    // No classifier decides this any more. `credentialKey` used to gate it and
+    // withheld the field from the few multi-secret / file-credential providers
+    // (Bedrock, both Vertex rows); upstream has no such notion - `auth.set`
+    // takes whatever is pasted - so they get the same field as everyone else.
+    expect(connectChoicesFor(entry({}), FULL_CAPS).map((c) => c.id)).toEqual([
       "api-key",
-    );
+    ]);
     expect(
-      connectChoicesFor(entry({ credentialKey: null }), FULL_CAPS).map(
-        (c) => c.id,
-      ),
-    ).not.toContain("api-key");
+      connectChoicesFor(
+        entry({ id: "amazon-bedrock", name: "Amazon Bedrock" }),
+        FULL_CAPS,
+      ).map((c) => c.id),
+    ).toEqual(["api-key"]);
   });
 
   it("shows an advertised method the host cannot run as UNAVAILABLE, never hidden", () => {
@@ -267,7 +267,6 @@ describe("connectChoicesFor", () => {
       entry({
         id: "github-copilot",
         name: "GitHub Copilot",
-        credentialKey: "GITHUB_TOKEN",
         methods: [
           { type: "oauth", label: "Login with GitHub Copilot", prompts: [] },
         ],
@@ -287,23 +286,25 @@ describe("connectChoicesFor", () => {
     ).toEqual(["api-key"]);
   });
 
-  it("marks an api METHOD unusable when the provider has no credential key", () => {
-    // An advertised `api` method still needs the one env-keyed input the host's
-    // connect rule requires, and there is no such key to send.
+  it("leaves an advertised api method usable - nothing gates it now", () => {
+    // This used to be marked unavailable whenever the classifier returned null
+    // for the provider. The host takes the pasted value regardless, so the only
+    // reason left to disable an `api` arm is the host withholding `connect`.
     const choices = connectChoicesFor(
       entry({
-        credentialKey: null,
-        methods: [{ type: "api", label: "API key", prompts: [] }],
+        methods: [
+          { type: "api", label: "Manually enter API Key", prompts: [] },
+        ],
       }),
       FULL_CAPS,
     );
     expect(choices).toHaveLength(1);
-    expect(choices[0]?.unavailableReason).not.toBeNull();
+    expect(choices[0]?.unavailableReason).toBeNull();
   });
 });
 
 describe("connect with an API key", () => {
-  it("sends exactly one input, keyed by the provider's credential key", () => {
+  it("sends the pasted secret as `key`, with prompts as a keyed record", () => {
     const onDone = vi.fn();
     renderDialog({ entry: entry({}), capabilities: FULL_CAPS, onDone });
     fireEvent.change(screen.getByLabelText("API key"), {
@@ -318,7 +319,10 @@ describe("connect with an API key", () => {
         action: "connect",
         modelProviderId: "anthropic",
         methodIndex: null,
-        inputs: [{ key: "ANTHROPIC_API_KEY", value: "sk-secret" }],
+        // `key` is the pasted SECRET - upstream's `ApiAuth.key`, which reads
+        // like an identifier and is not one. No env-var name travels any more.
+        key: "sk-secret",
+        inputs: {},
       },
     });
   });
@@ -375,7 +379,6 @@ describe("connect with an API key", () => {
   it("renders conditional prompt fields from the DSL", () => {
     renderDialog({
       entry: entry({
-        credentialKey: "COPILOT_API_KEY",
         methods: [
           {
             type: "api",
@@ -419,7 +422,6 @@ describe("credential precedence", () => {
       entry: entry({
         id: "openai",
         name: "OpenAI",
-        credentialKey: "OPENAI_API_KEY",
         connected: true,
         source: "env",
         methods: [{ type: "oauth", label: "ChatGPT Pro/Plus", prompts: [] }],
@@ -427,8 +429,10 @@ describe("credential precedence", () => {
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
     });
+    // The variable's NAME went with `credentialKey`; the client cannot know it
+    // without one, and guessing would be worse than the general statement.
     expect(
-      screen.getByText(/OPENAI_API_KEY is already set in this host/),
+      screen.getByText(/environment variable on this host already provides/),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
   });
@@ -462,7 +466,6 @@ describe("method picker", () => {
       entry: entry({
         id: "xai",
         name: "xAI",
-        credentialKey: "XAI_API_KEY",
         methods: [
           { type: "oauth", label: "SuperGrok Subscription", prompts: [] },
           { type: "api", label: "Manually enter API Key", prompts: [] },
@@ -494,7 +497,7 @@ describe("OAuth code flow", () => {
         action: "startOauth",
         modelProviderId: "github-copilot",
         methodIndex: 0,
-        inputs: [],
+        inputs: {},
       },
     });
 
@@ -944,23 +947,5 @@ describe("OAuth auto flow", () => {
     const cancel = mocks.cancelCalls[0];
     settleCancel(cancel, { cancelled: false, result: { kind: "done" } });
     expect(onDone).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("no usable sign-in", () => {
-  it("says so instead of rendering an empty picker", () => {
-    renderDialog({
-      entry: entry({
-        id: "amazon-bedrock",
-        name: "Amazon Bedrock",
-        credentialKey: null,
-        methods: [],
-      }),
-      capabilities: FULL_CAPS,
-      onDone: vi.fn(),
-    });
-    expect(
-      screen.getByText(/advertises no sign-in method Traycer can drive/),
-    ).toBeTruthy();
   });
 });

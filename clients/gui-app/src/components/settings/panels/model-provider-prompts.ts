@@ -1,5 +1,5 @@
 import type {
-  ModelProviderAuthInput,
+  ModelProviderAuthInputs,
   ModelProviderPrompt,
   ModelProviderPromptCondition,
 } from "@traycer/protocol/host/provider-native-schemas";
@@ -105,16 +105,17 @@ export function unansweredModelProviderPrompts(
 }
 
 /**
- * The wire payload for a method's prompted fields. HIDDEN prompts contribute
- * nothing - the host rejects any input key the selected method did not ask for,
- * and a field the user never saw is exactly that.
+ * The wire payload for a method's prompted fields, keyed by prompt key. HIDDEN
+ * prompts contribute nothing - a field the user never saw is not an answer, and
+ * sending its seeded default would be a client bug dressed as data.
  */
 export function modelProviderPromptInputs(
   prompts: readonly ModelProviderPrompt[],
   answers: ModelProviderPromptAnswers,
-): readonly ModelProviderAuthInput[] {
-  return visibleModelProviderPrompts(prompts, answers).map((prompt) => ({
-    key: prompt.key,
-    value: answers.get(prompt.key) ?? "",
-  }));
+): ModelProviderAuthInputs {
+  const inputs: Record<string, string> = {};
+  for (const prompt of visibleModelProviderPrompts(prompts, answers)) {
+    inputs[prompt.key] = answers.get(prompt.key) ?? "";
+  }
+  return inputs;
 }
