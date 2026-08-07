@@ -396,8 +396,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
   force-refreshes the list and harness availability on demand.
   - **The detail pane is tabbed, and the tab RAIL is the only thing between the
-    provider header and its config.** Order is `general` · `account` · `usage` ·
-    `env` · `mcp` · `plugins` · `skills`, filtered per provider through
+    provider header and its config.** Order is `account` · `usage` · `general` ·
+    `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
     `supportedTabsFor` (`provider-settings-tabs.ts` - pure, so the rule is
     tested without rendering the panel).
     - **The provider header and the rail are PINNED rows; only the active tab's
@@ -793,6 +793,102 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         must not touch the create/import draft fields; failure closes only the
         confirmation and renders inside the skill dialog, since the tab's own
         error banner sits behind it and would be invisible.
+  - **Model Providers is the visual layer of `opencode auth login`**
+    (`provider-model-providers-tab.tsx` +
+    `provider-model-provider-connect-dialog.tsx`): the UPSTREAM LLM credentials
+    a provider calls with, not a Traycer account and not a CLI binary. Backed by
+    four dedicated RPCs on the optional-capability channel
+    (`providers.listModelProviders` / `modelProviderAuth` /
+    `awaitModelProviderAuth` / `cancelModelProviderAuth`) through
+    `useHostQuery` / `useHostMutation`, with keys in
+    `lib/query-keys/model-providers-query-keys.ts`.
+    - **The tab exists only when the host says so.** It rides `supportedTabs`
+      like every other wire tab, and only the `opencode` module advertises it -
+      so an old host, an old CLI below the version gate, or any other provider
+      simply has no tab. There is no client-side derivation that could disagree.
+      It sits after `env` and before `mcp` in `PROVIDER_TAB_ORDER`: it is
+      configuration (what this provider can reach) rather than an inventory of
+      what is installed into it, and that position cannot move any provider's
+      DEFAULT tab, since every provider advertising it also advertises the tabs
+      ahead of it.
+    - **NO scope picker**, unlike MCP. OpenCode's upstream auth is per-user;
+      there are no project-scoped credentials for a `global`/`project` control
+      to choose between. The sidebar host picker still scopes the tab.
+    - **ONE list, connected first** (`sortModelProviderEntries`), not a
+      "Connected" section above a searchable catalog. Search has to be able to
+      find a connected provider, and the two-section shape is precisely the one
+      where it cannot. ~180 rows in a viewport-capped scroll region of their
+      own; deliberately NOT virtualized (single-line rows, no per-row queries -
+      and a virtualizer renders an empty viewport under jsdom's zero-height
+      layout, which would put this list's behavior beyond test).
+    - **`source` is badged only for a CONNECTED provider, and disconnect is
+      gated on `canDisconnect` ALONE.** The host reports `source` as null unless
+      connected, so a badge anywhere else would claim a credential origin the
+      row does not have. `hasStoredCredential` answers a different question
+      ("does Traycer hold a credential?") than `canDisconnect` ("may it be
+      removed from here?"); today's host answers both `source === "api"`, a
+      later one need not, and reading either for the other is how a button
+      appears that the host will refuse. `env` / `config` / `custom` therefore
+      read as **Managed outside Traycer**.
+    - **`credentialKey` is the credential's home**, and the reason it is on the
+      wire: the host's connect contract wants exactly ONE input keyed by the
+      provider's models.dev env var, and only the host knows which member of a
+      multi-entry `env[]` is the secret. Null for the few providers with no
+      plain-key path (multi-secret, or a service-account file) - those hide the
+      key field entirely rather than offering one the host must reject.
+    - **The plain API-key path disappears when the provider ADVERTISES an `api`
+      method**, because that method IS the key path plus the fields it wants.
+      Two "API key" rows differing only in whether they ask the provider's own
+      questions is a choice nobody can make correctly.
+    - **The prompts DSL is evaluated client-side**
+      (`model-provider-prompts.ts` - pure, so it is tested without a form).
+      Visibility resolves SEQUENTIALLY and only a visible prompt's answer feeds
+      a later `when`: the form is a CLI prompt loop rendered at once, so a
+      question never asked has no answer, and a field predicated on it must stay
+      off screen. An unanswered key fails `neq` as well as `eq`. Hidden fields
+      contribute nothing to the request - the host rejects any key the selected
+      method did not ask for.
+    - **OAuth attempt state lives in `model-provider-pending-auth-store.ts`**
+      (mirrors `mcp-pending-auth-store.ts`) and carries the host-minted
+      `attemptId`, which is the field that makes a resumed panel honest:
+      attempts are single-flight per `(providerId, modelProviderId)` and a newer
+      one supersedes the pending one, so a panel polling by key alone would be
+      handed the newer attempt's status as its own. The tab adopts a stored
+      attempt during RENDER, guarded on the entry map's identity - the same
+      pattern as the MCP tab's `useResumeOauthPolling`, and what makes the panel
+      re-openable across navigation yet still dismissible.
+    - **Two OAuth arms, and neither is faked.** `code` shows the provider's own
+      `instructions` verbatim plus a paste field; `auto` completes on the
+      server's loopback and shows a waiting state with a bounded poll and a
+      **Stop waiting** button - honest wording, because upstream has no
+      OAuth-cancel endpoint and cancelling only discards Traycer's pending
+      attempt and releases the server lease.
+    - **Typed failures map to four distinct moves**
+      (`modelProviderAuthErrorDisposition` in
+      `lib/providers/model-provider-error-copy.ts`): `attempt_superseded`
+      stands down SILENTLY (a
+      newer attempt owns the surface - reporting it accuses the user of breaking
+      the flow they just restarted), `attempt_expired`/`attempt_not_found` offer
+      a fresh start, `code_rejected` re-prompts and KEEPS the live attempt, and
+      everything else is reported. That mapping is the enum's contract restated
+      as behaviour in one place, instead of a switch per call site that handles
+      half of it.
+    - **A cold list can be a WAIT rather than a failure.** Reaching the catalog
+      needs the managed server, so every reason it would not start arrives as
+      one `server_unavailable` - including a provider pack still downloading.
+      The tab is handed the provider row's `providerPackPreparingForProvider`
+      state and renders that case as loading-with-reason.
+      `capability_unavailable` gets no Retry button: the surface is not offered
+      here at all, and a click that cannot work is the offered-then-failed shape
+      the rest of this panel refuses.
+    - **Mutations invalidate the model catalog, not the harness list.**
+      `agent.gui.listModels` is `staleTime: Infinity` by design, so without the
+      invalidation the model picker would serve the pre-connect list for the
+      rest of the app session - the one place the user looks to confirm the
+      connect worked. `agent.gui.listHarnesses` is left alone: an upstream
+      credential does not change which CLIs are installed, and re-probing every
+      harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
+      user action.
 - `Notifications` Two `SettingsGroup` cards. A design pass
   (`settings-related-panels-core-flows` artifact) replaced the old one-column
   severity×channel matrix with a compact policy card, and gave the hooks

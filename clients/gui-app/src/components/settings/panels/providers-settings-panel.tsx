@@ -42,6 +42,7 @@ import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProviderMcpTab } from "./provider-mcp-tab";
+import { ProviderModelProvidersTab } from "./provider-model-providers-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
 import { ProviderSkillsTab } from "./provider-skills-tab";
 import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
@@ -51,6 +52,7 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import {
   providerCanStartProfileOauth,
   providerSignInUnavailableHint,
@@ -95,11 +97,6 @@ const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
   mcp: "MCP",
   plugins: "Plugins",
   skills: "Skills",
-  // The wire id exists (`providers.list@8.0`); the tab itself does not render
-  // yet - it is absent from `PROVIDER_TAB_ORDER`, so `supportedTabsFor` never
-  // returns it and no host advertises it. The label lands here now because
-  // this map is exhaustive over the wire enum, and a tab id cannot be added to
-  // the protocol without one.
   modelProviders: "Model Providers",
 };
 
@@ -1015,6 +1012,34 @@ function ProviderTabBody({
           // that cannot report this never accuses a provider of a missing
           // binary it knows nothing about.
           cliBinaryResolved={state.cliBinaryResolved ?? true}
+        />
+      );
+    }
+    case "modelProviders": {
+      const modelProviders = state.nativeCapabilities.modelProviders;
+      if (modelProviders === null) {
+        // Unreachable through the tab bar - `supportedTabsFor` only returns a
+        // tab the host advertised, and a host that advertises this one fills
+        // the capability block. Kept because the switch is the only place that
+        // narrows the nullable block, and a `!` here would be the escape the
+        // repo's type rules exist to prevent.
+        return (
+          <ProviderTabPlaceholder
+            title="Model providers"
+            description="This provider does not support upstream model provider sign-in."
+          />
+        );
+      }
+      return (
+        <ProviderModelProvidersTab
+          providerId={state.providerId}
+          providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+          capabilities={modelProviders}
+          // The catalog needs a managed server, so a pack that is still
+          // downloading reads as "the server would not start". The provider row
+          // is what tells the tab to render that as a WAIT rather than a
+          // failure - see `ModelProvidersBody`.
+          packPreparing={providerPackPreparingForProvider(state)}
         />
       );
     }
