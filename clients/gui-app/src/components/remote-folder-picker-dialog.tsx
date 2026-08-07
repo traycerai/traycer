@@ -262,7 +262,18 @@ function RemoteFolderPickerBody(): ReactNode {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <RemoteFolderPickerRecents entries={recentEntries} onPick={setPath} />
+        <RemoteFolderPickerRecents
+          entries={recentEntries}
+          onPick={(path) => {
+            // Picking a recent makes the field non-pristine, which unmounts
+            // the whole row - including the button that was just activated.
+            // `onMouseDown` keeps focus for a pointer, but a keyboard user
+            // (Enter/Space) never triggers that, so focus would land nowhere
+            // and the field would stop accepting typing, arrows and cmd+Enter.
+            setPath(path);
+            inputRef.current?.focus();
+          }}
+        />
         <p className="px-2 pb-1 text-ui-xs text-muted-foreground">
           Directories
         </p>
@@ -676,7 +687,14 @@ function rootLengthOf(path: string): number {
   return 1;
 }
 
+/**
+ * `\` counts as a separator only once the path is known to be Windows-native.
+ * On a POSIX host a backslash is an ordinary filename character, so a folder
+ * genuinely named `foo\bar` must not be split at it - `/srv/foo\bar` browses
+ * `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
+ */
 function lastSeparatorIndex(path: string): number {
+  if (path.startsWith("/")) return path.lastIndexOf("/");
   return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
 }
 
@@ -692,9 +710,10 @@ function separatorOf(path: string): string {
 
 /** Descending appends a separator; a root already ends in one. */
 function withTrailingSeparator(path: string): string {
-  return path.endsWith("/") || path.endsWith("\\")
-    ? path
-    : path + separatorOf(path);
+  // Only the path's OWN separator counts as already-terminated: a POSIX
+  // folder named `foo\` still needs its `/`.
+  const separator = separatorOf(path);
+  return path.endsWith(separator) ? path : path + separator;
 }
 
 function isTildeOnly(raw: string): boolean {
@@ -849,10 +868,10 @@ function readAddTarget(
   }
   if (!isAbsolutePath(path)) return null;
   const rootLength = rootLengthOf(path);
-  while (
-    path.length > rootLength &&
-    (path.endsWith("/") || path.endsWith("\\"))
-  ) {
+  // Same discipline as `withTrailingSeparator`: strip only this path's own
+  // separator, so a POSIX folder named `foo\` keeps its backslash.
+  const separator = separatorOf(path);
+  while (path.length > rootLength && path.endsWith(separator)) {
     path = path.slice(0, -1);
   }
   return path;

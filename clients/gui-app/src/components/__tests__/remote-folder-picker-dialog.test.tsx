@@ -592,6 +592,60 @@ describe("<RemoteFolderPickerDialog />", () => {
     await expect(pick).resolves.toBe("/srv/app");
   });
 
+  it("keeps focus on the field when a recent is picked by keyboard", async () => {
+    // Picking a recent unmounts the whole row, including the button that was
+    // just activated. `onMouseDown` covers a pointer, but Enter/Space never
+    // fires it - focus would be left on a removed node.
+    recentEntries = [
+      { path: "/Users/tester/code", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+    ];
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    const chip = (
+      await screen.findAllByTestId("remote-folder-picker-recent")
+    )[0];
+    // Tab to the chip first: that is what makes this discriminating. Clicking
+    // without focusing leaves the field focused anyway, so the assertion would
+    // hold with or without the fix.
+    if (!(chip instanceof HTMLElement))
+      throw new Error("chip is not an element");
+    chip.focus();
+    expect(document.activeElement).toBe(chip);
+    fireEvent.click(chip);
+    expect(screen.queryAllByTestId("remote-folder-picker-recent")).toEqual([]);
+    expect(document.activeElement).toBe(pathInput());
+  });
+
+  it("treats a backslash as an ordinary character in a POSIX folder name", async () => {
+    // A POSIX host may legitimately have a folder named `foo\bar`; splitting
+    // at the backslash would browse `/Users/tester/foo` instead.
+    queryByPath.set(
+      pathKey("/Users/tester"),
+      readyLevel({
+        directoryPath: "/Users/tester",
+        parentPath: "/Users",
+        entries: [
+          { path: "/Users/tester/foo\\bar", name: "foo\\bar" },
+          { path: "/Users/tester/code", name: "code" },
+        ],
+      }),
+    );
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.change(pathInput(), {
+      target: { value: "/Users/tester/foo\\bar" },
+    });
+    // Browsed /Users/tester filtered by "foo\bar" - never /Users/tester/foo.
+    expect(requestedPaths).toContain("/Users/tester");
+    expect(requestedPaths).not.toContain("/Users/tester/foo");
+    expect(rowNames()).toEqual(["foo\\bar"]);
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/Users/tester/foo\\bar");
+  });
+
   it("hides the recents once the field is edited", async () => {
     recentEntries = [
       { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
