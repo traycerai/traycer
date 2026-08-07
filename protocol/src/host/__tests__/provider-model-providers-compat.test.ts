@@ -582,9 +582,9 @@ describe("providers.listModelProviders payloads", () => {
   });
 
   it("reports an externally-sourced credential as read-only, never as storable", () => {
-    // `env`/`config`/`custom` are the effective origin. The row still says
-    // `connected`, and it is the two flags - not the source string - a
-    // renderer gates its disconnect affordance on.
+    // `env`/`config` describe a credential living outside anything this tab
+    // can write. The row can still say `connected`, and it is `canDisconnect`
+    // - not the source string - a renderer gates its disconnect affordance on.
     const entry = modelProviderEntrySchema.parse({
       id: "openai",
       name: "OpenAI",
@@ -596,6 +596,44 @@ describe("providers.listModelProviders payloads", () => {
     });
     expect(entry.canDisconnect).toBe(false);
     expect(entry.connected).toBe(true);
+  });
+
+  it("can say connected-but-not-removable, which is why the two flags are separate", () => {
+    // The autoload-`custom` residual, and the case that makes
+    // `hasStoredCredential` and `canDisconnect` genuinely different questions
+    // rather than two names for `source === "api"`. A provider autoloaded by a
+    // plugin has nothing in the auth store to delete, so `auth.remove` is a
+    // no-op and the row stays connected afterwards - a disconnect button there
+    // is a click that reports success and changes nothing.
+    const entry = modelProviderEntrySchema.parse({
+      id: "some-loader-provider",
+      name: "Loader Provider",
+      source: "custom",
+      hasStoredCredential: false,
+      canDisconnect: false,
+      connected: true,
+      methods: [],
+    });
+    expect(entry.connected).toBe(true);
+    expect(entry.canDisconnect).toBe(false);
+    expect(entry.hasStoredCredential).toBe(false);
+  });
+
+  it("can also say custom-and-removable - the source does not decide either flag", () => {
+    // Same source, both flags true: a `custom` row whose credential the host
+    // CAN remove. If `source` decided the flags, one of these two rows would
+    // be unrepresentable, and a renderer that read the source instead of the
+    // flags would get exactly one of them wrong.
+    const entry = modelProviderEntrySchema.parse({
+      id: "some-loader-provider",
+      name: "Loader Provider",
+      source: "custom",
+      hasStoredCredential: true,
+      canDisconnect: true,
+      connected: true,
+      methods: [],
+    });
+    expect(entry.canDisconnect).toBe(true);
   });
 
   it("accepts a null source for an unauthenticated provider and rejects an unmodeled one", () => {

@@ -1290,13 +1290,27 @@ export type ModelProviderSource = z.infer<typeof modelProviderSourceSchema>;
 /**
  * One upstream provider row.
  *
- * `hasStoredCredential` and `canDisconnect` are separate fields that the
- * `opencode` host currently answers identically (`source === "api"`), and they
- * are kept separate on purpose: they are different questions - "does Traycer
- * hold a credential for this?" vs "may the user remove it from here?" - and a
- * later host that CAN read the auth store answers the first differently
- * without a protocol change. A renderer must gate its disconnect affordance on
- * `canDisconnect` alone.
+ * `connected` is the server's own verdict, and it is NOT `source === "api"`.
+ * A provider counts as connected when its effective credential comes from
+ * Traycer-manageable storage - `api` (OpenCode's auth store) or `custom` (a
+ * loader/plugin that supplied one) - while `env` and `config` describe a
+ * credential that exists outside anything this tab can write.
+ *
+ * `hasStoredCredential` and `canDisconnect` are separate fields, and they are
+ * separate because they answer different questions: "does Traycer hold a
+ * credential for this?" versus "will Remove actually do something?" The
+ * `custom` source is exactly where those diverge. A provider can be autoloaded
+ * `custom` with nothing in the auth store to delete, so `auth.remove` is a
+ * no-op and the row stays connected afterwards - offering a disconnect button
+ * there means offering a click that reports success and changes nothing.
+ *
+ * So a renderer gates its disconnect affordance on `canDisconnect` ALONE -
+ * never on `connected`, never on `source`, and never on
+ * `hasStoredCredential`. The host owns the rule that decides these (it is the
+ * only side that can see the auth store and the loader set); this schema only
+ * fixes what each field MEANS, so the rule can sharpen - a host that learns to
+ * read the store answers the first question better - without a protocol
+ * change.
  *
  * No secret ever appears here. Credentials are write-only on this surface
  * (`connect` carries plaintext once), and the read side reports presence and
