@@ -823,6 +823,20 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       (single-line rows, no per-row queries - and a virtualizer renders an empty
       viewport under jsdom's zero-height layout, which would put this list's
       behavior beyond test).
+      - **One filter beside the search box**
+        (`model-provider-filter.ts` + `model-provider-list-controls.tsx`): All /
+        Browser sign-in / API key, in the same `ListFilter` menu shape the
+        provider rail uses (`provider-rail-controls.tsx`), down to the dot that
+        marks an active filter and the trigger's accessible name carrying the
+        current value. Per-row method badges were the other option and would
+        have lit "API key" on ~170 of ~180 rows to say nothing — the failure the
+        removed per-tab content dots had. The interesting answer is the rare
+        one, so it lives one click away instead.
+        The two buckets deliberately OVERLAP rather than partition: a provider
+        advertising both arms belongs under either, and the handful offering
+        neither (multi-secret or service-account-file credentials) match no
+        filter and stay reachable under All. Filtering runs BEFORE the fuzzy
+        search, so a query cannot quietly re-widen the bucket the user picked.
     - **Keys entered here land in the PROVIDER's credential store, not
       Traycer's.** A connect writes OpenCode's own `auth.json` through
       `auth.set`, and nothing is mirrored into `provider-overrides.json` — so

@@ -101,6 +101,41 @@ export function readOnlySourceLabel(
 }
 
 /**
+ * Why a read-only row cannot be changed from here, and what WOULD change it.
+ *
+ * The label alone ("Set by environment") states the owner; this states the
+ * consequence and the way out, because otherwise the row is a dead end: no
+ * Connect, no Remove, and no hint that the credential the user is about to go
+ * looking for is being outranked rather than ignored.
+ *
+ * This is not hypothetical precedence. OpenCode resolves env before its own
+ * auth store, so a provider with BOTH reports `env` - observed live: an account
+ * holding a stored `openai` OAuth credential still reports `source: "env"`
+ * while `OPENAI_API_KEY` is exported. Signing in again from here would succeed,
+ * write a credential, and change nothing the user can see, which is why the row
+ * offers no button and says this instead.
+ *
+ * `credentialKey` names the actual variable when we have it - "unset the env
+ * var" is not an instruction anyone can follow without it.
+ */
+export function readOnlySourceHint(
+  source: ModelProviderSource,
+  credentialKey: string | null,
+): string | null {
+  switch (source) {
+    case "env":
+      return credentialKey === null
+        ? "An environment variable on this host provides this credential and takes precedence over anything saved here."
+        : `${credentialKey} is set in this host's environment and takes precedence over anything saved here. Unset it and reconnect to sign in from Traycer.`;
+    case "config":
+    case "custom":
+      return "An OpenCode config file provides this credential and takes precedence over anything saved here. Remove it there to sign in from Traycer.";
+    case "api":
+      return null;
+  }
+}
+
+/**
  * One selectable way to sign in.
  *
  * The plain API-key path is a choice with `methodIndex: null` rather than a

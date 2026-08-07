@@ -240,6 +240,90 @@ describe("ProviderModelProvidersTab list states", () => {
   });
 });
 
+/**
+ * Radix opens on pointerdown, not click - firing only `click` leaves the menu
+ * shut and every following query passing vacuously. Mirrors
+ * `provider-rail-controls.test`'s helper.
+ */
+function selectFilter(name: string): void {
+  fireEvent.pointerDown(
+    screen.getByRole("button", { name: /^Filter model providers/ }),
+    { button: 0, ctrlKey: false, pointerType: "mouse" },
+  );
+  fireEvent.click(screen.getByRole("menuitemradio", { name }));
+}
+
+describe("ProviderModelProvidersTab method filter", () => {
+  const MIXED: ModelProvidersListResult = {
+    ok: true,
+    providers: [
+      entry({ id: "anthropic", name: "Anthropic" }),
+      entry({
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        credentialKey: null,
+        methods: [{ type: "oauth", label: "Sign in with GitHub", prompts: [] }],
+      }),
+    ],
+  };
+
+  it("shows everything until a filter is picked", () => {
+    renderTab({ result: MIXED, capabilities: FULL_CAPS });
+    expect(screen.getByText("Anthropic")).toBeTruthy();
+    expect(screen.getByText("GitHub Copilot")).toBeTruthy();
+    // No dot on the trigger while nothing is filtered.
+    expect(
+      screen.getByTestId("model-provider-filter-trigger").textContent,
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Filter model providers" }),
+    ).toBeTruthy();
+  });
+
+  it("narrows to browser sign-in and names the filter on the trigger", () => {
+    // ~10 of ~180 catalog rows advertise OAuth, which is the whole reason this
+    // control exists - per-row badges would have marked the other ~170 with a
+    // label that says nothing.
+    renderTab({ result: MIXED, capabilities: FULL_CAPS });
+    selectFilter("Browser sign-in");
+
+    expect(screen.getByText("GitHub Copilot")).toBeTruthy();
+    expect(screen.queryByText("Anthropic")).toBeNull();
+    // The accessible name carries the CURRENT value: the dot alone says only
+    // that something is filtered.
+    expect(
+      screen.getByRole("button", {
+        name: "Filter model providers, showing browser sign-in",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("explains an empty filter result without quoting an empty query", () => {
+    renderTab({
+      result: { ok: true, providers: [entry({ id: "anthropic" })] },
+      capabilities: FULL_CAPS,
+    });
+    selectFilter("Browser sign-in");
+    expect(screen.getByText("No matching providers")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "No providers on this host advertise a browser sign-in.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("keeps a search INSIDE the picked bucket", () => {
+    // Filter runs before the fuzzy matcher, so a query cannot quietly re-widen
+    // the set the user narrowed.
+    renderTab({ result: MIXED, capabilities: FULL_CAPS });
+    selectFilter("Browser sign-in");
+    fireEvent.change(screen.getByLabelText("Search providers"), {
+      target: { value: "anthropic" },
+    });
+    expect(screen.queryByText("Anthropic")).toBeNull();
+  });
+});
+
 describe("ProviderModelProvidersTab source and disconnect", () => {
   it("badges the origin ONLY for a connected provider", () => {
     // `source` is null unless connected, and a badge on a row nobody has
@@ -346,6 +430,37 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
+  });
+
+  it("explains what OUTRANKS a read-only credential, naming the variable", () => {
+    // Observed live: an account with a stored openai OAuth credential still
+    // reports `source: env` while OPENAI_API_KEY is exported. Without this the
+    // row is a dead end - no Connect, no Remove, and no hint that signing in
+    // again would succeed and change nothing visible.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            credentialKey: "OPENAI_API_KEY",
+            connected: true,
+            source: "env",
+            canDisconnect: false,
+            methods: [
+              { type: "oauth", label: "ChatGPT Pro/Plus", prompts: [] },
+            ],
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    const label = screen.getByTestId("model-provider-read-only-label");
+    expect(label.textContent).toBe("Set by environment");
+    // The hint rides the tooltip; jsdom cannot open Radix content, so the
+    // trigger wiring is the structural proof (see the remove-button test).
+    expect(label.getAttribute("data-slot")).toBe("tooltip-trigger");
   });
 
   it("gates the disconnect affordance on canDisconnect ALONE", () => {
@@ -571,8 +686,11 @@ describe("ProviderModelProvidersTab resume", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getAllByRole("button", { name: /Connect/ })[0]);
     expect(screen.getByText("Connect Anthropic")).toBeTruthy();
-    // The sign-in FORM, not a resumed waiting panel.
-    expect(screen.getByLabelText("API key")).toBeTruthy();
+    // The sign-in FORM, not a resumed waiting panel. These rows advertise an
+    // oauth method, so the form's action is Continue - and the plain API-key
+    // field is correctly absent, since the provider never advertised one.
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    expect(screen.queryByLabelText("API key")).toBeNull();
     expect(
       screen.queryByText("Waiting for the browser to finish signing in"),
     ).toBeNull();

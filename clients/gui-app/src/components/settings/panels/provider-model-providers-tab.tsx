@@ -31,19 +31,24 @@ import {
   useModelProviderPendingAuthStore,
 } from "@/stores/settings/model-provider-pending-auth-store";
 import {
+  readOnlySourceHint,
   readOnlySourceLabel,
   sortModelProviderEntries,
   sourceBadgeHint,
   sourceBadgeLabel,
 } from "./model-provider-connect-model";
 import {
+  filterModelProvidersByMethod,
+  MODEL_PROVIDER_METHOD_FILTER,
+  modelProviderMethodFilterEmptyDescription,
+  type ModelProviderMethodFilter,
+} from "./model-provider-filter";
+import { ModelProviderListControls } from "./model-provider-list-controls";
+import {
   filterModelProviders,
   isProviderListSearchActive,
 } from "./provider-list-search-filter";
-import {
-  ProviderListSearch,
-  ProviderListSearchEmptyState,
-} from "./provider-list-search";
+import { ProviderListSearchEmptyState } from "./provider-list-search";
 import { ProviderModelProviderConnectDialog } from "./provider-model-provider-connect-dialog";
 
 const EMPTY_ENTRIES: readonly ModelProviderEntry[] = [];
@@ -128,6 +133,9 @@ export function ProviderModelProvidersTab(props: {
   const hostId = binding?.hostClient.getActiveHostId() ?? activeHostId;
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [methodFilter, setMethodFilter] = useState<ModelProviderMethodFilter>(
+    MODEL_PROVIDER_METHOD_FILTER.All,
+  );
   const [connectTargetId, setConnectTargetId] = useState<string | null>(null);
   const [disconnectTarget, setDisconnectTarget] =
     useState<ModelProviderEntry | null>(null);
@@ -148,11 +156,19 @@ export function ProviderModelProvidersTab(props: {
         : EMPTY_ENTRIES,
     [result],
   );
+  // Filter first, THEN search: the fuzzy matcher ranks what it is given, so
+  // narrowing the candidate set before it runs keeps a query's results inside
+  // the bucket the user picked instead of quietly re-widening it.
   const filtered = useMemo(
-    () => filterModelProviders(entries, searchQuery),
-    [entries, searchQuery],
+    () =>
+      filterModelProviders(
+        filterModelProvidersByMethod(entries, methodFilter),
+        searchQuery,
+      ),
+    [entries, methodFilter, searchQuery],
   );
   const searchActive = isProviderListSearchActive(searchQuery);
+  const filterActive = methodFilter !== MODEL_PROVIDER_METHOD_FILTER.All;
 
   // Which row should re-open BY ITSELF after a navigation. Newest wins; it
   // decides nothing about the row the user opens by hand.
@@ -225,11 +241,12 @@ export function ProviderModelProvidersTab(props: {
       </p>
 
       {entries.length > 0 ? (
-        <ProviderListSearch
+        <ModelProviderListControls
           query={searchQuery}
           onQueryChange={setSearchQuery}
+          filter={methodFilter}
+          onFilterChange={setMethodFilter}
           resultCount={filtered.length}
-          resourceLabel="providers"
         />
       ) : null}
 
@@ -246,6 +263,11 @@ export function ProviderModelProvidersTab(props: {
         unfilteredCount={entries.length}
         searchQuery={searchQuery}
         searchActive={searchActive}
+        filterEmptyDescription={
+          filterActive
+            ? modelProviderMethodFilterEmptyDescription(methodFilter)
+            : null
+        }
         canDisconnect={canDisconnect}
         connectable={
           capabilities.actions.includes("connect") ||
@@ -312,6 +334,8 @@ function ModelProvidersBody(props: {
   readonly unfilteredCount: number;
   readonly searchQuery: string;
   readonly searchActive: boolean;
+  /** Copy for an active filter that matched nothing, or null while showing all. */
+  readonly filterEmptyDescription: string | null;
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
   readonly rowError: {
@@ -386,11 +410,23 @@ function ModelProvidersBody(props: {
       />
     );
   }
-  if (props.searchActive && props.entries.length === 0) {
+  if (props.entries.length === 0 && props.searchActive) {
     return (
       <ProviderListSearchEmptyState
         query={props.searchQuery}
         resourceLabel="providers"
+      />
+    );
+  }
+  // A filter with no query needs its own line: the search empty state quotes a
+  // query, and quoting an empty one would read as a bug rather than a filter.
+  if (props.entries.length === 0 && props.filterEmptyDescription !== null) {
+    return (
+      <EmptyState
+        title="No matching providers"
+        description={props.filterEmptyDescription}
+        actionLabel={null}
+        onAction={null}
       />
     );
   }
@@ -465,6 +501,10 @@ function ModelProviderRow(props: {
     entry.connected && entry.source !== null && entry.source !== "api";
   const readOnlyLabel =
     entry.source === null ? null : readOnlySourceLabel(entry.source);
+  const readOnlyHint =
+    entry.source === null
+      ? null
+      : readOnlySourceHint(entry.source, entry.credentialKey);
   return (
     <li className="rounded-lg border border-border/60">
       <div className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5">
@@ -503,9 +543,19 @@ function ModelProviderRow(props: {
         <div className="flex shrink-0 items-center gap-1">
           {props.busy ? <MutedAgentSpinner /> : null}
           {externallyManaged && readOnlyLabel !== null ? (
-            <span className="text-ui-xs text-muted-foreground">
-              {readOnlyLabel}
-            </span>
+            <TooltipWrapper
+              label={readOnlyHint}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span
+                className="cursor-help text-ui-xs text-muted-foreground underline decoration-dotted underline-offset-2"
+                data-testid="model-provider-read-only-label"
+              >
+                {readOnlyLabel}
+              </span>
+            </TooltipWrapper>
           ) : null}
           {props.connectable && !externallyManaged ? (
             <Button
