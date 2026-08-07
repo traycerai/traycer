@@ -578,10 +578,11 @@ const unavailableProviderRateLimitsSchemaV60 = z.object({
  * NOT widen this schema - extend the latest schema and use that v4 bridge
  * instead.
  *
- * Hugging Face itself is deliberately NOT a rate-limit-capable provider (it
- * exposes no personal-account usage API), so it can only ever appear here
- * through the unavailable arm - which is exactly why the arm's enum is what
- * needs pinning.
+ * Hugging Face appears in NEITHER arm of this union: it has no available arm
+ * here, and `providerIdSchemaV60` cannot name it in the unavailable one.
+ * Pinning that arm's enum is what closes the second door - left live, a
+ * degraded Hugging Face snapshot would still reach a v3.0 caller as an
+ * `available: false` row naming a provider that line has never heard of.
  */
 export const providerRateLimitsSchemaV60 = z.union([
   codexRateLimitsSchema,
