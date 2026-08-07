@@ -188,6 +188,33 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     expect(guide.getAttribute("href")).toBe("https://ampcode.com/manual");
   });
 
+  it("waits for the PATH probe instead of declaring the binary missing", () => {
+    // `availabilityPending` means the host's shell/PATH probe has not settled,
+    // and the protocol is explicit that `candidates` must not be trusted until
+    // it does. The empty list here is interim, not a verdict — for the
+    // PATH-only providers this is the ordinary cold-open state, so treating it
+    // as final tells people to install a CLI the probe is about to find.
+    const state: ProviderCliState = {
+      ...providerState({
+        providerId: "amp",
+        selected: { kind: "path" },
+        candidates: [],
+      }),
+      availabilityPending: true,
+    };
+    renderSection(state);
+
+    expect(screen.getByText("Looking for the Amp CLI…")).toBeDefined();
+    expect(
+      screen.queryByText(/No Amp CLI was found on this machine/),
+    ).toBeNull();
+    // The install guide is the actionable half of the wrong advice; it must
+    // not be reachable while the answer is still unknown.
+    expect(
+      screen.queryByRole("link", { name: "Amp installation guide" }),
+    ).toBeNull();
+  });
+
   it("renders the empty sentence with no link when the install URL is null (cursor)", () => {
     // Cursor has no verified install page in this repo; null means omit the
     // anchor rather than shipping a guessed URL that 404s.

@@ -2192,6 +2192,57 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(useProvidersFocusStore.getState().focusTab).toBeNull();
   });
 
+  it("opens the FOCUSED provider's own first tab when no focusTab is given", () => {
+    // The "Add API key" CTA sets `focusHarnessId` and no `focusTab`, so the
+    // initial tab falls out of the default rule. That default is now
+    // provider-dependent (account -> usage -> ...), which makes deriving it
+    // from the RAIL'S FIRST provider actively wrong: opencode has no API key
+    // and defaults to `usage`, and because amp also advertises `usage` the
+    // stale value survives `resolveTabForProvider` and the pane settles on
+    // "Profiles & Limits" - never showing the key field the CTA exists to
+    // reach.
+    useProvidersFocusStore.getState().setFocusHarnessId("amp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+    ).toBe("active");
+    // Discriminating: "Profiles & Limits" is rendered and selectable for amp,
+    // so this is the deep link picking the right one of two live tabs rather
+    // than the wrong one being absent.
+    expect(
+      screen
+        .getByRole("tab", { name: "Profiles & Limits" })
+        .getAttribute("data-state"),
+    ).toBe("inactive");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+  });
+
   it("ignores focusTab when the target provider does not support it", () => {
     useProvidersFocusStore.getState().setFocusHarnessId("cursor");
     useProvidersFocusStore.getState().setFocusTab("general");

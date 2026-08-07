@@ -511,10 +511,19 @@ function ProvidersRailLayout({
   const [activeId, setActiveId] = useState<ProviderId>(() =>
     initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
+  // Same provider id as `activeId` above, deliberately: the default tab is now
+  // provider-dependent (account → usage → …), so deriving it from the rail's
+  // first provider lands the deep link on the wrong tab. The "Add API key" CTA
+  // sets `focusHarnessId` with no `focusTab`; with a first provider defaulting
+  // to `usage`, a focused provider that also supports `usage` would keep
+  // "Profiles & Limits" instead of opening its own first tab, "Account" — the
+  // one field the CTA exists to reach. When the deep link is not consumed (no
+  // focus, or a different host) `initialFocus.harnessId` is already null, so
+  // this stays the rail's first provider.
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,
-      initialActiveProviderId(orderedProviders, null),
+      initialActiveProviderId(orderedProviders, initialFocus.harnessId),
     ),
   );
   useEffect(() => {

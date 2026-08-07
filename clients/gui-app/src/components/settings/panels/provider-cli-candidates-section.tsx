@@ -253,6 +253,72 @@ function CandidateNotices({
  * below orchestration, and keeps this anchor's RunnerHost branch out of that
  * component's complexity budget.
  */
+/**
+ * What the candidate area shows: the table, or one of the two empty states.
+ *
+ * A plain function rather than nested ternaries in the JSX — the three-way
+ * choice reads as a rule here, and the table branch is long enough that a
+ * reader arriving at its `)` should not have to reconstruct which of two
+ * conditions got them there.
+ *
+ * `adding` forces the table because that is where the custom-path input lives:
+ * a user who opened it must still be able to type, whatever the probe says.
+ */
+type CandidateArea = "probing" | "missing" | "table";
+
+function candidateAreaFor(args: {
+  readonly adding: boolean;
+  readonly probePending: boolean;
+  readonly candidateCount: number;
+}): CandidateArea {
+  if (args.adding || args.candidateCount > 0) return "table";
+  return args.probePending ? "probing" : "missing";
+}
+
+function CandidateEmptyArea({
+  area,
+  providerId,
+}: {
+  readonly area: Exclude<CandidateArea, "table">;
+  readonly providerId: ProviderId;
+}): ReactNode {
+  if (area === "probing") {
+    return (
+      <CliBinaryProbePendingNotice
+        providerLabel={PROVIDER_DISPLAY_NAMES[providerId]}
+      />
+    );
+  }
+  return (
+    <CliBinaryMissingNotice
+      providerLabel={PROVIDER_DISPLAY_NAMES[providerId]}
+      installGuideUrl={PROVIDER_INSTALL_GUIDE_URL[providerId]}
+    />
+  );
+}
+
+/**
+ * Shown INSTEAD of the missing-binary notice while the host's PATH probe is
+ * still in flight and has turned up nothing yet.
+ *
+ * Deliberately says nothing about installing: at this point we do not know
+ * whether a binary exists, and the missing notice's advice ("install it, or
+ * add its path below") is wrong often enough — every PATH-only provider on a
+ * cold open — that showing it early is worse than showing nothing.
+ */
+function CliBinaryProbePendingNotice({
+  providerLabel,
+}: {
+  readonly providerLabel: string;
+}): ReactNode {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+      <MutedAgentSpinner />
+      Looking for the {providerLabel} CLI…
+    </div>
+  );
+}
+
 function CliBinaryMissingNotice({
   providerLabel,
   installGuideUrl,
@@ -370,7 +436,18 @@ export function ProviderCliCandidatesSection({
     managedInstallState,
     cliConfig.candidates,
   );
-  const noBinaryFound = cliConfig.candidates.length === 0;
+  // `availabilityPending` means the host's shell/PATH probe is still running,
+  // and the protocol is explicit that `candidates` must not be trusted until
+  // it settles ("A pending row always carries `available: false` semantically"
+  // — provider-schemas). An empty interim list is therefore not evidence of
+  // absence: for the PATH-only providers (amp, cursor) this pane would tell
+  // people to install a binary the in-flight probe is about to find, and offer
+  // an install guide for a CLI they already have.
+  const candidateArea = candidateAreaFor({
+    adding,
+    probePending: state.availabilityPending,
+    candidateCount: cliConfig.candidates.length,
+  });
 
   return (
     <>
@@ -380,12 +457,7 @@ export function ProviderCliCandidatesSection({
         advisory={state.advisory ?? null}
         packPreparing={packPreparing}
       />
-      {noBinaryFound && !adding ? (
-        <CliBinaryMissingNotice
-          providerLabel={PROVIDER_DISPLAY_NAMES[providerId]}
-          installGuideUrl={PROVIDER_INSTALL_GUIDE_URL[providerId]}
-        />
-      ) : (
+      {candidateArea === "table" ? (
         <div className="overflow-hidden rounded-lg border border-border/60">
           <div
             className={cn(
@@ -462,6 +534,8 @@ export function ProviderCliCandidatesSection({
             </div>
           ) : null}
         </div>
+      ) : (
+        <CandidateEmptyArea area={candidateArea} providerId={providerId} />
       )}
 
       {adding ? null : (
