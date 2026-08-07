@@ -362,13 +362,6 @@ export function NotificationsPopover(
     setClearAllConfirmOpen(false);
   }, [actions]);
 
-  const handleClear = useCallback(
-    (row: MergedNotificationRow) => {
-      actions.clear(row);
-    },
-    [actions],
-  );
-
   const handleUnreadOnlyChange = useCallback(
     (next: boolean) => {
       Analytics.getInstance().track(AnalyticsEvent.NotificationFilterChanged, {
@@ -492,11 +485,9 @@ export function NotificationsPopover(
                       <NotificationRow
                         key={id}
                         feedId={id}
-                        alwaysShowRail
                         onActivate={handleActivate}
                         onAcknowledge={handleAcknowledge}
                         onResolve={handleResolve}
-                        onClear={handleClear}
                       />
                     ))}
                   </ul>
@@ -520,7 +511,6 @@ export function NotificationsPopover(
                   onActivate={handleActivate}
                   onAcknowledge={handleAcknowledge}
                   onResolve={handleResolve}
-                  onClear={handleClear}
                   onResetFilters={resetFilters}
                 />
               </section>
@@ -843,7 +833,6 @@ interface RecentSectionBodyProps {
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   readonly onResolve: (row: MergedNotificationRow) => void;
-  readonly onClear: (row: MergedNotificationRow) => void;
   readonly onResetFilters: () => void;
 }
 
@@ -855,7 +844,6 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
         onResolve={props.onResolve}
-        onClear={props.onClear}
       />
     );
   }
@@ -877,7 +865,6 @@ interface RecentRowListProps {
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   readonly onResolve: (row: MergedNotificationRow) => void;
-  readonly onClear: (row: MergedNotificationRow) => void;
 }
 
 /** Inserts a temporal separator whenever the calendar-day group changes
@@ -898,7 +885,6 @@ function RecentRowList(props: RecentRowListProps): ReactNode {
           onActivate={props.onActivate}
           onAcknowledge={props.onAcknowledge}
           onResolve={props.onResolve}
-          onClear={props.onClear}
         />
       ))}
     </ul>
@@ -912,7 +898,6 @@ interface RecentRowProps {
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   readonly onResolve: (row: MergedNotificationRow) => void;
-  readonly onClear: (row: MergedNotificationRow) => void;
 }
 
 function RecentRow(props: RecentRowProps): ReactNode {
@@ -936,11 +921,9 @@ function RecentRow(props: RecentRowProps): ReactNode {
       )}
       <NotificationRow
         feedId={props.feedId}
-        alwaysShowRail={false}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
         onResolve={props.onResolve}
-        onClear={props.onClear}
       />
     </>
   );

@@ -352,7 +352,10 @@ function hostDone(
   });
 }
 
-function cloudDone(entryId: string): HostNotificationsCloudFeedRow {
+function cloudDone(
+  entryId: string,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
   return {
     entryId,
     originHostId: mockLocalHostEntry.hostId,
@@ -360,7 +363,7 @@ function cloudDone(entryId: string): HostNotificationsCloudFeedRow {
     entry: {
       id: entryId,
       updatedAt: 200,
-      readAt: null,
+      readAt,
       kind: "agent.stopped",
       sourceRef: entryId,
       severity: "done",
@@ -717,7 +720,7 @@ describe("NotificationsPopover", () => {
   it("keeps the last cloud snapshot visible while showing reconnecting", async () => {
     notificationFeedMode.value = "cloud";
     useCloudNotificationsStore.getState().applySnapshot({
-      rows: [cloudDone("entry-cloud")],
+      rows: [cloudDone("entry-cloud", null)],
       summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
       version: 1,
     });
@@ -763,7 +766,7 @@ describe("NotificationsPopover", () => {
     notificationFeedMode.value = "cloud";
     bindHostClient();
     useCloudNotificationsStore.getState().applySnapshot({
-      rows: [cloudDone("entry-cloud")],
+      rows: [cloudDone("entry-cloud", null)],
       summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
       version: 1,
     });
@@ -793,11 +796,61 @@ describe("NotificationsPopover", () => {
     );
   });
 
+  it("does not render a trailing tick for an already-read cloud row", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-read", 100)],
+      summary: { totalCount: 1, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationRead).toBe("true");
+    expect(
+      within(row).queryByRole("button", { name: "Mark as read" }),
+    ).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(within(row).queryByTestId("notification-unread-rail")).toBeNull();
+  });
+
+  it("does not render a row-level Clear action for an unread cloud row", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-unread", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationRead).toBe("false");
+    expect(within(row).queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Mark as read" }),
+    ).not.toBeNull();
+  });
+
   it("requires confirmation before clearing the cloud feed", async () => {
     notificationFeedMode.value = "cloud";
     bindHostClient();
     useCloudNotificationsStore.getState().applySnapshot({
-      rows: [cloudDone("entry-cloud")],
+      rows: [cloudDone("entry-cloud", null)],
       summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
       version: 1,
     });
@@ -1775,7 +1828,7 @@ describe("NotificationsPopover", () => {
     expect(stillThere).not.toBeUndefined();
   });
 
-  it("renders Dismiss on blocking Attention rows, including already-read ones", async () => {
+  it("renders trailing tick actions only on unread rows", async () => {
     applyHostSnapshot(
       [
         hostPrompt("prompt-unread", 120, null),
@@ -1808,12 +1861,13 @@ describe("NotificationsPopover", () => {
     const failure = findRow("host:fail-unread");
     const recentRead = findRow("host:recent-read");
 
-    // Core fix: blocking Attention keeps Dismiss even after navigation read.
+    // Read rows do not reuse the unread-state tick for another disposition.
     expect(readPrompt.dataset.notificationRead).toBe("true");
-    const readDismiss = within(readPrompt).getByTestId("notification-dismiss");
-    expect(readDismiss.getAttribute("aria-label")).toBe("Dismiss");
     expect(
-      within(readPrompt).queryByTestId("notification-mark-read"),
+      within(readPrompt).queryByRole("button", { name: "Dismiss" }),
+    ).toBeNull();
+    expect(
+      within(readPrompt).queryByRole("button", { name: "Mark as read" }),
     ).toBeNull();
 
     expect(
@@ -1843,8 +1897,8 @@ describe("NotificationsPopover", () => {
   it("Dismiss resolves without activating and moves the row to Recent as read", async () => {
     bindHostClient();
     applyHostSnapshot(
-      [hostPrompt("prompt-dismiss", 100, 50), hostDone("done", 90, null)],
-      { unreadCount: 1, attentionCount: 1 },
+      [hostPrompt("prompt-dismiss", 100, null), hostDone("done", 90, null)],
+      { unreadCount: 2, attentionCount: 1 },
     );
 
     const onNavigate = vi.fn();
