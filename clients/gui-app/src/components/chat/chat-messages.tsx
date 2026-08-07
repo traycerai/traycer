@@ -99,6 +99,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 interface ChatMessagesProps {
@@ -872,11 +873,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const resolvePendingRestoreEndLandingRef = useRef<(() => boolean) | null>(
     null,
   );
-  const isFollowCorrectionSuppressed = useCallback(
-    (): boolean => pendingHydrationRestoreAnchorIdRef.current !== null,
-    [],
-  );
-
   const chatTimelineRef = useRef<LegendListRef | null>(null);
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
@@ -1007,6 +1003,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const restorePersistencePendingRef = useRef(
     savedRestoreRequiresPersistenceGate(rawSavedTabState),
   );
+  // A restored free-reading chat can briefly report measurable strict-bottom
+  // geometry when a hidden task canvas becomes visible, before LegendList has
+  // reinflated its rows and applied the saved anchor. Maintenance callbacks in
+  // that window are bootstrap layout, not evidence that the reader returned to
+  // the tail. Keep follow reconciliation suppressed until the saved landing is
+  // validated, as well as during the narrower partial-hydration transaction.
+  const isFollowCorrectionSuppressed = useCallback(
+    (): boolean =>
+      restorePersistencePendingRef.current ||
+      pendingHydrationRestoreAnchorIdRef.current !== null,
+    [],
+  );
   // Fixup (fix-top-level-task-tab-scroll-restoration): continuously mirrors
   // the last KNOWN-COHERENT scroll snapshot while the DOM is genuinely
   // measurable (kept fresh by the rAF-throttled viewport update below, same
@@ -1096,15 +1104,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     setTimelineMode("following-end", true);
   }, [resolveSuppressedEndLanding, setTimelineMode]);
 
-  // Decision #6: ANY pointerdown in the transcript - expanding a card,
-  // Decision #6/#5/#7: any real reader input (pointerdown, keyboard) freezes
-  // an in-flight native smooth-scroll and re-syncs mode/`isAtEndRef` against
-  // the actual physical position - an optimistic `following-end` set ahead of
-  // a still-animating scroll (e.g. the pill's own `scrollToEnd`) must not be
-  // trusted once that animation is cancelled mid-flight. The subsequent real
-  // scroll event (if any) is what actually determines follow via
-  // latch report; this only corrects the ownership bookkeeping for an
-  // operation a real gesture just superseded.
+  // Decision #6/#5/#7: reader input freezes an in-flight native smooth-scroll
+  // and re-syncs ownership against the actual physical position. Transcript
+  // pointerdown is a preflight because a disclosure click can resize content
+  // without publishing a reading position; wheel/touch/keyboard and scrollbar
+  // input publish, so their subsequent scroll report may detach the latch.
   const handleTimelineReaderGesture = useCallback(
     ({
       freezeInFlightScroll,
@@ -1166,17 +1170,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [handleTimelineReaderGesture],
   );
-  const handleTranscriptPointerDown = useCallback((): void => {
-    // Inline artifact/A2A navigation starts with pointerdown and can unmount
-    // this tile before a later passive scroll snapshot runs. Capture the
-    // exact source viewport synchronously, before cancellation changes mode.
-    persistCurrentScrollRef.current();
-    cancelTimelineLiveFollowForUserNavigation({
-      direction: "indeterminate",
-      freezeInFlightScroll: true,
-      publishesReaderPosition: false,
-    });
-  }, [cancelTimelineLiveFollowForUserNavigation]);
+  const handleTranscriptPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      // Inline artifact/A2A navigation starts with pointerdown and can unmount
+      // this tile before a later passive scroll snapshot runs. Capture the
+      // exact source viewport synchronously, before cancellation changes mode.
+      persistCurrentScrollRef.current();
+      const scrollNode = chatTimelineRef.current?.getScrollableNode();
+      // A disclosure/card click is only a correction-cancelling preflight: its
+      // ensuing ResizeObserver/MVCP movement is layout-owned and must not
+      // detach follow. Pointer input targeting the scroll node itself is the
+      // scrollbar interaction shape; it publishes the ensuing scroll position.
+      const publishesReaderPosition = event.target === scrollNode;
+      cancelTimelineLiveFollowForUserNavigation({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition,
+      });
+    },
+    [cancelTimelineLiveFollowForUserNavigation],
+  );
 
   // ChatTimeline unmounts LegendList entirely for an empty transcript
   // (ChatEmptyState instead), so this - not just `messages` identity - is
@@ -1708,10 +1721,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // Explicit navigation (find/minimap/deep-link/restoration) is programmatic,
-  // not a gesture. It never itself grants or removes follow - a landing at
-  // the strict bottom resumes follow the same way any other scroll reaching
-  // the edge does, via the latch's ordinary strict-end report the settled
-  // scroll produces; a landing away from it simply stays free-scrolling.
+  // not a gesture. It declares a free-scrolling destination before moving;
+  // a landing at the strict bottom resumes follow through the latch's ordinary
+  // strict-end report. Bare scrollTop direction is never used as intent
+  // because MVCP and layout compensation produce the same browser signal.
   //
   // Ticket 10: settle/re-issue against the CURRENT geometry - an ANIMATED
   // long jump targets ESTIMATED heights; no mid-flight retargeting in the
@@ -1722,6 +1735,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
       if (!list) return;
+      followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(
         location.animated,
       );
@@ -2095,12 +2109,41 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
     if (replay.anchorMessageId === null) return;
-    restorePersistedTimelineLocation(replay.anchorMessageId, replay.offset, {
-      isAborted: () => false,
-      onValidated: () => undefined,
-      onExhausted: () => undefined,
-    });
-  }, [identity, restorePersistedTimelineLocation, visible]);
+    // Re-arm the same persistence/correction gate used by mount-time restore.
+    // A top-level task canvas is kept mounted, so showing it again can deliver
+    // ResizeObserver maintenance while LegendList still exposes its temporary
+    // zero/incomplete geometry. Without this gate that transient strict edge
+    // can reacquire follow before the saved anchor is replayed, permanently
+    // replacing the reading position with `following-end`.
+    restorePersistencePendingRef.current = true;
+    // Unlike the hydration catch-up above, nothing re-attempts a failed
+    // visibility replay (this effect only fires on hide/show transitions), so
+    // retaining the gate on failure would leave follow reconciliation and
+    // scroll persistence suppressed until an unrelated reader gesture. Reuse
+    // the mount-time exhaustion fallback instead: accept wherever the bounded
+    // retries (or an unavailable list/anchor) left the viewport as the new
+    // truth and release the gate.
+    const acceptFailedReplayLanding = (): void => {
+      restorePersistencePendingRef.current = false;
+      pendingMeasuredFreeRestoreRef.current = null;
+      reconcileInvalidTimelineLanding();
+    };
+    const issued = restorePersistedTimelineLocation(
+      replay.anchorMessageId,
+      replay.offset,
+      {
+        isAborted: () => false,
+        onValidated: () => undefined,
+        onExhausted: acceptFailedReplayLanding,
+      },
+    );
+    if (!issued) acceptFailedReplayLanding();
+  }, [
+    identity,
+    reconcileInvalidTimelineLanding,
+    restorePersistedTimelineLocation,
+    visible,
+  ]);
 
   const navigateToMessage = useCallback(
     (messageId: string, highlight: boolean, animated: boolean): void => {

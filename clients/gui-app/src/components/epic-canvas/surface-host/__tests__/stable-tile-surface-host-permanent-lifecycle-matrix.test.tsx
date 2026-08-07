@@ -1687,19 +1687,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     setLegendListScrollContainerScrollHeightOverride(
       LEGEND_LIST_HEADER_PX + messageCount * LEGEND_LIST_ROW_HEIGHT_PX + 40,
     );
-    saveChatTabState({
-      identity: {
-        tileInstanceId: CHAT_TRACKED.instanceId,
-        epicId: EPIC_ID,
-        chatId: CHAT_TRACKED.id,
-        hostId: CHAT_TRACKED.hostId,
-      },
-      mode: "free-scrolling",
-      anchorMessageId,
-      anchorIndex,
-      offset: savedViewOffset,
-    });
-
+    enableLegendListBrowserScrollEvents();
     seedCanvas(pane("p1", [CHAT_TRACKED.instanceId]), [CHAT_TRACKED], "p1");
     const { container } = renderMatrix(undefined);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
@@ -1709,6 +1697,17 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await settleLegendList();
 
     const scrollNode = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(scrollNode.dataset.scrollMode).toBe("following-end");
+    const readingPosition =
+      LEGEND_LIST_HEADER_PX +
+      anchorIndex * LEGEND_LIST_ROW_HEIGHT_PX -
+      savedViewOffset;
+    act(() => {
+      fireEvent.wheel(scrollNode, { deltaY: -80 });
+      scrollNode.scrollTop = readingPosition;
+      fireEvent.scroll(scrollNode);
+    });
+    await settleLegendList();
     expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
     const beforeHide = scrollNode.scrollTop;
     expect(beforeHide).toBeGreaterThan(0);
