@@ -72,16 +72,25 @@ interface CacheEntry {
     VersionedRpcRegistry,
     VersionedStreamRpcRegistry
   >;
+  /**
+   * The identity this entry was built for, kept as fields rather than re-parsed
+   * out of the map key. The key is a positional join, so reading identity back
+   * out of it means index-counting that silently rots the moment the key gains
+   * a field - which it did, when `authRecovery` was added.
+   */
+  readonly identity: RemoteSessionIdentity;
   refCount: number;
   /** Armed while the entry lingers at refCount 0; null while consumers hold it. */
   lingerTimer: TimerHandle | null;
   /**
    * Set once this entry's identity has been SUPERSEDED - the host re-keyed or
-   * moved, and a newer identity for the same host/user/policy has been
-   * acquired since. Sticky: supersession is a fact about the identity, not
-   * about the successor's health, so a successor that later dies does not make
-   * this session current again (its key still embeds the OLD public key, so it
-   * can never re-handshake and can never be re-acquired by the render layer).
+   * moved, and a newer PHYSICAL identity for the same host and user has been
+   * acquired since (whatever recovery policy that acquire wanted; see
+   * {@link closeSupersededIdentities}). Sticky: supersession is a fact about
+   * the identity, not about the successor's health, so a successor that later
+   * dies does not make this session current again - its key still embeds the
+   * OLD public key, so it can never re-handshake and can never be re-acquired
+   * by the render layer.
    *
    * A marked entry is barred from BOTH things the cache does for a live entry:
    * it never lingers (see `release`) and it never answers
@@ -102,9 +111,9 @@ const KEY_SEPARATOR = "\u0000";
 const entriesByKey = new Map<string, CacheEntry>();
 
 /**
- * `hostId` is joined FIRST and unconditionally - `keyHostId`/
- * `hasReadyRemoteSession` parse the key's hostId prefix up to the first
- * separator, independent of how many further identity fields follow it.
+ * The map key, and nothing else: every consumer that needs an identity FIELD
+ * back reads `CacheEntry.identity` instead of parsing this string, so fields
+ * may be added here without any positional reader to keep in step.
  */
 export function remoteSessionCacheKey(identity: RemoteSessionIdentity): string {
   return [
@@ -162,6 +171,7 @@ export function acquireRemoteSession<
     closeSupersededIdentities(identity, key);
     entry = {
       session: createSession(),
+      identity,
       refCount: 0,
       lingerTimer: null,
       superseded: false,
@@ -248,18 +258,29 @@ export function acquireRemoteSession<
 }
 
 /**
- * Closes any zero-reference entry this acquire SUPERSEDES: same host, same
- * user, same recovery policy, but a different host public key or relay attach
- * URL - i.e. the host re-keyed or its endpoint moved, and the render layer has
- * just rebuilt its transport onto the new identity.
+ * Closes any zero-reference entry this acquire SUPERSEDES: same host and user,
+ * but a different host public key or relay attach URL - i.e. the host re-keyed
+ * or its endpoint moved, and the render layer has just rebuilt its transport
+ * onto the new identity.
+ *
+ * Supersession is a property of the PHYSICAL identity (`hostPublicKey` +
+ * `relayAttachUrl`) and is judged independently of `authRecovery`. The two are
+ * easy to conflate and mean opposite things:
+ *
+ *  - same physical identity, different policy -> legitimately independent. The
+ *    one-shot and durable sessions deliberately do not share a connection, and
+ *    both are current. Leave it alone.
+ *  - different physical identity -> superseded, WHATEVER the policy. A ready
+ *    one-shot (`terminal`) session lingering under the old public key is just
+ *    as stale as a durable one, and {@link hasReadyRemoteSession} matches on
+ *    `hostId` across all policies - so skipping it because the acquiring
+ *    consumer happened to want the OTHER policy leaves it reporting the host
+ *    Online while the current identity is still dialing or already failing.
  *
  * Keep-warm exists so a prompt RE-ACQUIRE of the same identity is free. A
  * superseded identity can never be re-acquired (its key embeds the old public
- * key), so lingering buys nothing and costs two things: an authenticated relay
- * socket held open for the rest of the window, and - because
- * {@link hasReadyRemoteSession} matches on `hostId` alone - live-session
- * evidence attributed to a host whose current identity may still be dialing or
- * already failing, which is enough to render it Online and pass its scope gate.
+ * key), so lingering buys nothing and costs an authenticated relay socket held
+ * open for the rest of the window on top of the false liveness evidence.
  *
  * A session a consumer still HOLDS is not torn out from under it - that is not
  * this function's call - but it is still marked {@link CacheEntry.superseded},
@@ -276,16 +297,21 @@ function closeSupersededIdentities(
     if (key === currentKey) {
       continue;
     }
-    const [hostId, userId, , , authRecovery] = key.split(KEY_SEPARATOR);
     if (
-      hostId !== identity.hostId ||
-      userId !== identity.userId ||
-      authRecovery !== identity.authRecovery
+      entry.identity.hostId !== identity.hostId ||
+      entry.identity.userId !== identity.userId
     ) {
-      // A different user or a different recovery policy - a legitimately
-      // independent session for the same host, not a superseded one. (The two
-      // fields skipped above are exactly the ones that must DIFFER for this to
-      // be a supersession, and `key !== currentKey` already establishes that.)
+      // A different host, or a different signed-in user on this host: an
+      // independent session, and not ours to judge.
+      continue;
+    }
+    if (
+      entry.identity.hostPublicKey === identity.hostPublicKey &&
+      entry.identity.relayAttachUrl === identity.relayAttachUrl
+    ) {
+      // Same physical identity. `key !== currentKey` therefore means it differs
+      // ONLY in `authRecovery` - the deliberate one-shot/durable split, both
+      // current, neither superseding the other.
       continue;
     }
     entry.superseded = true;
@@ -317,9 +343,9 @@ function closeSupersededIdentities(
  * identity finishes dialing, which is the safe direction.
  */
 export function hasReadyRemoteSession(hostId: string): boolean {
-  for (const [key, entry] of entriesByKey) {
+  for (const entry of entriesByKey.values()) {
     if (
-      keyHostId(key) === hostId &&
+      entry.identity.hostId === hostId &&
       !entry.superseded &&
       entry.session.isReady()
     ) {
@@ -334,9 +360,4 @@ export function remoteSessionRefCountForTest(
   identity: RemoteSessionIdentity,
 ): number {
   return entriesByKey.get(remoteSessionCacheKey(identity))?.refCount ?? 0;
-}
-
-function keyHostId(key: string): string {
-  const separatorIndex = key.indexOf(KEY_SEPARATOR);
-  return separatorIndex === -1 ? key : key.slice(0, separatorIndex);
 }

@@ -625,4 +625,52 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(durableSession.closeCalls).toBe(0);
     expect(remoteSessionRefCountForTest(oneShot)).toBe(1);
   });
+
+  it("supersedes a rotated identity ACROSS the policy split, not just within it", () => {
+    // The distinction the test above is one half of. Differing in policy alone
+    // means "legitimately independent"; differing in PHYSICAL identity means
+    // "superseded" whatever the policy, because `hasReadyRemoteSession` matches
+    // on hostId across all policies. A ready one-shot session lingering under
+    // the old public key is exactly as stale as a durable one would be, and
+    // left alone it reports the host Online while the rotated identity dials.
+    const oneShot = { ...freshIdentity(), authRecovery: "terminal" as const };
+    const staleOneShot = fakeSession();
+    staleOneShot.ready = true;
+    acquireRemoteSession(oneShot, () => staleOneShot).close();
+    expect(hasReadyRemoteSession(oneShot.hostId)).toBe(true);
+
+    // The host re-keys, and it is the DURABLE transport that rebuilds first -
+    // a different policy from the lingering entry's.
+    const rotatedDurable: RemoteSessionIdentity = {
+      ...oneShot,
+      hostPublicKey: "pubkey-rotated",
+      authRecovery: "revalidate",
+    };
+    const dialing = fakeSession();
+    dialing.ready = false;
+    acquireRemoteSession(rotatedDurable, () => dialing);
+
+    expect(staleOneShot.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(oneShot.hostId)).toBe(false);
+  });
+
+  it("supersedes a rotated RELAY URL across the policy split too", () => {
+    // The other physical-identity field, so the rule is pinned as
+    // "public key OR relay URL", not just the one the rotation test happens to
+    // move.
+    const durable = freshIdentity();
+    const staleDurable = fakeSession();
+    staleDurable.ready = true;
+    acquireRemoteSession(durable, () => staleDurable).close();
+
+    const movedOneShot: RemoteSessionIdentity = {
+      ...durable,
+      relayAttachUrl: "wss://relay-moved.invalid/attach",
+      authRecovery: "terminal",
+    };
+    acquireRemoteSession(movedOneShot, () => fakeSession());
+
+    expect(staleDurable.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(durable.hostId)).toBe(false);
+  });
 });
