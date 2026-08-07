@@ -114,7 +114,8 @@ function initialActiveProviderId(
 }
 
 // Initial tab for the deep-linked (or first) provider: honor `focusTab` when
-// the target advertises it, else the first supported tab.
+// the target supports it, else the first supported tab in
+// {@link PROVIDER_TAB_ORDER} (account → usage → general → …).
 function initialActiveTab(
   providers: readonly ProviderCliState[],
   providerId: ProviderId,
@@ -124,12 +125,11 @@ function initialActiveTab(
   const tabs = resolveSupportedTabs(providerTabInputs(state));
   // `focusTab` is a plain `string` in the store, so a deep link CAN name the
   // client-only `account` tab even though it is absent from the wire enum -
-  // the match below is against the resolved tab list, not the schema. No
-  // caller sets it today; the "Add API key" CTA passes only `focusHarnessId`
-  // and therefore lands on `tabs[0]`, which is `general` for every provider
-  // that has one. That predates the Account/Usage split (the key field sat on
-  // `usage`, also not first) and is a CTA-side change, not one this pane can
-  // make on its own.
+  // the match below is against the resolved tab list, not the schema. When no
+  // focusTab is set (including the "Add API key" CTA that only sets
+  // `focusHarnessId`), `tabs[0]` is the first supported tab — account when the
+  // provider takes a key, usage when it has profiles/limits, otherwise the
+  // next supported tab in display order.
   const focusTab = useProvidersFocusStore.getState().focusTab;
   if (focusTab !== null) {
     const match = tabs.find((tab) => tab === focusTab);
@@ -511,10 +511,19 @@ function ProvidersRailLayout({
   const [activeId, setActiveId] = useState<ProviderId>(() =>
     initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
+  // Same provider id as `activeId` above, deliberately: the default tab is now
+  // provider-dependent (account → usage → …), so deriving it from the rail's
+  // first provider lands the deep link on the wrong tab. The "Add API key" CTA
+  // sets `focusHarnessId` with no `focusTab`; with a first provider defaulting
+  // to `usage`, a focused provider that also supports `usage` would keep
+  // "Profiles & Limits" instead of opening its own first tab, "Account" — the
+  // one field the CTA exists to reach. When the deep link is not consumed (no
+  // focus, or a different host) `initialFocus.harnessId` is already null, so
+  // this stays the rail's first provider.
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,
-      initialActiveProviderId(orderedProviders, null),
+      initialActiveProviderId(orderedProviders, initialFocus.harnessId),
     ),
   );
   useEffect(() => {
@@ -932,6 +941,7 @@ function ProviderTabBody({
         <ProviderEnvOverridesSection
           providerId={state.providerId}
           overrides={state.envOverrides}
+          envOverrideScope={state.nativeCapabilities.envOverrideScope}
         />
       );
     // The key IS the account for these providers, so it owns a tab rather than
@@ -994,6 +1004,11 @@ function ProviderTabBody({
           providerId={state.providerId}
           capabilities={mcp}
           providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+          // An old host omits the key entirely; `?? true` matches the schema's
+          // own `.catch(true)` - assume resolved, show no notice - so a host
+          // that cannot report this never accuses a provider of a missing
+          // binary it knows nothing about.
+          cliBinaryResolved={state.cliBinaryResolved ?? true}
         />
       );
     }

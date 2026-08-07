@@ -79,7 +79,16 @@ export function providerSignInUnavailableHint(
   if (oauthArgs === null || oauthArgs.length === 0) {
     // A permanent property of the provider, so it outranks the situational
     // reasons below: telling this user to switch hosts would waste their time.
-    return `${providerDisplayName(state.providerId)} does not support browser sign-in. Authenticate with its own CLI, or set an API key above.`;
+    // Unreachable today for profile-capable providers (they all ship
+    // oauthArgs) and for zero-profile hosts the profile section returns null
+    // before calling this — kept accurate so a future call site is not wrong.
+    // "Above" is intentionally gone: the API key field lives on the Account
+    // tab after the providers tab split, not above this hint.
+    const name = providerDisplayName(state.providerId);
+    if (state.providerId === "traycer") {
+      return `${name} does not support browser sign-in.`;
+    }
+    return `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`;
   }
   if (providerSupportsTerminalLogin(state.loginCapability)) {
     // Also a permanent provider property, and it outranks the host check
