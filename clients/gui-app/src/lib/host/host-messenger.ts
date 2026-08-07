@@ -245,11 +245,19 @@ class RuntimeHostMessenger<
    * time land on an honest non-retryable error instead of a redial. Entries
    * expire after {@link TERMINAL_VERDICT_TTL_MS} - terminal describes the
    * SESSION, not the host, which may be updated/re-entitled any moment - and
-   * are dropped early when a later session for the host reaches ready.
+   * are dropped early when a later session for the host reaches ready, or
+   * when the host's transport identity moves off the recorded `key`: the key
+   * folds in version/publicKey/relay URL, so e.g. the host update that
+   * resolves an INCOMPATIBLE fatal changes the key and proves the verdict
+   * describes a session that can no longer even be built.
    */
   private readonly terminalVerdictByHost = new Map<
     string,
-    { readonly fatal: FatalErrorDetails; readonly at: number }
+    {
+      readonly fatal: FatalErrorDetails;
+      readonly at: number;
+      readonly key: string;
+    }
   >();
 
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
@@ -296,6 +304,7 @@ class RuntimeHostMessenger<
 
     const verdictRejection = this.rejectIfTerminalVerdict(
       target.hostId,
+      remoteTransportKey(target),
       method,
     );
     if (verdictRejection !== null) {
@@ -346,6 +355,7 @@ class RuntimeHostMessenger<
 
     const verdictRejection = this.rejectIfTerminalVerdict(
       target.hostId,
+      remoteTransportKey(target),
       method,
     );
     if (verdictRejection !== null) {
@@ -442,6 +452,7 @@ class RuntimeHostMessenger<
     const availability = this.subscribeRemoteAvailability(
       built.remoteTransport.session,
       target.hostId,
+      nextKey,
     );
     this.remoteBinding = {
       key: nextKey,
@@ -497,6 +508,7 @@ class RuntimeHostMessenger<
   private subscribeRemoteAvailability(
     session: IRemoteSession<Registry, HostStreamRpcRegistry>,
     hostId: string,
+    transportKey: string,
   ): AvailabilitySubscription {
     const previousOrphanDetach = this.owedOrphanDetachByHost.get(hostId);
     if (previousOrphanDetach !== undefined) {
@@ -551,6 +563,7 @@ class RuntimeHostMessenger<
         this.terminalVerdictByHost.set(hostId, {
           fatal,
           at: Date.now(),
+          key: transportKey,
         });
         this.onRemoteAvailabilityRecovered(hostId);
       }
@@ -647,13 +660,22 @@ class RuntimeHostMessenger<
    */
   private rejectIfTerminalVerdict(
     hostId: string,
+    currentKey: string | null,
     method: string,
   ): Promise<never> | null {
     const verdict = this.terminalVerdictByHost.get(hostId);
     if (verdict === undefined) {
       return null;
     }
-    if (Date.now() - verdict.at >= TERMINAL_VERDICT_TTL_MS) {
+    if (
+      verdict.key !== currentKey ||
+      Date.now() - verdict.at >= TERMINAL_VERDICT_TTL_MS
+    ) {
+      // Key mismatch: the host's transport identity moved (version bump, key
+      // rotation, relay move) since the fatal - the very session the verdict
+      // condemned can no longer be built, so waiting out the TTL would
+      // fail-fast a host that just fixed itself. (A null current key falls
+      // through to the malformed-entry refusal in the caller.)
       this.terminalVerdictByHost.delete(hostId);
       return null;
     }

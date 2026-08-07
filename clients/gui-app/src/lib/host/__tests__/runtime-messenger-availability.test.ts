@@ -681,6 +681,60 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     }
   });
 
+  it("drops the verdict early when the host's transport identity changes - a host update must not wait out the TTL", async () => {
+    // An INCOMPATIBLE fatal is resolved exactly by a version change, and the
+    // directory publishes that as a new transport key. The verdict describes
+    // a session that can no longer even be built, so a key mismatch discards
+    // it immediately instead of fail-fasting the just-fixed host for the
+    // rest of the TTL.
+    const session = controllableSession();
+    mocks.createRemoteHostTransport.mockImplementation(() => ({
+      session,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    }));
+    let currentRemoteEntry: RemoteHostDirectoryEntry = remoteEntry;
+    const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      resolveTarget: (hostId) =>
+        hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
+      auth: null,
+      authnBaseUrl: "https://authn.invalid",
+      requestId: () => "req-1",
+      onRemoteAvailabilityRecovered: () => undefined,
+    });
+    const requestRemote = (): Promise<unknown> =>
+      binding.messenger.request(
+        "host.status",
+        {},
+        authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+      );
+
+    await requestRemote().catch(() => undefined);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    session.fatal = incompatibleFatal();
+    session.emitClosed();
+
+    // Same identity: the fresh verdict fails fast, no rebuild.
+    const error: unknown = await requestRemote().then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    // The host updates: new version => new transport key => the verdict is
+    // discarded and the request dials fresh, well inside the TTL.
+    currentRemoteEntry = { ...remoteEntry, version: "1.2.4" };
+    await requestRemote().catch(() => undefined);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    binding.dispose();
+  });
+
   it("a routine close (no fatal) records no verdict, fires no invalidation, and the next request rebuilds", () => {
     // Linger expiry / supersession retire a session without a verdict; the
     // host's next visit must dial normally, not land on a poisoned error.
