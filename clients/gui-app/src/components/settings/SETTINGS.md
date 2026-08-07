@@ -868,10 +868,21 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       multi-entry `env[]` is the secret. Null for the few providers with no
       plain-key path (multi-secret, or a service-account file) - those hide the
       key field entirely rather than offering one the host must reject.
-    - **The plain API-key path disappears when the provider ADVERTISES an `api`
-      method**, because that method IS the key path plus the fields it wants.
-      Two "API key" rows differing only in whether they ask the provider's own
-      questions is a choice nobody can make correctly.
+    - **The plain API-key path disappears when the provider advertises ANY
+      method.** A provider with a method list has told us exhaustively how it
+      can be authenticated, and every one that accepts a pasted key advertises
+      that explicitly — `openai`, `xai`, `poe`, `gitlab`, `digitalocean` and
+      `snowflake-cortex` all carry their own "Manually enter API Key"-style arm,
+      so nothing is lost by deferring to the list.
+      `github-copilot` is the case that separates this from the narrower
+      "suppress only when an `api` method exists" rule: it advertises
+      `['oauth']` and nothing else, while still carrying `env: ['GITHUB_TOKEN']`
+      — an entry that exists for env-var DETECTION, not as a field to type into.
+      Under the narrow rule the dialog offered an "API key" option that
+      `opencode auth login` does not, and a key pasted there would have been
+      stored as a credential that cannot work (Copilot needs its GitHub token
+      exchanged for a Copilot API token, which pasting cannot do). Verified
+      against a live server's `/provider/auth`.
     - **The prompts DSL is evaluated client-side**
       (`model-provider-prompts.ts` - pure, so it is tested without a form).
       Visibility resolves SEQUENTIALLY and only a visible prompt's answer feeds

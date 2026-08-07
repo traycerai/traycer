@@ -136,11 +136,19 @@ export type ConnectChoice = {
  * - nothing offered at all — no key path and no methods. The caller renders the
  *   honest empty state instead of an empty picker.
  *
- * The plain path is also suppressed when the provider ADVERTISES an `api`
- * method, because that method IS the key path - with the extra fields it wants.
- * Offering both would put two "API key" rows in the picker that differ only in
- * whether they collect the provider's own questions, and the bare one would
- * quietly store a credential missing them.
+ * The plain path is suppressed whenever the provider advertises ANY method.
+ * A provider with a method list has told us exhaustively how it can be
+ * authenticated, and every one that accepts a pasted key says so with an `api`
+ * method of its own - `openai`, `xai`, `poe`, `gitlab`, `digitalocean` and
+ * `snowflake-cortex` all carry an explicit "Manually enter API Key"-style arm.
+ *
+ * `github-copilot` is the case that separates this rule from the narrower
+ * "suppress only when an `api` method exists": it advertises `['oauth']` and
+ * nothing else, so upstream is saying there is NO manual key path - and its
+ * `env` entry (`GITHUB_TOKEN`) exists for env-var DETECTION, not as a field to
+ * type into. Under the narrow rule we offered an "API key" option the CLI does
+ * not, which would have stored a credential that cannot work: Copilot needs the
+ * GitHub token exchanged for a Copilot API token, which pasting cannot do.
  */
 export function connectChoicesFor(
   entry: ModelProviderEntry,
@@ -148,11 +156,9 @@ export function connectChoicesFor(
 ): readonly ConnectChoice[] {
   const canConnect = capabilities.actions.includes("connect");
   const canOauth = capabilities.actions.includes("oauth");
-  const advertisesApiMethod = entry.methods.some(
-    (method) => method.type === "api",
-  );
+  const advertisesAnyMethod = entry.methods.length > 0;
   const choices: ConnectChoice[] = [];
-  if (entry.credentialKey !== null && !advertisesApiMethod) {
+  if (entry.credentialKey !== null && !advertisesAnyMethod) {
     choices.push({
       id: "api-key",
       label: "API key",

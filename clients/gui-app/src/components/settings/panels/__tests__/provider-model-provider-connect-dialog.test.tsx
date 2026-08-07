@@ -246,11 +246,45 @@ describe("connectChoicesFor", () => {
     // is a choice nobody can make correctly.
     const choices = connectChoicesFor(
       entry({
-        methods: [{ type: "api", label: "API key", prompts: [] }],
+        methods: [
+          { type: "api", label: "Manually enter API Key", prompts: [] },
+        ],
       }),
       FULL_CAPS,
     );
     expect(choices.map((choice) => choice.id)).toEqual(["method-0"]);
+  });
+
+  it("drops the plain path for an OAUTH-ONLY provider that still has an env var", () => {
+    // github-copilot, verified live: it advertises `['oauth']` and nothing
+    // else, while carrying `env: ['GITHUB_TOKEN']`. That env entry is for
+    // DETECTION, not a field to type into - Copilot needs the GitHub token
+    // exchanged for a Copilot API token, which pasting cannot do. Every
+    // provider that DOES accept a pasted key advertises an `api` arm of its own
+    // (openai, xai, poe, gitlab, digitalocean, snowflake-cortex all do), so
+    // "advertises any method" is the rule, not "advertises an api method".
+    const choices = connectChoicesFor(
+      entry({
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        credentialKey: "GITHUB_TOKEN",
+        methods: [
+          { type: "oauth", label: "Login with GitHub Copilot", prompts: [] },
+        ],
+      }),
+      FULL_CAPS,
+    );
+    expect(choices.map((choice) => choice.label)).toEqual([
+      "Login with GitHub Copilot",
+    ]);
+  });
+
+  it("KEEPS the plain path for the ~170 providers that advertise nothing", () => {
+    // The common case: no method list at all, so the models.dev env var is the
+    // only way in - and prompting for it is exactly what the CLI does.
+    expect(
+      connectChoicesFor(entry({ methods: [] }), FULL_CAPS).map((c) => c.id),
+    ).toEqual(["api-key"]);
   });
 
   it("marks an api METHOD unusable when the provider has no credential key", () => {
@@ -387,20 +421,27 @@ describe("method picker", () => {
     expect(screen.queryByText("Sign-in method")).toBeNull();
     cleanup();
 
+    // Two ways in means the provider ADVERTISED two - the real shape for
+    // openai / xai / poe / gitlab, which pair an OAuth arm with an explicit
+    // "Manually enter API Key" one.
     renderDialog({
       entry: entry({
+        id: "xai",
+        name: "xAI",
+        credentialKey: "XAI_API_KEY",
         methods: [
-          { type: "oauth", label: "Sign in with Anthropic", prompts: [] },
+          { type: "oauth", label: "SuperGrok Subscription", prompts: [] },
+          { type: "api", label: "Manually enter API Key", prompts: [] },
         ],
       }),
       capabilities: FULL_CAPS,
       onDone: vi.fn(),
     });
     expect(screen.getByText("Sign-in method")).toBeTruthy();
-    expect(screen.getByText("Sign in with Anthropic")).toBeTruthy();
-    // Twice on purpose: the picker option and the field label for the choice
-    // that is currently selected.
-    expect(screen.getAllByText("API key").length).toBeGreaterThan(1);
+    expect(screen.getByText("SuperGrok Subscription")).toBeTruthy();
+    expect(screen.getByText("Manually enter API Key")).toBeTruthy();
+    // And no third, invented "API key" row beside the two it advertised.
+    expect(screen.queryByText("API key")).toBeNull();
   });
 });
 
