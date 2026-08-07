@@ -65,7 +65,11 @@ vi.mock("@/components/home/composer/terminal-launch-panel", () => ({
 }));
 
 vi.mock("@/components/home/toolbar/composer-toolbar", () => ({
-  ComposerToolbar: () => null,
+  ComposerToolbar: () => <div data-testid="desktop-toolbar" />,
+}));
+
+vi.mock("@/components/home/mobile/composer-mobile-toolbar", () => ({
+  ComposerMobileToolbar: () => <div data-testid="mobile-toolbar" />,
 }));
 
 afterEach(cleanup);
@@ -92,10 +96,13 @@ interface RenderComposerBodyOptions {
   readonly header?: ReactNode;
   readonly topBanner?: ReactNode;
   readonly stashControl?: ReactNode;
+  /** Omitted means the desktop toolbar, which is what most cases exercise. */
+  readonly toolbarLayout?: "full" | "collapsed";
 }
 
 function renderComposerBody(options: RenderComposerBodyOptions) {
   const { composerMode, paste, header, topBanner, stashControl } = options;
+  const toolbarLayout = options.toolbarLayout ?? "full";
   const toolbarStore = createComposerToolbarStore({
     seedKey: "test",
     values: {
@@ -124,6 +131,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
       workspaceDisabledHint={null}
       header={header}
       topBanner={topBanner}
+      toolbarLayout={toolbarLayout}
       stashControl={stashControl}
       attachmentsStrip={null}
       workspaceControls={null}
@@ -234,6 +242,51 @@ describe("ComposerBody topBanner placement", () => {
       "rate-limit-banner",
       "composer-card",
     ]);
+  });
+});
+
+describe("ComposerBody toolbar layout", () => {
+  it("renders the desktop toolbar for the full layout", () => {
+    renderComposerBody({
+      composerMode: "chat",
+      paste: makePaste(),
+      header: null,
+      topBanner: null,
+      toolbarLayout: "full",
+    });
+
+    expect(screen.getByTestId("desktop-toolbar")).toBeTruthy();
+    expect(screen.queryByTestId("mobile-toolbar")).toBeNull();
+  });
+
+  it("renders the collapsed toolbar instead of the desktop one", () => {
+    renderComposerBody({
+      composerMode: "chat",
+      paste: makePaste(),
+      header: null,
+      topBanner: null,
+      toolbarLayout: "collapsed",
+    });
+
+    expect(screen.getByTestId("mobile-toolbar")).toBeTruthy();
+    expect(screen.queryByTestId("desktop-toolbar")).toBeNull();
+  });
+
+  it("keeps the collapsed toolbar out of terminal mode, as the full one is", () => {
+    // Both toolbars live in the chat-only half of the card; terminal mode
+    // hides that half and shows the launch panel instead.
+    renderComposerBody({
+      composerMode: "terminal",
+      paste: makePaste(),
+      header: null,
+      topBanner: null,
+      toolbarLayout: "collapsed",
+    });
+
+    // Its own wrapper, not just any `.hidden` in the card - the editor half
+    // carries the same class and appears first.
+    const toolbar = screen.getByTestId("mobile-toolbar");
+    expect(toolbar.parentElement?.className).toContain("hidden");
   });
 });
 

@@ -24,6 +24,15 @@ interface HarnessModelTriggerProps extends Omit<
   profileAccentDot: ProfileAccentDotInput | null;
   isLoading: boolean;
   disabled: boolean;
+  /**
+   * `"responsive"` is the desktop toolbar: the full pill (model, thinking
+   * effort, chevron), collapsing to the harness glyph alone in a narrow
+   * container. `"model-only"` is the phone toolbar: the model name and nothing
+   * else, at any width - the thinking effort is noise on a row that narrow, and
+   * an unlabelled glyph would be worse. Both keep the same accessible name, so
+   * the effort is still announced either way.
+   */
+  labelDisplay: "responsive" | "model-only";
   ref?: Ref<HTMLButtonElement>;
 }
 
@@ -38,9 +47,15 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     profileAccentDot,
     isLoading,
     disabled,
+    labelDisplay,
     ref,
     ...rest
   } = props;
+  // Applied to the label and the chevron together: the pill either shows its
+  // content or shrinks to the harness glyph.
+  const collapseWhenNarrow = labelDisplay === "responsive";
+  const narrowHidden = cn(collapseWhenNarrow && "@max-lg:hidden");
+  const showsReasoning = collapseWhenNarrow && reasoningLabel !== null;
   const serviceTierSummary =
     serviceTierLabel === null || !serviceTierActive
       ? null
@@ -59,7 +74,11 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
       ref={ref}
       aria-label={summary}
       disabled={disabled}
-      className="max-w-[min(50cqw,18rem)] min-w-0 justify-start disabled:cursor-not-allowed disabled:opacity-50 @max-lg:size-8 @max-lg:justify-center @max-lg:px-0"
+      className={cn(
+        "max-w-[min(50cqw,18rem)] min-w-0 justify-start disabled:cursor-not-allowed disabled:opacity-50",
+        collapseWhenNarrow &&
+          "@max-lg:size-8 @max-lg:justify-center @max-lg:px-0",
+      )}
       {...rest}
     >
       {serviceTierLabel === null ? null : (
@@ -89,23 +108,30 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           />
         )}
       </span>
-      <span className="min-w-0 truncate whitespace-nowrap @max-lg:hidden">
+      <span className={cn("min-w-0 truncate whitespace-nowrap", narrowHidden)}>
         {label}
       </span>
-      {reasoningLabel === null ? null : (
+      {!showsReasoning ? null : (
         <>
           <span
             aria-hidden="true"
-            className="shrink-0 text-muted-foreground/70 @max-lg:hidden"
+            className={cn("shrink-0 text-muted-foreground/70", narrowHidden)}
           >
             ·
           </span>
-          <span className="shrink-0 whitespace-nowrap text-muted-foreground @max-lg:hidden">
+          <span
+            className={cn(
+              "shrink-0 whitespace-nowrap text-muted-foreground",
+              narrowHidden,
+            )}
+          >
             {reasoningLabel}
           </span>
         </>
       )}
-      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground @max-lg:hidden" />
+      <ChevronDown
+        className={cn("size-3.5 shrink-0 text-muted-foreground", narrowHidden)}
+      />
     </ToolbarPillButton>
   );
 }

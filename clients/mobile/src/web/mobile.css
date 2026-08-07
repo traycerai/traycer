@@ -1,0 +1,47 @@
+.traycer-mobile-client,
+.traycer-mobile-client body,
+.traycer-mobile-client #root {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+.traycer-mobile-client body {
+  margin: 0;
+  overscroll-behavior: none;
+}
+
+.traycer-mobile-client
+  [data-layout="hero"]
+  [data-testid="signin-device-progress"]
+  .text-muted-foreground {
+  color: rgb(255 255 255 / 0.68);
+}
+
+@media (max-width: 639px), (max-height: 639px) and (orientation: landscape) {
+  .traycer-mobile-client main:has([data-layout="hero"]) {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .traycer-mobile-client main:has([data-layout="hero"]) > section {
+    min-height: 100dvh;
+    padding: 3rem 1rem;
+  }
+
+  .traycer-mobile-client [data-layout="hero"] button {
+    min-height: 2.75rem;
+  }
+
+  .traycer-mobile-client footer {
+    padding-right: 1rem;
+    padding-bottom: 0.75rem;
+  }
+}
+
+@media (max-height: 639px) {
+  .traycer-mobile-client main:has([data-layout="hero"]) > section {
+    justify-content: flex-start;
+    padding-top: 1.5rem;
+    padding-bottom: 1.5rem;
+  }
+}

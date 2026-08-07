@@ -6,6 +6,7 @@ import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-br
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { HostConnectionDegradedBanner } from "@/components/layout/host-connection-degraded-banner";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
@@ -13,8 +14,9 @@ import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
-import { RemoteWorkspacePathPickerHost } from "@/components/home/host-workspace-selector/remote-workspace-path-picker-host";
+import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 
 interface AppShellProps {
   children: ReactNode;
@@ -28,12 +30,15 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   const { children } = props;
   const activeHostId = useReactiveActiveHostId();
+  // Phones get the hamburger navigation drawer; it is only mounted below md so
+  // desktop mounts nothing extra and stays unchanged.
+  const isMobile = useIsMobileViewport();
 
   return (
     <DiffWorkerPoolProvider>
-      <div className="min-h-screen bg-canvas text-canvas-foreground">
+      <div className="min-h-dvh bg-canvas text-canvas-foreground">
         <RootDndProvider>
-          <div className="relative flex h-screen w-full flex-col">
+          <div className="relative flex h-dvh w-full flex-col">
             <AppHeader variant="app" />
             <HostConnectionDegradedBanner />
             <main className="relative flex min-h-0 flex-1 flex-col">
@@ -62,10 +67,11 @@ export function AppShell(props: AppShellProps) {
               <TileSelectAllBridge />
             </main>
             <OpenFolderDialog />
-            <RemoteWorkspacePathPickerHost />
+            <RemoteFolderPickerDialog />
             <QuitInterceptBridge />
             <MigrationRunController />
             <MigrationBlockingModalHost />
+            {isMobile ? <MobileNavDrawer /> : null}
             {/* Test-only probe: binds the active hostId to a hidden DOM
                 attribute so the mobile-cardinality integration tests can
                 assert the runner-host auto-bind machinery without depending

@@ -95,10 +95,13 @@ export function PromotableModalFrame(
             {props.title}
           </DialogPrimitive.Title>
           <div className="ml-auto flex items-center gap-1">
+            {/* No promote on phones: the strip-tab surface it opens isn't
+                mobile-ready, and below md the modal is already full-screen. */}
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
+              className="max-md:hidden"
               aria-label={props.promoteAriaLabel}
               data-testid={props.promoteTestId}
               onClick={props.onPromote}

@@ -143,8 +143,23 @@ export function WorkspaceFolderRows(props: {
     >
       <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
         <div
-          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-center gap-x-1.5 gap-y-1.5"
+          // Below md the five tracks leave the Location and Branch labels ~16px
+          // and ~50px of text width, so they truncate to "N…" / "tray… fr…".
+          // Drop to three columns there - identity + actions stay on line 1 and
+          // each control wraps to its own full-width line (see `FolderRow`).
+          //
+          // The row gap also has to grow there: one folder is three lines
+          // separated by 4px, so a 6px gap BETWEEN folders is indistinguishable
+          // from the gaps inside one, and several folders read as one long list
+          // of anonymous rows. 12px against 4px is the contrast that makes each
+          // folder read as a group - whitespace rather than divider lines.
+          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-center gap-x-1.5 gap-y-1.5 max-md:max-h-[17rem] max-md:grid-cols-[1.5rem_minmax(0,1fr)_auto] max-md:gap-y-3 max-md:overflow-y-auto"
           data-testid="workspace-folder-grid"
+          // Chromium makes an actually-overflowing scroll container a sequential
+          // tab stop even with no tabIndex set (jsdom does not model this), which
+          // would add a dead Tab press before the first row. Same treatment as
+          // `WorkspaceFolderHoverList`; pointer / wheel scrolling is unaffected.
+          tabIndex={-1}
         >
           {items.map((item) => (
             <FolderRow

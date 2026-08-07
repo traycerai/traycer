@@ -513,7 +513,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       <section
         className={cn(
           "flex min-h-0 w-full flex-col",
-          variant === "page" ? "mx-auto max-w-3xl flex-1 px-6 pt-6" : "mt-8",
+          variant === "page"
+            ? "mx-auto max-w-3xl flex-1 px-4 pt-4 md:px-6 md:pt-6"
+            : "mt-8",
           props.className,
         )}
       >
@@ -783,14 +785,20 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
   });
 
   return (
-    <div className="flex items-center justify-between gap-2 px-2 pb-2">
+    // Wraps instead of clipping when the bar is narrower than its controls
+    // (sub-340px phones, or the Clear button appearing beside the cluster).
+    // The button cluster `grow`s so it renders identically while everything
+    // fits on one line (buttons flush right, as justify-between alone would
+    // place them) and spans the full row - still right-aligned - when it
+    // wraps below the Clear button.
+    <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {props.leading}
         {props.filters.active ? (
           <ClearFiltersButton onClick={props.filters.onClear} />
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex min-w-0 grow flex-wrap items-center justify-end gap-1">
         {props.selection.kind === "active" ? (
           <>
             <Button
@@ -855,42 +863,49 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
             </Button>
           </>
         ) : (
+          // Paired sub-groups so a wrap breaks between pairs instead of
+          // orphaning a lone icon on its own line. Intra- and inter-group
+          // gaps are both gap-1, so the one-line rendering is unchanged.
           <>
-            <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
-            <EpicsFilterPopover
-              availableRepos={props.availableRepos}
-              availableWorkspaces={props.availableWorkspaces}
-              search={props.search}
-              onSearchChange={props.onSearchChange}
-              facets={props.facets}
-            />
-            {props.showSelection ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
+              <EpicsFilterPopover
+                availableRepos={props.availableRepos}
+                availableWorkspaces={props.availableWorkspaces}
+                search={props.search}
+                onSearchChange={props.onSearchChange}
+                facets={props.facets}
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {props.showSelection ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Select history items"
+                  disabled={!props.selection.canSelect}
+                  className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
+                  onClick={props.selection.onStart}
+                >
+                  <ListChecks className="size-4" />
+                  Select
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                aria-label="Select history items"
-                disabled={!props.selection.canSelect}
-                className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
-                onClick={props.selection.onStart}
+                size="icon-sm"
+                aria-label="Refresh tasks"
+                data-testid="epics-list-refresh"
+                disabled={refresh.refreshing || hostId === null}
+                onClick={refresh.trigger}
               >
-                <ListChecks className="size-4" />
-                Select
+                <RefreshCwIcon
+                  className={cn("size-4", refresh.refreshing && "animate-spin")}
+                />
               </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Refresh tasks"
-              data-testid="epics-list-refresh"
-              disabled={refresh.refreshing || hostId === null}
-              onClick={refresh.trigger}
-            >
-              <RefreshCwIcon
-                className={cn("size-4", refresh.refreshing && "animate-spin")}
-              />
-            </Button>
+            </div>
           </>
         )}
       </div>
@@ -1100,13 +1115,18 @@ function HistoryRowTrailingMetadata(props: {
 }): ReactNode {
   const hasPrPills =
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
+  // Desktop (md+): label and pills share one grid cell and swap on
+  // hover/focus. Below md there is no hover, so the cell flattens into a
+  // flex line - label and pills sit side by side, pills persistently
+  // visible and tappable - on the row's wrapped second line (`pl-6` aligns
+  // it under the title, past the leading icon).
   return (
-    <span className="grid shrink-0 items-center justify-items-end text-ui-xs">
+    <span className="grid shrink-0 items-center justify-items-end text-ui-xs max-md:flex max-md:min-w-0 max-md:gap-2 max-md:pl-6">
       <span
         className={cn(
           "col-start-1 row-start-1 text-muted-foreground",
           hasPrPills &&
-            "transition-opacity group-hover/list-row:opacity-0 group-focus-within/list-row:opacity-0",
+            "transition-opacity md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:opacity-0",
         )}
       >
         updated {props.updatedLabel}
@@ -1116,7 +1136,7 @@ function HistoryRowTrailingMetadata(props: {
           worktrees={props.worktrees}
           detailOnHover
           maximumVisible={2}
-          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100"
+          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
         />
       ) : null}
@@ -1390,8 +1410,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       })}
     >
       {rowInteractionLayer}
+      {/* Below md the row wraps to two lines - title spans the full first
+          line (`basis-full` beats flex-1's 0% basis inside the media query)
+          and the metadata drops underneath - otherwise the shrink-0
+          "updated ..." label squeezes the title to nothing at phone width. */}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
-        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
             <input
@@ -1502,7 +1526,9 @@ function HistoryPinControl(props: {
             "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
             props.item.isPinned
               ? "text-primary opacity-100"
-              : "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100",
+              : // Touch has no hover to reveal the control, and tapping the row
+                // navigates - so on coarse pointers it stays visible.
+                "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100 pointer-coarse:opacity-100",
           )}
           onClick={() => {
             props.onSetPinned(props.item.epicId, !props.item.isPinned);
@@ -1686,6 +1712,9 @@ function HistorySweepMenuItem(props: {
 function historyRowContentClassName(hasSweepControl: boolean): string {
   return cn(
     "pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm",
+    // Below md the row wraps to two lines rather than letting the shrink-0
+    // "updated ..." label squeeze the title to nothing at phone width.
+    "max-md:flex-wrap max-md:gap-y-1",
     // Reserve room for the second hover control so the sweep button never
     // overlaps the trailing metadata / PR pills.
     hasSweepControl && "pr-20",
@@ -1726,7 +1755,7 @@ function HistoryTitleEditControl(props: {
         aria-label={`Edit title for ${historyItemDisplayTitle(props.item)}`}
         data-testid="epics-list-row-edit-title"
         disabled={props.isRenamePending}
-        className="pointer-events-auto size-5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+        className="pointer-events-auto size-5 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
         onClick={props.onStartRename}
       >
         <Pencil className="size-3.5" />
@@ -1821,7 +1850,7 @@ function HistoryRowDeleteControl(props: {
         aria-label={`Delete ${historyItemDisplayTitle(props.item)}`}
         aria-haspopup="dialog"
         data-testid="epics-list-row-delete"
-        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+        className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
         onClick={() => {
           props.onRequestDelete([props.item.epicId]);
         }}

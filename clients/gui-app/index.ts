@@ -1,4 +1,5 @@
 export { TraycerApp, type TraycerAppProps } from "@/traycer-app";
+export { isMobileApp, setMobileApp } from "@/lib/mobile-app";
 export {
   hostRpcRegistry,
   type HostRpcRegistry,

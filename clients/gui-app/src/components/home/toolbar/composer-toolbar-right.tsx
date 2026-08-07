@@ -62,6 +62,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
   return (
     <div className="flex min-w-0 items-center justify-end gap-1">
       <HarnessModelPicker
+        labelDisplay="responsive"
         store={store}
         withServiceTier
         tuiOnly={false}

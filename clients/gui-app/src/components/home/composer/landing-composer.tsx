@@ -86,6 +86,7 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { ArrowLeftRight } from "lucide-react";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useHostBinding, useHostClient } from "@/lib/host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
@@ -131,6 +132,22 @@ function promptStashIsDisabled(
   return isSubmitting || attachmentPending;
 }
 
+function landingComposerCanSubmit(args: {
+  readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
+  readonly submitBlocked: boolean;
+  readonly workspaceCanStart: boolean;
+  readonly hasSubmittableContent: boolean;
+}): boolean {
+  return (
+    !args.isSubmitting &&
+    !args.attachmentPending &&
+    !args.submitBlocked &&
+    args.workspaceCanStart &&
+    args.hasSubmittableContent
+  );
+}
+
 export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
@@ -167,6 +184,18 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const composerMode = draftComposerMode ?? globalComposerMode;
   const chatComposerActive = activityEnabled && composerMode === "chat";
+  // Phones collapse the composer toolbar into a single options-sheet trigger.
+  // Only the toolbar slot swaps, so the editor keeps its position in the tree
+  // and never remounts when the viewport crosses the breakpoint.
+  const isMobile = useIsMobileViewport();
+
+  const handleToggleComposerMode = useCallback(() => {
+    const next = nextComposerMode(composerMode);
+    setGlobalComposerMode(next);
+    if (draftId !== null) {
+      setDraftComposerMode(draftId, next);
+    }
+  }, [composerMode, draftId, setDraftComposerMode, setGlobalComposerMode]);
 
   useEffect(() => {
     return () => {
@@ -549,12 +578,13 @@ export function LandingComposer(props: LandingComposerProps) {
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
   });
-  const canSubmit =
-    !isSubmitting &&
-    !attachmentPending &&
-    !submitBlocked &&
-    workspaceCanStart &&
-    hasSubmittableContent;
+  const canSubmit = landingComposerCanSubmit({
+    isSubmitting,
+    attachmentPending,
+    submitBlocked,
+    workspaceCanStart,
+    hasSubmittableContent,
+  });
 
   const actions = useLandingComposerActions();
   const { dictationControl, dictationPreparing } = useComposerDictation({
@@ -668,13 +698,7 @@ export function LandingComposer(props: LandingComposerProps) {
       }
       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       disabled={isSubmitting}
-      onClick={() => {
-        const next = nextComposerMode(composerMode);
-        setGlobalComposerMode(next);
-        if (draftId !== null) {
-          setDraftComposerMode(draftId, next);
-        }
-      }}
+      onClick={handleToggleComposerMode}
     >
       <ArrowLeftRight className="size-3 shrink-0" />
       {composerMode === "chat" ? "Switch to Terminal" : "Switch to Chat"}
@@ -696,6 +720,7 @@ export function LandingComposer(props: LandingComposerProps) {
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
+      toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         rateLimitPrompt.kind === "visible" ? (
           <ProfileRateLimitSwitchBanner

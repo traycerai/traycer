@@ -1,0 +1,43 @@
+{
+  "_README": [
+    "SHAPE REFERENCE ONLY - do not rename this file to google-services.json with these values in it.",
+    "The real file is ops-provisioned: Firebase console > Project settings > Your apps > Android app",
+    "(package name com.traycer.app) > google-services.json. Drop it next to this file, at",
+    "clients/mobile/android/app/google-services.json; it is gitignored.",
+    "",
+    "Without that file android/app/build.gradle skips the com.google.gms.google-services plugin, the",
+    "build still succeeds, and FirebaseMessaging simply never initializes - the push controller logs",
+    "the failure and the app runs unchanged (see clients/mobile/AGENTS.md).",
+    "",
+    "Populating these placeholders by hand is WORSE than leaving the file out: Firebase would then",
+    "initialize against a project that does not exist and fail later, at token fetch, instead of at",
+    "the one place the absence is already handled."
+  ],
+  "project_info": {
+    "project_number": "000000000000",
+    "project_id": "REPLACE_WITH_FIREBASE_PROJECT_ID",
+    "storage_bucket": "REPLACE_WITH_FIREBASE_PROJECT_ID.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.traycer.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_WITH_FIREBASE_ANDROID_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

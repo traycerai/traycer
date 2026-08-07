@@ -120,6 +120,7 @@ function openPicker(): string {
         epicId="epic-1"
         tabId={tabId}
         onBeforeOpen={undefined}
+        onLaunched={null}
       />
     </TooltipProvider>,
   );
@@ -191,6 +192,7 @@ describe("<NewTerminalPicker />", () => {
           epicId="epic-1"
           tabId={tabId}
           onBeforeOpen={undefined}
+          onLaunched={null}
         />
       </TooltipProvider>
     );
@@ -496,6 +498,7 @@ describe("<NewTerminalPicker /> focus-loss dismissal (MED4)", () => {
               epicId="epic-1"
               tabId={tabId}
               onBeforeOpen={undefined}
+              onLaunched={null}
             />
           </TooltipProvider>
         </PaneVisibilityContext.Provider>

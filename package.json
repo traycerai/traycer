@@ -155,6 +155,7 @@
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "uuid": "^14.0.1",
+    "vaul": "^1.1.2",
     "vite": "^8.2.0",
     "vitest": "^4.1.10",
     "y-protocols": "^1.0.7",
@@ -186,6 +187,8 @@
     "wait-on": "^9.1.0"
   },
   "overrides": {
+    "@radix-ui/react-dialog": "1.1.21",
+    "@radix-ui/react-dismissable-layer": "1.1.18",
     "@codemirror/state": "^6.7.1",
     "@codemirror/language": "^6.12.4",
     "diff": "^9.0.0",
@@ -196,7 +199,7 @@
     "hono": "^4.12.25",
     "fast-uri": "^4.0.0",
     "follow-redirects": "^1.16.0",
-    "prosemirror-model": "1.25.9",
+    "prosemirror-model": "1.25.11",
     "yaml": "^2.9.0",
     "ip-address": "^10.2.0",
     "axios": "^1.17.0",

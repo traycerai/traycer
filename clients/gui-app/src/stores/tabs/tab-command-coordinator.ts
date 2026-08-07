@@ -8,7 +8,11 @@ import {
   resolveTabIdForPhaseMigration,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  newestLandingDraftId,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import { isMobileApp } from "@/lib/mobile-app";
 import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
@@ -1013,7 +1017,17 @@ export class TabCommandCoordinator {
     target: Extract<CoordinatedTabActivationTarget, { kind: "draft" }>,
     layout: PersistedTabStripLayout,
   ): ResolvedCoordinatedActivation | null {
-    const draftId = target.draftId ?? (target.create ? uuidv4() : null);
+    // The installed mobile app has ONE stable composer (no tab strip to close
+    // a second draft tab), so an id-less create lands on the newest existing
+    // draft instead of minting - mirroring `createDraft`'s product-flag gate.
+    const mobileStableDraftId =
+      target.draftId === null && target.create && isMobileApp()
+        ? newestLandingDraftId()
+        : null;
+    const draftId =
+      target.draftId ??
+      mobileStableDraftId ??
+      (target.create ? uuidv4() : null);
     if (draftId === null) return null;
     const exists = useLandingDraftStore
       .getState()

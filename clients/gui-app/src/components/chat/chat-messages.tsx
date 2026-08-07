@@ -2424,18 +2424,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             data-testid="chat-messages-scroll"
             data-scroll-mode={scrollMode}
           />
+          {/* The minimap rail is untappable on touch and its hover-expand
+              never fires; hide it below md and reclaim the right edge.
+              `contents` keeps the absolutely-positioned rail's layout
+              identical on desktop (>=768px). The `side` setting is a user
+              preference, not a viewport rule, so it cannot stand in for this. */}
           {hasContent && chatTurnMinimapSide !== "hide" ? (
-            <ChatTurnMinimap
-              messages={messages}
-              inViewRefreshRef={minimapInViewRefreshRef}
-              listRef={chatTimelineRef}
-              topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-              viewportRef={transcriptContainerRef}
-              bottomInset={endInset}
-              onSelect={onMinimapItemSelect}
-              identity={identity}
-              side={chatTurnMinimapSide}
-            />
+            <div className="contents max-md:hidden">
+              <ChatTurnMinimap
+                messages={messages}
+                inViewRefreshRef={minimapInViewRefreshRef}
+                listRef={chatTimelineRef}
+                topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                viewportRef={transcriptContainerRef}
+                bottomInset={endInset}
+                onSelect={onMinimapItemSelect}
+                identity={identity}
+                side={chatTurnMinimapSide}
+              />
+            </div>
           ) : null}
           {hasContent ? (
             <ScrollToEndPill

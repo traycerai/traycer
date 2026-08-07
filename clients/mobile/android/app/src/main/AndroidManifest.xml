@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <!--
+            adjustResize is the Android half of the Keyboard config in
+            capacitor.config.ts: `resize: Native` and `autoBackdropColor` are
+            BOTH iOS-only options, so without this the platform picks its own
+            soft-input mode. If it picks adjustPan the window is scrolled
+            rather than resized, and the h-dvh app shell - terminal key bar
+            included - stops tracking the visible area, which is the exact
+            problem the iOS setting exists to avoid.
+        -->
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+    </application>
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        Android 13 (API 33) made notification posting a runtime permission. The
+        push plugin declares the matching @Permission alias, but the
+        <uses-permission> itself has to live in the APP manifest - the plugin's
+        library manifest does not contribute it. Without this line
+        requestPermissions() is denied by the platform WITHOUT ever showing the
+        system dialog, and the registration flow then correctly (but silently)
+        gives up. Below API 33 the plugin short-circuits both permission calls
+        to "granted".
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+</manifest>

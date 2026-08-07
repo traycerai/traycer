@@ -104,7 +104,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
             event.stopPropagation();
             onRemove(atom.id);
           }}
-          className="absolute right-0.5 top-0.5 z-10 size-4 rounded-full p-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          className="absolute right-0.5 top-0.5 z-10 size-4 rounded-full p-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
         >
           <X className="size-3" aria-hidden />
         </Button>

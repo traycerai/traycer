@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "@traycer-clients/shared/*": ["../shared/*"],
+      "@traycer-clients/gui-app": ["../gui-app/index.ts"],
+      "@traycer-clients/gui-app/*": ["../gui-app/*"],
+      "@traycer-clients/mobile/*": ["./src/*"],
+      "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
+      "@traycer/protocol/*": ["../../protocol/src/*"],
+      "@/*": ["../gui-app/src/*"]
+    }
+  },
+  "include": ["src", "scripts", "capacitor.config.ts", "__tests__"],
+  "exclude": ["node_modules", "dist", "android", "ios", "web"]
+}

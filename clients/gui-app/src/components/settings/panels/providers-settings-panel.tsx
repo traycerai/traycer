@@ -15,6 +15,13 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
@@ -565,14 +572,26 @@ function ProvidersRailLayout({
     // providers never resizes the box and the detail pane - not the outer
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
-    <div className="flex h-full min-h-0">
+    // Below md the rail column collapses into a full-width provider select
+    // stacked above the detail pane. The select lists `orderedProviders`, not
+    // the rail's filtered `visibleProviders` - the rail's search/filter is a
+    // pointer affordance that goes with it, so it must never narrow what a
+    // phone can reach.
+    <div className="flex h-full min-h-0 flex-col md:flex-row">
+      <div className="shrink-0 border-b border-border/60 p-2 md:hidden">
+        <ProvidersMobileSelect
+          providers={orderedProviders}
+          activeId={active.providerId}
+          onSelect={onSelectProvider}
+        />
+      </div>
       {/* The search row is a pinned SIBLING of the scroll box rather than the
           first child of a scrolling column - the same shape the tab rail uses
           below, and for the same reason: scrolling the list must never carry
           the control that filters it out of reach. */}
       <nav
         aria-label="Providers"
-        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60"
+        className="hidden w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60 md:flex"
       >
         <ProviderRailControls
           view={railView}
@@ -623,6 +642,35 @@ function ProvidersRailLayout({
         />
       </div>
     </div>
+  );
+}
+
+function ProvidersMobileSelect(props: {
+  readonly providers: readonly ProviderCliState[];
+  readonly activeId: ProviderId;
+  readonly onSelect: (providerId: ProviderId) => void;
+}): ReactNode {
+  return (
+    <Select
+      value={props.activeId}
+      onValueChange={(value) => {
+        // Resolve through the provider list instead of asserting the select's
+        // string value back into the ProviderId union.
+        const match = props.providers.find((p) => p.providerId === value);
+        if (match !== undefined) props.onSelect(match.providerId);
+      }}
+    >
+      <SelectTrigger aria-label="Provider" className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {props.providers.map((provider) => (
+          <SelectItem key={provider.providerId} value={provider.providerId}>
+            {PROVIDER_DISPLAY_NAMES[provider.providerId]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

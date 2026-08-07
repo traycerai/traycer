@@ -1,6 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
+import "@/components/home/home-touch-targets.css";
 import {
   useSystemTabModalController,
   useSystemTabModalRefreshGuard,
@@ -72,8 +73,18 @@ function SystemTabModalSurface(props: SystemTabModalSurfaceProps): ReactNode {
     <PromotableModalFrame
       icon={<Icon className="size-4 text-muted-foreground" />}
       title={meta.label}
-      contentClassName="h-[80vh] w-[80vw] max-w-[min(95vw,80rem)]"
-      dataAttributes={{ "data-leader-scope": LEADER_SCOPE_SETTINGS }}
+      // Full-screen sheet below md: the centered 80% box leaves the History
+      // list unusably narrow on phones. Pure CSS (not a JS viewport check) so
+      // an open modal reflows correctly when the window crosses 768px.
+      contentClassName="h-[80vh] w-[80vw] max-w-[min(95vw,80rem)] max-md:h-dvh max-md:w-screen max-md:max-w-none max-md:rounded-none"
+      // The touch-target scope re-applies the coarse-pointer hit-slop rules
+      // (home-touch-targets.css) inside this portal - the modal body renders
+      // the same list chrome as the home page but portals outside the
+      // `[data-home-touch-scope]` subtree HomePage sets.
+      dataAttributes={{
+        "data-leader-scope": LEADER_SCOPE_SETTINGS,
+        "data-home-touch-scope": "",
+      }}
       promoteAriaLabel={`Open ${meta.label} as a tab`}
       promoteTestId={`system-tab-modal-promote-${active.kind}`}
       closeTestId={`system-tab-modal-close-${active.kind}`}

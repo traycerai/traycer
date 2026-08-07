@@ -20,7 +20,7 @@
  */
 import { readRotatedTokens } from "./auth-validation";
 
-export type DeviceClientId = "cli" | "desktop";
+export type DeviceClientId = "cli" | "desktop" | "mobile";
 
 /**
  * Per-request cancellation + timeout for the device HTTP calls. `signal` is the

@@ -1,6 +1,7 @@
 import { useMatch } from "@tanstack/react-router";
 import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
@@ -27,6 +28,7 @@ export function EpicSurface(props: EpicSurfaceProps) {
     }),
     structuralSharing: true,
   });
+  const isMobile = useIsMobileViewport();
   const route = activeRoute ?? null;
   const activeSearch =
     route !== null &&
@@ -44,7 +46,14 @@ export function EpicSurface(props: EpicSurfaceProps) {
               className="flex min-h-0 min-w-0 flex-1 flex-row"
               data-epic-surface={props.tabId}
             >
-              <EpicSidebarColumn epicId={props.epicId} tabId={props.tabId} />
+              {/* Phones present one full-screen surface at a time: the epic
+                  sidebar (artifact/chat/terminal tree + resize rail) is dropped
+                  below md so the pane container spans the full width. Its
+                  navigation re-homes into the mobile tile switcher. Desktop
+                  (>=768px) is unaffected. */}
+              {isMobile ? null : (
+                <EpicSidebarColumn epicId={props.epicId} tabId={props.tabId} />
+              )}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <EpicRouteSessionBody
                   epicId={props.epicId}

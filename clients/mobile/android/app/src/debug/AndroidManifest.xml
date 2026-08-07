@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-variant overlay. The dev loop is entirely plain-http loopback: the
+    live-reload bundle, the authn/cloud-ui origins baked by `vite.config.ts`,
+    and the host's `ws://127.0.0.1:<port>` RPC socket. Android blocks cleartext
+    by default from API 28 on, so debug builds need an explicit exemption.
+
+    Scoped rather than blanket: `android:usesCleartextTraffic="true"` would
+    open every host, and it would live in the same merged manifest a release
+    build eventually inherits if the overlay were ever moved to `main/`.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

@@ -392,6 +392,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         </DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
+            labelDisplay="responsive"
             store={toolbarStore}
             withServiceTier={false}
             tuiOnly

@@ -115,6 +115,7 @@ describe("<NewTerminalPicker /> double-launch guard", () => {
         epicId="epic-1"
         tabId={tabId}
         onBeforeOpen={undefined}
+        onLaunched={null}
       />,
     );
     fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));

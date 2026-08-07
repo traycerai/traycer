@@ -13,6 +13,11 @@ import { workspaceRunPath, type WorkspaceRunItem } from "./workspace-run-item";
  * primary pin / folder / location / branch / actions. A filled pin marks the
  * primary folder; every other row keeps the same outline-pin slot. Actions are
  * always visible in a muted tone, brightening on hover/focus.
+ *
+ * Below md the row wraps into three lines against the parent's three-column
+ * phone grid - identity + actions on line 1, then Location and Branch each
+ * getting the full width so their labels stop truncating to a letter or two.
+ * Same controls, same handlers; only where they sit changes.
  */
 export function FolderRow(props: {
   readonly item: WorkspaceRunItem;
@@ -28,7 +33,10 @@ export function FolderRow(props: {
 
   return (
     <div
-      className="group col-span-full grid min-w-0 grid-cols-subgrid items-center"
+      // Columns are subgridded from the parent; the rows are this element's
+      // own, so the wrapped phone lines need their own row gap (the parent's
+      // gap-y separates FOLDER rows, not the lines within one).
+      className="group col-span-full grid min-w-0 grid-cols-subgrid items-center max-md:gap-y-1"
       data-testid="folder-row"
       data-path={item.displayPath}
     >
@@ -104,7 +112,7 @@ function FolderRowBody(props: {
   if (item.unresolved) {
     return (
       <>
-        <div className="col-[3/5] flex min-w-0 items-center gap-2">
+        <div className="col-[3/5] flex min-w-0 items-center gap-2 max-md:col-[2/4] max-md:row-start-2">
           <span className="text-ui-sm text-muted-foreground">Unavailable</span>
           {props.readOnly || item.onLocate === null ? null : (
             <Button
@@ -134,7 +142,7 @@ function FolderRowBody(props: {
     return (
       <>
         <div
-          className="col-[3/5] flex min-w-0 items-center gap-2 text-ui-sm text-muted-foreground"
+          className="col-[3/5] flex min-w-0 items-center gap-2 text-ui-sm text-muted-foreground max-md:col-[2/4] max-md:row-start-2"
           data-testid="folder-row-loading"
         >
           <AgentSpinningDots
@@ -155,17 +163,25 @@ function FolderRowBody(props: {
 
   return (
     <>
-      <FolderLocationControl
-        item={item}
-        uncommittedByPath={props.uncommittedByPath}
-        boundaryEl={props.boundaryEl}
-        readOnly={props.readOnly}
-      />
-      <FolderBranchControl
-        item={item}
-        boundaryEl={props.boundaryEl}
-        readOnly={props.readOnly}
-      />
+      {/* Placement wrappers, not restyling: each control keeps its own
+          `w-full` trigger and fills the wrapper, so desktop is unchanged (the
+          wrapper simply occupies the track the control used to). Below md they
+          drop to their own line, indented past the pin column. */}
+      <div className="min-w-0 max-md:col-[2/4] max-md:row-start-2">
+        <FolderLocationControl
+          item={item}
+          uncommittedByPath={props.uncommittedByPath}
+          boundaryEl={props.boundaryEl}
+          readOnly={props.readOnly}
+        />
+      </div>
+      <div className="min-w-0 max-md:col-[2/4] max-md:row-start-3">
+        <FolderBranchControl
+          item={item}
+          boundaryEl={props.boundaryEl}
+          readOnly={props.readOnly}
+        />
+      </div>
       <FolderRowActions
         item={item}
         readOnly={props.readOnly}
@@ -186,7 +202,10 @@ function FolderRowActions(props: {
   const showEnvironment = !item.unresolved && !item.metadataPending;
   return (
     <span
-      className="col-start-5 grid shrink-0 grid-cols-2 items-center justify-self-end gap-0.5"
+      // Explicitly pinned to line 1 below md: the wrapped Location / Branch
+      // lines claim rows 2-3, and without a row of its own this would auto-place
+      // into the next free cell instead of staying beside the folder name.
+      className="col-start-5 grid shrink-0 grid-cols-2 items-center justify-self-end gap-0.5 max-md:col-start-3 max-md:row-start-1"
       data-testid="folder-row-actions"
     >
       <span className="inline-flex size-6 items-center justify-center">

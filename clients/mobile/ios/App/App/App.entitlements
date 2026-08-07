@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Debug/dev signing keeps this "development" (Apple's sandbox APNs
+	     gateway); distribution signing rewrites it to "production" at export.
+	     Registration code degrades gracefully when provisioning lacks push. -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>
