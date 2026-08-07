@@ -1,8 +1,15 @@
 import {
   recordTuiAgentActivityRequestSchemaV11,
   recordTuiAgentActivityResponseSchema,
+  tuiAgentPromptSubmittedRequestSchema,
+  tuiAgentPromptSubmittedResponseSchema,
+  type RecordTuiAgentActivityRequestV11,
+  type RecordTuiAgentActivityResponse,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
-import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  tuiHarnessIdSchema,
+  type TuiHarnessId,
+} from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpcFastFail,
   parseHostResponse,
@@ -19,9 +26,40 @@ type ActivityHookEvent = "start" | "stop";
 type NoopReason =
   "missing-context" | "unknown-event" | "unknown-provider" | "host-unreachable";
 
+// Identity fields shared by the `promptSubmitted` call and its `recordActivity`
+// fallback - both carry the exact same payload (see the module doc).
+interface HookActivityIdentity {
+  readonly epicId: string | null;
+  readonly tuiAgentId: string | null;
+  readonly harnessSessionId: string | null;
+  readonly harnessId: TuiHarnessId;
+  readonly observedHarnessSessionId: string | null;
+}
+
 /**
  * `traycer agent activity-from-hook` - invoked by provider TUI lifecycle
  * hooks. It reports provider-native turn start/stop edges to the host.
+ *
+ * The `stop` edge still rides `agent.tui.recordActivity`. The `start` edge
+ * (the `UserPromptSubmit` hook chain) is the roles-snapshot-delivery pull
+ * point: it calls `agent.tui.promptSubmitted@1.0` instead, an optional unary
+ * method that does both jobs in one round trip - it records the same
+ * activity edge `recordActivity` would have, then runs the host's
+ * roles-digest-cursor check. A non-null `pendingPromptContext` in the
+ * response is emitted on stdout as the `UserPromptSubmit` `additionalContext`
+ * envelope (`{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
+ * "additionalContext":"..."}}`), which Claude Code appends to the outgoing
+ * prompt; `null` (nothing to deliver) means no stdout at all.
+ *
+ * `promptSubmitted` is registered with `degrade: { kind: "unsupported" }`
+ * (a brand-new method, not a new minor of `recordActivity`): against a host
+ * that doesn't advertise it, the shared transport never sends the request -
+ * it fails locally with `HostRpcError({ code: "E_HOST_UNSUPPORTED" })`,
+ * which `toAgentCliError` maps to `CliError({ code:
+ * CLI_ERROR_CODES.HOST_UNSUPPORTED })`. That specific code degrades silently
+ * to a plain `recordActivity` `start` call carrying the identical payload -
+ * today's semantics, unnoticed by the user. Every other error (a genuine
+ * host `RPC_ERROR`, auth failure, etc.) still surfaces.
  *
  * It also piggybacks the live provider session id (stamped on the hook's
  * stdin payload) as `observedHarnessSessionId` so the host can resync the
@@ -35,9 +73,9 @@ type NoopReason =
  * resync from it anyway). A missing/slow/garbage payload yields `null` and
  * never fails the hook.
  *
- * Like the title hook command, this is intentionally quiet: hooks can fire
- * outside Traycer-managed sessions, and their stdout may be surfaced back into
- * the provider TUI.
+ * Like the title hook command, this is intentionally quiet on the `stop`
+ * edge and on every benign miss: hooks can fire outside Traycer-managed
+ * sessions, and their stdout may be surfaced back into the provider TUI.
  */
 export function buildAgentActivityFromHookCommand(opts: {
   readonly provider: string;
@@ -72,39 +110,116 @@ export function buildAgentActivityFromHookCommand(opts: {
         ? await readObservedHarnessSessionId()
         : null;
 
-    const request = parseUserInput(recordTuiAgentActivityRequestSchemaV11, {
+    const identity: HookActivityIdentity = {
       epicId,
       tuiAgentId,
       harnessSessionId,
       harnessId: parsedHarness.data,
-      event,
       observedHarnessSessionId,
-    });
-    const rpcResult = await toAgentCliError(
-      callHostRpcFastFail("agent.tui.recordActivity", request),
-    ).catch((err: unknown) => {
-      if (
-        err instanceof CliError &&
-        err.code === CLI_ERROR_CODES.HOST_NOT_RUNNING
-      ) {
-        return "host-unreachable" as const;
-      }
-      throw err;
-    });
-    if (rpcResult === "host-unreachable") {
-      return noop("host-unreachable");
+    };
+
+    if (event === "stop") {
+      const stopResult = await callRecordActivity(identity, "stop");
+      if (stopResult === "host-unreachable") return noop("host-unreachable");
+      return {
+        data: { accepted: stopResult.accepted, reason: null },
+        human: null,
+        exitCode: 0,
+      };
     }
 
-    const { accepted } = parseHostResponse(
-      recordTuiAgentActivityResponseSchema,
-      rpcResult,
-    );
+    return submitPrompt(identity);
+  };
+}
+
+async function submitPrompt(identity: HookActivityIdentity) {
+  const request = parseUserInput(tuiAgentPromptSubmittedRequestSchema, {
+    epicId: identity.epicId,
+    tuiAgentId: identity.tuiAgentId,
+    harnessSessionId: identity.harnessSessionId,
+    harnessId: identity.harnessId,
+    observedHarnessSessionId: identity.observedHarnessSessionId,
+  });
+  const rpcResult = await toAgentCliError(
+    callHostRpcFastFail("agent.tui.promptSubmitted", request),
+  ).catch((err: unknown) => {
+    if (
+      err instanceof CliError &&
+      err.code === CLI_ERROR_CODES.HOST_NOT_RUNNING
+    ) {
+      return "host-unreachable" as const;
+    }
+    if (
+      err instanceof CliError &&
+      err.code === CLI_ERROR_CODES.HOST_UNSUPPORTED
+    ) {
+      return "host-too-old" as const;
+    }
+    throw err;
+  });
+  if (rpcResult === "host-unreachable") return noop("host-unreachable");
+  if (rpcResult === "host-too-old") {
+    const fallback = await callRecordActivity(identity, "start");
+    if (fallback === "host-unreachable") return noop("host-unreachable");
     return {
-      data: { accepted, reason: null },
+      data: { accepted: fallback.accepted, reason: null },
       human: null,
       exitCode: 0,
     };
+  }
+
+  const { accepted, pendingPromptContext } = parseHostResponse(
+    tuiAgentPromptSubmittedResponseSchema,
+    rpcResult,
+  );
+  return {
+    data: { accepted, reason: null },
+    human:
+      pendingPromptContext === null
+        ? null
+        : userPromptSubmitEnvelope(pendingPromptContext),
+    exitCode: 0,
   };
+}
+
+async function callRecordActivity(
+  identity: HookActivityIdentity,
+  event: ActivityHookEvent,
+): Promise<RecordTuiAgentActivityResponse | "host-unreachable"> {
+  const requestInput: RecordTuiAgentActivityRequestV11 = {
+    epicId: identity.epicId,
+    tuiAgentId: identity.tuiAgentId,
+    harnessSessionId: identity.harnessSessionId,
+    harnessId: identity.harnessId,
+    event,
+    observedHarnessSessionId: identity.observedHarnessSessionId,
+  };
+  const request = parseUserInput(
+    recordTuiAgentActivityRequestSchemaV11,
+    requestInput,
+  );
+  const rpcResult = await toAgentCliError(
+    callHostRpcFastFail("agent.tui.recordActivity", request),
+  ).catch((err: unknown) => {
+    if (
+      err instanceof CliError &&
+      err.code === CLI_ERROR_CODES.HOST_NOT_RUNNING
+    ) {
+      return "host-unreachable" as const;
+    }
+    throw err;
+  });
+  if (rpcResult === "host-unreachable") return "host-unreachable";
+  return parseHostResponse(recordTuiAgentActivityResponseSchema, rpcResult);
+}
+
+function userPromptSubmitEnvelope(additionalContext: string): string {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext,
+    },
+  });
 }
 
 function parseActivityHookEvent(value: string): ActivityHookEvent | null {

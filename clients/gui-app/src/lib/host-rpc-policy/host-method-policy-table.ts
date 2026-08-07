@@ -455,6 +455,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Optional replacement for the recordActivity start edge: records the
+  // activity edge and pulls the role-registry digest cursor forward when
+  // behind (roles-snapshot-delivery). Same scheduling as its sibling hooks.
+  "agent.tui.promptSubmitted": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Creating an agent persists a new collaboration record.
   "agent.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "agent.selectionGuide": { ...LATEST_SCHEDULING, poll: null },

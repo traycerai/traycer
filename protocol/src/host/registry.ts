@@ -182,6 +182,7 @@ import {
   agentTuiPrepareLaunchV10,
   agentTuiPrepareLaunchV11,
   agentTuiPrepareLaunchUpgradeV10ToV11,
+  agentTuiPromptSubmittedV10,
   agentTuiRecordActivityV10,
   agentTuiRecordActivityV11,
   agentTuiRecordActivityUpgradeV10ToV11,
@@ -3647,6 +3648,27 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: the `UserPromptSubmit` hook's combined
+  // activity-edge + roles-digest-pull call (roles-snapshot-delivery pull
+  // point 1). The `degrade: unsupported` strategy EXCLUDES it from the
+  // released floor and the released-method-names snapshot - adding it to the
+  // floor would be handshake-fatal for existing clients. An old host lacks
+  // it in its optional manifest; the CLI hook falls back to plain
+  // `recordActivity` rather than calling a method the host would reject.
+  // Mirrors `agent.tui.validateForkProfile`'s degrade strategy above.
+  "agent.tui.promptSubmitted": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentTuiPromptSubmittedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "agent.create": {
     1: {
