@@ -384,8 +384,9 @@ function ModelProvidersBody(props: {
   return (
     // The catalog is ~180 rows, so it gets its own bounded scroll region rather
     // than extending the tab's: a page whose scrollbar spans the whole catalog
-    // buries every other control on the tab. Capped against the VIEWPORT, not a
-    // fixed pixel height, so a tall window shows more rows.
+    // buries every other control on the tab. Capped against the VIEWPORT
+    // alone - no px/rem branch - so the cap scales with the window rather than
+    // freezing at one text size.
     //
     // Not virtualized. These rows are one line of text plus a button - no
     // images, no per-row queries - so 180 of them cost one cheap render pass;
@@ -394,7 +395,7 @@ function ModelProvidersBody(props: {
     // this list untestable under jsdom, which reports every element as
     // zero-height and would leave the viewport empty.
     <ul
-      className="flex max-h-[min(60vh,32rem)] w-full flex-col gap-2 overflow-y-auto"
+      className="flex max-h-[60vh] w-full flex-col gap-2 overflow-y-auto"
       data-testid="model-provider-list"
     >
       {props.entries.map((entry) => (
@@ -437,6 +438,14 @@ function ModelProviderRow(props: {
   // and a later host may answer the two differently - reading either one for
   // the other is how a button appears that the host will refuse.
   const showDisconnect = props.canDisconnect && entry.canDisconnect;
+  // A credential Traycer did not write and cannot remove: an env var, an
+  // OpenCode config block, or a provider plugin. The row is READ-ONLY, which
+  // has to include the write affordance as well as the remove one - a
+  // "Replace" here would store a key into the auth store that the env var
+  // keeps shadowing, so the click appears to work and changes nothing. Undoing
+  // that shadowing is explicitly out of v1 scope (the host cannot even read
+  // its own auth store), so the honest surface is no button and a line saying
+  // where the credential actually comes from.
   const externallyManaged =
     entry.connected && entry.source !== null && entry.source !== "api";
   return (
@@ -476,15 +485,12 @@ function ModelProviderRow(props: {
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {props.busy ? <MutedAgentSpinner /> : null}
-          {/* An externally-sourced credential is read-only here and says so
-              instead of offering a button the host would refuse. Traycer does
-              not own that file or that environment. */}
-          {externallyManaged && !showDisconnect ? (
+          {externallyManaged ? (
             <span className="text-ui-xs text-muted-foreground">
               Managed outside Traycer
             </span>
           ) : null}
-          {props.connectable ? (
+          {props.connectable && !externallyManaged ? (
             <Button
               type="button"
               size="sm"

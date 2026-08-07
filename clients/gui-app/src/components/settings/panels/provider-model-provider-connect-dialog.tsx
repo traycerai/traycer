@@ -36,7 +36,6 @@ import {
   modelProviderAuthErrorMessage,
 } from "@/lib/providers/model-provider-error-copy";
 import { redactLogText } from "@/lib/logger";
-import { cn } from "@/lib/utils";
 import type { ModelProviderPendingAuthEntry } from "@/stores/settings/model-provider-pending-auth-store";
 import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provider-pending-auth-store";
 import {
@@ -66,7 +65,24 @@ type LiveAttempt = {
   readonly authorizationUrl: string;
   readonly method: "auto" | "code";
   readonly instructions: string | null;
+  /** When this attempt STARTED, never when it was last polled. */
+  readonly startedAt: number;
 };
+
+/**
+ * Same attempt, same data. Returns the previous object so a steady poll - which
+ * re-sends the identical authorization payload every tick - produces no state
+ * change, and so nothing downstream of it (the polling effect included) churns
+ * once per second for the length of an OAuth consent screen.
+ */
+function sameLiveAttempt(left: LiveAttempt, right: LiveAttempt): boolean {
+  return (
+    left.attemptId === right.attemptId &&
+    left.authorizationUrl === right.authorizationUrl &&
+    left.method === right.method &&
+    left.instructions === right.instructions
+  );
+}
 
 export function ProviderModelProviderConnectDialog(props: {
   readonly open: boolean;
@@ -119,8 +135,10 @@ export function ProviderModelProviderConnectDialog(props: {
           authorizationUrl: resumedAttempt.authorizationUrl,
           method: resumedAttempt.method,
           instructions: resumedAttempt.instructions,
+          startedAt: resumedAttempt.startedAt,
         },
   );
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const auth = useProvidersModelProviderAuth();
   const awaitAuth = useProvidersAwaitModelProviderAuth();
@@ -128,10 +146,17 @@ export function ProviderModelProviderConnectDialog(props: {
   const openExternalLink = useRunnerOpenExternalLink();
   const pendingAuthUpsert = useModelProviderPendingAuthStore((s) => s.upsert);
   const pendingAuthRemove = useModelProviderPendingAuthStore((s) => s.remove);
+  const pendingAuthGet = useModelProviderPendingAuthStore((s) => s.get);
 
+  // Null while the host binding has not settled: an attempt cannot be filed
+  // under an unknown host, and a record filed under the wrong one can never be
+  // resumed against the list it started from.
   const pendingKey = useMemo(
-    () => ({ providerId, modelProviderId: entry.id }),
-    [providerId, entry.id],
+    () =>
+      hostId === null
+        ? null
+        : { hostId, providerId, modelProviderId: entry.id },
+    [hostId, providerId, entry.id],
   );
 
   // Switching sign-in method rebuilds the form: the prompts belong to the
@@ -156,22 +181,37 @@ export function ProviderModelProviderConnectDialog(props: {
     });
   }, []);
 
-  const forgetAttempt = useCallback(() => {
-    setAttempt(null);
-    setCode("");
-    pendingAuthRemove(pendingKey);
-  }, [pendingAuthRemove, pendingKey]);
+  // Drops the LOCAL panel and, only if the store still holds this exact
+  // attempt, its resume record. Both halves are guarded by `attemptId`: a
+  // teardown that resolves after the user started a newer attempt for the same
+  // row must not take the newer one's surface or its record with it.
+  const forgetAttempt = useCallback(
+    (attemptId: string) => {
+      setAttempt((current) =>
+        current !== null && current.attemptId === attemptId ? null : current,
+      );
+      setCode("");
+      if (pendingKey !== null) pendingAuthRemove(pendingKey, attemptId);
+    },
+    [pendingAuthRemove, pendingKey],
+  );
+
+  const liveAttemptId = attempt === null ? null : attempt.attemptId;
 
   /**
-   * The one place a wire result becomes UI state, so the four call sites
-   * (connect, startOauth, submitCode, poll) cannot disagree about what
+   * The one place a wire result becomes UI state, so every call site (connect,
+   * startOauth, submitCode, a status tick, a settled cancel) agrees about what
    * `attempt_superseded` or `unsupported` means.
+   *
+   * It deliberately CANNOT reach the browser. Opening the sign-in page belongs
+   * to {@link applyStartResult} alone - see its note for why a status tick that
+   * carries an `authorizationUrl` must not be treated as a fresh start.
    */
   const applyResult = useCallback(
     (result: ModelProviderAuthResult) => {
       switch (result.kind) {
         case "done":
-          forgetAttempt();
+          if (liveAttemptId !== null) forgetAttempt(liveAttemptId);
           onDone();
           return;
         case "pending":
@@ -184,29 +224,27 @@ export function ProviderModelProviderConnectDialog(props: {
           );
           return;
         case "authorizationUrl": {
-          const live: LiveAttempt = {
-            attemptId: result.attemptId,
-            authorizationUrl: result.authorizationUrl,
-            method: result.method,
-            instructions: result.instructions,
-          };
-          setAttempt(live);
+          setAttempt((current) => {
+            const next: LiveAttempt = {
+              attemptId: result.attemptId,
+              authorizationUrl: result.authorizationUrl,
+              method: result.method,
+              instructions: result.instructions,
+              // A tick REFRESHES an attempt the panel already holds; only a
+              // genuinely new attempt starts a new clock. Restamping every tick
+              // would make the newest-wins resume ordering meaningless.
+              startedAt:
+                current !== null && current.attemptId === result.attemptId
+                  ? current.startedAt
+                  : Date.now(),
+            };
+            if (current !== null && sameLiveAttempt(current, next)) {
+              return current;
+            }
+            return next;
+          });
           setErrorMessage(null);
           setRestartNotice(null);
-          if (hostId !== null) {
-            pendingAuthUpsert({
-              key: pendingKey,
-              hostId,
-              attemptId: live.attemptId,
-              startedAt: Date.now(),
-              authorizationUrl: live.authorizationUrl,
-              method: live.method,
-              instructions: live.instructions,
-            });
-          }
-          // Opened for both arms. `code` still needs the provider's page on
-          // screen to produce the code the user is about to paste.
-          openExternalLink.mutate(live.authorizationUrl);
           return;
         }
         case "error": {
@@ -218,15 +256,14 @@ export function ProviderModelProviderConnectDialog(props: {
               // A newer attempt owns this provider now. Say nothing and drop
               // this panel - the surface belongs to the other attempt.
               //
-              // Deliberately NOT `forgetAttempt()`: the store is keyed by
-              // `(providerId, modelProviderId)`, so the newer attempt has
-              // already overwritten that slot. Removing it here would delete
-              // the live attempt's own resume record.
+              // The LOCAL panel only: the store slot for this row has already
+              // been claimed by the newer attempt, whose resume record must
+              // survive.
               setAttempt(null);
               setCode("");
               return;
             case "restart":
-              forgetAttempt();
+              if (liveAttemptId !== null) forgetAttempt(liveAttemptId);
               setRestartNotice(message);
               return;
             case "reprompt":
@@ -241,33 +278,115 @@ export function ProviderModelProviderConnectDialog(props: {
         }
       }
     },
-    [
-      forgetAttempt,
-      hostId,
-      onDone,
-      openExternalLink,
-      pendingAuthUpsert,
-      pendingKey,
-    ],
+    [forgetAttempt, liveAttemptId, onDone],
   );
 
-  // The `auto` arm completes on the server's own loopback, so the only way to
-  // learn about it is to ask. Bounded per tick and stopped the moment the
-  // attempt settles or the panel switches arms.
+  /**
+   * The START path: the user asked for this sign-in just now. Records the
+   * attempt so it survives a navigation, then opens the provider's page.
+   *
+   * This is the ONLY function in the file that reaches the browser, and that
+   * matters because of how the host answers a status poll: a still-pending
+   * attempt comes back as the STORED `authorizationUrl`, not as
+   * `{ kind: "pending" }`, so a re-attaching client can still show the
+   * provider's page and instructions. That is the right wire shape and the
+   * wrong thing to open a tab on - handling both paths in one place reopened
+   * the sign-in page on every tick of a flow the user was already inside.
+   */
+  const applyStartResult = useCallback(
+    (result: ModelProviderAuthResult) => {
+      applyResult(result);
+      if (result.kind !== "authorizationUrl") return;
+      if (pendingKey !== null) {
+        pendingAuthUpsert({
+          key: pendingKey,
+          attemptId: result.attemptId,
+          startedAt: Date.now(),
+          authorizationUrl: result.authorizationUrl,
+          method: result.method,
+          instructions: result.instructions,
+        });
+      }
+      // Opened for both arms. `code` still needs the provider's page on screen
+      // to produce the code the user is about to paste.
+      openExternalLink.mutate(result.authorizationUrl);
+    },
+    [applyResult, openExternalLink, pendingAuthUpsert, pendingKey],
+  );
+
+  /**
+   * A status tick. Refreshes what the resume record knows - the host may have
+   * learned the provider's instructions since - and never touches the browser.
+   */
+  const applyPollResult = useCallback(
+    (result: ModelProviderAuthResult) => {
+      applyResult(result);
+      if (result.kind !== "authorizationUrl" || pendingKey === null) return;
+      const stored = pendingAuthGet(pendingKey);
+      // Only refresh OUR OWN record. A tick that races a newer attempt's upsert
+      // must not write this attempt's data into the newer one's slot.
+      if (stored === null || stored.attemptId !== result.attemptId) return;
+      if (
+        stored.authorizationUrl === result.authorizationUrl &&
+        stored.method === result.method &&
+        stored.instructions === result.instructions
+      ) {
+        return;
+      }
+      pendingAuthUpsert({
+        ...stored,
+        authorizationUrl: result.authorizationUrl,
+        method: result.method,
+        instructions: result.instructions,
+      });
+    },
+    [applyResult, pendingAuthGet, pendingAuthUpsert, pendingKey],
+  );
+
+  /**
+   * The `auto` arm completes on the server's own loopback, so the only way to
+   * learn about it is to ask.
+   *
+   * SINGLE-FLIGHT: the next tick is scheduled when the previous one settles,
+   * never on a fixed interval. A `setInterval` keeps firing while a slow or
+   * stalled request is still open, so a host that takes longer than the cadence
+   * accumulates overlapping polls for one attempt - each one re-leasing the
+   * managed server this flow is trying not to churn.
+   */
   const awaitMutate = awaitAuth.mutate;
   const shouldPoll = attempt !== null && attempt.method === "auto";
-  const pollAttemptId = attempt?.attemptId ?? null;
+  const pollAttemptId = attempt === null ? null : attempt.attemptId;
   useEffect(() => {
     if (!shouldPoll || pollAttemptId === null) return;
-    const timer = setInterval(() => {
+    const attemptId = pollAttemptId;
+    let cancelled = false;
+    let timer: number | null = null;
+    function schedule(): void {
+      timer = window.setTimeout(tick, OAUTH_AUTO_POLL_MS);
+    }
+    function tick(): void {
+      if (cancelled) return;
       awaitMutate(
-        { providerId, modelProviderId: entry.id, attemptId: pollAttemptId },
-        { onSuccess: (data) => applyResult(data.result) },
+        { providerId, modelProviderId: entry.id, attemptId },
+        {
+          onSuccess: (data) => {
+            if (cancelled) return;
+            applyPollResult(data.result);
+          },
+          onSettled: () => {
+            if (cancelled) return;
+            schedule();
+          },
+        },
       );
-    }, OAUTH_AUTO_POLL_MS);
-    return () => clearInterval(timer);
+    }
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [
-    applyResult,
+    applyPollResult,
     awaitMutate,
     entry.id,
     pollAttemptId,
@@ -304,7 +423,7 @@ export function ProviderModelProviderConnectDialog(props: {
             inputs: [...promptInputs],
           },
         },
-        { onSuccess: (data) => applyResult(data.result) },
+        { onSuccess: (data) => applyStartResult(data.result) },
       );
       return;
     }
@@ -328,7 +447,16 @@ export function ProviderModelProviderConnectDialog(props: {
       },
       { onSuccess: (data) => applyResult(data.result) },
     );
-  }, [answers, applyResult, auth, choice, entry, providerId, secret]);
+  }, [
+    answers,
+    applyResult,
+    applyStartResult,
+    auth,
+    choice,
+    entry,
+    providerId,
+    secret,
+  ]);
 
   const handleSubmitCode = useCallback(() => {
     if (attempt === null || code.trim().length === 0) return;
@@ -347,13 +475,43 @@ export function ProviderModelProviderConnectDialog(props: {
     );
   }, [applyResult, attempt, auth, code, entry.id, providerId]);
 
+  /**
+   * "Stop waiting". Best-effort and LOCAL - upstream exposes no OAuth-cancel
+   * endpoint, so this asks the host to drop its pending attempt and release the
+   * server lease it is holding.
+   *
+   * The attempt and its resume record are kept until the host CONFIRMS. Tearing
+   * them down optimistically was worse than it looks: a transport failure then
+   * left a live attempt on the host, holding a lease, with no surface left that
+   * could retry the cancel or reach the flow again.
+   */
   const handleCancelAttempt = useCallback(() => {
     if (attempt === null) return;
     const attemptId = attempt.attemptId;
-    forgetAttempt();
+    setCancelError(null);
     cancelAuth.mutate(
       { providerId, modelProviderId: entry.id, attemptId },
-      { onSuccess: (data) => applyResult(data.result) },
+      {
+        onSuccess: (data) => {
+          if (data.cancelled) {
+            // A live attempt was found and torn down. The host reports that as
+            // `{ cancelled: true, result: done }` - `done` describing the
+            // cancel, NOT a credential. Feeding it to `applyResult` would close
+            // the dialog claiming the provider had connected.
+            forgetAttempt(attemptId);
+            return;
+          }
+          // Nothing was pending: the attempt had already settled, expired or
+          // been superseded while the click was in flight, and `result` says
+          // which. That one IS a real outcome.
+          applyResult(data.result);
+        },
+        onError: () => {
+          // Keep the panel and the record: the host may still hold this
+          // attempt, and this is the only surface that can ask again.
+          setCancelError("Couldn't stop the sign-in. Try again.");
+        },
+      },
     );
   }, [applyResult, attempt, cancelAuth, entry.id, forgetAttempt, providerId]);
 
@@ -382,6 +540,7 @@ export function ProviderModelProviderConnectDialog(props: {
         submitting={auth.isPending}
         cancelling={cancelAuth.isPending}
         errorMessage={errorMessage}
+        cancelError={cancelError}
       />
     );
   } else {
@@ -636,6 +795,8 @@ function OauthWaitingPanel(props: {
   readonly submitting: boolean;
   readonly cancelling: boolean;
   readonly errorMessage: string | null;
+  /** A cancel that could not be delivered - the attempt is still live. */
+  readonly cancelError: string | null;
 }): ReactNode {
   const codeId = useId();
   const { attempt } = props;
@@ -690,8 +851,11 @@ function OauthWaitingPanel(props: {
       {props.errorMessage !== null ? (
         <p className="text-ui-xs text-destructive">{props.errorMessage}</p>
       ) : null}
+      {props.cancelError !== null ? (
+        <p className="text-ui-xs text-destructive">{props.cancelError}</p>
+      ) : null}
 
-      <div className={cn("flex flex-wrap items-center gap-2")}>
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           size="sm"

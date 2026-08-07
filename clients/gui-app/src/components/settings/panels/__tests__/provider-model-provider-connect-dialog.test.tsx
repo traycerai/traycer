@@ -19,23 +19,42 @@ import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provid
 type AuthCall = {
   readonly variables: unknown;
   readonly onSuccess: (data: { result: ModelProviderAuthResult }) => void;
+  readonly onSettled: (() => void) | undefined;
+  readonly onError: (() => void) | undefined;
+};
+
+type CancelCall = {
+  readonly variables: unknown;
+  readonly onSuccess: (data: {
+    cancelled: boolean;
+    result: ModelProviderAuthResult;
+  }) => void;
+  readonly onError: (() => void) | undefined;
+};
+
+type MutateOptions = {
+  readonly onSuccess: AuthCall["onSuccess"];
+  readonly onSettled?: () => void;
+  readonly onError?: () => void;
 };
 
 const mocks = vi.hoisted(() => ({
   authCalls: [] as AuthCall[],
   awaitCalls: [] as AuthCall[],
-  cancelCalls: [] as AuthCall[],
+  cancelCalls: [] as CancelCall[],
   openExternalLink: vi.fn(),
   authIsPending: false,
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
   useProvidersModelProviderAuth: () => ({
-    mutate: (
-      variables: unknown,
-      options: { onSuccess: AuthCall["onSuccess"] },
-    ) => {
-      mocks.authCalls.push({ variables, onSuccess: options.onSuccess });
+    mutate: (variables: unknown, options: MutateOptions) => {
+      mocks.authCalls.push({
+        variables,
+        onSuccess: options.onSuccess,
+        onSettled: options.onSettled,
+        onError: options.onError,
+      });
     },
     isPending: mocks.authIsPending,
   }),
@@ -45,11 +64,13 @@ vi.mock(
   "@/hooks/providers/use-providers-await-model-provider-auth-mutation",
   () => ({
     useProvidersAwaitModelProviderAuth: () => ({
-      mutate: (
-        variables: unknown,
-        options: { onSuccess: AuthCall["onSuccess"] },
-      ) => {
-        mocks.awaitCalls.push({ variables, onSuccess: options.onSuccess });
+      mutate: (variables: unknown, options: MutateOptions) => {
+        mocks.awaitCalls.push({
+          variables,
+          onSuccess: options.onSuccess,
+          onSettled: options.onSettled,
+          onError: options.onError,
+        });
       },
       isPending: false,
     }),
@@ -62,9 +83,16 @@ vi.mock(
     useProvidersCancelModelProviderAuth: () => ({
       mutate: (
         variables: unknown,
-        options: { onSuccess: AuthCall["onSuccess"] },
+        options: {
+          onSuccess: CancelCall["onSuccess"];
+          onError?: () => void;
+        },
       ) => {
-        mocks.cancelCalls.push({ variables, onSuccess: options.onSuccess });
+        mocks.cancelCalls.push({
+          variables,
+          onSuccess: options.onSuccess,
+          onError: options.onError,
+        });
       },
       isPending: false,
     }),
@@ -146,9 +174,25 @@ const OAUTH_ONLY = entry({
   methods: [{ type: "oauth", label: "Sign in with GitHub", prompts: [] }],
 });
 
+/**
+ * Resolves a recorded call the way TanStack does: `onSuccess`, then
+ * `onSettled`. The second half matters - the poll schedules its NEXT tick from
+ * `onSettled`, so a mock that skipped it would make single-flight polling look
+ * like it had stopped after one request.
+ */
 function settle(call: AuthCall, result: ModelProviderAuthResult): void {
   act(() => {
     call.onSuccess({ result });
+    call.onSettled?.();
+  });
+}
+
+function settleCancel(
+  call: CancelCall,
+  data: { cancelled: boolean; result: ModelProviderAuthResult },
+): void {
+  act(() => {
+    call.onSuccess(data);
   });
 }
 
@@ -506,19 +550,24 @@ describe("OAuth code flow", () => {
 });
 
 describe("OAuth auto flow", () => {
-  it("polls until the browser round trip completes", () => {
+  it("polls until the browser round trip completes, opening the browser ONCE", () => {
+    // The host answers a still-pending attempt with the STORED
+    // `authorizationUrl`, not `{kind:"pending"}` - so this is the real wire
+    // shape, and the one that used to reopen the sign-in tab every tick.
     vi.useFakeTimers();
     const onDone = vi.fn();
     renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
-    settle(start, {
+    const pendingArm: ModelProviderAuthResult = {
       kind: "authorizationUrl",
       attemptId: "attempt-1",
       authorizationUrl: "https://example.test/auth",
       method: "auto",
       instructions: null,
-    });
+    };
+    settle(start, pendingArm);
+    expect(mocks.openExternalLink).toHaveBeenCalledTimes(1);
     expect(
       screen.getByText("Waiting for the browser to finish signing in"),
     ).toBeTruthy();
@@ -535,14 +584,25 @@ describe("OAuth auto flow", () => {
       modelProviderId: "github-copilot",
       attemptId: "attempt-1",
     });
-    settle(poll, { kind: "pending" });
+    settle(poll, pendingArm);
     expect(onDone).not.toHaveBeenCalled();
 
+    // Several more ticks of the same still-pending answer.
     act(() => {
       vi.advanceTimersByTime(1_600);
     });
     const second = mocks.awaitCalls[1];
-    settle(second, { kind: "done" });
+    settle(second, pendingArm);
+    act(() => {
+      vi.advanceTimersByTime(1_600);
+    });
+    const third = mocks.awaitCalls[2];
+    expect(third).toBeDefined();
+    settle(third, { kind: "done" });
+
+    // ONE open for the whole flow: the start. Every tick after it refreshed
+    // the panel and nothing else.
+    expect(mocks.openExternalLink).toHaveBeenCalledTimes(1);
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(useModelProviderPendingAuthStore.getState().entries).toEqual({});
 
@@ -550,7 +610,37 @@ describe("OAuth auto flow", () => {
     act(() => {
       vi.advanceTimersByTime(5_000);
     });
-    expect(mocks.awaitCalls).toHaveLength(2);
+    expect(mocks.awaitCalls).toHaveLength(3);
+  });
+
+  it("is single-flight: no new poll while one is still open", () => {
+    // A `setInterval` keeps firing through a slow request, stacking overlapping
+    // polls on one attempt - each re-leasing the managed server this flow is
+    // trying not to churn.
+    vi.useFakeTimers();
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    settle(mocks.authCalls[0], {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/auth",
+      method: "auto",
+      instructions: null,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(1_600);
+    });
+    expect(mocks.awaitCalls).toHaveLength(1);
+    // The first poll never settles; time keeps passing.
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(mocks.awaitCalls).toHaveLength(1);
   });
 
   it("stops waiting on cancel and drops the pending attempt", () => {
@@ -573,16 +663,100 @@ describe("OAuth auto flow", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
     });
-    expect(mocks.cancelCalls[0]?.variables).toEqual({
+    const cancel = mocks.cancelCalls[0];
+    expect(cancel.variables).toEqual({
       providerId: "opencode",
       modelProviderId: "github-copilot",
       attemptId: "attempt-1",
     });
+
+    // Still waiting until the host CONFIRMS: an optimistic teardown would leave
+    // a live attempt holding a server lease with no surface able to retry.
+    expect(useModelProviderPendingAuthStore.getState().entries).not.toEqual({});
+    settleCancel(cancel, { cancelled: true, result: { kind: "done" } });
     expect(useModelProviderPendingAuthStore.getState().entries).toEqual({});
     act(() => {
       vi.advanceTimersByTime(5_000);
     });
     expect(mocks.awaitCalls).toHaveLength(0);
+  });
+
+  it("does NOT report a confirmed cancel as a successful connect", () => {
+    // The host answers a real teardown with `{cancelled: true, result: done}`,
+    // where `done` describes the CANCEL. Treating it as a credential result
+    // would close the dialog claiming the provider had connected.
+    vi.useFakeTimers();
+    const onDone = vi.fn();
+    renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const start = mocks.authCalls[0];
+    settle(start, {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/auth",
+      method: "auto",
+      instructions: null,
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    });
+    const cancel = mocks.cancelCalls[0];
+    settleCancel(cancel, { cancelled: true, result: { kind: "done" } });
+    expect(onDone).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+  });
+
+  it("keeps the attempt when the cancel could not be delivered", () => {
+    vi.useFakeTimers();
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const start = mocks.authCalls[0];
+    settle(start, {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/auth",
+      method: "auto",
+      instructions: null,
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    });
+    const cancel = mocks.cancelCalls[0];
+    act(() => {
+      cancel.onError?.();
+    });
+    expect(
+      screen.getByText("Couldn't stop the sign-in. Try again."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop waiting" })).toBeTruthy();
+    expect(useModelProviderPendingAuthStore.getState().entries).not.toEqual({});
+  });
+
+  it("applies the real outcome when the cancel found nothing pending", () => {
+    // The browser callback landing while the click was in flight: nothing to
+    // cancel, and `result` says the credential was actually written.
+    vi.useFakeTimers();
+    const onDone = vi.fn();
+    renderDialog({ entry: OAUTH_ONLY, capabilities: FULL_CAPS, onDone });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const start = mocks.authCalls[0];
+    settle(start, {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/auth",
+      method: "auto",
+      instructions: null,
+    });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    });
+    const cancel = mocks.cancelCalls[0];
+    settleCancel(cancel, { cancelled: false, result: { kind: "done" } });
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 });
 

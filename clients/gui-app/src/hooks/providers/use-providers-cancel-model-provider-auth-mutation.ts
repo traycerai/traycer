@@ -28,9 +28,14 @@ interface CancelModelProviderAuthContext {
  *
  * `cancelled: false` is not a failure - it means the attempt had already
  * settled, expired or been superseded, and `result` describes what it settled
- * as. That is why a `done` result still invalidates: the race where the user
- * hits Cancel just as the browser callback lands is real, and the credential is
- * written either way.
+ * as.
+ *
+ * That distinction is exactly what decides whether anything is invalidated. A
+ * successful teardown reports `{ cancelled: true, result: done }`, where `done`
+ * describes the CANCEL and not a credential - nothing changed upstream, so
+ * refetching would re-lease a managed server the user just asked to be let go
+ * of. Only the `cancelled: false` race - the browser callback landing while the
+ * click was in flight - actually wrote a credential.
  */
 export function useProvidersCancelModelProviderAuth(): UseMutationResult<
   ProvidersCancelModelProviderAuthResponse,
@@ -59,7 +64,7 @@ export function useProvidersCancelModelProviderAuth(): UseMutationResult<
       mutationKey: providersMutationKeys.cancelModelProviderAuth(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (data, _variables, context) => {
-        if (data.result.kind !== "done") return;
+        if (data.cancelled || data.result.kind !== "done") return;
         invalidateAfterModelProviderMutation({
           queryClient,
           hostId: context.hostId,

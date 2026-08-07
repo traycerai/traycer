@@ -265,7 +265,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.queryByText("Environment")).toBeNull();
   });
 
-  it("shows an env-sourced credential as read-only", () => {
+  it("shows an env-sourced credential as read-only, with NO write affordance", () => {
     renderTab({
       result: {
         ok: true,
@@ -287,6 +287,31 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(
       screen.queryByRole("button", { name: "Remove Groq credential" }),
     ).toBeNull();
+    // Read-only means the WRITE affordance too. A "Replace" here would store a
+    // key into the auth store that the env var keeps shadowing - the click
+    // would appear to work and change nothing, and un-shadowing is explicitly
+    // out of v1 scope.
+    expect(screen.queryByRole("button", { name: /Replace/ })).toBeNull();
+  });
+
+  it("still offers Replace for a credential Traycer itself stored", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: "api",
+            hasStoredCredential: true,
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
   });
 
   it("gates the disconnect affordance on canDisconnect ALONE", () => {
@@ -385,7 +410,9 @@ describe("ProviderModelProvidersTab layout", () => {
     });
     const list = screen.getByTestId("model-provider-list");
     expect(list.className).toContain("w-full");
-    expect(list.className).toContain("max-h-[min(60vh,32rem)]");
-    expect(list.className).not.toMatch(/\b(?:w|h)-\[\d+px\]/);
+    expect(list.className).toContain("max-h-[60vh]");
+    // No fixed layout box in EITHER unit: a rem cap freezes with the text size
+    // instead of following the window, which the px-only assertion missed.
+    expect(list.className).not.toMatch(/-\[[^\]]*\d(?:px|rem)/);
   });
 });

@@ -817,10 +817,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     - **ONE list, connected first** (`sortModelProviderEntries`), not a
       "Connected" section above a searchable catalog. Search has to be able to
       find a connected provider, and the two-section shape is precisely the one
-      where it cannot. ~180 rows in a viewport-capped scroll region of their
-      own; deliberately NOT virtualized (single-line rows, no per-row queries -
-      and a virtualizer renders an empty viewport under jsdom's zero-height
-      layout, which would put this list's behavior beyond test).
+      where it cannot. ~180 rows in a scroll region of their own, capped against
+      the VIEWPORT alone (`max-h-[60vh]`, no px/rem branch, so the cap follows
+      the window rather than the text size); deliberately NOT virtualized
+      (single-line rows, no per-row queries - and a virtualizer renders an empty
+      viewport under jsdom's zero-height layout, which would put this list's
+      behavior beyond test).
     - **`source` is badged only for a CONNECTED provider, and disconnect is
       gated on `canDisconnect` ALONE.** The host reports `source` as null unless
       connected, so a badge anywhere else would claim a credential origin the
@@ -828,8 +830,15 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       ("does Traycer hold a credential?") than `canDisconnect` ("may it be
       removed from here?"); today's host answers both `source === "api"`, a
       later one need not, and reading either for the other is how a button
-      appears that the host will refuse. `env` / `config` / `custom` therefore
-      read as **Managed outside Traycer**.
+      appears that the host will refuse.
+    - **An externally-sourced row is read-only in BOTH directions.** `env` /
+      `config` / `custom` read as **Managed outside Traycer** and carry neither
+      Remove nor Connect/Replace. Dropping the remove button and keeping the
+      write one was the tempting half-measure and is worse than either: writing
+      a key into OpenCode's auth store while an env var still shadows it
+      succeeds at the host and changes nothing the user can see, and undoing
+      that shadowing is explicitly out of v1 scope (the host cannot read its own
+      auth store — see the plan's "Credential source display" decision).
     - **`credentialKey` is the credential's home**, and the reason it is on the
       wire: the host's connect contract wants exactly ONE input keyed by the
       provider's models.dev env var, and only the host knows which member of a
@@ -849,8 +858,17 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       contribute nothing to the request - the host rejects any key the selected
       method did not ask for.
     - **OAuth attempt state lives in `model-provider-pending-auth-store.ts`**
-      (mirrors `mcp-pending-auth-store.ts`) and carries the host-minted
-      `attemptId`, which is the field that makes a resumed panel honest:
+      (mirrors `mcp-pending-auth-store.ts`), keyed
+      `(hostId, providerId, modelProviderId)` and carrying the host-minted
+      `attemptId`. `hostId` is in the key even though the HOST keys its own
+      registry without it: the host only speaks for itself, while this store is
+      one client-side map spanning every host Settings can point at — without it
+      a sign-in started on host B overwrites host A's record, and A resumes
+      against an `attemptId` that names nothing there. Removal is
+      attempt-guarded for the same class of reason: every teardown resolves
+      asynchronously, so a late cancel must not delete the record of the newer
+      attempt that legitimately replaced it. `attemptId` is also what makes a
+      resumed panel honest:
       attempts are single-flight per `(providerId, modelProviderId)` and a newer
       one supersedes the pending one, so a panel polling by key alone would be
       handed the newer attempt's status as its own. The tab adopts a stored
@@ -861,8 +879,28 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       `instructions` verbatim plus a paste field; `auto` completes on the
       server's loopback and shows a waiting state with a bounded poll and a
       **Stop waiting** button - honest wording, because upstream has no
-      OAuth-cancel endpoint and cancelling only discards Traycer's pending
-      attempt and releases the server lease.
+      OAuth-cancel endpoint.
+      - **Only the START path opens a browser.** The host answers a
+        still-pending poll with the STORED `authorizationUrl` rather than
+        `{kind:"pending"}`, so a client re-attaching after a navigation can
+        still show the provider's page. That is the right wire shape and the
+        wrong thing to open a tab on, so the dialog carries an explicit policy
+        (`applyStartResult` vs `applyPollResult`) instead of inferring one from
+        the arm: a tick refreshes the panel and the resume record, and only a
+        user action reaches `openExternalLink`. Handling both in one place
+        reopened the sign-in page every 1.5s, on a flow the user was already in.
+      - **Polling is single-flight**, scheduled from the previous tick's
+        settlement rather than on a `setInterval`: an interval keeps firing
+        through a slow request, stacking concurrent polls on one attempt — each
+        re-leasing the managed server this whole design exists to stop churning.
+      - **Stop waiting keeps the attempt until the host CONFIRMS.** An
+        optimistic teardown left a live host attempt holding a server lease with
+        no surface able to retry when the cancel failed in transport. A
+        confirmed cancel (`{cancelled: true, result: done}`) is LOCAL teardown —
+        `done` describes the cancel, not a credential, so it neither closes the
+        dialog as a success nor invalidates any cache. Only the
+        `cancelled: false` race (the browser callback landing while the click
+        was in flight) actually wrote a credential, and that one does both.
     - **Typed failures map to four distinct moves**
       (`modelProviderAuthErrorDisposition` in
       `lib/providers/model-provider-error-copy.ts`): `attempt_superseded`
