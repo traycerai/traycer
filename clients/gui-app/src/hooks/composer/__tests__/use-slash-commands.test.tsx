@@ -104,7 +104,7 @@ describe("useSlashCommands", () => {
     });
   });
 
-  it("filters provider skills and exposes loading state", () => {
+  it("ranks the best fuzzy match first and exposes loading state", () => {
     mockState.isPending = true;
 
     const { result } = renderHook(() =>
@@ -117,12 +117,11 @@ describe("useSlashCommands", () => {
     );
 
     expect(result.current.isLoading).toBe(true);
-    expect(result.current.data).toEqual([
-      expect.objectContaining({
-        source: "provider",
-        name: "frontend-design",
-        kind: "skill",
-      }),
-    ]);
+    expect(result.current.data[0]).toMatchObject({
+      source: "provider",
+      name: "frontend-design",
+      kind: "skill",
+    });
+    expect(result.current.data.map((cmd) => cmd.name)).not.toContain("plan");
   });
 });

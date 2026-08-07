@@ -83,6 +83,7 @@ function open(
     range: { from: 1, to: 1 + query.length + 1 },
     query,
     commit,
+    dismiss: null,
     clientRect: null,
   });
 }
@@ -99,6 +100,7 @@ function openSlash(
     range: { from: 1, to: 2 },
     query: "",
     commit,
+    dismiss: null,
     clientRect: null,
   });
 }
@@ -119,6 +121,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().openPicker({
@@ -129,6 +132,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
 
@@ -160,6 +164,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 4, to: 5 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
 
@@ -250,6 +255,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 5 },
       query: "src",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -427,6 +433,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -558,6 +565,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -698,5 +706,75 @@ describe("composer picker store selection stickiness", () => {
     expect(store.getState().items[2].id).toBe("compact");
     // The carried row stays inert: commit still refuses it.
     expect(store.getState().commitActiveItem()).toBe(false);
+  });
+});
+
+// The mention picker's Enter only commits an ENGAGED menu (see
+// `handlePickerEnter` / the suggestion render): un-engaged Enter is prose and
+// falls through to submit. The flag lives here so every Enter surface reads
+// one definition of "the user aimed at this menu".
+describe("composer picker store engagement", () => {
+  function publishMentions(
+    store: ComposerPickerStore,
+    ids: ReadonlyArray<string>,
+  ): void {
+    store.getState().setItems({
+      sessionId: 1,
+      kind: "mention",
+      query: "q",
+      slashScope: null,
+      step: ROOT_MENTION_STEP,
+      items: ids.map(mentionItem),
+      loading: false,
+      loadFailed: false,
+      retryLoad: null,
+    });
+  }
+
+  it("starts un-engaged and engages on arrow-key navigation", () => {
+    const store = createComposerPickerStore();
+    open(store, "q", NOOP_COMMIT);
+    publishMentions(store, ["a", "b"]);
+    expect(store.getState().engaged).toBe(false);
+
+    store.getState().moveActive(1);
+
+    expect(store.getState().engaged).toBe(true);
+  });
+
+  it("engages even when a single-row list wraps onto itself", () => {
+    const store = createComposerPickerStore();
+    open(store, "q", NOOP_COMMIT);
+    publishMentions(store, ["only"]);
+
+    store.getState().moveActive(1);
+
+    expect(store.getState().activeIndex).toBe(0);
+    expect(store.getState().engaged).toBe(true);
+  });
+
+  it("resets engagement on step navigation and on re-open", () => {
+    const store = createComposerPickerStore();
+    open(store, "q", NOOP_COMMIT);
+    publishMentions(store, ["a", "b"]);
+    store.getState().moveActive(1);
+    expect(store.getState().engaged).toBe(true);
+
+    store.getState().setStep(FILES_PROVIDER_STEP);
+    expect(store.getState().engaged).toBe(false);
+
+    store.getState().moveActive(1);
+    store.getState().openPicker({
+      sessionId: 2,
+      kind: "mention",
+      slashScope: null,
+      slashTrigger: null,
+      range: { from: 1, to: 2 },
+      query: "",
+      commit: NOOP_COMMIT,
+      dismiss: null,
+      clientRect: null,
+    });
+    expect(store.getState().engaged).toBe(false);
   });
 });

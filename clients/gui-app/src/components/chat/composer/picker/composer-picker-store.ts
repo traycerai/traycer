@@ -119,6 +119,15 @@ export interface ComposerPickerState {
    */
   readonly itemsForSlashScope: ComposerSlashScope | null;
   readonly activeIndex: number;
+  /**
+   * True once the user has navigated this menu with the keyboard (arrow keys)
+   * since it opened. The mention picker's Enter only commits an ENGAGED menu -
+   * an un-engaged Enter is prose punctuation and falls through to the
+   * composer's normal send - so mere menu presence can never hijack Enter
+   * mid-sentence. Per menu-open session: reset on open, close, and step
+   * navigation. Slash ignores it - a typed /command is deliberate.
+   */
+  readonly engaged: boolean;
   readonly loading: boolean;
   /**
    * Background-refetch indicator, distinct from `loading`: true while a
@@ -128,6 +137,16 @@ export interface ComposerPickerState {
    */
   readonly fetching: boolean;
   readonly commit: ComposerPickerCommit | null;
+  /**
+   * Session-owned dismissal handle: closes the picker AND ends the owning
+   * tiptap suggestion session (via its plugin exit meta), so the dismissal
+   * cannot leak into the next trigger occurrence the way a bare
+   * `closeSession` would - the plugin would stay active and route the next
+   * occurrence's updates into this dead session. Registered by the
+   * suggestion render like `commit`; null when the owner has no such handle
+   * (callers fall back to `closeSession`).
+   */
+  readonly dismiss: (() => void) | null;
   /**
    * True when the active kind's catalog query FAILED (currently only the
    * slash-command catalog reports this). The menu renders a "couldn't load"
@@ -184,6 +203,7 @@ export interface ComposerPickerActions {
     readonly range: ComposerPickerRange;
     readonly query: string;
     readonly commit: ComposerPickerCommit;
+    readonly dismiss: (() => void) | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly updateRange: (input: {
@@ -244,9 +264,11 @@ const INITIAL_STATE: ComposerPickerState = {
   itemsForStepId: null,
   itemsForSlashScope: null,
   activeIndex: 0,
+  engaged: false,
   loading: false,
   fetching: false,
   commit: null,
+  dismiss: null,
   loadFailed: false,
   retryLoad: null,
   clientRect: null,
@@ -329,6 +351,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
       range,
       query,
       commit,
+      dismiss,
       clientRect,
     }) => {
       set({
@@ -345,9 +368,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         itemsForSlashScope: null,
         activeIndex: 0,
+        engaged: false,
         loading: false,
         fetching: false,
         commit,
+        dismiss,
         loadFailed: false,
         retryLoad: null,
         clientRect,
@@ -402,6 +427,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         itemsForSlashScope: null,
         activeIndex: 0,
+        engaged: false,
         loading: false,
         fetching: false,
         loadFailed: false,
@@ -485,8 +511,13 @@ export function createComposerPickerStore(): ComposerPickerStore {
         clampIndex(previous.activeIndex, length) + direction,
         length,
       );
-      if (next === previous.activeIndex) return;
-      set({ activeIndex: next });
+      if (next === previous.activeIndex) {
+        // A single-row list wraps onto itself, but the arrow press still
+        // counts as engaging the menu - Enter must commit that lone row.
+        if (!previous.engaged) set({ engaged: true });
+        return;
+      }
+      set({ activeIndex: next, engaged: true });
     },
 
     commitActiveItem: () => {

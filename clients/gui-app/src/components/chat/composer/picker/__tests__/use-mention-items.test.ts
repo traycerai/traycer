@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCurrentEpicArtifactMentionEntries,
   epicAgentMentionEntriesFromEpic,
+  mentionNoMatchDismissVerdict,
   mergeCurrentEpicArtifactMentions,
   mergeTaskAndArtifactMentionEntries,
 } from "../use-mention-items";
@@ -647,5 +648,76 @@ describe("mergeTaskAndArtifactMentionEntries", () => {
       epicId: "task-1",
       label: "Untitled epic",
     });
+  });
+});
+
+describe("mentionNoMatchDismissVerdict", () => {
+  const settledNoMatch = {
+    active: true,
+    stepKind: "root" as const,
+    query: "ghost",
+    debouncedQuery: "ghost",
+    matchedCount: 0,
+    loading: false,
+    fetching: false,
+    workspaceRequestCount: 1,
+    workspaceError: null,
+    epicRequestCount: 1,
+    epicError: null,
+    terminalRequested: true,
+    terminalLoading: false,
+    terminalFetching: false,
+    terminalError: null,
+  };
+
+  it("closes when every source, including the terminal list, has settled with no match", () => {
+    expect(mentionNoMatchDismissVerdict(settledNoMatch)).toBe(true);
+  });
+
+  it("holds the menu open while the terminal list is still loading", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        terminalLoading: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("holds the menu open while the terminal list is refetching", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        terminalFetching: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats a failed terminal list like any other errored source", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        terminalError: new Error("terminal.list failed"),
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores terminal state when terminals were never requested (no open Task)", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        terminalRequested: false,
+        terminalLoading: true,
+        terminalError: new Error("irrelevant"),
+      }),
+    ).toBe(true);
+  });
+
+  it("never closes over an errored workspace source", () => {
+    expect(
+      mentionNoMatchDismissVerdict({
+        ...settledNoMatch,
+        workspaceError: new Error("search failed"),
+      }),
+    ).toBe(false);
   });
 });
