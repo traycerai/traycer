@@ -11,12 +11,14 @@ type ProviderId = ProviderCliState["providerId"];
 export function ProviderEnvOverridesSection({
   providerId,
   overrides,
+  envOverrideScope,
 }: {
   readonly providerId: ProviderId;
   readonly overrides: readonly {
     readonly key: string;
     readonly value: string | null;
   }[];
+  readonly envOverrideScope: ProviderCliState["nativeCapabilities"]["envOverrideScope"];
 }) {
   const providerName = PROVIDER_DISPLAY_NAMES[providerId];
   const setOverride = useProvidersSetEnvOverride();
@@ -49,10 +51,18 @@ export function ProviderEnvOverridesSection({
           <div className="text-ui-sm font-medium text-foreground">
             Environment variables
           </div>
-          <p className="text-ui-xs text-muted-foreground">
-            Applied when Traycer spawns the {providerName} harness. Use Unset to
-            drop a variable inherited from your shell.
-          </p>
+          {envOverrideScope === "native-config-only" ? (
+            <p className="text-ui-xs text-muted-foreground">
+              Applied to native configuration operations, such as MCP setup, but
+              not chat turns. Use Unset to drop a variable inherited from your
+              shell.
+            </p>
+          ) : (
+            <p className="text-ui-xs text-muted-foreground">
+              Applied when Traycer spawns the {providerName} harness. Use Unset
+              to drop a variable inherited from your shell.
+            </p>
+          )}
         </div>
         {disabled ? <MutedAgentSpinner /> : null}
       </div>

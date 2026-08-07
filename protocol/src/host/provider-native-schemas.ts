@@ -127,6 +127,20 @@ export const providerSettingsTabSchema = z.enum([
 ]);
 export type ProviderSettingsTab = z.infer<typeof providerSettingsTabSchema>;
 
+/**
+ * Which provider operations receive Settings → Providers environment
+ * overrides. Most harnesses receive them for both their chat process and
+ * native configuration operations; an in-process harness can only use them
+ * for the latter.
+ */
+export const providerEnvOverrideScopeSchema = z.enum([
+  "harness-and-native-config",
+  "native-config-only",
+]);
+export type ProviderEnvOverrideScope = z.infer<
+  typeof providerEnvOverrideScopeSchema
+>;
+
 export const providerMcpTransportSchema = z.enum(["stdio", "http", "sse"]);
 export type ProviderMcpTransport = z.infer<typeof providerMcpTransportSchema>;
 
@@ -387,6 +401,12 @@ export type ProviderSkillsCapabilities = z.infer<
  */
 export const providerNativeCapabilitiesSchema = z.object({
   supportedTabs: z.array(providerSettingsTabSchema),
+  /**
+   * Omitted by older hosts and ordinary contracts, which retain the existing
+   * harness-and-native-config behaviour. A non-default value lets the client
+   * make the Env tab honest without a provider-id special case.
+   */
+  envOverrideScope: providerEnvOverrideScopeSchema.optional(),
   mcp: providerMcpCapabilitiesSchema.nullable(),
   plugins: providerPluginsCapabilitiesSchema.nullable(),
   skills: providerSkillsCapabilitiesSchema.nullable(),
