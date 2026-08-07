@@ -39,6 +39,7 @@ import {
   type RuntimeHostMessengerBinding,
 } from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createSessionRetirementSweep } from "@/lib/host/session-retirement";
 import { appLogger } from "@/lib/logger";
 import {
   runnerHostQueryScopeId,
@@ -298,18 +299,25 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
 
       const activeRuntime = runtime;
       const requestContextProvider = auth.getRequestContextProvider();
+      // Retires the previous auth context's cached remote sessions on ANY
+      // context transition - which transitions sweep (and why the key is the
+      // context REFERENCE, not the userId) is `createSessionRetirementSweep`'s
+      // pinned contract.
+      //
+      // Two ordering invariants this wiring provides:
+      // `runtimeMessenger.reset()` runs FIRST in this callback, so the
+      // messenger holds no binding over an entry the sweep is about to close;
+      // and this listener is registered before `runtime.start()` and before
+      // any child mounts, so no consumer can have acquired a NEW-context
+      // session earlier in the same emit for the indiscriminate sweep to kill.
+      const sweepRetiredContextSessions = createSessionRetirementSweep({
+        currentContext: () => requestContextProvider.current(),
+        retire: retireAllRemoteSessions,
+      });
       const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
         () => {
           runtimeMessenger?.reset();
-          if (requestContextProvider.current() === null) {
-            // Sign-out. Supersession is otherwise only detected when someone
-            // ACQUIRES a session, so without this sweep a retired user's
-            // still-attached sessions keep answering `hasReadyRemoteSession`
-            // for up to the keep-warm window - rendering hosts Online to
-            // whoever signs in next, off connections that can never mint
-            // again (the transition released their credential lease).
-            retireAllRemoteSessions();
-          }
+          sweepRetiredContextSessions();
         },
       );
       void (async () => {

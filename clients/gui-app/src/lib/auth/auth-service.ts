@@ -2229,12 +2229,26 @@ export class AuthService {
     }
     this.setDeviceProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
+    let rotatedInPlace = false;
     if (liveUserId !== undefined && liveUserId === user.user.id) {
-      this.contextProvider.rotateCurrentBearer({
-        userId: liveUserId,
-        bearerToken,
-      });
-    } else {
+      try {
+        this.contextProvider.rotateCurrentBearer({
+          userId: liveUserId,
+          bearerToken,
+        });
+        rotatedInPlace = true;
+      } catch {
+        // The provider's own contract: rotation refusals (no current context,
+        // a released lease, an identity mismatch) are translated by
+        // auth-boundary callers into a clean sign-out + re-sign-in
+        // transition. Falling through to `setSignedIn` IS that transition -
+        // without it, a refused rotation would abort the whole sign-in
+        // projection mid-way (device progress already cleared, store never
+        // updated).
+        rotatedInPlace = false;
+      }
+    }
+    if (!rotatedInPlace) {
       this.contextProvider.setSignedIn({
         user,
         bearerToken,

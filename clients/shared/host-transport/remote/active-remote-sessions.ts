@@ -189,16 +189,27 @@ export function acquireRemoteSession<
 ): IRemoteSession<RpcRegistry, StreamRegistry> {
   const key = remoteSessionCacheKey(identity);
   let entry = entriesByKey.get(key);
-  if (entry !== undefined && entry.session.isClosed()) {
-    // A terminally-closed session (a session-level fatal closes it in place,
-    // underneath every consumer - or while lingering with none) must never be
-    // handed to a NEW acquirer: `start()` no-ops once closed, so the view
-    // could never carry traffic again. Evict the dead entry so this acquire
-    // constructs a fresh session; its remaining views release against the
-    // entry captured at THEIR acquire time (the identity check in `release`),
-    // so a late release can never touch the successor's refCount, and the
-    // evicted entry's still-pending linger timer (if any) finds itself
-    // superseded and does nothing.
+  if (entry !== undefined && (entry.session.isClosed() || entry.superseded)) {
+    // Two states a NEW acquirer must never adopt:
+    //
+    // Closed: a terminally-closed session (a session-level fatal closes it in
+    // place, underneath every consumer - or while lingering with none) can
+    // never carry traffic again (`start()` no-ops once closed).
+    //
+    // Superseded: the sweep's verdict on this entry is sticky - it closes at
+    // its first free moment. Adopting it would extend its refCount, deferring
+    // that moment indefinitely and carrying new work on the very connection
+    // the verdict retired. This acquire is instead a fresh claim that the
+    // identity is CURRENT (the same acquirer-is-newest premise the sweep
+    // itself rests on - e.g. the host's key rotated back, or a retired
+    // context's acquire was already refused upstream by the bearer gate), so
+    // it gets a fresh session under a fresh entry.
+    //
+    // Either way: evict. The displaced entry's remaining views release
+    // against the entry captured at THEIR acquire time, closing it when the
+    // last one lets go (see `release`), so a late release can never touch
+    // the successor's refCount, and the evicted entry's still-pending linger
+    // timer (if any) finds itself superseded and does nothing.
     if (entry.lingerTimer !== null) {
       clearTimeout(entry.lingerTimer);
     }
@@ -243,15 +254,21 @@ export function acquireRemoteSession<
       return;
     }
     released = true;
-    // Identity check, not a key-string relookup: if THIS entry has already
-    // been torn down and a fresh one re-created under the same key, a late
-    // release (e.g. from a discarded render's view) must never touch the
-    // successor's refCount.
-    if (entriesByKey.get(key) !== entry) {
-      return;
-    }
+    // Always the CAPTURED entry's refCount, never a key-string relookup: if a
+    // fresh entry has been re-created under the same key, a late release
+    // (a discarded render's view, or a holder of an entry the superseded
+    // eviction above displaced) must never touch the successor's refCount.
     entry.refCount -= 1;
     if (entry.refCount > 0) {
+      return;
+    }
+    if (entriesByKey.get(key) !== entry) {
+      // Displaced from the map while still held (the eviction branch in
+      // `acquireRemoteSession` - closed or superseded - is the only path
+      // that removes a held entry). Nothing will ever hand this entry out
+      // again and no sweep or timer can see it, so the last holder closes
+      // it here. Idempotent when the session was already closed.
+      entry.session.close();
       return;
     }
     if (entry.superseded || entry.session.isClosed()) {
@@ -259,12 +276,13 @@ export function acquireRemoteSession<
       // re-keyed or moved underneath a live reference, so
       // `closeSupersededIdentities` could not take it then and nothing sweeps
       // again now. Close it HERE, at the only other moment it is free.
-      // Lingering would buy nothing that keep-warm exists for - this key can
-      // never be re-acquired - and would cost the two things that motivated
-      // closing superseded identities in the first place: an authenticated
-      // relay socket held open for the rest of the window, and a ready
-      // session answering `hasReadyRemoteSession` for a host whose CURRENT
-      // identity may still be dialing or already failing.
+      // Lingering would buy nothing that keep-warm exists for - a re-acquire
+      // of this key refuses to adopt a superseded entry and builds a fresh
+      // one - and would cost the two things that motivated closing superseded
+      // identities in the first place: an authenticated relay socket held
+      // open for the rest of the window, and a ready session answering
+      // `hasReadyRemoteSession` for a host whose CURRENT identity may still
+      // be dialing or already failing.
       //
       // Closed: the session went terminally dead (a session-level fatal)
       // while held. Arming a linger on the corpse would keep a dead entry
@@ -296,6 +314,7 @@ export function acquireRemoteSession<
     start: () => session.start(),
     isClosed: () => session.isClosed(),
     isReady: () => session.isReady(),
+    terminalFatal: () => session.terminalFatal(),
     sendUnary: (method, params) => session.sendUnary(method, params),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeWithParamsProvider: (method, paramsProvider) =>

@@ -58,6 +58,16 @@ describe("createRemoteHostTransport bearer gate", () => {
     };
     expect(transportFor(releasedSource)).toBeNull();
 
+    // The third enumerated refusal: a source that reads fine but holds an
+    // EMPTY token. It cannot authorize a grant mint any more than a released
+    // lease can - only the failure would come later, from authn, after the
+    // session was already cached under that epoch.
+    const emptyTokenSource: OpenFrameBearerSource = {
+      getBearerToken: () => "",
+      identity: { userId: "user-null-bearer-test" },
+    };
+    expect(transportFor(emptyTokenSource)).toBeNull();
+
     // Non-vacuity contrast: the identical options WITH a live auth context
     // build fine - the null verdicts above came from the bearer gate, not
     // from some other option being malformed.

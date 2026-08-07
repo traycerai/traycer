@@ -192,6 +192,8 @@ function fakeRemoteSession(): FakeRemoteSession {
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
+    // These provider tests never exercise fatal verdicts.
+    terminalFatal: () => null,
     close: () => {
       closeCalls += 1;
     },
@@ -369,6 +371,51 @@ describe("HostStreamProvider", () => {
     expect(result.current).toBeInstanceOf(WsStreamClient);
     expect(result.current).not.toBe(first);
     expect(result.current?.isClosed()).toBe(false);
+  });
+
+  it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
+    // A terminal-class close (incompatible protocol, plan restriction) would
+    // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
+    // fatal -> onClosed -> rebuild, one full mint/dial cycle per round trip.
+    // The first quick close still rebuilds immediately (the wedge-recovery
+    // case above); the SECOND consecutive quick close must wait.
+    vi.useFakeTimers();
+    try {
+      const hostClient = buildClient();
+      bindingRef.value = { hostClient };
+      act(() => {
+        hostClient.bind(mockLocalHostEntry);
+      });
+
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      // Quick close #1: immediate rebuild.
+      act(() => {
+        first?.close("test-terminal-close");
+      });
+      const second = result.current;
+      expect(second).not.toBe(first);
+      expect(second?.isClosed()).toBe(false);
+
+      // Quick close #2: the rebuild is DEFERRED. `useWsStreamClient` hides
+      // the dead instance during the handoff, so consumers see null - what
+      // must NOT happen is an instant fresh client (= a fresh mint+dial).
+      act(() => {
+        second?.close("test-terminal-close");
+      });
+      expect(result.current).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      const third = result.current;
+      expect(third).not.toBe(second);
+      expect(third?.isClosed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("nudges a re-dial exactly once under a StrictMode double-invoke", () => {

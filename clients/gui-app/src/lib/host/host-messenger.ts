@@ -9,6 +9,7 @@ import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/
 import {
   HostRequestAbortedError,
   HostRpcError,
+  HostTransportFailureError,
   type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
@@ -27,7 +28,10 @@ import {
   WsRpcClient,
   type RequestIdProvider,
 } from "@traycer-clients/shared/host-transport/ws-rpc-client";
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  FatalErrorDetails,
+  VersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
@@ -35,6 +39,17 @@ import {
 
 const DEFAULT_HOST_RPC_FRAME_TIMEOUT_MS = 30_000;
 const TRANSPORT_KEY_SEPARATOR = "\u0000";
+
+/**
+ * How long a host's terminal-fatal verdict keeps the runtime messenger from
+ * redialing it (see `RuntimeHostMessenger.terminalVerdictByHost`). Long enough
+ * that the invalidation→refetch cycle the verdict itself triggers lands on the
+ * verdict rejection (an error card) rather than a fresh dial - and that a
+ * fatal that WILL repeat (incompatible protocol, plan restriction) cannot
+ * drive a mint+dial loop at the query layer's pace - while short enough that
+ * a host the user just updated connects on the next natural refetch.
+ */
+const TERMINAL_VERDICT_TTL_MS = 30_000;
 
 const browserWebSocketFactory = createWhatwgWebSocketFactory();
 const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
@@ -218,6 +233,24 @@ class RuntimeHostMessenger<
    * re-visit adopts the SAME still-dialing session from the keep-warm cache.
    */
   private readonly owedOrphanDetachByHost = new Map<string, () => void>();
+  /**
+   * Sticky per-host verdicts from sessions that closed on a terminal fatal
+   * (incompatible protocol, plan restriction, revoked credential). Without
+   * this, the stranded-spinner sequence closes over itself: the panel query
+   * cached a retryable "not ready" error from racing the dial, the dial ends
+   * terminal, and every refetch transparently rebuilds a FRESH dialing
+   * session that errors retryable again before ITS fatal lands - spinner
+   * forever, one grant mint per cycle. Recording the verdict (and rejecting
+   * with it, `rejectIfTerminalVerdict`) makes the invalidation fired at close
+   * time land on an honest non-retryable error instead of a redial. Entries
+   * expire after {@link TERMINAL_VERDICT_TTL_MS} - terminal describes the
+   * SESSION, not the host, which may be updated/re-entitled any moment - and
+   * are dropped early when a later session for the host reaches ready.
+   */
+  private readonly terminalVerdictByHost = new Map<
+    string,
+    { readonly fatal: FatalErrorDetails; readonly at: number }
+  >();
 
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
     this.registry = params.registry;
@@ -246,22 +279,34 @@ class RuntimeHostMessenger<
     if (disposedRejection !== null) {
       return disposedRejection;
     }
+    // Before target resolution, not just on the remote branch: an aborted
+    // authority must be INERT everywhere. Gating only the remote path would
+    // still let a stale aborted request dispatch locally - and, worse, run
+    // `closeRemoteTransport()` as a side effect, releasing a live remote
+    // binding on behalf of a request whose owner already moved on.
+    const abortedRejection = this.rejectIfAborted(authority, method);
+    if (abortedRejection !== null) {
+      return abortedRejection;
+    }
     const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
       return this.localMessenger.request(method, params, authority);
     }
 
-    const abortedRejection = this.rejectIfAborted(authority, method);
-    if (abortedRejection !== null) {
-      return abortedRejection;
+    const verdictRejection = this.rejectIfTerminalVerdict(
+      target.hostId,
+      method,
+    );
+    if (verdictRejection !== null) {
+      return verdictRejection;
     }
     const remoteMessenger = this.remoteMessengerFor(target, authority);
     if (remoteMessenger === null) {
       return Promise.reject(
         new HostRpcError({
           code: "RPC_ERROR",
-          message: `Remote host '${target.hostId}' does not expose a valid remote transport`,
+          message: `Remote host '${target.hostId}' has no usable remote transport right now (malformed directory entry, or no presentable credential mid auth transition)`,
           requestId: this.requestId(),
           method,
           fatalDetails: null,
@@ -281,6 +326,13 @@ class RuntimeHostMessenger<
     if (disposedRejection !== null) {
       return disposedRejection;
     }
+    // Same ordering as `request`: the abort gate runs before target
+    // resolution so an aborted authority cannot dispatch locally or release
+    // the remote binding as a side effect.
+    const abortedRejection = this.rejectIfAborted(authority, method);
+    if (abortedRejection !== null) {
+      return abortedRejection;
+    }
     const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
@@ -292,16 +344,19 @@ class RuntimeHostMessenger<
       );
     }
 
-    const abortedRejection = this.rejectIfAborted(authority, method);
-    if (abortedRejection !== null) {
-      return abortedRejection;
+    const verdictRejection = this.rejectIfTerminalVerdict(
+      target.hostId,
+      method,
+    );
+    if (verdictRejection !== null) {
+      return verdictRejection;
     }
     const remoteMessenger = this.remoteMessengerFor(target, authority);
     if (remoteMessenger === null) {
       return Promise.reject(
         new HostRpcError({
           code: "RPC_ERROR",
-          message: `Remote host '${target.hostId}' does not expose a valid remote transport`,
+          message: `Remote host '${target.hostId}' has no usable remote transport right now (malformed directory entry, or no presentable credential mid auth transition)`,
           requestId: this.requestId(),
           method,
           fatalDetails: null,
@@ -415,11 +470,20 @@ class RuntimeHostMessenger<
    * getting ready - a session-level fatal, or the keep-warm linger expiring -
    * so a churning host picker cannot accumulate listeners.
    *
-   * The orphan is owed exactly ONE outstanding boundary. A binding that
-   * already saw one has nothing left to carry: the queries it would un-strand
-   * were re-armed then, so release detaches it on the spot. And per HOST there
-   * is at most one orphan at a time: subscribing a new binding for the same
-   * host takes over the previous orphan's debt (see
+   * Whether anything is owed is decided AT RELEASE TIME from the session's
+   * live state: a session that is ready right now owes nothing (its last
+   * boundary re-armed the queries - the warm cache-hit adopt included, whose
+   * boundary happened before this binding existed), so release detaches on
+   * the spot; a session that is NOT ready at release - still on its first
+   * dial, or dropped and mid-reconnect after having been ready - owes the
+   * queries that errored against it exactly ONE more boundary, so the
+   * listener stays as the host's orphan. Deciding from a first-boundary
+   * one-shot flag instead would go stale in the reconnect case: delivered
+   * once, then released mid-reconnect, the flag would say "nothing owed" and
+   * drop precisely the recovery evidence this wiring exists to carry.
+   *
+   * Per HOST there is at most one orphan at a time: subscribing a new binding
+   * for the same host takes over the previous orphan's debt (see
    * `owedOrphanDetachByHost`), because one host-scope invalidation un-strands
    * every generation's queries alike. Otherwise a picker toggling between an
    * UNREACHABLE host and another would pile up one permanent listener per
@@ -440,13 +504,6 @@ class RuntimeHostMessenger<
       previousOrphanDetach();
     }
     let released = false;
-    // Whether this listener is still WAITING on a boundary. That is the whole
-    // reason a released binding's listener is allowed to outlive it - it owes
-    // the queries one invalidation - so it is also the exact condition for
-    // detaching. Tracked as "owed" rather than "delivered" because the two
-    // differ on the warm-cache path below, where a boundary is never owed and
-    // therefore never delivered either.
-    let boundaryOwed = true;
     let detached = false;
     let unsubscribeAvailability: (() => void) | null = null;
     let unsubscribeClosed: (() => void) | null = null;
@@ -462,31 +519,59 @@ class RuntimeHostMessenger<
       unsubscribeClosed?.();
     };
     unsubscribeAvailability = session.subscribeAvailabilityRecovered(() => {
-      boundaryOwed = false;
+      // Positive evidence beats any recorded verdict: the host is back
+      // (updated, re-entitled, re-keyed), so stop rejecting its requests.
+      this.terminalVerdictByHost.delete(hostId);
       this.onRemoteAvailabilityRecovered(hostId);
       if (released) {
+        // The orphan's single owed boundary, now delivered.
         detach();
       }
     });
-    unsubscribeClosed = session.onClosed(detach);
-    // An ALREADY-ready session owes nothing: `subscribeAvailabilityRecovered`
-    // fires on a recovery, not on the current state, so a binding that adopts a
-    // warm cached session would otherwise wait forever for a boundary that has
-    // already happened - and, since it never arrives, never detach on release.
-    // Every picker visit would then leave one more listener on a session some
-    // other consumer keeps alive, and the next real reconnect would fan out one
-    // duplicate invalidation per abandoned visit.
-    //
-    // Read AFTER subscribing, so the check cannot fall in the gap: a session
-    // that becomes ready in between has already run the listener above and
-    // cleared the flag, and re-clearing it here is a no-op.
-    if (session.isReady()) {
-      boundaryOwed = false;
-    }
+    unsubscribeClosed = session.onClosed(() => {
+      const fatal = session.terminalFatal();
+      if (fatal !== null) {
+        // Terminal fatal - a verdict, unlike a routine cache retirement
+        // (linger expiry / supersession), which must NOT poison the host's
+        // next visit. Record it so refetches land on an honest non-retryable
+        // error instead of a fresh doomed dial, then deliver the same
+        // host-scope invalidation a ready boundary would have: it is the only
+        // signal left that can un-strand a query already parked on the
+        // spinner's cached retryable error (`useHostQuery` disables every
+        // other recovery route).
+        //
+        // A stale-generation fatal cannot out-vote a newer live binding: the
+        // per-host orphan takeover means the only listener left for a host is
+        // either the CURRENT binding's or the single orphan of a host with no
+        // newer binding, so a fatal heard here always describes the host's
+        // latest session this messenger knows. (An orphan whose IDENTITY was
+        // superseded can, at worst, fail-fast the host for one TTL while
+        // other consumers hold a working session under the new identity -
+        // bounded, and cleared early by the next ready boundary heard.)
+        this.terminalVerdictByHost.set(hostId, {
+          fatal,
+          at: Date.now(),
+        });
+        this.onRemoteAvailabilityRecovered(hostId);
+      }
+      detach();
+    });
     return {
       release: () => {
+        if (detached) {
+          // Already hard-detached (the session closed, or dispose ran). A
+          // late release must not resurrect the dead listener as the host's
+          // owed orphan - the entry would sit in `owedOrphanDetachByHost`
+          // pointing at a detach that no-ops before its map cleanup.
+          return;
+        }
         released = true;
-        if (!boundaryOwed) {
+        // Live readiness, not a delivered-once flag - see the method doc: a
+        // session that is up right now owes nothing (warm adopt included),
+        // while one that is dialing OR mid-reconnect owes one boundary even
+        // if it already delivered an earlier one while this binding was
+        // current.
+        if (session.isReady()) {
           detach();
           return;
         }
@@ -548,6 +633,37 @@ class RuntimeHostMessenger<
         message: "Request authority was aborted before dispatch",
         requestId: this.requestId(),
         method,
+      }),
+    );
+  }
+
+  /**
+   * The redial gate behind {@link terminalVerdictByHost}: while a host's
+   * terminal verdict is fresh, its requests fail fast with the recorded fatal
+   * (non-retryable, so the retrying wrapper and the Providers panel's error
+   * classification both read it as "waiting will not help") instead of
+   * minting a grant and dialing a session that will end the same way. An
+   * expired verdict is dropped here, letting the next request dial fresh.
+   */
+  private rejectIfTerminalVerdict(
+    hostId: string,
+    method: string,
+  ): Promise<never> | null {
+    const verdict = this.terminalVerdictByHost.get(hostId);
+    if (verdict === undefined) {
+      return null;
+    }
+    if (Date.now() - verdict.at >= TERMINAL_VERDICT_TTL_MS) {
+      this.terminalVerdictByHost.delete(hostId);
+      return null;
+    }
+    return Promise.reject(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: `Remote session for host '${hostId}' closed terminally: ${verdict.fatal.code}: ${verdict.fatal.reason}`,
+        requestId: this.requestId(),
+        method,
+        fatalDetails: verdict.fatal,
       }),
     );
   }

@@ -474,10 +474,15 @@ function ProvidersPanelBody({
     // A remote host that dialed and then went TERMINAL - an incompatible
     // handshake, a plan restriction, a rejected credential, the reconnect cap -
     // owes no boundary either, and would strand this spinner just as badly.
-    // That case never reaches here: `RemoteSession.sendUnary` rejects a closed
-    // session as a non-retryable `HostTransportFailureError`, precisely so the
-    // class keeps meaning "still dialing" at this branch. The spinner's promise
-    // is only as good as that invariant, so it is enforced at the session.
+    // That case never PERSISTS here, enforced at two layers. New requests:
+    // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
+    // `HostTransportFailureError`, so the class keeps meaning "still dialing"
+    // at this branch. The query that already CACHED a retryable error from
+    // racing the dial (the retry budget is shorter than a full attach):
+    // `RuntimeHostMessenger` records the terminal verdict, fires one
+    // host-scope invalidation, and rejects the resulting refetch with the
+    // verdict instead of transparently redialing - without that, the refetch
+    // would race a FRESH dial, cache "retryable" again, and spin forever.
     if (
       query.error instanceof RetryableTransportError &&
       !isSelectedHostLocal

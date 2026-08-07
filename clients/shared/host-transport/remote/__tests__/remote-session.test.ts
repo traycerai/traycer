@@ -207,6 +207,20 @@ class FakeRelayHost {
     },
   };
 
+  /** Relay control frame: the host's leg of the tunnel went away/came back. */
+  sendHostAttachment(state: "host_detached" | "host_attached"): void {
+    const connection = [...this.connections]
+      .reverse()
+      .find((entry) => !entry.closed);
+    if (connection === undefined) {
+      throw new Error("no live connection to signal on");
+    }
+    connection.socket.onmessage?.({
+      type: "text",
+      data: JSON.stringify({ type: state }),
+    });
+  }
+
   /** Server-side drop of the live socket (relay restart / network cut). */
   dropCurrentConnection(): void {
     const connection = [...this.connections]
@@ -699,6 +713,53 @@ describe("RemoteSession availability-recovered evidence", () => {
         expect(session.isReady()).toBe(true);
         expect(closedEvents).toBe(0);
         expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession host_detached readiness evidence", () => {
+  it(
+    "stops answering ready and rejects sends as retryable while the host leg is detached, then recovers through the full re-attach",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      let recoveredEvents = 0;
+      session.subscribeAvailabilityRecovered(() => {
+        recoveredEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(1);
+
+        // Relay says the HOST's leg is gone. The session keeps its socket and
+        // its "ready" phase while it waits - but the scheduler is paused and
+        // nothing will drain it, so answering "ready" would be the standing
+        // lie R4-B5 kills (Settings rendering Online, off this session, for a
+        // host that is OFF - for up to the 15-min standing bound), and an
+        // enqueued unary would just die at the 30s timeout as NON-retryable.
+        relay.sendHostAttachment("host_detached");
+        expect(session.isReady()).toBe(false);
+        expect(session.isClosed()).toBe(false);
+
+        const error: unknown = await session.sendUnary("host.status", {}).then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(RetryableTransportError);
+
+        // `host_attached` out of detached means the host rebuilt its Noise
+        // state - the session routes it through a FULL re-attach, whose ready
+        // boundary restores the evidence and fires availability recovery.
+        relay.sendHostAttachment("host_attached");
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(2);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();

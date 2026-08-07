@@ -59,6 +59,9 @@ function fakeSession(): FakeSession {
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
+    // These cache tests never exercise fatal verdicts; the cache view only
+    // forwards this accessor.
+    terminalFatal: () => null,
     close: () => {
       closeCalls += 1;
     },
@@ -401,6 +404,54 @@ describe("acquireRemoteSession", () => {
     viewB.close();
     expireLinger();
     expect(sessionForKeyB.closeCalls).toBe(1);
+  });
+
+  it("refuses to ADOPT a superseded-but-held entry: a re-acquire of that key displaces it and builds fresh, and the displaced holder's release closes the old session outright", () => {
+    const base = freshIdentity();
+    const identityKeyA: RemoteSessionIdentity = {
+      ...base,
+      hostPublicKey: "pubkey-a",
+    };
+    const identityKeyB: RemoteSessionIdentity = {
+      ...base,
+      hostPublicKey: "pubkey-b",
+    };
+    const oldSession = fakeSession();
+    const newKeySession = fakeSession();
+    const freshSession = fakeSession();
+    const createSession = vi
+      .fn()
+      .mockReturnValueOnce(oldSession)
+      .mockReturnValueOnce(newKeySession)
+      .mockReturnValueOnce(freshSession);
+
+    // Key A is HELD when key B's acquire supersedes it: the sweep can only
+    // mark it (a session is never torn out from under a live consumer).
+    const heldOldView = acquireRemoteSession(identityKeyA, createSession);
+    const viewB = acquireRemoteSession(identityKeyB, createSession);
+
+    // A second consumer still carrying identity A re-acquires. Adopting the
+    // marked entry would extend its refCount - deferring the sticky verdict's
+    // "closes at its first free moment" indefinitely and carrying new work on
+    // the retired connection - so the acquire must displace it and build a
+    // fresh session instead.
+    const reacquiredView = acquireRemoteSession(identityKeyA, createSession);
+    expect(createSession).toHaveBeenCalledTimes(3);
+    expect(oldSession.closeCalls).toBe(0);
+
+    // The displaced entry is no longer in the map, so its holder's release
+    // cannot linger it (nothing could ever adopt it again) and must not touch
+    // the successor's refCount: it closes the old session on the spot.
+    heldOldView.close();
+    expect(oldSession.closeCalls).toBe(1);
+    expect(freshSession.closeCalls).toBe(0);
+    expect(remoteSessionRefCountForTest(identityKeyA)).toBe(1);
+
+    reacquiredView.close();
+    viewB.close();
+    expireLinger();
+    expect(freshSession.closeCalls).toBe(1);
+    expect(newKeySession.closeCalls).toBe(1);
   });
 
   it("(review finding #3) release() targets the entry captured at acquire time, not a key-string relookup - a stale release after a full teardown+re-acquire cycle never corrupts the successor's refCount", () => {

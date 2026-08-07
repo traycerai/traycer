@@ -178,6 +178,35 @@ describe("DialFailureLog", () => {
     expect(captured.warns).toHaveLength(0);
   });
 
+  it("concludes a mid-outage teardown with one 'closed while down' line, so the tail's silence cannot read as recovery", () => {
+    const { log, captured, advance } = build();
+    log.recordFailure({ cause: "mint failed", context: "", retryInMs: 1000 });
+    advance(90_000);
+    log.recordFailure({ cause: "mint failed", context: "", retryInMs: 30_000 });
+
+    // The cache retired the session (linger expiry / supersession) while the
+    // loop was still failing: without a terminal line the tail reads
+    // "...retrying in 30000ms" then nothing - the log's own failure mode 2.
+    log.recordAbandoned();
+    expect(captured.warns).toHaveLength(2);
+    expect(captured.warns[1]).toContain(
+      "closed while still down after 2 consecutive failures",
+    );
+    expect(captured.warns[1]).toContain("90s");
+    expect(captured.warns[1]).toContain("the retry loop has ended");
+
+    // One line, and a healthy close logs nothing at all.
+    log.recordAbandoned();
+    expect(captured.warns).toHaveLength(2);
+  });
+
+  it("stays silent on an abandonment that followed no failure - closing a healthy session logs nothing", () => {
+    const { log, captured } = build();
+    log.recordAbandoned();
+    expect(captured.warns).toHaveLength(0);
+    expect(captured.infos).toHaveLength(0);
+  });
+
   it("treats a post-recovery failure as fresh news, not a continuation", () => {
     const { log, captured } = build();
     log.recordFailure({ cause: "mint failed", context: "", retryInMs: 1000 });

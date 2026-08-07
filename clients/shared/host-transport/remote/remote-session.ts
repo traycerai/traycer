@@ -180,6 +180,17 @@ export interface IRemoteSession<
    */
   onClosed(listener: () => void): () => void;
   /**
+   * The terminal fatal that closed this session, or `null` while it is alive
+   * OR when it was closed by a caller (`close()` at refcount zero is a
+   * lifecycle event, not a verdict). This is how a consumer reacting to
+   * `onClosed` distinguishes "the host rejected this session for a reason
+   * that will repeat" (incompatible protocol, plan restriction, revoked
+   * credential) from "the cache retired an idle session" - the former is
+   * worth surfacing and NOT worth immediately redialing, the latter is
+   * routine.
+   */
+  terminalFatal(): FatalErrorDetails | null;
+  /**
    * Subscribes to positive evidence that the session just reached its ready
    * boundary (full attach + every live stream restored) - EVERY boundary,
    * including the clean first open. The remote analog of the recovery
@@ -295,6 +306,9 @@ export class RemoteSession<
    */
   private readonly dialFailures: DialFailureLog;
 
+  /** See {@link IRemoteSession.terminalFatal}. Set once, by `goTerminalFatal`. */
+  private terminalFatalDetails: FatalErrorDetails | null = null;
+
   constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
     this.options = options;
     this.clientManifests = {
@@ -326,6 +340,11 @@ export class RemoteSession<
     return this.phase === "closed";
   }
 
+  /** See {@link IRemoteSession.terminalFatal}. */
+  terminalFatal(): FatalErrorDetails | null {
+    return this.terminalFatalDetails;
+  }
+
   /**
    * True once the Noise handshake + in-channel `open`/`openAck` have both
    * completed and the mux is actively carrying traffic — the live, firsthand
@@ -334,11 +353,20 @@ export class RemoteSession<
    * reads. `false` while idle/connecting/handshaking/reconnecting, so a
    * session that is merely attempting to attach is never mistaken for proof
    * of liveness.
+   *
+   * `hostAttached` is part of that evidence: after a relay `host_detached`
+   * the session keeps its socket and `phase === "ready"` while it waits for
+   * the host to come back, but the mux is carrying nothing — the scheduler is
+   * paused and every stream is reconnecting. Answering "ready" there is the
+   * standing lie R4-B5 exists to kill (Settings would render Online, off this
+   * session, for a host that is OFF — for up to the 15-min standing bound).
    */
   isReady(): boolean {
     return (
       this.phase === "ready" &&
-      this.readyBoundaryGeneration === this.connectGeneration
+      this.readyBoundaryGeneration === this.connectGeneration &&
+      this.connection !== null &&
+      this.connection.hostAttached
     );
   }
 
@@ -377,12 +405,32 @@ export class RemoteSession<
           : "Remote session is not ready",
         requestId,
         method,
-        fatalDetails: null,
+        // A terminally-closed session carries its verdict so the surface that
+        // shows the failure can say WHY (plan restriction vs incompatible
+        // protocol vs revoked credential), not just "closed".
+        fatalDetails: this.isClosed() ? this.terminalFatalDetails : null,
       };
       return Promise.reject(
         this.isClosed()
           ? new HostTransportFailureError(notReady)
           : new RetryableTransportError(notReady),
+      );
+    }
+    if (!connection.hostAttached) {
+      // Relay said `host_detached`: the scheduler is paused and nothing will
+      // drain it (host re-attach forces a full re-dial — see
+      // `onHostAttached`). Enqueueing here would park the frame until the
+      // 30s unary timeout kills it as a NON-retryable `HostRpcError`.
+      // Pre-send and provably undeliverable ⇒ retryable, same as any other
+      // not-ready-yet state.
+      return Promise.reject(
+        new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "Remote host is detached from the relay",
+          requestId,
+          method,
+          fatalDetails: null,
+        }),
       );
     }
     const hostManifest = connection.hostManifest;
@@ -558,6 +606,7 @@ export class RemoteSession<
     if (this.phase === "closed") {
       return;
     }
+    this.dialFailures.recordAbandoned();
     this.phase = "closed";
     this.restoredStreamIds.clear();
     this.clearAllTimers();
@@ -1321,6 +1370,7 @@ export class RemoteSession<
     console.warn(
       `[remote-session] remote session (host ${this.options.hostId}) closed terminally: ${details.code}: ${details.reason}`,
     );
+    this.terminalFatalDetails = details;
     this.phase = "closed";
     this.restoredStreamIds.clear();
     this.clearAllTimers();

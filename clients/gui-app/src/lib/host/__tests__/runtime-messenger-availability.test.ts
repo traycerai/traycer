@@ -19,6 +19,11 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
+  HostRequestAbortedError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
+import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
@@ -59,6 +64,13 @@ interface ControllableSession extends IRemoteSession<
    * recovery, not the current state.
    */
   ready: boolean;
+  /**
+   * Settable BEFORE `emitClosed()` to play a terminal session fatal (the real
+   * session records the verdict, then closes and notifies). Left null,
+   * `emitClosed` plays a routine cache retirement - the distinction the
+   * messenger's `onClosed` handler keys on.
+   */
+  fatal: FatalErrorDetails | null;
   emitReady(): void;
   emitClosed(): void;
 }
@@ -70,6 +82,7 @@ function controllableSession(): ControllableSession {
   let terminallyClosed = false;
   const session: ControllableSession = {
     ready: false,
+    fatal: null,
     get availabilityListenerCount() {
       return availability.size;
     },
@@ -128,6 +141,7 @@ function controllableSession(): ControllableSession {
       availability.add(listener);
       return () => availability.delete(listener);
     },
+    terminalFatal: () => session.fatal,
     close: () => {
       closeCalls += 1;
     },
@@ -187,7 +201,11 @@ function harness(): {
   requestRemote: () => void;
   requestRemoteRaw: () => Promise<unknown>;
   requestRemoteWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
+  requestRemoteWithTimeoutAndSignal: (
+    abortSignal: AbortSignal,
+  ) => Promise<unknown>;
   requestLocal: () => void;
+  requestLocalWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
   reset: () => void;
   dispose: () => void;
 } {
@@ -236,6 +254,20 @@ function harness(): {
         {},
         {
           ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+          abortSignal,
+        },
+      ),
+    requestRemoteWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
+      binding.messenger.requestWithResponseTimeout("host.status", {}, 5_000, {
+        ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+        abortSignal,
+      }),
+    requestLocalWithSignal: (abortSignal: AbortSignal) =>
+      binding.messenger.request(
+        "host.status",
+        {},
+        {
+          ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
           abortSignal,
         },
       ),
@@ -459,6 +491,31 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
+  it("re-arms the orphan debt when released MID-RECONNECT after a delivered boundary", () => {
+    // Owedness is decided from the session's LIVE state at release, not a
+    // delivered-once flag: a binding that saw its first boundary, then had
+    // the session drop underneath it, still owes the queries the NEXT
+    // boundary if it is released while the reconnect is in flight.
+    const h = harness();
+    h.requestRemote();
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    // The session drops and begins reconnecting - not closed, not ready.
+    h.session.ready = false;
+
+    h.requestLocal();
+    // A first-boundary one-shot flag would detach here and the recovery
+    // below would reach nobody.
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID, REMOTE_HOST_ID]);
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.dispose();
+  });
+
   it("reset() keeps a still-owed orphan attached", () => {
     // reset() fires on every hostClient change event - including the
     // host-bound promotion that lands while this binding's session is still
@@ -537,4 +594,114 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     );
     expect(h.session.availabilityListenerCount).toBe(0);
   });
+
+  it("an aborted authority is inert on the LOCAL branch too - it must not release the live remote binding as a side effect", async () => {
+    // The local branch runs `closeRemoteTransport()` before dispatching, so
+    // gating only the remote branch would let a stale aborted background
+    // request for the local host tear down a binding whose owner is mid-dial.
+    const h = harness();
+    h.requestRemote();
+    expect(h.session.closeCalls).toBe(0);
+
+    const aborted = new AbortController();
+    aborted.abort();
+    const error: unknown = await h.requestLocalWithSignal(aborted.signal).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    // The remote binding survived: no release, listener still attached.
+    expect(h.session.closeCalls).toBe(0);
+    expect(h.session.availabilityListenerCount).toBe(1);
+
+    h.dispose();
+  });
+
+  it("requestWithResponseTimeout enforces the same abort gate", async () => {
+    const h = harness();
+    const aborted = new AbortController();
+    aborted.abort();
+
+    await expect(
+      h.requestRemoteWithTimeoutAndSignal(aborted.signal),
+    ).rejects.toThrow("Request authority was aborted before dispatch");
+    expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
+
+    h.dispose();
+  });
+
+  it("a terminal fatal close fires ONE host-scope invalidation to un-strand the spinner's cached error", () => {
+    const h = harness();
+    h.requestRemote();
+    expect(h.recovered).toEqual([]);
+
+    // The dial ends terminally (incompatible handshake / plan restriction /
+    // revoked credential) - the ready boundary the stranded query was owed
+    // will never come, so the close itself must deliver the invalidation.
+    h.session.fatal = incompatibleFatal();
+    h.session.emitClosed();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    h.dispose();
+  });
+
+  it("rejects with the recorded verdict instead of redialing while it is fresh, then redials after the TTL", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.requestRemote();
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+      h.session.fatal = incompatibleFatal();
+      h.session.emitClosed();
+
+      // The invalidation-triggered refetch lands HERE: a transparent rebuild
+      // would dial fresh, error retryable before ITS fatal, and re-strand the
+      // spinner - the exact loop the verdict exists to break. The rejection
+      // carries the fatal so the surface can say why.
+      const error: unknown = await h.requestRemoteRaw().then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(HostTransportFailureError);
+      expect((error as HostTransportFailureError).fatalDetails).toEqual(
+        incompatibleFatal(),
+      );
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+      // Terminal described the SESSION, not the host: after the TTL the next
+      // request dials fresh (the host may have been updated/re-entitled).
+      vi.advanceTimersByTime(30_000);
+      h.requestRemote();
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+      h.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a routine close (no fatal) records no verdict, fires no invalidation, and the next request rebuilds", () => {
+    // Linger expiry / supersession retire a session without a verdict; the
+    // host's next visit must dial normally, not land on a poisoned error.
+    const h = harness();
+    h.requestRemote();
+
+    h.session.emitClosed();
+    expect(h.recovered).toEqual([]);
+
+    h.requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    h.dispose();
+  });
 });
+
+function incompatibleFatal(): FatalErrorDetails {
+  return {
+    code: "INCOMPATIBLE",
+    reason: "protocol manifests do not overlap",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}

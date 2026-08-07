@@ -96,6 +96,24 @@ export class DialFailureLog {
   }
 
   /**
+   * The session was torn down (caller `close()` — linger expiry, supersession,
+   * retirement) while the connect loop was still failing. Without this line
+   * the tail reads "…retrying in Nms" followed by silence, which failure
+   * mode 2 above says a reader takes as recovery. One line, no-op when
+   * nothing had failed, so a healthy close stays silent.
+   */
+  recordAbandoned(): void {
+    if (this.consecutiveFailures === 0) {
+      return;
+    }
+    const now = this.options.now();
+    this.options.warn(
+      `[remote-session] ${this.options.label} closed while still down after ${this.consecutiveFailures} consecutive failures over ${secondsSince(this.firstFailureAt, now)}s - the retry loop has ended`,
+    );
+    this.reset();
+  }
+
+  /**
    * The session reached its ready boundary. Logs the recovery ONLY if
    * something had actually failed, so a healthy session never emits it.
    */
