@@ -59,6 +59,7 @@ interface TestState {
   sessionReady: boolean;
   snapshotLoaded: boolean;
   activeArtifactId: string | null;
+  openTileContentIds: ReadonlySet<string>;
   activePanelId: "chats" | "artifacts";
   artifactFilterKinds: ReadonlyArray<string>;
   chatFilterOrigin: "all" | "gui" | "tui";
@@ -106,8 +107,7 @@ interface TestState {
    * two into a combination the real registry could not produce.
    */
   archiveSupport: boolean | null;
-  /** Whether the "Show archived" filter toggle is on. */
-  showArchived: boolean;
+  archiveVisibility: "unarchived" | "archived" | "all";
   /** Ids whose record carries a non-null `archivedAt`. */
   archivedIds: readonly string[];
   archiveMutate: Mock;
@@ -153,6 +153,7 @@ const testState = vi.hoisted<TestState>(() => ({
   sessionReady: true,
   snapshotLoaded: true,
   activeArtifactId: null,
+  openTileContentIds: new Set<string>(),
   activePanelId: "chats",
   artifactFilterKinds: [],
   chatFilterOrigin: "all",
@@ -174,7 +175,7 @@ const testState = vi.hoisted<TestState>(() => ({
   tuiProviderProfiles: [],
   permissionRole: "owner",
   archiveSupport: true,
-  showArchived: false,
+  archiveVisibility: "unarchived",
   archivedIds: [],
   archiveMutate: vi.fn(),
   archiveBatchPending: false,
@@ -534,6 +535,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
       unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
     }),
   useIsActiveEpicArtifact: () => false,
+  useOpenTileContentIds: () => testState.openTileContentIds,
 }));
 
 vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
@@ -547,6 +549,11 @@ vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
 }));
 
 vi.mock("@/stores/epics/left-panel-store", () => ({
+  CHAT_ARCHIVE_VISIBILITY: {
+    Unarchived: "unarchived",
+    Archived: "archived",
+    All: "all",
+  },
   DEFAULT_LEFT_PANEL_ID: "chats",
   isArtifactFilterActive: () => testState.artifactFilterKinds.length > 0,
   isChatFilterActive: () => testState.chatFilterOrigin !== "all",
@@ -559,7 +566,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   }),
   useArtifactSort: () => ({ field: "updated", direction: "desc" }),
   useChatFilter: () => ({ origin: testState.chatFilterOrigin }),
-  useChatShowArchived: () => testState.showArchived,
+  useChatArchiveVisibility: () => testState.archiveVisibility,
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
   usePanelVisibilityOverrides: () => ({}),
@@ -793,6 +800,7 @@ describe("epic sidebar selection mode", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.activeArtifactId = null;
+    testState.openTileContentIds = new Set<string>();
     testState.activePanelId = "chats";
     testState.artifactFilterKinds = [];
     testState.chatFilterOrigin = "all";
@@ -812,7 +820,7 @@ describe("epic sidebar selection mode", () => {
     testState.tuiHarnessIds = {};
     testState.permissionRole = "owner";
     testState.archiveSupport = true;
-    testState.showArchived = false;
+    testState.archiveVisibility = "unarchived";
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
     testState.archiveBatchPending = false;
@@ -3145,7 +3153,7 @@ describe("sidebar leading identity icon", () => {
  * Host-backed archive for Agents panel rows.
  *
  * Behaviours B1–B10 from the archive feature. The harness knobs
- * (`archiveSupport`, `showArchived`, `archivedIds`, `archiveMutate`) drive
+ * (`archiveSupport`, `archiveVisibility`, `archivedIds`, `archiveMutate`) drive
  * the gate, filter, and projected flags - these tests assert renderer
  * behaviour against those knobs, not production selector/RPC wiring.
  */
@@ -3156,6 +3164,7 @@ describe("chat row archive", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.activeArtifactId = null;
+    testState.openTileContentIds = new Set<string>();
     testState.activePanelId = "chats";
     testState.artifactFilterKinds = [];
     testState.chatFilterOrigin = "all";
@@ -3171,7 +3180,7 @@ describe("chat row archive", () => {
     testState.tuiHarnessIds = {};
     testState.permissionRole = "owner";
     testState.archiveSupport = true;
-    testState.showArchived = false;
+    testState.archiveVisibility = "unarchived";
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
     testState.archiveBatchPending = false;
@@ -3268,9 +3277,9 @@ describe("chat row archive", () => {
     expect(screen.getByTestId("epic-sidebar-item-agent-root")).toBeTruthy();
   });
 
-  // --- B3: "Show archived" reveals dimmed rows ----------------------------
+  // --- B3: archive visibility modes ---------------------------------------
 
-  it('hides archived rows by default and reveals them dimmed when "Show archived" is on (B3)', () => {
+  it('hides archived rows by default and reveals them dimmed in "All chats" (B3)', () => {
     seedArchiveSubtree();
     testState.archivedIds = ["chat-root"];
 
@@ -3280,7 +3289,7 @@ describe("chat row archive", () => {
     expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
     expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
 
-    testState.showArchived = true;
+    testState.archiveVisibility = "all";
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
@@ -3292,12 +3301,42 @@ describe("chat row archive", () => {
     expect(rootRow.className).toContain("opacity-55");
     expect(childRow.className).not.toContain("opacity-55");
 
-    testState.showArchived = false;
+    testState.archiveVisibility = "unarchived";
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
     expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
     expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+  });
+
+  it("shows only archived rows plus their ancestor path in archived-only mode", () => {
+    seedArchiveSubtree();
+    testState.archivedIds = ["chat-child"];
+    testState.archiveVisibility = "archived";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const ancestor = screen.getByTestId("epic-sidebar-item-chat-root");
+    const archived = screen.getByTestId("epic-sidebar-item-chat-child");
+    expect(ancestor.className).not.toContain("opacity-55");
+    expect(archived.className).toContain("opacity-55");
+    expect(
+      screen.queryByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("does not let open or busy unarchived rows leak into archived-only mode", () => {
+    seedArchiveSubtree();
+    testState.archivedIds = ["chat-child"];
+    testState.archiveVisibility = "archived";
+    testState.openTileContentIds = new Set(["agent-root"]);
+    testState.activityTierById = new Map([["agent-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
   });
 
   // --- B4: capability gate ------------------------------------------------
@@ -3464,7 +3503,7 @@ describe("chat row archive", () => {
     testState.activeAgentIds = new Set<string>();
     testState.activityTierById = new Map();
     testState.archivedIds = ["chat-root"];
-    testState.showArchived = true;
+    testState.archiveVisibility = "all";
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
@@ -3560,6 +3599,25 @@ describe("chat row archive", () => {
     });
   });
 
+  it("removes the idle-time slot from layout when row controls are revealed", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const idleTimeSlot = idleTime("chat-root")?.parentElement;
+    expect(idleTimeSlot).toBeTruthy();
+    expect(idleTimeSlot?.className).toContain("group-hover/tree-item:hidden");
+    expect(idleTimeSlot?.className).toContain(
+      "group-focus-within/tree-item:hidden",
+    );
+    expect(idleTimeSlot?.className).toContain(
+      "group-has-[[data-state=open]]/tree-item:hidden",
+    );
+    expect(idleTimeSlot?.className).not.toContain(
+      "group-hover/tree-item:invisible",
+    );
+  });
+
   // --- B10: edge behaviour ------------------------------------------------
 
   it("does not close the open tab when archiving the active chat (B10)", () => {
@@ -3572,6 +3630,72 @@ describe("chat row archive", () => {
 
     expect(testState.archiveMutate).toHaveBeenCalled();
     expect(testState.closeCanvasTab).not.toHaveBeenCalled();
+  });
+
+  it("keeps an archived chat with an open canvas tab visible and marked", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.openTileContentIds = new Set(["chat-root"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(row.className).toContain("opacity-55");
+    const archivedLabel = within(row).getByTestId("chat-row-archived-label");
+    expect(archivedLabel.textContent).toBe("Archived·");
+    expect(within(archivedLabel).getByText("Archived").className).toContain(
+      "font-semibold",
+    );
+    // The exception is row-scoped, not an implicit "All chats": an idle
+    // descendant hidden by the archived root stays out.
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+  });
+
+  it("always reveals an archived busy chat with its activity indicator", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).getByTestId("chat-row-archived-label")).toBeTruthy();
+    expect(leadingStatusKinds("chat-root")).toEqual(["activity"]);
+  });
+
+  it("always reveals an archived unread chat with its unread indicator", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.indicatorChats = {
+      "chat-root": indicator({ unreadDone: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).getByTestId("chat-row-archived-label")).toBeTruthy();
+    expect(leadingStatusKinds("chat-root")).toEqual(["done"]);
+  });
+
+  it("clears archived row styling when the unarchive projection arrives", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.openTileContentIds = new Set(["chat-root"]);
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    expect(screen.getByTestId("chat-row-archived-label")).toBeTruthy();
+
+    testState.archivedIds = [];
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).queryByTestId("chat-row-archived-label")).toBeNull();
+    expect(row.className).not.toContain("opacity-55");
   });
 
   it("leaves the bulk-selection delete flow intact alongside archive (B10)", async () => {
@@ -3603,13 +3727,26 @@ describe("chat row archive", () => {
     expect(screen.getByTestId("epic-chat-sidebar-archived-empty")).toBeTruthy();
     expect(screen.getByText("Every agent here is archived.")).toBeTruthy();
     expect(
-      screen.getByText(
-        'Turn on "Show archived" in the filter menu to see them.',
-      ),
+      screen.getByText('Choose "Archived only" or "All chats" under Show.'),
     ).toBeTruthy();
     // Must not falsely claim the interface filter emptied the panel.
     expect(screen.queryByText("No agents use this interface.")).toBeNull();
     expect(screen.queryByText("No agents yet.")).toBeNull();
+  });
+
+  it("shows a distinct empty state when archived-only has no matches", () => {
+    seedGuiChatTree();
+    testState.archiveVisibility = "archived";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByTestId("epic-chat-sidebar-archived-empty")).toBeTruthy();
+    expect(
+      screen.getByText("No archived agents match this view."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Choose "Unarchived only" or "All chats" under Show.'),
+    ).toBeTruthy();
   });
 
   it("never lets the hover archive button displace a collapsed parent's descendant rollup (B5)", () => {
@@ -3646,7 +3783,7 @@ describe("chat row archive", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     // The invariant: an archived record must never become unreachable. Every
-    // route back to one - the "Show archived" toggle, the Unarchive entry, the
+    // route back to one - the archive visibility filter, Unarchive entry, the
     // empty-state hint - is capability-gated, so a host that is known to lack
     // the method must stop hiding. Otherwise a row archived on a newer host and
     // then viewed from an older one is invisible with nothing left to recover
@@ -3804,7 +3941,7 @@ describe("chat row archive", () => {
   it("still offers Unarchive on a running archived row (B11)", () => {
     seedChatTree();
     testState.archivedIds = ["chat-root"];
-    testState.showArchived = true;
+    testState.archiveVisibility = "all";
     // An inbound message auto-unarchives and wakes the agent, so archived+busy
     // is a real state - and unarchiving is the direction the host allows.
     testState.activeAgentIds = new Set(["chat-root"]);

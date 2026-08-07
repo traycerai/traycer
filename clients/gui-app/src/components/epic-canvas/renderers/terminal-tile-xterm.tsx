@@ -32,10 +32,7 @@ import {
   inactiveCursorStyleFor,
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
-import {
-  DEFAULT_MONO_FONT_STACK,
-  buildFontFamilyValue,
-} from "@/lib/default-font-stacks";
+import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   dataTransferHasFiles,
@@ -100,23 +97,6 @@ interface XtermInitialOptions extends ITerminalOptions {
 const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
-
-// xterm measures glyph cell width on a hidden canvas using the configured
-// `fontFamily`, so CSS variables (which don't resolve in that measurement
-// pass) are not usable here. Instead the effective terminal font is built
-// directly from settings-store values against the same default mono stack
-// `theme-provider.tsx` uses for `--traycer-font-mono` - `letterSpacing` /
-// `lineHeight` are pinned on the constructed Terminal so paint and
-// measurement agree.
-function resolveEffectiveFontFamily(
-  terminalFontFamily: string | null,
-  codeFontFamily: string | null,
-): string {
-  return buildFontFamilyValue(
-    terminalFontFamily ?? codeFontFamily,
-    DEFAULT_MONO_FONT_STACK,
-  );
-}
 
 export interface TerminalXtermHostProps {
   /**
@@ -237,17 +217,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // effects below. These initial options apply on first create only - a
   // reattached engine keeps its already-synced options.
   const theme = useTerminalTheme();
-  const codeFontSize = useSettingsStore((s) => s.codeFontSize);
-  const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
-  const codeFontFamily = useSettingsStore((s) => s.codeFontFamily);
-  const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);
   const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
   const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
-  const effectiveFontSize = terminalFontSize ?? codeFontSize;
-  const fontFamily = resolveEffectiveFontFamily(
-    terminalFontFamily,
-    codeFontFamily,
-  );
+  // xterm measures glyph cell width on a hidden canvas where CSS variables do
+  // not resolve, so the font is applied as concrete values here; `letterSpacing`
+  // / `lineHeight` are pinned on the constructed Terminal so paint and
+  // measurement agree.
+  const { fontFamily, fontSize: effectiveFontSize } =
+    useEffectiveTerminalFont();
   const runnerHost = useRunnerHost();
   // Unfocused panes unregister global find ownership. Both split halves stay
   // mounted and visible, so app-level find is scoped to the FOCUSED terminal -

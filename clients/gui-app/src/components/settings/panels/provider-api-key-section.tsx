@@ -36,6 +36,7 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
   traycer: null,
   openrouter: "https://openrouter.ai/settings/keys",
+  huggingface: "https://huggingface.co/settings/tokens",
   grok: null,
   qwen: null,
   // Kiro keys are issued from the Kiro app / AWS console rather than a stable

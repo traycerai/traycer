@@ -33,7 +33,8 @@ export interface HarnessModelRow {
   readonly browseLabel: string;
   /**
    * Stable group id this row groups under in browse mode - the host's declared
-   * provider/vendor for grouped harnesses (OpenCode, OpenRouter). Section
+   * provider/vendor for grouped harnesses (OpenCode, OpenRouter, Hugging Face).
+   * Section
    * boundaries key off this, NOT the display label, so two groups that happen to
    * share a name don't collapse into one. `null` for ungrouped harnesses.
    */
@@ -87,7 +88,8 @@ export function buildHarnessModelRows(
   models: ReadonlyArray<ModelOption>,
 ): ReadonlyArray<HarnessModelRow> {
   // When the host declares per-model groups (OpenCode by provider, OpenRouter by
-  // vendor), order by group so contiguous runs line up with the group headers
+  // vendor, Hugging Face by org), order by group so contiguous runs line up
+  // with the group headers
   // the picker renders. Reorder only when EVERY model is annotated: a partially
   // annotated list (a transitional/skewed host that tags only some models) keeps
   // host order rather than floating the unannotated models to the top. Ungrouped
@@ -199,7 +201,8 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
     model.metadata.openCodeProviderId,
   );
   // Group by the stable group id whenever the host declares one in the model
-  // list (OpenCode by upstream provider, OpenRouter by vendor prefix) - the
+  // list (OpenCode by upstream provider, OpenRouter by vendor prefix, Hugging
+  // Face by `<org>` id prefix) - the
   // renderer is harness-agnostic. Fall back to the id as header text when the
   // label is missing so such models still group rather than scattering.
   const providerGroupId =

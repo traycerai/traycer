@@ -120,6 +120,10 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  // No stream client means nothing has been negotiated yet, which is what
+  // `null` says - the tile's monitors menu reads this and stays quiet.
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -344,6 +348,7 @@ function emitChatSnapshot(
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }

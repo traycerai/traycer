@@ -14,7 +14,6 @@ import {
 export const LEFT_PANEL_IDS = [
   "chats",
   "terminals",
-  "managed-commands",
   "artifacts",
   "git-diff",
   "pull-requests",
@@ -44,6 +43,24 @@ export const CHAT_ORIGIN = {
   Tui: "tui",
 } as const;
 export type ChatOriginFilter = (typeof CHAT_ORIGIN)[keyof typeof CHAT_ORIGIN];
+
+export const CHAT_ARCHIVE_VISIBILITY = {
+  Unarchived: "unarchived",
+  Archived: "archived",
+  All: "all",
+} as const;
+export type ChatArchiveVisibility =
+  (typeof CHAT_ARCHIVE_VISIBILITY)[keyof typeof CHAT_ARCHIVE_VISIBILITY];
+export const DEFAULT_CHAT_ARCHIVE_VISIBILITY =
+  CHAT_ARCHIVE_VISIBILITY.Unarchived;
+
+function isChatArchiveVisibility(
+  value: unknown,
+): value is ChatArchiveVisibility {
+  return Object.values(CHAT_ARCHIVE_VISIBILITY).some(
+    (visibility) => visibility === value,
+  );
+}
 
 export const ARTIFACT_READ = {
   All: "all",
@@ -155,7 +172,6 @@ export function clampSidebarWidthPx(widthPx: number): number {
 export const DEFAULT_LEFT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats", "artifacts"] },
   { panelIds: ["terminals"] },
-  { panelIds: ["managed-commands"] },
   { panelIds: ["git-diff"] },
   { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
@@ -214,14 +230,14 @@ interface LeftPanelStore {
   readonly acknowledgedRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelAcknowledgedRootCreatePending>;
   readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
   /**
-   * Per-epic "Show archived" reveal for the Agents panel. Deliberately NOT a
-   * field on {@link ChatFilter}: `isChatFilterActive` drives the visible-id set
-   * that `mergeForcedExpanded` force-expands, so folding this in would expand
-   * the entire tree the moment anything was archived. It is also the opposite
-   * of a filter - it reveals rows rather than hiding them - so it must not
-   * light the "your view is filtered" dot either.
+   * Per-epic archive visibility for the Agents panel. Deliberately NOT a field
+   * on {@link ChatFilter}: `isChatFilterActive` drives the visible-id set that
+   * `mergeForcedExpanded` force-expands, so folding this in would expand the
+   * entire tree whenever the archive view changes.
    */
-  readonly chatShowArchivedByEpicId: Readonly<Record<string, boolean>>;
+  readonly chatArchiveVisibilityByEpicId: Readonly<
+    Record<string, ChatArchiveVisibility>
+  >;
   readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   readonly chatSortByEpicId: Readonly<Record<string, SortMode>>;
   readonly artifactSortByEpicId: Readonly<Record<string, SortMode>>;
@@ -303,7 +319,10 @@ interface LeftPanelStore {
 
   readonly setChatOrigin: (epicId: string, origin: ChatOriginFilter) => void;
   readonly clearChatFilter: (epicId: string) => void;
-  readonly toggleChatShowArchived: (epicId: string) => void;
+  readonly setChatArchiveVisibility: (
+    epicId: string,
+    visibility: ChatArchiveVisibility,
+  ) => void;
   readonly toggleArtifactStatus: (
     epicId: string,
     status: ArtifactStatusFilter,
@@ -329,18 +348,66 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-function isLeftPanelGroup(value: unknown): value is LeftPanelGroup {
-  if (!isRecord(value)) return false;
-  if (!Array.isArray(value.panelIds)) return false;
-  return value.panelIds.every(isLeftPanelId);
+/**
+ * v2 replaces the binary `chatShowArchivedByEpicId` preference with the full
+ * three-state archive visibility model. A legacy `true` meant exactly what
+ * `All` means now; absent/false remains the default unarchived-only view.
+ */
+export function migrateLeftPanelPersistedState(persisted: unknown): unknown {
+  if (!isRecord(persisted)) return persisted;
+  const archiveVisibilityByEpicId: Record<string, ChatArchiveVisibility> = {};
+  if (isRecord(persisted.chatArchiveVisibilityByEpicId)) {
+    for (const [epicId, visibility] of Object.entries(
+      persisted.chatArchiveVisibilityByEpicId,
+    )) {
+      if (
+        isChatArchiveVisibility(visibility) &&
+        visibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY
+      ) {
+        archiveVisibilityByEpicId[epicId] = visibility;
+      }
+    }
+  } else if (isRecord(persisted.chatShowArchivedByEpicId)) {
+    for (const [epicId, showArchived] of Object.entries(
+      persisted.chatShowArchivedByEpicId,
+    )) {
+      if (showArchived === true) {
+        archiveVisibilityByEpicId[epicId] = CHAT_ARCHIVE_VISIBILITY.All;
+      }
+    }
+  }
+  const migrated = { ...persisted };
+  delete migrated.chatShowArchivedByEpicId;
+  migrated.chatArchiveVisibilityByEpicId = archiveVisibilityByEpicId;
+  return migrated;
 }
 
+function isPersistedPanelGroupShape(
+  value: unknown,
+): value is { readonly panelIds: ReadonlyArray<unknown> } {
+  if (!isRecord(value)) return false;
+  return Array.isArray(value.panelIds);
+}
+
+/**
+ * Sidebar grouping as some build of the app wrote it. Only structure is
+ * rejected here; an id this build does not know is dropped, and the group with
+ * it once nothing is left in it.
+ *
+ * Removing a panel has to be as gentle as adding one. Rejecting the whole
+ * value over one unknown id sends a user who had ever rearranged their sidebar
+ * straight back to defaults on the release that retires a panel - and every
+ * such user carries the retired id, because it shipped in the defaults.
+ */
 function readPersistedPanelGroups(
   value: unknown,
 ): ReadonlyArray<LeftPanelGroup> | null {
   if (!Array.isArray(value)) return null;
-  if (!value.every(isLeftPanelGroup)) return null;
-  return value;
+  if (!value.every(isPersistedPanelGroupShape)) return null;
+  return value.flatMap((group) => {
+    const panelIds = group.panelIds.filter(isLeftPanelId);
+    return panelIds.length === 0 ? [] : [{ panelIds }];
+  });
 }
 
 function getPersistedPanelSectionCollapsedByPanelId(
@@ -816,7 +883,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
       localRootCreatePendingByEpicPanel: {},
       acknowledgedRootCreatePendingByEpicPanel: {},
       chatFilterByEpicId: {},
-      chatShowArchivedByEpicId: {},
+      chatArchiveVisibilityByEpicId: {},
       artifactFilterByEpicId: {},
       chatSortByEpicId: {},
       artifactSortByEpicId: {},
@@ -1162,20 +1229,22 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
-      toggleChatShowArchived: (epicId) => {
+      setChatArchiveVisibility: (epicId, visibility) => {
         set((state) => {
-          const current = state.chatShowArchivedByEpicId[epicId] ?? false;
-          if (current) {
-            // Drop the key rather than storing `false` so the default state
-            // leaves no entry behind, matching how an inactive filter clears.
-            const next = { ...state.chatShowArchivedByEpicId };
+          const current =
+            state.chatArchiveVisibilityByEpicId[epicId] ??
+            DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+          if (current === visibility) return state;
+          if (visibility === DEFAULT_CHAT_ARCHIVE_VISIBILITY) {
+            // Drop the key so the default view leaves no persisted entry.
+            const next = { ...state.chatArchiveVisibilityByEpicId };
             delete next[epicId];
-            return { chatShowArchivedByEpicId: next };
+            return { chatArchiveVisibilityByEpicId: next };
           }
           return {
-            chatShowArchivedByEpicId: {
-              ...state.chatShowArchivedByEpicId,
-              [epicId]: true,
+            chatArchiveVisibilityByEpicId: {
+              ...state.chatArchiveVisibilityByEpicId,
+              [epicId]: visibility,
             },
           };
         });
@@ -1286,24 +1355,24 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
       resetChatView: (epicId) => {
         set((state) => {
           const hasFilter = Object.hasOwn(state.chatFilterByEpicId, epicId);
-          const hasShowArchived = Object.hasOwn(
-            state.chatShowArchivedByEpicId,
+          const hasArchiveVisibility = Object.hasOwn(
+            state.chatArchiveVisibilityByEpicId,
             epicId,
           );
           const hasSort = Object.hasOwn(state.chatSortByEpicId, epicId);
-          if (!hasFilter && !hasShowArchived && !hasSort) return state;
+          if (!hasFilter && !hasArchiveVisibility && !hasSort) return state;
 
           const chatFilterByEpicId = { ...state.chatFilterByEpicId };
-          const chatShowArchivedByEpicId = {
-            ...state.chatShowArchivedByEpicId,
+          const chatArchiveVisibilityByEpicId = {
+            ...state.chatArchiveVisibilityByEpicId,
           };
           const chatSortByEpicId = { ...state.chatSortByEpicId };
           delete chatFilterByEpicId[epicId];
-          delete chatShowArchivedByEpicId[epicId];
+          delete chatArchiveVisibilityByEpicId[epicId];
           delete chatSortByEpicId[epicId];
           return {
             chatFilterByEpicId,
-            chatShowArchivedByEpicId,
+            chatArchiveVisibilityByEpicId,
             chatSortByEpicId,
           };
         });
@@ -1361,6 +1430,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
     }),
     {
       ...basePersistOptions(PERSIST_KEY),
+      version: 2,
       storage: createJSONStorage(() => window.localStorage),
       partialize: (state) => ({
         activePanelIdByTabId: getPersistedActivePanelIds(
@@ -1380,12 +1450,9 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           state.chatFilterByEpicId,
           isChatFilterActive,
         ),
-        // Only the `true` entries; the toggle already deletes on the way back
-        // to the default, so this is belt-and-braces against a stale persisted
-        // `false` from an older build.
-        chatShowArchivedByEpicId: filterActiveByEpic(
-          state.chatShowArchivedByEpicId,
-          (showArchived) => showArchived,
+        chatArchiveVisibilityByEpicId: filterActiveByEpic(
+          state.chatArchiveVisibilityByEpicId,
+          (visibility) => visibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY,
         ),
         artifactFilterByEpicId: filterActiveByEpic(
           state.artifactFilterByEpicId,
@@ -1400,6 +1467,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           isSortModeActive,
         ),
       }),
+      migrate: (persisted) => migrateLeftPanelPersistedState(persisted),
     },
   ),
 );
@@ -1412,12 +1480,16 @@ export function useChatFilter(epicId: string): ChatFilter {
   );
 }
 
-/**
- * Whether the Agents panel is currently revealing archived rows for this epic.
- * Default `false` - archived rows and their subtrees stay hidden.
- */
-export function useChatShowArchived(epicId: string): boolean {
-  return useLeftPanelStore((s) => s.chatShowArchivedByEpicId[epicId] ?? false);
+/** Archive visibility for this epic's Agents panel. */
+export function useChatArchiveVisibility(
+  epicId: string,
+): ChatArchiveVisibility {
+  return useLeftPanelStore((state) => {
+    const visibility = state.chatArchiveVisibilityByEpicId[epicId];
+    return isChatArchiveVisibility(visibility)
+      ? visibility
+      : DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+  });
 }
 
 export function useArtifactFilter(epicId: string): ArtifactFilter {

@@ -74,6 +74,7 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
           disabled={hintActive ? false : disabled}
           aria-disabled={hintActive || undefined}
           aria-label={label}
+          aria-keyshortcuts={stopMode ? undefined : "Meta+Enter Control+Enter"}
           data-testid={stopMode ? "chat-stop-button" : undefined}
           className={buttonClassName}
         >

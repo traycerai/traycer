@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CHAT_ARCHIVE_VISIBILITY,
   DEFAULT_LEFT_PANEL_GROUPS,
   DEFAULT_LEFT_PANEL_ID,
   DEFAULT_SIDEBAR_WIDTH_PX,
@@ -14,6 +15,7 @@ import {
   moveLeftPanelToPanelPosition,
   useLeftPanelGroups,
   useLeftPanelStore,
+  useChatArchiveVisibility,
   type ArtifactFilter,
   type ChatFilter,
   type LeftPanelGroup,
@@ -52,6 +54,7 @@ interface PersistedLeftPanelState {
     readonly panelSectionWeightsByPanelId: Readonly<Record<string, number>>;
     readonly panelVisibilityOverrideById: Readonly<Record<string, boolean>>;
     readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
+    readonly chatArchiveVisibilityByEpicId: Readonly<Record<string, string>>;
     readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   };
   readonly version: number;
@@ -76,7 +79,7 @@ function resetStore(): void {
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
     chatFilterByEpicId: {},
-    chatShowArchivedByEpicId: {},
+    chatArchiveVisibilityByEpicId: {},
     artifactFilterByEpicId: {},
   });
 }
@@ -85,7 +88,6 @@ const SPLIT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats"] },
   { panelIds: ["artifacts"] },
   { panelIds: ["terminals"] },
-  { panelIds: ["managed-commands"] },
   { panelIds: ["git-diff"] },
   { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
@@ -172,7 +174,6 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -200,7 +201,7 @@ describe("useLeftPanelStore", () => {
     );
   });
 
-  it("normalizes malformed persisted panel groups on access", async () => {
+  it("drops an unknown panel id from persisted groups instead of resetting the layout", async () => {
     window.localStorage.setItem(
       PERSIST_KEY,
       JSON.stringify({
@@ -216,11 +217,75 @@ describe("useLeftPanelStore", () => {
 
     await useLeftPanelStore.persist.rehydrate();
 
-    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual(
-      DEFAULT_LEFT_PANEL_GROUPS,
-    );
+    // Chats keeps the group it was given (rather than the default's merged
+    // chats+artifacts), and the ids this build knows but the stored value did
+    // not mention are appended - the same treatment a newly added panel gets.
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
+      { panelIds: ["chats"] },
+      { panelIds: ["terminals"] },
+      { panelIds: ["artifacts"] },
+      { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
+      { panelIds: ["file-tree"] },
+      { panelIds: ["sharing"] },
+      { panelIds: ["comments"] },
+    ]);
     expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
       "artifacts",
+    );
+  });
+
+  // Every user who ever rearranged their sidebar carries the id of a panel the
+  // release retires, because it shipped in the defaults. Rejecting the whole
+  // persisted value over it sent all of them back to defaults on upgrade.
+  it("keeps a user's grouping when it names a panel this build has retired", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          panelGroups: [
+            { panelIds: ["chats", "managed-commands"] },
+            { panelIds: ["terminals", "git-diff"] },
+            { panelIds: ["managed-commands"] },
+            { panelIds: ["artifacts"] },
+            { panelIds: ["pull-requests"] },
+            { panelIds: ["file-tree"] },
+            { panelIds: ["sharing"] },
+            { panelIds: ["comments"] },
+          ],
+        },
+        version: 1,
+      }),
+    );
+
+    await useLeftPanelStore.persist.rehydrate();
+
+    // The merged pair the user built survives minus the dead id, and the group
+    // that held nothing else goes away with it.
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
+      { panelIds: ["chats"] },
+      { panelIds: ["terminals", "git-diff"] },
+      { panelIds: ["artifacts"] },
+      { panelIds: ["pull-requests"] },
+      { panelIds: ["file-tree"] },
+      { panelIds: ["sharing"] },
+      { panelIds: ["comments"] },
+    ]);
+  });
+
+  it("falls back to defaults when the persisted groups are not groups at all", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: { panelGroups: [{ panels: ["chats"] }] },
+        version: 1,
+      }),
+    );
+
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual(
+      DEFAULT_LEFT_PANEL_GROUPS,
     );
   });
 
@@ -259,12 +324,12 @@ describe("useLeftPanelStore", () => {
         panelSectionWeightsByPanelId: {},
         panelVisibilityOverrideById: {},
         chatFilterByEpicId: {},
-        chatShowArchivedByEpicId: {},
+        chatArchiveVisibilityByEpicId: {},
         artifactFilterByEpicId: {},
         chatSortByEpicId: {},
         artifactSortByEpicId: {},
       },
-      version: 1,
+      version: 2,
     });
   });
 
@@ -351,6 +416,61 @@ describe("useLeftPanelStore", () => {
     expect(persisted.state.artifactFilterByEpicId).toEqual({});
   });
 
+  it("defaults archive visibility to unarchived only", () => {
+    const { result } = renderHook(() => useChatArchiveVisibility("epic-a"));
+    expect(result.current).toBe(CHAT_ARCHIVE_VISIBILITY.Unarchived);
+  });
+
+  it("persists non-default archive visibility and drops the default", () => {
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .setChatArchiveVisibility("epic-a", CHAT_ARCHIVE_VISIBILITY.Archived);
+    });
+    expect(
+      readPersistedLeftPanelState().state.chatArchiveVisibilityByEpicId,
+    ).toEqual({ "epic-a": "archived" });
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .setChatArchiveVisibility("epic-a", CHAT_ARCHIVE_VISIBILITY.All);
+    });
+    expect(
+      readPersistedLeftPanelState().state.chatArchiveVisibilityByEpicId,
+    ).toEqual({ "epic-a": "all" });
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .setChatArchiveVisibility("epic-a", CHAT_ARCHIVE_VISIBILITY.Unarchived);
+    });
+    expect(
+      readPersistedLeftPanelState().state.chatArchiveVisibilityByEpicId,
+    ).toEqual({});
+  });
+
+  it('migrates legacy "Show archived" preferences to All chats', async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          chatShowArchivedByEpicId: {
+            "epic-all": true,
+            "epic-default": false,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().chatArchiveVisibilityByEpicId).toEqual({
+      "epic-all": "all",
+    });
+  });
+
   it("reorders panel groups before or after another group", () => {
     splitChatsAndArtifacts();
     applyPanelGroupMove("artifacts", "chats", "before");
@@ -358,7 +478,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -372,7 +491,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -386,7 +504,6 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -404,7 +521,6 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -439,7 +555,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["pull-requests"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["sharing"] },
     ]);
   });
@@ -464,7 +579,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["sharing"] },
     ]);
   });
@@ -481,7 +595,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts", "chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -503,7 +616,6 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -537,7 +649,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
@@ -558,7 +669,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -576,7 +686,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -598,7 +707,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -616,7 +724,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -635,7 +742,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments", "artifacts"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -706,7 +812,6 @@ describe("useLeftPanelStore", () => {
 
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       ...PRE_PULL_REQUESTS_PANEL_GROUPS,
-      { panelIds: ["managed-commands"] },
       { panelIds: ["pull-requests"] },
     ]);
   });
@@ -723,7 +828,6 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
-      { panelIds: ["managed-commands"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },

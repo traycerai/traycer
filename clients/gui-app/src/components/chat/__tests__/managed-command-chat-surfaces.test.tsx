@@ -13,34 +13,49 @@ import {
   fireEvent,
   render,
   screen,
+  type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { DndContext } from "@dnd-kit/core";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
-import type { ManagedCommandListStreamCallbacks } from "@traycer-clients/shared/host-transport/managed-command-list-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
- * The chat's own managed-command surfaces (`UI.md` §3, §5): the chip and the
- * resume divider are doors into the output window, both kind-explicit; the
- * running-work strip lists the commands this chat has running right now.
+ * The chat's own managed-command surfaces: the chip and the resume divider are
+ * doors into the output window, both kind-explicit; the Background panel lists
+ * what this chat has running right now; and the monitors menu is the home for
+ * the chat's commands in every state.
  */
+
+const streamSupport = vi.hoisted<{ value: string }>(() => ({
+  value: "supported",
+}));
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
-  useStreamMethodSupport: () => "supported",
+  useStreamMethodSupport: () => streamSupport.value,
   useStreamMethodSchemaVersion: () => null,
 }));
 
 // The one faked boundary: the lifecycle RPCs behind a managed row's hover
-// actions. Everything the strip does with them - which rows offer them, what
-// they are called - is real.
+// actions. Everything the surfaces do with them - which rows offer them, what
+// they are called with - is real. The aggregated stop-all has its own suite
+// over a real host client.
 const stopMutate = vi.fn();
+const stopAllMutate = vi.fn();
+const stopAllFlight = { isPending: false };
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
   () => ({
     useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
     useManagedCommandStop: () => ({ mutate: stopMutate, isPending: false }),
+    useManagedCommandStopAll: () => ({
+      mutate: stopAllMutate,
+      isPending: stopAllFlight.isPending,
+    }),
+    useManagedCommandStopAllIsPending: () => stopAllFlight.isPending,
     useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
   }),
 );
@@ -52,19 +67,32 @@ import {
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { ManagedCommandListStreamMount } from "@/providers/managed-command-list-stream-mount";
-import { __setManagedCommandListStreamClientFactoryForTests } from "@/providers/managed-command-list-stream-factory-override";
-import { managedCommandListRegistry } from "@/stores/managed-commands/managed-command-list-registry";
+import {
+  disposeManagedCommandChatSessions,
+  installManagedCommandChatSession,
+  type ManagedCommandChatSessionStub,
+} from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { ManagedCommandBadge } from "@/components/chat/queued-message-surface";
 import { AutonomousResumeSegment } from "@/components/chat/segments/autonomous-resume-segment";
-import { ManagedCommandStripRows } from "@/components/chat/managed-command-strip-rows";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
+import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
+import { useManagedCommandAttentionStore } from "@/stores/managed-commands/managed-command-attention-store";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
 const CHAT_ID = "chat-1";
+
+/** One harness-owned background row, so the panel is never managed-only. */
+const HARNESS_ITEM: BackgroundItem = {
+  taskId: "harness-task",
+  kind: "command",
+  title: "bun run compile",
+  blockId: "harness-task-tool",
+  parentTaskId: null,
+  scheduledFor: null,
+};
 
 function command(over: Partial<ManagedCommand>): ManagedCommand {
   return {
@@ -96,28 +124,42 @@ function trigger(
   };
 }
 
-function installListStub(): { emit: () => ManagedCommandListStreamCallbacks } {
-  let captured: ManagedCommandListStreamCallbacks | null = null;
-  __setManagedCommandListStreamClientFactoryForTests((_epicId, callbacks) => {
-    captured = callbacks;
-    return { close: () => undefined };
-  });
-  return {
-    emit: () => {
-      if (captured === null) throw new Error("list callbacks not wired");
-      return captured;
-    },
-  };
+/**
+ * The commands ride each chat's own stream now, so a suite that needs two
+ * chats' menus needs two sessions. Created on first use so a test that never
+ * mentions a chat leaves it without one - which is also the "no session yet"
+ * state the surfaces must survive.
+ */
+const chatSessions = new Map<string, ManagedCommandChatSessionStub>();
+
+function chatSession(chatId: string): ManagedCommandChatSessionStub {
+  const existing = chatSessions.get(chatId);
+  if (existing !== undefined) return existing;
+  const created = installManagedCommandChatSession({ epicId: EPIC_ID, chatId });
+  chatSessions.set(chatId, created);
+  return created;
 }
 
-function renderInChatTile(node: ReactNode): void {
-  render(
+/** This chat's whole set, the way the host sends it - never a delta. */
+function setCommands(
+  commands: readonly ManagedCommand[],
+  chatId: string,
+): void {
+  chatSession(chatId).setCommands(commands);
+}
+
+function chatTileTree(node: ReactNode): ReactNode {
+  return (
     <EpicSessionContext.Provider value={epicHandle}>
       <TabHostProvider hostId="host-1">
         <TooltipProvider>{node}</TooltipProvider>
       </TabHostProvider>
-    </EpicSessionContext.Provider>,
+    </EpicSessionContext.Provider>
   );
+}
+
+function renderInChatTile(node: ReactNode): RenderResult {
+  return render(chatTileTree(node));
 }
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
@@ -133,6 +175,13 @@ let epicHandle: OpenEpicStoreHandle;
 
 beforeEach(() => {
   stopMutate.mockClear();
+  stopAllMutate.mockClear();
+  stopAllFlight.isPending = false;
+  streamSupport.value = "supported";
+  useManagedCommandAttentionStore.setState(
+    useManagedCommandAttentionStore.getInitialState(),
+    true,
+  );
   epicHandle = createOpenEpicStore({
     epicId: EPIC_ID,
     streamClientFactory: noopStreamClientFactory,
@@ -150,8 +199,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   epicHandle.dispose();
-  __setManagedCommandListStreamClientFactoryForTests(null);
-  managedCommandListRegistry.disposeAll();
+  chatSessions.clear();
+  disposeManagedCommandChatSessions();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
@@ -306,95 +355,149 @@ describe("resume divider", () => {
   });
 });
 
-describe("running-work strip rows", () => {
-  function renderStrip(): { emit: () => ManagedCommandListStreamCallbacks } {
-    const stub = installListStub();
+describe("running commands in the Background panel", () => {
+  function renderPanel(items: ReadonlyArray<BackgroundItem>): {
+    onStopAll: Mock<() => string | null>;
+  } {
+    return renderPanelWith(items, true);
+  }
+
+  /** `canAct` is "this chat's stream is open" - a harness-side capability. */
+  function renderPanelWith(
+    items: ReadonlyArray<BackgroundItem>,
+    canAct: boolean,
+  ): {
+    onStopAll: Mock<() => string | null>;
+  } {
+    const onStopAll: Mock<() => string | null> = vi.fn(() => null);
     renderInChatTile(
-      <>
-        <ManagedCommandListStreamMount epicId={EPIC_ID} />
-        <ManagedCommandStripRows epicId={EPIC_ID} chatId={CHAT_ID} />
-      </>,
+      <BackgroundItemsPanel
+        items={items}
+        epicId={EPIC_ID}
+        chatId={CHAT_ID}
+        canAct={canAct}
+        readOnly={false}
+        pendingStopTaskIds={new Set()}
+        stopAllPending={false}
+        scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
+        onItemClick={() => undefined}
+        onStopItem={() => null}
+        onStopAll={onStopAll}
+      />,
     );
-    return stub;
+    return { onStopAll };
+  }
+
+  function expandPanel(): void {
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
   }
 
   it("lists only this chat's running commands, kind-explicit", () => {
-    const stub = renderStrip();
-
+    renderPanel([]);
     act(() => {
-      stub.emit().onSnapshot([
-        command({ id: "mine-running" }),
-        command({
-          id: "mine-exited",
-          status: { state: "exited", exitCode: 0, signal: null, exitedAtMs: 5 },
-        }),
-        command({ id: "other-chat", chatId: "chat-2" }),
-      ]);
+      setCommands(
+        [
+          command({ id: "mine-running" }),
+          command({
+            id: "mine-exited",
+            status: {
+              state: "exited",
+              exitCode: 0,
+              signal: null,
+              exitedAtMs: 5,
+            },
+          }),
+        ],
+        CHAT_ID,
+      );
+      // Another chat's monitor rides another chat's stream, so this panel can
+      // never see it however busy that chat is.
+      setCommands([command({ id: "other-chat", chatId: "chat-2" })], "chat-2");
     });
+    expandPanel();
 
-    const rows = screen.getAllByTestId(/^managed-command-strip-row-/);
+    const rows = screen.getAllByTestId(/^managed-command-background-row-/);
     expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
-      "managed-command-strip-row-mine-running",
+      "managed-command-background-row-mine-running",
     ]);
     expect(rows[0].textContent).toContain("Monitor · deploy watcher");
   });
 
   it("drops a row the moment its command reaches a terminal state", () => {
-    const stub = renderStrip();
+    renderPanel([]);
     act(() => {
-      stub.emit().onSnapshot([command({ id: "mine-running" })]);
+      setCommands([command({ id: "mine-running" })], CHAT_ID);
     });
+    expandPanel();
 
     act(() => {
-      stub.emit().onChanged(
-        command({
-          id: "mine-running",
-          status: { state: "exited", exitCode: 0, signal: null, exitedAtMs: 5 },
-        }),
+      setCommands(
+        [
+          command({
+            id: "mine-running",
+            status: {
+              state: "exited",
+              exitCode: 0,
+              signal: null,
+              exitedAtMs: 5,
+            },
+          }),
+        ],
+        CHAT_ID,
       );
     });
 
     expect(
-      screen.queryByTestId("managed-command-strip-row-mine-running"),
+      screen.queryByTestId("managed-command-background-row-mine-running"),
     ).toBeNull();
   });
 
-  it("opens the output window from a strip row", () => {
-    const stub = renderStrip();
+  it("opens the output window from a row", () => {
+    renderPanel([]);
     act(() => {
-      stub.emit().onSnapshot([command({ id: "mine-running" })]);
+      setCommands([command({ id: "mine-running" })], CHAT_ID);
     });
+    expandPanel();
 
     fireEvent.click(
-      screen.getByTestId("managed-command-strip-row-mine-running"),
+      screen.getByTestId("managed-command-background-row-mine-running"),
     );
 
     expect(findOpenArtifactInTab(TAB_ID, "mine-running")).not.toBeNull();
   });
 
-  it("reads like a harness row: kind glyph, elapsed time and its own stop", () => {
-    const stub = renderStrip();
+  it("reads in the panel's own row grammar: kind glyph, uppercase kind pill, elapsed, hover stop", () => {
+    renderPanel([]);
     act(() => {
-      stub.emit().onSnapshot([
-        command({
-          id: "mine-running",
-          kind: "shell",
-          status: {
-            state: "running",
-            pid: 4410,
-            startedAtMs: Date.now() - 65_000,
-          },
-        }),
-      ]);
+      setCommands(
+        [
+          command({
+            id: "mine-running",
+            kind: "shell",
+            status: {
+              state: "running",
+              pid: 4410,
+              startedAtMs: Date.now() - 65_000,
+            },
+          }),
+        ],
+        CHAT_ID,
+      );
     });
+    expandPanel();
 
-    const row = screen.getByTestId("managed-command-strip-row-mine-running");
+    const row = screen.getByTestId(
+      "managed-command-background-row-mine-running",
+    );
+    // The glyph is what keeps a supervised shell apart from the harness's own
+    // background kinds; the pill names it in the panel's existing grammar.
     expect(row.querySelector("[data-kind-icon='shell']")).not.toBeNull();
+    expect(row.textContent).toContain("Shell");
     // Same clock format the harness rows use, so two rows side by side read
     // as one list rather than two conventions.
     expect(row.textContent).toContain("1m 5s");
 
-    // "Stop all" never touches these, so the row has to carry its own.
     fireEvent.click(screen.getByTestId("managed-command-stop-mine-running"));
     expect(stopMutate).toHaveBeenCalledWith({
       hostId: "host-1",
@@ -404,17 +507,18 @@ describe("running-work strip rows", () => {
   });
 
   it("offers stop and nothing destructive: this is a status, not the object", () => {
-    const stub = renderStrip();
+    renderPanel([]);
     act(() => {
-      stub.emit().onSnapshot([command({ id: "mine-running" })]);
+      setCommands([command({ id: "mine-running" })], CHAT_ID);
     });
+    expandPanel();
 
     expect(
       screen.getByTestId("managed-command-stop-mine-running"),
     ).not.toBeNull();
     // Delete destroys the command's whole output history. It belongs to the
-    // sidebar and the output window, where a command is a durable object - not
-    // to a row that exists only while the process does.
+    // chat's monitors menu and the output window, where a command is a durable
+    // object - not to a row that exists only while the process does.
     expect(
       screen.queryByTestId("managed-command-delete-mine-running"),
     ).toBeNull();
@@ -422,69 +526,31 @@ describe("running-work strip rows", () => {
       screen.queryByTestId("managed-command-start-mine-running"),
     ).toBeNull();
   });
-});
 
-describe("background strip honesty", () => {
-  function renderPanelWithStrip(): {
-    emit: () => ManagedCommandListStreamCallbacks;
-    onStopAll: Mock<() => string | null>;
-  } {
-    const stub = installListStub();
-    const onStopAll: Mock<() => string | null> = vi.fn(() => null);
-    renderInChatTile(
-      <>
-        <ManagedCommandListStreamMount epicId={EPIC_ID} />
-        <BackgroundItemsPanel
-          items={[
-            {
-              taskId: "harness-task",
-              kind: "command",
-              title: "bun run compile",
-              blockId: "harness-task-tool",
-              parentTaskId: null,
-              scheduledFor: null,
-            },
-          ]}
-          epicId={EPIC_ID}
-          chatId={CHAT_ID}
-          canAct
-          readOnly={false}
-          pendingStopTaskIds={new Set()}
-          stopAllPending={false}
-          scrollRegionMaxHeightClass="max-h-96"
-          separated={false}
-          onItemClick={() => undefined}
-          onStopItem={() => null}
-          onStopAll={onStopAll}
-        />
-      </>,
-    );
-    return { emit: stub.emit, onStopAll };
-  }
-
-  it("counts managed commands separately, because Stop all cannot reach them", () => {
-    const stub = renderPanelWithStrip();
+  it("counts managed commands into the one running total the button can keep", () => {
+    renderPanel([HARNESS_ITEM]);
     act(() => {
-      stub
-        .emit()
-        .onSnapshot([
+      setCommands(
+        [
           command({ id: "m1", kind: "monitor" }),
           command({ id: "m2", kind: "monitor" }),
           command({ id: "s1", kind: "shell" }),
-        ]);
+        ],
+        CHAT_ID,
+      );
     });
 
-    // NOT "4 running": one press of Stop all leaves three of those four alive,
-    // so folding them into one total is a promise the button does not keep.
+    // One press of Stop all now reaches all four, so one summed total is a
+    // promise the button keeps.
     expect(screen.getByTestId("background-header-summary").textContent).toBe(
-      "1 running · 2 monitors · 1 shell",
+      "4 running",
     );
   });
 
   it("keeps the plain summary when the chat has no managed commands", () => {
-    const stub = renderPanelWithStrip();
+    renderPanel([HARNESS_ITEM]);
     act(() => {
-      stub.emit().onSnapshot([]);
+      setCommands([], CHAT_ID);
     });
 
     expect(screen.getByTestId("background-header-summary").textContent).toBe(
@@ -492,29 +558,497 @@ describe("background strip honesty", () => {
     );
   });
 
-  it("declares the managed subset with its own heading inside the panel", () => {
-    const stub = renderPanelWithStrip();
+  it("stops the managed rows too when Stop all is pressed, as one action", () => {
+    const panel = renderPanel([HARNESS_ITEM]);
     act(() => {
-      stub.emit().onSnapshot([command({ id: "m1" })]);
+      setCommands(
+        [command({ id: "m1" }), command({ id: "m2", kind: "shell" })],
+        CHAT_ID,
+      );
     });
+    expandPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
-
-    expect(screen.getByText("Monitors and shells")).not.toBeNull();
-    expect(screen.getByText("Not stopped by Stop all")).not.toBeNull();
-  });
-
-  it("leaves managed rows running when Stop all is pressed", () => {
-    const stub = renderPanelWithStrip();
-    act(() => {
-      stub.emit().onSnapshot([command({ id: "m1" })]);
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
     fireEvent.click(screen.getByTestId("background-stop-all"));
 
-    expect(stub.onStopAll).toHaveBeenCalledTimes(1);
+    // The harness stop-all cannot reach host-supervised commands, so those go
+    // through their own stop alongside it - one button, two mechanisms. The
+    // managed half is ONE call over the whole set, not one per row: a host
+    // that has gone away fails them all for the same reason, and per-row
+    // mutations reported that reason once per row.
+    expect(panel.onStopAll).toHaveBeenCalledTimes(1);
+    expect(stopAllMutate).toHaveBeenCalledTimes(1);
+    expect(stopAllMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: EPIC_ID,
+      commandIds: ["m1", "m2"],
+    });
     expect(stopMutate).not.toHaveBeenCalled();
-    expect(screen.getByTestId("managed-command-strip-row-m1")).not.toBeNull();
+  });
+
+  it("stays dead while anything it started is still in flight", () => {
+    stopAllFlight.isPending = true;
+    const panel = renderPanel([HARNESS_ITEM]);
+    act(() => {
+      setCommands([command({ id: "m1" })], CHAT_ID);
+    });
+    expandPanel();
+
+    // Re-enabling as soon as one half finished let a second press resubmit
+    // the finished half while the other was still running - one button, one
+    // in-flight state.
+    const stopAllButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Stop all",
+    });
+    expect(stopAllButton.disabled).toBe(true);
+    fireEvent.click(stopAllButton);
+    expect(panel.onStopAll).not.toHaveBeenCalled();
+    expect(stopAllMutate).not.toHaveBeenCalled();
+  });
+
+  it("disables Stop all only when neither half can act", () => {
+    stopAllFlight.isPending = true;
+    const panel = renderPanelWith([HARNESS_ITEM], false);
+    act(() => {
+      setCommands([command({ id: "m1" })], CHAT_ID);
+    });
+
+    // Harness half gated by the closed stream, managed half in flight: with
+    // nothing left for a press to do, the button finally disables.
+    const stopAllButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Stop all",
+    });
+    expect(stopAllButton.disabled).toBe(true);
+    fireEvent.click(stopAllButton);
+    expect(panel.onStopAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps a managed row stoppable while the chat stream is reconnecting", () => {
+    const panel = renderPanelWith([HARNESS_ITEM], false);
+    act(() => {
+      setCommands([command({ id: "m1" })], CHAT_ID);
+    });
+    expandPanel();
+
+    // Stopping a managed command is an RPC to its host; the chat's own stream
+    // has no part in it. Gating it on `canAct` left a reconnecting chat with
+    // no way to stop a runaway monitor from anywhere in the panel.
+    expect(screen.getByTestId("managed-command-stop-m1")).not.toBeNull();
+    // The harness row's stop DOES ride the chat stream, so it stays gated.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Stop Command" })
+        .disabled,
+    ).toBe(true);
+
+    // And the aggregate follows the same split: the button stays live for the
+    // managed half, and a press skips the unreachable harness half rather
+    // than dying with it - a reconnect is exactly when a runaway monitor
+    // needs the one-click stop.
+    const stopAllButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Stop all",
+    });
+    expect(stopAllButton.disabled).toBe(false);
+    fireEvent.click(stopAllButton);
+    expect(panel.onStopAll).not.toHaveBeenCalled();
+    expect(stopAllMutate).toHaveBeenCalledTimes(1);
+    expect(stopAllMutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: EPIC_ID,
+      commandIds: ["m1"],
+    });
+  });
+
+  it("no longer disclaims a subset Stop all cannot reach", () => {
+    renderPanel([HARNESS_ITEM]);
+    act(() => {
+      setCommands([command({ id: "m1" })], CHAT_ID);
+    });
+    expandPanel();
+
+    expect(screen.queryByText("Not stopped by Stop all")).toBeNull();
+    expect(screen.queryByText("Monitors and shells")).toBeNull();
+  });
+});
+
+describe("the chat's monitors menu", () => {
+  function renderMenu(): void {
+    renderInChatTile(
+      <DndContext>
+        <ManagedCommandChatMenu
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId="host-1"
+          viewTabId={TAB_ID}
+        />
+      </DndContext>,
+    );
+  }
+
+  function trigger$(): HTMLElement | null {
+    return screen.queryByTestId("managed-command-chat-menu-trigger");
+  }
+
+  function openMenu(): void {
+    fireEvent.click(screen.getByTestId("managed-command-chat-menu-trigger"));
+  }
+
+  function exited(over: Partial<ManagedCommand>): ManagedCommand {
+    return command({
+      status: { state: "exited", exitCode: 1, signal: null, exitedAtMs: 20 },
+      updatedAtMs: 20,
+      ...over,
+    });
+  }
+
+  it("is absent until this chat owns a command, and present for any state", () => {
+    renderMenu();
+    act(() => {
+      // Only the other chat has anything, and its set never reaches this menu.
+      setCommands([command({ id: "other", chatId: "chat-2" })], "chat-2");
+    });
+    expect(trigger$()).toBeNull();
+
+    act(() => {
+      setCommands(
+        [
+          command({
+            id: "mine-done",
+            status: { state: "stopped", stoppedAtMs: 30 },
+          }),
+        ],
+        CHAT_ID,
+      );
+    });
+    // A finished command still belongs to the chat, so the door to it stays.
+    expect(trigger$()).not.toBeNull();
+  });
+
+  it("counts what is running, and says nothing when nothing is", () => {
+    renderMenu();
+    act(() => {
+      setCommands(
+        [
+          command({ id: "r1" }),
+          command({ id: "r2", kind: "shell" }),
+          command({
+            id: "done",
+            status: { state: "stopped", stoppedAtMs: 30 },
+          }),
+        ],
+        CHAT_ID,
+      );
+    });
+
+    expect(
+      screen.getByTestId("managed-command-chat-menu-running").textContent,
+    ).toBe("2");
+
+    act(() => {
+      setCommands(
+        [
+          command({ id: "r1", status: { state: "stopped", stoppedAtMs: 31 } }),
+          command({
+            id: "r2",
+            kind: "shell",
+            status: { state: "stopped", stoppedAtMs: 31 },
+          }),
+          command({
+            id: "done",
+            status: { state: "stopped", stoppedAtMs: 30 },
+          }),
+        ],
+        CHAT_ID,
+      );
+    });
+
+    expect(
+      screen.queryByTestId("managed-command-chat-menu-running"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("managed-command-chat-menu-attention"),
+    ).toBeNull();
+  });
+
+  it("lights attention for a failed shell and a monitor that exited on its own, never for a stop", () => {
+    renderMenu();
+    act(() => {
+      setCommands(
+        [
+          // A shell that failed: its ending is not the one it promised.
+          exited({ id: "shell-failed", kind: "shell" }),
+          // A monitor that exited cleanly is still a watcher that stopped
+          // watching, which is exactly the thing worth being told.
+          exited({
+            id: "monitor-clean-exit",
+            kind: "monitor",
+            status: {
+              state: "exited",
+              exitCode: 0,
+              signal: null,
+              exitedAtMs: 20,
+            },
+          }),
+          // Asked for by a human or an agent: never news.
+          command({
+            id: "stopped-by-someone",
+            status: { state: "stopped", stoppedAtMs: 20 },
+          }),
+          // A clean shell run ended the way it said it would.
+          exited({
+            id: "shell-clean",
+            kind: "shell",
+            status: {
+              state: "exited",
+              exitCode: 0,
+              signal: null,
+              exitedAtMs: 20,
+            },
+          }),
+        ],
+        CHAT_ID,
+      );
+    });
+
+    expect(
+      screen.getByTestId("managed-command-chat-menu-attention").textContent,
+    ).toBe("2");
+  });
+
+  it("lets attention beat running, then clears it once the menu has been opened", () => {
+    renderMenu();
+    act(() => {
+      setCommands(
+        [command({ id: "live" }), exited({ id: "failed", kind: "shell" })],
+        CHAT_ID,
+      );
+    });
+
+    // Both apply; the failure is the thing to say.
+    expect(
+      screen.getByTestId("managed-command-chat-menu-attention").textContent,
+    ).toBe("1");
+    expect(
+      screen.queryByTestId("managed-command-chat-menu-running"),
+    ).toBeNull();
+
+    openMenu();
+    // The row spells the outcome out, so the badge has nothing left to report.
+    expect(
+      screen.getByTestId("managed-command-menu-row-failed").textContent,
+    ).toContain("Exited · code 1");
+    expect(
+      screen.queryByTestId("managed-command-chat-menu-attention"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("managed-command-chat-menu-running").textContent,
+    ).toBe("1");
+  });
+
+  it("does not re-arm another chat's acknowledged failures", () => {
+    renderInChatTile(
+      <DndContext>
+        <ManagedCommandChatMenu
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId="host-1"
+          viewTabId={TAB_ID}
+        />
+        <ManagedCommandChatMenu
+          epicId={EPIC_ID}
+          chatId="chat-2"
+          hostId="host-1"
+          viewTabId={TAB_ID}
+        />
+      </DndContext>,
+    );
+    act(() => {
+      setCommands([exited({ id: "a-failed", kind: "shell" })], CHAT_ID);
+      setCommands(
+        [exited({ id: "b-failed", kind: "shell", chatId: "chat-2" })],
+        "chat-2",
+      );
+    });
+
+    const [menuA, menuB] = screen.getAllByTestId(
+      "managed-command-chat-menu-trigger",
+    );
+    fireEvent.click(menuA);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(menuB);
+
+    // Acknowledgement is one map across every chat, and each menu only ever
+    // knows its own commands - so opening chat B must MERGE rather than
+    // rebuild, or chat A's already-seen failure lights up again.
+    const attention = screen.queryAllByTestId(
+      "managed-command-chat-menu-attention",
+    );
+    expect(attention).toHaveLength(0);
+  });
+
+  it("treats an ending that arrives while the menu is open as seen", () => {
+    renderMenu();
+    act(() => {
+      setCommands([command({ id: "flaky", kind: "shell" })], CHAT_ID);
+    });
+    openMenu();
+
+    // The rows are on screen when the exit lands, so the user watched it
+    // happen - the badge has nothing left to report, open or closed.
+    act(() => {
+      setCommands(
+        [
+          exited({
+            id: "flaky",
+            kind: "shell",
+            status: {
+              state: "exited",
+              exitCode: 2,
+              signal: null,
+              exitedAtMs: 99,
+            },
+            updatedAtMs: 99,
+          }),
+        ],
+        CHAT_ID,
+      );
+    });
+    expect(
+      screen.queryByTestId("managed-command-chat-menu-attention"),
+    ).toBeNull();
+
+    openMenu(); // toggles closed
+    expect(
+      screen
+        .getByTestId("managed-command-chat-menu-trigger")
+        .getAttribute("data-attention"),
+    ).toBe("false");
+  });
+
+  it("re-arms when an acknowledged command fails again after the menu closes", () => {
+    renderMenu();
+    act(() => {
+      setCommands([exited({ id: "flaky", kind: "shell" })], CHAT_ID);
+    });
+    openMenu();
+    expect(
+      screen.queryByTestId("managed-command-chat-menu-attention"),
+    ).toBeNull();
+    openMenu(); // toggles closed
+
+    // A failure nobody had on screen is new news.
+    act(() => {
+      setCommands(
+        [
+          exited({
+            id: "flaky",
+            kind: "shell",
+            status: {
+              state: "exited",
+              exitCode: 2,
+              signal: null,
+              exitedAtMs: 99,
+            },
+            updatedAtMs: 99,
+          }),
+        ],
+        CHAT_ID,
+      );
+    });
+
+    expect(
+      screen.getByTestId("managed-command-chat-menu-attention").textContent,
+    ).toBe("1");
+  });
+
+  it("stays put with an empty state when its last command is deleted while open", () => {
+    renderMenu();
+    act(() => {
+      setCommands([command({ id: "only" })], CHAT_ID);
+    });
+    openMenu();
+
+    act(() => {
+      setCommands([], CHAT_ID);
+    });
+
+    // Removing the button under the pointer that just pressed Delete would
+    // take the popover with it.
+    expect(trigger$()).not.toBeNull();
+    expect(
+      screen.getByTestId("managed-command-chat-menu-empty").textContent,
+    ).toBe("No monitors or shells left");
+  });
+
+  it("opens the command's output window from a row", () => {
+    renderMenu();
+    act(() => {
+      setCommands([command({ id: "door" })], CHAT_ID);
+    });
+    openMenu();
+
+    fireEvent.click(screen.getByTestId("managed-command-menu-row-door"));
+
+    expect(findOpenArtifactInTab(TAB_ID, "door")).not.toBeNull();
+  });
+
+  it("contributes nothing but its trigger, so the composer row can lay it out", () => {
+    const { container } = renderInChatTile(
+      <DndContext>
+        <ManagedCommandChatMenu
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId="host-1"
+          viewTabId={TAB_ID}
+        />
+      </DndContext>,
+    );
+    act(() => {
+      setCommands([command({ id: "only" })], CHAT_ID);
+    });
+
+    // The badge used to hang in an absolutely positioned frame over the
+    // transcript. Now that it lives in the workspace-controls row beside the
+    // context-usage chip, a frame of its own would either hold a slot open
+    // while the chat owns nothing or lift the button out of the row's flow.
+    expect(container.firstElementChild).toBe(
+      screen.getByTestId("managed-command-chat-menu-trigger"),
+    );
+  });
+
+  it("flags a lost host while keeping the last known rows", () => {
+    renderMenu();
+    act(() => {
+      setCommands([command({ id: "frozen" })], CHAT_ID);
+      chatSession(CHAT_ID).setConnectionStatus("open");
+    });
+    openMenu();
+
+    act(() => {
+      chatSession(CHAT_ID).setConnectionStatus("reconnecting");
+    });
+
+    // A dropped stream freezes the menu on its last snapshot. Without a word
+    // for it, a stale list is indistinguishable from a quiet one.
+    expect(
+      screen.getByTestId("managed-command-chat-menu-disconnected"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("managed-command-menu-row-frozen"),
+    ).not.toBeNull();
+  });
+
+  it("offers restart and delete on a finished command, stop on a live one", () => {
+    renderMenu();
+    act(() => {
+      setCommands(
+        [command({ id: "live" }), exited({ id: "over", kind: "shell" })],
+        CHAT_ID,
+      );
+    });
+    openMenu();
+
+    expect(screen.getByTestId("managed-command-stop-live")).not.toBeNull();
+    expect(screen.queryByTestId("managed-command-start-live")).toBeNull();
+    expect(screen.getByTestId("managed-command-start-over")).not.toBeNull();
+    expect(screen.getByTestId("managed-command-delete-over")).not.toBeNull();
   });
 });

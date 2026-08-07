@@ -2,10 +2,12 @@ import type {
   DropPosition,
   EpicTerminalRef,
   GitDiffTileRef,
+  ManagedCommandOutputTileRef,
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import {
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
@@ -43,6 +45,7 @@ export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
 export const WORKSPACE_FOLDER_DND_TYPE = "workspace-folder";
 export const CHAT_ARTIFACT_DND_TYPE = "chat-artifact";
 export const ACTIVE_AGENT_DND_TYPE = "active-agent";
+export const MANAGED_COMMAND_OUTPUT_DND_TYPE = "managed-command-output";
 export const LEFT_PANEL_RAIL_ITEM_DND_TYPE = "left-panel-rail-item";
 export const COMPOSER_ATTACHMENT_DROP_TARGET_TYPE =
   "composer-attachment-drop-target";
@@ -54,6 +57,7 @@ export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   WORKSPACE_FILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
   ACTIVE_AGENT_DND_TYPE,
+  MANAGED_COMMAND_OUTPUT_DND_TYPE,
 ];
 
 export interface RectLike {
@@ -114,6 +118,20 @@ export interface EpicCanvasGitDiffTileDragData {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tile: GitDiffTileRef;
+}
+
+/**
+ * A row in a chat's monitors menu, dragged out to give that command's output
+ * window a place on the canvas. The tile ref is minted at the source (like a
+ * terminal row), and one-window-per-command survives it: the ref's content id
+ * IS the command id, so the drop resolves to a MOVE of the existing window
+ * whenever one is already open.
+ */
+export interface EpicCanvasManagedCommandOutputDragData {
+  readonly kind: typeof MANAGED_COMMAND_OUTPUT_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly tile: ManagedCommandOutputTileRef;
 }
 
 export interface EpicCanvasWorkspaceFileDragData {
@@ -193,6 +211,7 @@ export type EpicCanvasDragSourceData =
   | EpicCanvasWorkspaceFolderDragData
   | EpicCanvasChatArtifactDragData
   | EpicCanvasActiveAgentDragData
+  | EpicCanvasManagedCommandOutputDragData
   | EpicCanvasLeftPanelRailDragData;
 
 /**
@@ -365,6 +384,10 @@ export function getGitDiffTileDragId(tileId: string): string {
   return `git-diff-tile:${tileId}`;
 }
 
+export function getManagedCommandOutputDragId(commandId: string): string {
+  return `managed-command-output:${commandId}`;
+}
+
 export function getWorkspaceFileDragId(fileId: string): string {
   return `workspace-file:${fileId}`;
 }
@@ -523,6 +546,17 @@ function readTerminalTileSource(
   return { kind: TERMINAL_TILE_DND_TYPE, ...scope, tile: ref };
 }
 
+function readManagedCommandOutputSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  const ref = parseTileRef(value.tile);
+  if (scope === null || ref === null || !isManagedCommandOutputTileRef(ref)) {
+    return null;
+  }
+  return { kind: MANAGED_COMMAND_OUTPUT_DND_TYPE, ...scope, tile: ref };
+}
+
 function readWorkspaceFileSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
@@ -657,6 +691,8 @@ export function readEpicCanvasDragSourceData(
   if (value.kind === CHAT_ARTIFACT_DND_TYPE)
     return readChatArtifactSource(value);
   if (value.kind === ACTIVE_AGENT_DND_TYPE) return readActiveAgentSource(value);
+  if (value.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE)
+    return readManagedCommandOutputSource(value);
   if (value.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE)
     return readLeftPanelRailItemSource(value);
   return null;
