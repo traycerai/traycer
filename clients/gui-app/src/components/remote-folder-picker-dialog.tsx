@@ -148,7 +148,7 @@ function RemoteFolderPickerBody(): ReactNode {
 
   const recentEntries = readRecentShortcuts(rawInput, recentsQuery.data);
 
-  const shownInput = readShownInput(rawInput, data);
+  const shownInput = readShownInput(rawInput, data, effectiveHome);
   const filteredEntries = useMemo(
     () =>
       filterEntries(
@@ -777,13 +777,19 @@ function parentOf(path: string): string {
   return index < rootLength ? path.slice(0, rootLength) : path.slice(0, index);
 }
 
-/** Field text when unedited: the current location with a trailing slash. */
+/** Field text when unedited: the current location with a trailing separator. */
 function readShownInput(
   rawInput: string | null,
   data: WorkspaceBrowseFoldersResponse | undefined,
+  homePath: string | null,
 ): string {
   if (rawInput !== null) return rawInput;
-  return data !== undefined ? withTrailingSeparator(data.directoryPath) : "";
+  if (data !== undefined) return withTrailingSeparator(data.directoryPath);
+  // The root listing FAILED but `getHomeDir` answered - the supported
+  // unlistable-home case. Add is armed with that home, so it has to be
+  // visible: showing a blank field under an enabled Add would submit a path
+  // the user was never shown. `readAddTarget` falls back the same way.
+  return homePath === null ? "" : withTrailingSeparator(homePath);
 }
 
 /**

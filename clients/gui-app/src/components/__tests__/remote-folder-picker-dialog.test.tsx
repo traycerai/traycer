@@ -629,6 +629,32 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
   });
 
+  it("shows the getHomeDir fallback rather than arming Add over a blank field", async () => {
+    // Root listing fails, getHomeDir answers - the supported unlistable-home
+    // case. Add falls back to that home, so the field must show it: an enabled
+    // Add over an empty field would submit a path never displayed.
+    queryByPath.set(pathKey(null), {
+      data: undefined,
+      isPending: false,
+      error: new Error(
+        "Access to this folder is denied on the host machine (System Settings > Privacy & Security on the host Mac)",
+      ),
+      refetch: () => Promise.resolve(),
+    });
+    reportedHomeDir = "/Users/tester";
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findByTestId("remote-folder-picker-path");
+    expect(pathInput().value).toBe("/Users/tester/");
+    expect(
+      screen.getByTestId("remote-folder-picker-add").hasAttribute("disabled"),
+    ).toBe(false);
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/Users/tester");
+  });
+
   it("expands ~ off getHomeDir when the home listing never answers", async () => {
     // The whole point of reading getHomeDir separately: home is unlistable, so
     // the root browse can never teach the field where `~` points - but Add
