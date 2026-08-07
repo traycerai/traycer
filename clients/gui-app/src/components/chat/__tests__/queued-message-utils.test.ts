@@ -119,6 +119,8 @@ describe("queueItemCanPauseFromQueueHeader", () => {
       commandId: "command-1",
       description: "bun test --watch",
       commandKind: "monitor",
+      delivery: "next_turn",
+      targetTurnId: null,
       status: "pending",
       createdAt: 1,
       updatedAt: 1,
