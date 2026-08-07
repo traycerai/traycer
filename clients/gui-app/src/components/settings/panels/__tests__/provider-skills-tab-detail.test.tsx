@@ -46,6 +46,17 @@ const skillMocks = vi.hoisted(() => ({
   },
 }));
 
+// Detail suite is about open/remove/readFile — not scope switching. Stub the
+// shared hook so F5's workspace resolution does not require a QueryClient.
+// Dynamic import: `vi.mock` is hoisted above static imports.
+vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
+  const { GLOBAL_ONLY_NATIVE_SCOPE } =
+    await import("@/components/settings/panels/__tests__/provider-native-scope-test-mocks");
+  return {
+    useProviderNativeScope: () => GLOBAL_ONLY_NATIVE_SCOPE,
+  };
+});
+
 vi.mock("@/hooks/providers/use-providers-skills-list-query", () => ({
   useProvidersSkillsList: () => ({
     data: { skills: skillMocks.skills },
@@ -194,6 +205,55 @@ describe("<ProviderSkillsTab /> skill detail", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("shows the empty-list copy when no skills are installed", () => {
+    skillMocks.skills = [];
+    renderTab();
+
+    expect(screen.getByText("No skills yet")).toBeDefined();
+    expect(
+      screen.getByRole("textbox", { name: "Search skills" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/No skills match/)).toBeNull();
+  });
+
+  it("distinguishes an unmatched query from a truly empty skill list", () => {
+    skillMocks.skills = [
+      FIND_SKILLS,
+      {
+        name: "release-notes",
+        description: "Write release notes from a changeset.",
+        path: "/Users/dev/.traycer/managed-skills/release-notes",
+        source: "managed",
+      },
+    ];
+    renderTab();
+
+    expect(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Open release-notes (Built-in)" }),
+    ).toBeDefined();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search skills" }), {
+      target: { value: "zzzz-nope" },
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Open find-skills (Shared)" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open release-notes (Built-in)" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "No skills yet. Create one or import from a git URL / folder.",
+      ),
+    ).toBeNull();
+    expect(screen.getByText("No skills match “zzzz-nope”.")).toBeDefined();
+    expect(screen.getByRole("status").textContent).toBe("No skills match.");
   });
 
   // Rows are keyed `source:path`, so the SAME name under two roots is a shape

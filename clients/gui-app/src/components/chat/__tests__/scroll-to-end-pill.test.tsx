@@ -37,6 +37,7 @@ describe("ScrollToEndPill", () => {
     renderPill({ kind: "streaming", workingVerb: "Noodling" });
 
     expect(screen.getByTestId("scroll-to-end-pill-spinner")).toBeTruthy();
+    expect(screen.getByTestId("scroll-to-end-pill-chevron")).toBeTruthy();
     expect(screen.getByText("Noodling…")).toBeTruthy();
   });
 

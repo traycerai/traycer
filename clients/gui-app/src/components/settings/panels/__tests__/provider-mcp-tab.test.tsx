@@ -347,17 +347,31 @@ function connectedServer(
   };
 }
 
-function renderTab(
+function renderTabWithCliBinary(
   caps: ProviderMcpCapabilities,
   providerId: "codex" | "cursor" | "kimi",
+  cliBinaryResolved: boolean,
 ) {
   return render(
     <ProviderMcpTab
       providerId={providerId}
       capabilities={caps}
       providerLabel={providerId}
+      cliBinaryResolved={cliBinaryResolved}
     />,
   );
+}
+
+/**
+ * The ordinary case: the host resolved a CLI binary, so nothing is gated away
+ * and the tab renders its full affordances. Cases about the binary-absent gate
+ * call {@link renderTabWithCliBinary} directly.
+ */
+function renderTab(
+  caps: ProviderMcpCapabilities,
+  providerId: "codex" | "cursor" | "kimi",
+) {
+  return renderTabWithCliBinary(caps, providerId, true);
 }
 
 /**
@@ -939,23 +953,66 @@ describe("<ProviderMcpTab />", () => {
     ).toBeDefined();
   });
 
-  it("hides Edit when actionScopes.update is empty", () => {
-    const noUpdateCaps: ProviderMcpCapabilities = {
-      ...FULL_CAPS,
-      actionScopes: {
-        ...FULL_CAPS.actionScopes,
-        update: [],
-      },
-    };
+  // F4: every production contract sets updateServer: "none" and update: [].
+  // The pencil/edit path was maintained dead code; it is removed rather than
+  // wired. When a provider implements update, restore the affordance and this
+  // assertion (see provider-mcp-tab canUpdate comment).
+  it("does not render Edit even when a test double advertises update scopes", () => {
     mcpMocks.listResult.data = { servers: [connectedServer({})] };
-    renderTab(noUpdateCaps, "codex");
+    renderTab(FULL_CAPS, "codex");
     expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
   });
 
-  it("shows Edit when actionScopes.update includes current scope", () => {
-    mcpMocks.listResult.data = { servers: [connectedServer({})] };
+  // F4: realistic multi-row list — Edit must stay gone on every server name,
+  // not only the single-server double above. Delete/Add remain the live
+  // affordances.
+  it("does not render Edit on any realistic server row while Add and Delete stay", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({
+          name: "github",
+          transport: {
+            type: "http",
+            url: "https://mcp.github.com",
+            auth: null,
+          },
+          status: "needs_auth",
+          tools: [],
+        }),
+        connectedServer({
+          name: "local-stdio",
+          transport: {
+            type: "stdio",
+            command: "npx",
+            env: null,
+          },
+          status: "connected",
+          tools: [],
+        }),
+      ],
+    };
     renderTab(FULL_CAPS, "codex");
-    expect(screen.getByRole("button", { name: /Edit context7/ })).toBeDefined();
+
+    for (const name of ["context7", "github", "local-stdio"] as const) {
+      expect(
+        screen.queryByRole("button", { name: new RegExp(`Edit ${name}`) }),
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: new RegExp(`Delete ${name}`) }),
+      ).toBeDefined();
+    }
+
+    // Add still mounts a dialog fixed in mode="add" (no editTarget restore).
+    fireEvent.click(screen.getByRole("button", { name: /Add MCP server/ }));
+    const dialog = screen.getByTestId("provider-mcp-add-dialog");
+    expect(dialog).toBeDefined();
+    expect(
+      within(dialog).getByRole("button", { name: /Add server/ }),
+    ).toBeDefined();
+    // Edit-mode copy would say "Save" / "Update server"; add mode does not.
+    expect(within(dialog).queryByRole("button", { name: /Save/ })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /Update/ })).toBeNull();
   });
 
   it("hides Add/Delete/auth/discover on Project when actionScopes only allow them for Global", () => {
@@ -1332,8 +1389,15 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.getByText(/<redacted>/)).toBeDefined();
   });
 
-  it("shows Traycer sessions only note when descriptor flag is set", () => {
-    mcpMocks.listResult.data = { servers: [] };
+  /*
+   * The caveat rides the bulk-toggle controls now, not a banner over the whole
+   * tab - so it only exists once a server is expanded, and its text lives in a
+   * tooltip. Asserting the trigger's accessible name rather than opening the
+   * tooltip keeps this a placement test; Radix renders the content into a
+   * portal only while open.
+   */
+  it("offers the Traycer-sessions-only caveat beside the bulk tool toggles", () => {
+    mcpMocks.listResult.data = { servers: [connectedServer({})] };
     renderTab(
       {
         ...FULL_CAPS,
@@ -1341,6 +1405,145 @@ describe("<ProviderMcpTab />", () => {
       },
       "codex",
     );
-    expect(screen.getByText(/Traycer sessions only/)).toBeDefined();
+
+    expect(screen.queryByText(/Traycer sessions only/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand context7/ }));
+
+    expect(screen.getByRole("button", { name: "Enable all" })).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: "Where tool enable/disable applies",
+      }),
+    ).toBeDefined();
+  });
+
+  it("omits the caveat when the provider does not scope tool toggles", () => {
+    mcpMocks.listResult.data = { servers: [connectedServer({})] };
+    renderTab(FULL_CAPS, "codex");
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand context7/ }));
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Where tool enable/disable applies",
+      }),
+    ).toBeNull();
+  });
+
+  it("shows the empty list copy when no servers are configured", () => {
+    mcpMocks.listResult.data = { servers: [] };
+    renderTab(FULL_CAPS, "codex");
+
+    expect(screen.getByText("No MCP servers")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Add an MCP server so codex can use external tools and context.",
+      ),
+    ).toBeDefined();
+    // Search is still offered so an empty host does not hide the affordance,
+    // but the empty-list copy must not be replaced by a "no match" state.
+    expect(
+      screen.getByRole("textbox", { name: "Search servers" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/No servers match/)).toBeNull();
+  });
+
+  it("distinguishes an unmatched query from a truly empty server list", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({ name: "github" }),
+      ],
+    };
+    renderTab(FULL_CAPS, "codex");
+
+    expect(screen.getByText("context7")).toBeDefined();
+    expect(screen.getByText("github")).toBeDefined();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search servers" }), {
+      target: { value: "zzzz-nope" },
+    });
+
+    expect(screen.queryByText("context7")).toBeNull();
+    expect(screen.queryByText("github")).toBeNull();
+    expect(screen.queryByText("No MCP servers")).toBeNull();
+    expect(screen.getByText("No servers match “zzzz-nope”.")).toBeDefined();
+    expect(screen.getByRole("status").textContent).toBe("No servers match.");
+  });
+
+  it("filters the server list and announces how many remain", () => {
+    mcpMocks.listResult.data = {
+      servers: [
+        connectedServer({ name: "context7" }),
+        connectedServer({ name: "github" }),
+      ],
+    };
+    renderTab(FULL_CAPS, "codex");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search servers" }), {
+      target: { value: "contxt7" },
+    });
+
+    expect(screen.getByText("context7")).toBeDefined();
+    expect(screen.queryByText("github")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("1 server shown.");
+  });
+
+  /**
+   * The shape `applyBinaryAbsentGate` hands the client when it could not
+   * resolve a CLI: the write verbs' scope lists are emptied while the ROUTING
+   * fields (`addServer`/`removeServer`) keep saying "cli" - which is the only
+   * evidence the client has that something was subtracted rather than never
+   * offered.
+   */
+  const BINARY_ABSENT_CAPS: ProviderMcpCapabilities = {
+    ...FULL_CAPS,
+    authActions: [],
+    actionScopes: {
+      ...FULL_CAPS.actionScopes,
+      add: [],
+      remove: [],
+      auth: [],
+    },
+  };
+
+  describe("binary-absent gate", () => {
+    it("explains the missing write actions instead of silently dropping them", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer({})] };
+      renderTabWithCliBinary(BINARY_ABSENT_CAPS, "codex", false);
+
+      // The regression this guards: servers listed, Add gone, and nothing
+      // anywhere saying why or what to do about it.
+      expect(
+        screen.queryByRole("button", { name: "Add MCP server" }),
+      ).toBeNull();
+      const notice = screen.getByTestId("mcp-binary-absent-notice");
+      expect(notice.textContent).toContain("couldn't find the codex CLI");
+      expect(notice.textContent).toContain("adding and removing");
+      expect(notice.textContent).toContain("CLI & Args");
+    });
+
+    it("stays silent when the host resolved a binary", () => {
+      mcpMocks.listResult.data = { servers: [connectedServer({})] };
+      renderTabWithCliBinary(FULL_CAPS, "codex", true);
+
+      expect(screen.queryByTestId("mcp-binary-absent-notice")).toBeNull();
+    });
+
+    it("does not accuse a provider whose write verbs were never CLI-routed", () => {
+      // Cursor patches its config file, so an absent binary takes nothing this
+      // notice can prove. Claiming otherwise would be a guess, and the empty
+      // `authActions` it DOES leave behind is indistinguishable from a contract
+      // that never had auth actions at all.
+      mcpMocks.listResult.data = { servers: [connectedServer({})] };
+      renderTabWithCliBinary(
+        { ...CURSOR_CAPS, addServer: "patch", removeServer: "patch" },
+        "cursor",
+        false,
+      );
+
+      expect(screen.queryByTestId("mcp-binary-absent-notice")).toBeNull();
+    });
   });
 });

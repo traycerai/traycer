@@ -29,7 +29,9 @@ interface ScrollToEndPillProps {
  * Floating "scroll to end" pill. Sibling of the scroll container, absolute-
  * positioned bottom-center so its geometry is decoupled from the scroller's
  * content. It fades in/out via opacity + pointer-events so it never traps
- * focus or clicks while hidden. The
+ * focus or clicks while hidden. A restrained border separates it from the
+ * chat without adding a heavy shadow; the persistent chevron keeps the action
+ * clear even when the visible label describes live work. The
  * accessible name stays fixed to the pill's ACTION ("Scroll to end") across
  * every state - only the decorative visible label changes.
  */
@@ -52,8 +54,8 @@ export function ScrollToEndPill({
       tabIndex={visible ? 0 : -1}
       style={{ bottom: bottomOffsetPx }}
       className={cn(
-        "pointer-events-auto absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/60 bg-card px-3 py-1 text-muted-foreground text-xs shadow-sm",
-        "transition-opacity duration-150 hover:border-border hover:text-foreground",
+        "pointer-events-auto absolute left-1/2 z-10 flex h-8 -translate-x-1/2 select-none items-center gap-2 whitespace-nowrap rounded-full border border-foreground/20 bg-[color-mix(in_oklch,var(--foreground)_9%,var(--background))] px-3.5 font-medium text-foreground/85 text-ui-xs",
+        "outline-none transition-[opacity,background-color,border-color,box-shadow,color] duration-150 hover:border-foreground/30 hover:bg-[color-mix(in_oklch,var(--foreground)_12%,var(--background))] hover:text-foreground focus-visible:border-ring/70 focus-visible:ring-2 focus-visible:ring-ring/70",
         "[.traycer-panel-resizing_&]:pointer-events-none [.traycer-panel-resizing_&]:opacity-0",
         visible ? "opacity-100" : "pointer-events-none opacity-0",
       )}
@@ -64,10 +66,13 @@ export function ScrollToEndPill({
           testId="scroll-to-end-pill-spinner"
           variant={undefined}
         />
-      ) : (
-        <ChevronDown className="size-3.5" aria-hidden />
-      )}
+      ) : null}
       <span>{scrollToEndPillLabel(state)}</span>
+      <ChevronDown
+        className="size-4 shrink-0 opacity-70"
+        aria-hidden
+        data-testid="scroll-to-end-pill-chevron"
+      />
     </button>
   );
 }
