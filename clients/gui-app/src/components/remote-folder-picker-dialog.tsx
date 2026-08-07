@@ -125,6 +125,13 @@ function RemoteFolderPickerBody(): ReactNode {
     enabled: parsed.valid,
   });
   const data = parsed.valid ? query.data : undefined;
+  // A FAILED REFETCH keeps the last successful `data` in the cache (this
+  // query is `staleTime: 10_000`, so stepping back into a directory serves
+  // cache and refetches behind it). The listing renders no rows at all while
+  // this is set, so navigation has to agree with what is on screen - counting
+  // the stale rows below would let the arrow keys address option ids that are
+  // not rendered and let Enter open a directory the user cannot see.
+  const listingError = parsed.valid ? query.error : null;
 
   // Derived-state adjustment during render (React's sanctioned pattern):
   // remember the home directory as soon as the root response is in.
@@ -140,8 +147,12 @@ function RemoteFolderPickerBody(): ReactNode {
 
   const shownInput = readShownInput(rawInput, data);
   const filteredEntries = useMemo(
-    () => filterEntries(data?.entries, parsed.filter),
-    [data?.entries, parsed.filter],
+    () =>
+      filterEntries(
+        listingError !== null ? undefined : data?.entries,
+        parsed.filter,
+      ),
+    [listingError, data?.entries, parsed.filter],
   );
   const upPath = readUpPath(data, parsed);
   // Row 0 is the ".." row whenever there is somewhere to go up to.
@@ -154,11 +165,11 @@ function RemoteFolderPickerBody(): ReactNode {
   };
 
   const enterEntry = (entry: WorkspaceBrowseFolderEntry): void => {
-    setPath(`${entry.path}/`);
+    setPath(withTrailingSeparator(entry.path));
   };
 
   const goUp = (): void => {
-    if (upPath !== null) setPath(upPath === "/" ? "/" : `${upPath}/`);
+    if (upPath !== null) setPath(withTrailingSeparator(upPath));
   };
 
   const addTarget = readAddTarget(rawInput, effectiveHome, data);
@@ -255,7 +266,7 @@ function RemoteFolderPickerBody(): ReactNode {
         <RemoteFolderPickerListing
           invalid={!parsed.valid}
           isPending={parsed.valid ? query.isPending : false}
-          error={parsed.valid ? query.error : null}
+          error={listingError}
           entries={data === undefined ? undefined : filteredEntries}
           upPresent={upPath !== null}
           selectedIndex={clampedIndex}
@@ -624,8 +635,73 @@ const INVALID_INPUT: ParsedBrowseInput = {
 };
 
 /**
- * Split the field into the directory to browse (up to the last `/`) and the
- * live filter after it, expanding a leading `~` against the host home. An
+ * Paths here are HOST-native, not client-native: `workspace.browseFolders`
+ * runs on the host and answers in whatever that OS writes, so a Windows host
+ * sends `C:\Users\alice` and a POSIX host sends `/Users/alice`. The picker
+ * therefore accepts BOTH separators everywhere and echoes back the one a path
+ * is already written with.
+ *
+ * It never has to CONVERT: Windows accepts `/` as a separator too, so a path
+ * the user types with forward slashes still resolves on the host, and mixing
+ * them (`~/proj` expanded against `C:\Users\alice`) is fine.
+ */
+const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
+
+/** `\\server\share` - the shortest thing on a UNC path that is still a root. */
+const WINDOWS_UNC_ROOT = /^\\\\[^\\/]+[\\/][^\\/]+/;
+
+function isAbsolutePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    WINDOWS_DRIVE_ROOT.test(path) ||
+    WINDOWS_UNC_ROOT.test(path)
+  );
+}
+
+/**
+ * Length of the leading run that navigation may never chop into: `/`, `C:\`,
+ * or `\\server\share`. Without it, going up from `C:\Users` would land on
+ * `C:` (a drive-relative path, not a folder) instead of stopping at `C:\`.
+ */
+function rootLengthOf(path: string): number {
+  const unc = WINDOWS_UNC_ROOT.exec(path);
+  if (unc !== null) return unc[0].length;
+  if (WINDOWS_DRIVE_ROOT.test(path)) return 3;
+  return 1;
+}
+
+function lastSeparatorIndex(path: string): number {
+  return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+}
+
+/**
+ * The separator a path already uses. A POSIX absolute path always wins, so a
+ * directory legitimately NAMED with a backslash cannot flip the whole path to
+ * Windows separators.
+ */
+function separatorOf(path: string): string {
+  if (path.startsWith("/")) return "/";
+  return path.includes("\\") ? "\\" : "/";
+}
+
+/** Descending appends a separator; a root already ends in one. */
+function withTrailingSeparator(path: string): string {
+  return path.endsWith("/") || path.endsWith("\\")
+    ? path
+    : path + separatorOf(path);
+}
+
+function isTildeOnly(raw: string): boolean {
+  return raw === "~" || raw === "~/" || raw === "~\\";
+}
+
+function startsWithTilde(path: string): boolean {
+  return path.startsWith("~/") || path.startsWith("~\\");
+}
+
+/**
+ * Split the field into the directory to browse (up to the last separator) and
+ * the live filter after it, expanding a leading `~` against the host home. An
  * unedited field (null) browses the home directory unfiltered.
  */
 function parseBrowseInput(
@@ -636,11 +712,11 @@ function parseBrowseInput(
     return { valid: true, directoryPath: null, filter: "" };
   }
   const raw = rawInput.trim();
-  if (raw === "" || raw === "~" || raw === "~/") {
+  if (raw === "" || isTildeOnly(raw)) {
     return { valid: true, directoryPath: null, filter: "" };
   }
   let path = raw;
-  if (path.startsWith("~/")) {
+  if (startsWithTilde(path)) {
     // Home not learned yet: keep the root browse running (it is the only
     // request that can teach us home), unfiltered; the next render reparses
     // once the response lands.
@@ -649,9 +725,13 @@ function parseBrowseInput(
     }
     path = homePath + path.slice(1);
   }
-  if (!path.startsWith("/")) return INVALID_INPUT;
-  const lastSlash = path.lastIndexOf("/");
-  const directory = lastSlash === 0 ? "/" : path.slice(0, lastSlash);
+  if (!isAbsolutePath(path)) return INVALID_INPUT;
+  const lastSlash = lastSeparatorIndex(path);
+  const rootLength = rootLengthOf(path);
+  const directory =
+    lastSlash < rootLength
+      ? path.slice(0, rootLength)
+      : path.slice(0, lastSlash);
   return {
     valid: true,
     directoryPath: directory,
@@ -675,8 +755,11 @@ function readRecentShortcuts(
 }
 
 function parentOf(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index <= 0 ? "/" : path.slice(0, index);
+  const rootLength = rootLengthOf(path);
+  const index = lastSeparatorIndex(path);
+  // At (or inside) the root the parent is the root itself - the fixpoint the
+  // caller reads as "nowhere further up".
+  return index < rootLength ? path.slice(0, rootLength) : path.slice(0, index);
 }
 
 /** Field text when unedited: the current location with a trailing slash. */
@@ -685,7 +768,7 @@ function readShownInput(
   data: WorkspaceBrowseFoldersResponse | undefined,
 ): string {
   if (rawInput !== null) return rawInput;
-  return data !== undefined ? `${data.directoryPath}/` : "";
+  return data !== undefined ? withTrailingSeparator(data.directoryPath) : "";
 }
 
 /**
@@ -737,15 +820,18 @@ function readAddTarget(
   if (rawInput === null) return data?.directoryPath ?? homePath;
   const raw = rawInput.trim();
   if (raw === "") return null;
-  if (raw === "~" || raw === "~/")
-    return homePath ?? data?.directoryPath ?? null;
+  if (isTildeOnly(raw)) return homePath ?? data?.directoryPath ?? null;
   let path = raw;
-  if (path.startsWith("~/")) {
+  if (startsWithTilde(path)) {
     if (homePath === null) return null;
     path = homePath + path.slice(1);
   }
-  if (!path.startsWith("/")) return null;
-  while (path.length > 1 && path.endsWith("/")) {
+  if (!isAbsolutePath(path)) return null;
+  const rootLength = rootLengthOf(path);
+  while (
+    path.length > rootLength &&
+    (path.endsWith("/") || path.endsWith("\\"))
+  ) {
     path = path.slice(0, -1);
   }
   return path;
