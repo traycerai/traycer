@@ -867,14 +867,24 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       against an `attemptId` that names nothing there. Removal is
       attempt-guarded for the same class of reason: every teardown resolves
       asynchronously, so a late cancel must not delete the record of the newer
-      attempt that legitimately replaced it. `attemptId` is also what makes a
-      resumed panel honest:
+      attempt that legitimately replaced it.
+      - **Two lookups, deliberately not one.**
+        `findModelProviderPendingAuth` answers "which row should re-open BY
+        ITSELF" (newest on this host+provider); `getModelProviderPendingAuth`
+        answers "does the row the user just clicked have an attempt" (exact
+        full key). Two upstream providers can each hold a live attempt at once,
+        so collapsing them made the OLDER of the two restart-only: its record
+        sat in the store and the host held its server lease, but the only
+        lookup available could never name it.
+
+      `attemptId` is also what makes a resumed panel honest:
       attempts are single-flight per `(providerId, modelProviderId)` and a newer
       one supersedes the pending one, so a panel polling by key alone would be
       handed the newer attempt's status as its own. The tab adopts a stored
       attempt during RENDER, guarded on the entry map's identity - the same
       pattern as the MCP tab's `useResumeOauthPolling`, and what makes the panel
       re-openable across navigation yet still dismissible.
+
     - **Two OAuth arms, and neither is faked.** `code` shows the provider's own
       `instructions` verbatim plus a paste field; `auto` completes on the
       server's loopback and shows a waiting state with a bounded poll and a
@@ -893,6 +903,17 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         settlement rather than on a `setInterval`: an interval keeps firing
         through a slow request, stacking concurrent polls on one attempt — each
         re-leasing the managed server this whole design exists to stop churning.
+      - **A terminal failure REPORTED BY A POLL ends the attempt.** The same
+        `report` disposition means opposite things depending on who asked: from
+        a submit it is advice against an attempt the host is still holding, so
+        the panel stays put and the user can try again; from a status read it is
+        a post-mortem, because the host only answers that way once the
+        background callback has already failed and released its lease. Applying
+        it identically left the panel saying "Waiting" against a settled row
+        forever, with nothing further to arrive and no live attempt for Stop
+        waiting to cancel. `applyResult` therefore takes the call context, and a
+        polled `report` clears the attempt (attempt-id guarded), stops the poll,
+        and returns to a fresh start with the reason kept on screen.
       - **Stop waiting keeps the attempt until the host CONFIRMS.** An
         optimistic teardown left a live host attempt holding a server lease with
         no surface able to retry when the cancel failed in transport. A

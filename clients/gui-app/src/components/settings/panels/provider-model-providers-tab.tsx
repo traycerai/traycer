@@ -27,6 +27,7 @@ import { providerPackPreparingLabel } from "@/components/providers/provider-pack
 import type { ModelProviderPendingAuthEntry } from "@/stores/settings/model-provider-pending-auth-store";
 import {
   findModelProviderPendingAuth,
+  getModelProviderPendingAuth,
   useModelProviderPendingAuthStore,
 } from "@/stores/settings/model-provider-pending-auth-store";
 import {
@@ -152,14 +153,16 @@ export function ProviderModelProvidersTab(props: {
   );
   const searchActive = isProviderListSearchActive(searchQuery);
 
-  const resumedAttempt = findModelProviderPendingAuth(pendingAuthEntries, {
+  // Which row should re-open BY ITSELF after a navigation. Newest wins; it
+  // decides nothing about the row the user opens by hand.
+  const autoAdoptAttempt = findModelProviderPendingAuth(pendingAuthEntries, {
     providerId,
     hostId,
   });
 
   useResumedConnectTarget({
     entries: pendingAuthEntries,
-    resumed: resumedAttempt,
+    resumed: autoAdoptAttempt,
     connectTargetId,
     onAdopt: setConnectTargetId,
   });
@@ -168,6 +171,20 @@ export function ProviderModelProvidersTab(props: {
     connectTargetId === null
       ? null
       : (entries.find((entry) => entry.id === connectTargetId) ?? null);
+
+  // The attempt belonging to THIS row, looked up by its full key rather than
+  // taken from the auto-adopt candidate. With two live attempts on one host,
+  // the candidate is the newer one - so reading it here made the older row's
+  // live attempt restart-only, even though its record was sitting in the store
+  // and the host was still holding its server lease.
+  const resumedForTarget =
+    connectTarget === null || hostId === null
+      ? null
+      : getModelProviderPendingAuth(pendingAuthEntries, {
+          hostId,
+          providerId,
+          modelProviderId: connectTarget.id,
+        });
 
   const handleDisconnect = useCallback(() => {
     const target = disconnectTarget;
@@ -256,12 +273,7 @@ export function ProviderModelProvidersTab(props: {
           entry={connectTarget}
           capabilities={capabilities}
           hostId={hostId}
-          resumedAttempt={
-            resumedAttempt !== null &&
-            resumedAttempt.key.modelProviderId === connectTarget.id
-              ? resumedAttempt
-              : null
-          }
+          resumedAttempt={resumedForTarget}
           onDone={() => {
             setConnectTargetId(null);
           }}

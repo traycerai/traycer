@@ -643,6 +643,84 @@ describe("OAuth auto flow", () => {
     expect(mocks.awaitCalls).toHaveLength(1);
   });
 
+  it.each([
+    ["provider_auth_failed", "OpenCode rejected the sign-in"],
+    ["server_unavailable", "the server went away"],
+  ] as const)(
+    "ends the attempt when a poll reports a terminal %s",
+    (code, detail) => {
+      // The host only answers a status read this way once the background
+      // callback has already failed and released its lease - the row is
+      // settled. Reporting it while the panel keeps saying "Waiting" strands
+      // the user: nothing further arrives, and Stop waiting has no live
+      // attempt left to cancel.
+      vi.useFakeTimers();
+      renderDialog({
+        entry: OAUTH_ONLY,
+        capabilities: FULL_CAPS,
+        onDone: vi.fn(),
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      settle(mocks.authCalls[0], {
+        kind: "authorizationUrl",
+        attemptId: "attempt-1",
+        authorizationUrl: "https://example.test/auth",
+        method: "auto",
+        instructions: null,
+      });
+
+      act(() => {
+        vi.advanceTimersByTime(1_600);
+      });
+      settle(mocks.awaitCalls[0], { kind: "error", code, detail });
+
+      // Back to a fresh start, with the reason kept on screen.
+      expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+      expect(screen.getByText(detail)).toBeTruthy();
+      expect(
+        screen.queryByText("Waiting for the browser to finish signing in"),
+      ).toBeNull();
+      expect(useModelProviderPendingAuthStore.getState().entries).toEqual({});
+
+      // And the poll is stopped, not merely quiet for one tick.
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(mocks.awaitCalls).toHaveLength(1);
+    },
+  );
+
+  it("keeps a submit-code failure ADVISORY, with the attempt still live", () => {
+    // The same disposition, the opposite meaning: a submit reports against an
+    // attempt the host is still holding, so the user can act on it again.
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    settle(mocks.authCalls[0], {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/device",
+      method: "code",
+      instructions: null,
+    });
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
+      target: { value: "some-code" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    settle(mocks.authCalls[1], {
+      kind: "error",
+      code: "provider_auth_failed",
+      detail: "the provider refused it",
+    });
+
+    expect(screen.getByLabelText("Paste the code")).toBeTruthy();
+    expect(screen.getByText("the provider refused it")).toBeTruthy();
+    expect(useModelProviderPendingAuthStore.getState().entries).not.toEqual({});
+  });
+
   it("stops waiting on cancel and drops the pending attempt", () => {
     vi.useFakeTimers();
     renderDialog({

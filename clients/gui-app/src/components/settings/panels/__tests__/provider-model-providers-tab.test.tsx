@@ -400,6 +400,95 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
   });
 });
 
+describe("ProviderModelProvidersTab resume", () => {
+  function seedAttempt(args: {
+    readonly modelProviderId: string;
+    readonly attemptId: string;
+    readonly startedAt: number;
+  }): void {
+    useModelProviderPendingAuthStore.getState().upsert({
+      key: {
+        hostId: "host-1",
+        providerId: "opencode",
+        modelProviderId: args.modelProviderId,
+      },
+      attemptId: args.attemptId,
+      startedAt: args.startedAt,
+      authorizationUrl: `https://example.test/${args.modelProviderId}`,
+      method: "auto",
+      instructions: null,
+    });
+  }
+
+  const TWO_ROWS: ModelProvidersListResult = {
+    ok: true,
+    providers: [
+      entry({
+        id: "anthropic",
+        name: "Anthropic",
+        methods: [{ type: "oauth", label: "Sign in", prompts: [] }],
+      }),
+      entry({
+        id: "openai",
+        name: "OpenAI",
+        methods: [{ type: "oauth", label: "Sign in", prompts: [] }],
+      }),
+    ],
+  };
+
+  it("auto-adopts the NEWER attempt, and still resumes the older row on click", () => {
+    // Two upstream providers can each hold a live attempt at once - the host's
+    // single-flight rule is per (providerId, modelProviderId). The newest is
+    // what re-opens by itself; the older one must still be reachable, or its
+    // live attempt is restart-only while the host holds its server lease.
+    seedAttempt({
+      modelProviderId: "anthropic",
+      attemptId: "older",
+      startedAt: 1_000,
+    });
+    seedAttempt({
+      modelProviderId: "openai",
+      attemptId: "newer",
+      startedAt: 2_000,
+    });
+    renderTab({ result: TWO_ROWS, capabilities: FULL_CAPS });
+
+    // The newer attempt claimed the surface on mount.
+    expect(screen.getByText("Connect OpenAI")).toBeTruthy();
+    expect(
+      screen.getByText("Waiting for the browser to finish signing in"),
+    ).toBeTruthy();
+
+    // Dismiss it, then open the OLDER row by hand.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Connect/ })[0]);
+
+    // Resumed, not restarted: the waiting panel, not the sign-in form.
+    expect(screen.getByText("Connect Anthropic")).toBeTruthy();
+    expect(
+      screen.getByText("Waiting for the browser to finish signing in"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+  });
+
+  it("opens a row with no attempt on the sign-in form", () => {
+    seedAttempt({
+      modelProviderId: "openai",
+      attemptId: "newer",
+      startedAt: 2_000,
+    });
+    renderTab({ result: TWO_ROWS, capabilities: FULL_CAPS });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Connect/ })[0]);
+    expect(screen.getByText("Connect Anthropic")).toBeTruthy();
+    // The sign-in FORM, not a resumed waiting panel.
+    expect(screen.getByLabelText("API key")).toBeTruthy();
+    expect(
+      screen.queryByText("Waiting for the browser to finish signing in"),
+    ).toBeNull();
+  });
+});
+
 describe("ProviderModelProvidersTab layout", () => {
   it("sizes the catalog fluidly, capped against the viewport", () => {
     // jsdom has no layout engine, so the mechanism is asserted structurally:

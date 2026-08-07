@@ -96,16 +96,20 @@ export function modelProviderPendingAuthKeyString(
 }
 
 /**
- * The attempt to resume when the Model Providers tab mounts for one provider on
- * one host: the most recently started of that host+provider's live attempts.
+ * The attempt the tab AUTO-ADOPTS on mount: the most recently started of one
+ * host+provider's live attempts.
  *
- * Matching is EXACT on `hostId` and `providerId` - never "the first row in the
- * map" - because the map spans every host and every Traycer provider, and two
- * different upstream providers on the same host can each hold a live attempt at
- * once (the host's single-flight rule is per `(providerId, modelProviderId)`).
- * Newest wins so the choice is deterministic and lands on the flow the user was
- * most recently in; the caller still matches `modelProviderId` before handing
- * the record to a dialog, so a row never resumes another row's attempt.
+ * Two different upstream providers on the same host can each hold a live
+ * attempt (the host's single-flight rule is per `(providerId,
+ * modelProviderId)`), so this has to pick one, and newest wins - it is the flow
+ * the user was most recently in, and it is deterministic where "first row in
+ * the map" was an accident of insertion order.
+ *
+ * This answers "which row should re-open by itself", NOT "does the row the user
+ * just clicked have an attempt". That second question is
+ * {@link getModelProviderPendingAuth}, and conflating them is what left the
+ * older of two live attempts unreachable: it existed in the store, but the only
+ * lookup was one that could never name it.
  */
 export function findModelProviderPendingAuth(
   entries: Readonly<Record<string, ModelProviderPendingAuthEntry>>,
@@ -120,4 +124,21 @@ export function findModelProviderPendingAuth(
     if (newest === null || entry.startedAt > newest.startedAt) newest = entry;
   }
   return newest;
+}
+
+/**
+ * The attempt belonging to ONE row, by its full key.
+ *
+ * Separate from {@link findModelProviderPendingAuth} on purpose. The tab uses
+ * that one to decide which row re-opens by itself and this one for whichever
+ * row the user actually opened - so an older live attempt stays resumable
+ * instead of being restart-only just because a newer attempt for a different
+ * provider exists.
+ */
+export function getModelProviderPendingAuth(
+  entries: Readonly<Record<string, ModelProviderPendingAuthEntry>>,
+  key: ModelProviderPendingAuthKey,
+): ModelProviderPendingAuthEntry | null {
+  const id = keyString(key);
+  return Object.hasOwn(entries, id) ? entries[id] : null;
 }

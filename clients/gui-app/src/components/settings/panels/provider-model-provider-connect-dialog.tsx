@@ -206,9 +206,12 @@ export function ProviderModelProviderConnectDialog(props: {
    * It deliberately CANNOT reach the browser. Opening the sign-in page belongs
    * to {@link applyStartResult} alone - see its note for why a status tick that
    * carries an `authorizationUrl` must not be treated as a fresh start.
+   *
+   * `fromPoll` exists because ONE disposition means different things depending
+   * on who asked. See the `report` arm.
    */
   const applyResult = useCallback(
-    (result: ModelProviderAuthResult) => {
+    (result: ModelProviderAuthResult, fromPoll: boolean) => {
       switch (result.kind) {
         case "done":
           if (liveAttemptId !== null) forgetAttempt(liveAttemptId);
@@ -272,6 +275,19 @@ export function ProviderModelProviderConnectDialog(props: {
               setErrorMessage(message);
               return;
             case "report":
+              // A `report` from a SUBMIT is advice: the attempt is untouched
+              // and the user can try again against it. A `report` from a POLL
+              // is a post-mortem - the host only answers a status read this way
+              // once the attempt has already terminalized (the background
+              // callback failed, its lease was released, the row is settled).
+              // Leaving the panel "Waiting" on that answer strands the user
+              // forever: nothing further will ever arrive, and Stop waiting has
+              // no live attempt left to cancel.
+              if (fromPoll) {
+                if (liveAttemptId !== null) forgetAttempt(liveAttemptId);
+                setRestartNotice(message);
+                return;
+              }
               setErrorMessage(message);
               return;
           }
@@ -295,7 +311,7 @@ export function ProviderModelProviderConnectDialog(props: {
    */
   const applyStartResult = useCallback(
     (result: ModelProviderAuthResult) => {
-      applyResult(result);
+      applyResult(result, false);
       if (result.kind !== "authorizationUrl") return;
       if (pendingKey !== null) {
         pendingAuthUpsert({
@@ -320,7 +336,7 @@ export function ProviderModelProviderConnectDialog(props: {
    */
   const applyPollResult = useCallback(
     (result: ModelProviderAuthResult) => {
-      applyResult(result);
+      applyResult(result, true);
       if (result.kind !== "authorizationUrl" || pendingKey === null) return;
       const stored = pendingAuthGet(pendingKey);
       // Only refresh OUR OWN record. A tick that races a newer attempt's upsert
@@ -445,7 +461,7 @@ export function ProviderModelProviderConnectDialog(props: {
           inputs,
         },
       },
-      { onSuccess: (data) => applyResult(data.result) },
+      { onSuccess: (data) => applyResult(data.result, false) },
     );
   }, [
     answers,
@@ -471,7 +487,7 @@ export function ProviderModelProviderConnectDialog(props: {
           code: code.trim(),
         },
       },
-      { onSuccess: (data) => applyResult(data.result) },
+      { onSuccess: (data) => applyResult(data.result, false) },
     );
   }, [applyResult, attempt, auth, code, entry.id, providerId]);
 
@@ -504,7 +520,7 @@ export function ProviderModelProviderConnectDialog(props: {
           // Nothing was pending: the attempt had already settled, expired or
           // been superseded while the click was in flight, and `result` says
           // which. That one IS a real outcome.
-          applyResult(data.result);
+          applyResult(data.result, false);
         },
         onError: () => {
           // Keep the panel and the record: the host may still hold this
