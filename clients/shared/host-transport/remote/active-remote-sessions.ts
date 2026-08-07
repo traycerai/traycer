@@ -65,6 +65,31 @@ export interface RemoteSessionIdentity {
    * hit. So the two never share a physical connection.
    */
   readonly authRecovery: "revalidate" | "terminal";
+  /**
+   * Which auth context the session's creator was wired to - see
+   * `createRemoteHostTransport`, which derives it from the bearer source.
+   *
+   * Part of the identity for the same reason as `authRecovery`, and it is the
+   * keep-warm linger that makes it load-bearing. The factory captures its
+   * creator's bearer provider, grant provider and auth revalidator, and a
+   * cache hit never re-runs it. Without the linger those closures could only
+   * ever be adopted by a consumer overlapping in time with the creator, so a
+   * live creator vouched for them. A lingering session has NO consumers, so it
+   * can outlive the context that built it: sign out and back into the same
+   * account inside the window and every field above is identical, yet the
+   * adopted session still mints through the previous context's released
+   * credential lease. It fails closed rather than reusing a stale credential
+   * (`CredentialLease.getBearerToken()` throws once released, which the
+   * transport maps to a pre-dial failure) - but it fails PERMANENTLY: the
+   * socket may look fine until its next drop and then never re-attach.
+   *
+   * Keyed on the bearer SOURCE, not the token: same-user refresh rotates the
+   * lease in place (`RequestContextProvider.rotateCurrentBearer`) and does not
+   * emit a fresh context, so a token refresh keeps sharing the connection.
+   * Only a genuine context transition re-keys, which is exactly when adopting
+   * would be wrong.
+   */
+  readonly authEpoch: string;
 }
 
 interface CacheEntry {
@@ -122,6 +147,7 @@ export function remoteSessionCacheKey(identity: RemoteSessionIdentity): string {
     identity.hostPublicKey,
     identity.relayAttachUrl,
     identity.authRecovery,
+    identity.authEpoch,
   ].join(KEY_SEPARATOR);
 }
 

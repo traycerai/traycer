@@ -358,6 +358,26 @@ describe("HostClient", () => {
     expect(events[0].reason).toBe("availability-recovered");
   });
 
+  it("un-strands the ACTIVE host's scope without announcing a change", () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+    client.bind(mockLocalHostEntry);
+    invalidator.calls.length = 0;
+    invalidator.options.length = 0;
+    events.length = 0;
+
+    // The caller is a remote binding that owes a ready boundary for a host
+    // which became active mid-dial. It must still deliver - the active stream
+    // runtime replays nothing to a session that is already ready, so a dropped
+    // boundary strands those queries for good - but it must NOT announce, or
+    // the runtime answers the change by resetting the very binding reporting
+    // the recovery.
+    client.invalidateHostScopeForAvailability("mock-local");
+
+    expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(events).toEqual([]);
+  });
+
   it("delegates unary requests to the bound messenger", async () => {
     const { client, messenger } = buildHostClientWithMock();
     client.bind(mockLocalHostEntry);

@@ -1,6 +1,9 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type {
+  BearerSourceProvider,
+  OpenFrameBearerSource,
+} from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
@@ -94,6 +97,9 @@ export function createRemoteHostTransport<
       // factory below never runs, so `auth` would otherwise be silently
       // inherited from whichever consumer happened to build the session first.
       authRecovery: options.auth === null ? "terminal" : "revalidate",
+      // Same reasoning applied to WHICH auth context wired those closures, not
+      // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
+      authEpoch: authEpochFor(options.bearer),
     },
     () => {
       const grantProvider = createAttachGrantProvider({
@@ -124,6 +130,39 @@ export function createRemoteHostTransport<
 }
 
 /** Reads the current user bearer string from the shared bearer source. */
+/**
+ * Stable per-auth-context label for the session cache key.
+ *
+ * Identity is taken from the bearer SOURCE OBJECT rather than the token it
+ * currently holds, because the two change on different events: a same-user
+ * refresh rotates the token inside the existing lease (so the object, and
+ * therefore this label, is unchanged and the connection keeps being shared),
+ * while a real context transition - sign-out/sign-in, a rebuilt host runtime -
+ * hands over a different lease and so a different label.
+ *
+ * A `WeakMap` both keeps the label stable for repeat acquires by the same
+ * context and lets a retired lease be collected; the counter only ever needs
+ * to be distinct, never meaningful. `null` (no bearer available) gets its own
+ * fixed label - such a session cannot dial at all, so all of them may share.
+ */
+const authEpochLabels = new WeakMap<OpenFrameBearerSource, string>();
+let nextAuthEpoch = 0;
+
+function authEpochFor(bearer: BearerSourceProvider): string {
+  const source = bearer();
+  if (source === null) {
+    return "no-bearer";
+  }
+  const existing = authEpochLabels.get(source);
+  if (existing !== undefined) {
+    return existing;
+  }
+  nextAuthEpoch += 1;
+  const label = `lease-${nextAuthEpoch}`;
+  authEpochLabels.set(source, label);
+  return label;
+}
+
 function deriveBearerToken(bearer: BearerSourceProvider): string | null {
   const source = bearer();
   if (source === null) {

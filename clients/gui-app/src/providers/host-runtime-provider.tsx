@@ -232,19 +232,29 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
               requestId,
               // Un-strands queries that errored while this binding's remote
               // session was still dialing (a Settings host-picker selection
-              // has no other session holder). NON-active hosts only: the
-              // active host's evidence is owned by the stream-runtime wiring
-              // over the SAME shared session, and the active variant of the
-              // notify emits a host-change event - which the `onChange`
-              // subscription below answers with `runtimeMessenger.reset()`,
-              // so routing the active host through here would tear this very
-              // binding down as a side effect of its own good news.
+              // has no other session holder). A non-active host takes the
+              // announcing notify; an active one is invalidated directly,
+              // because the active variant emits a host-change event - which
+              // the `onChange` subscription below answers with
+              // `runtimeMessenger.reset()`, tearing this very binding down as
+              // a side effect of its own good news. Steady state for an active
+              // host is still owned by the stream-runtime wiring over the SAME
+              // shared session; this path only covers the promoted-mid-dial
+              // window, before that wiring exists to hear anything.
               onRemoteAvailabilityRecovered: (hostId) => {
                 if (runtime === null) {
                   return;
                 }
                 const active = runtime.hostClient.getActiveHost();
                 if (active !== null && active.hostId === hostId) {
+                  // Promoted to active while this dial was still in flight, so
+                  // the active stream-runtime wiring may not have attached yet
+                  // - and it never replays, so waiting for it to own this
+                  // boundary can strand the queries forever. Deliver the
+                  // invalidation directly instead: same un-stranding, minus the
+                  // active-change announcement that would reset this binding as
+                  // a side effect of its own good news.
+                  runtime.hostClient.invalidateHostScopeForAvailability(hostId);
                   return;
                 }
                 runtime.hostClient.notifyHostAvailabilityRecovered(hostId);

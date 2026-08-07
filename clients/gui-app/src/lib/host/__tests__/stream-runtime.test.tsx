@@ -201,6 +201,7 @@ function fakeRemoteSession(): FakeRemoteSession {
 
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
+const FIXTURE_AUTH_EPOCH = "lease-fixture-1";
 
 function remoteIdentity(publicKey: string): RemoteSessionIdentity {
   return {
@@ -210,6 +211,9 @@ function remoteIdentity(publicKey: string): RemoteSessionIdentity {
     relayAttachUrl: RELAY_URL,
     // The stream runtime always supplies the app revalidator.
     authRecovery: "revalidate",
+    // One signed-in context for the whole fixture, so sharing is decided by
+    // the fields under test rather than by an auth-context transition.
+    authEpoch: FIXTURE_AUTH_EPOCH,
   };
 }
 
@@ -433,6 +437,7 @@ describe("HostStreamProvider", () => {
             hostPublicKey: options.hostPublicKey,
             relayAttachUrl: options.relayAttachUrl,
             authRecovery: "revalidate",
+            authEpoch: FIXTURE_AUTH_EPOCH,
           },
           options.hostPublicKey === "pubkey-a"
             ? () => sessionForKeyA

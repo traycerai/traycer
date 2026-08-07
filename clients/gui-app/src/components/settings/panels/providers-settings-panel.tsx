@@ -470,6 +470,14 @@ function ProvidersPanelBody({
     // exists. So local falls through to the actionable card, which at worst
     // shows a recoverable fault with a way out and is replaced the moment a
     // recovery invalidation does land.
+    //
+    // A remote host that dialed and then went TERMINAL - an incompatible
+    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // owes no boundary either, and would strand this spinner just as badly.
+    // That case never reaches here: `RemoteSession.sendUnary` rejects a closed
+    // session as a non-retryable `HostTransportFailureError`, precisely so the
+    // class keeps meaning "still dialing" at this branch. The spinner's promise
+    // is only as good as that invariant, so it is enforced at the session.
     if (
       query.error instanceof RetryableTransportError &&
       !isSelectedHostLocal

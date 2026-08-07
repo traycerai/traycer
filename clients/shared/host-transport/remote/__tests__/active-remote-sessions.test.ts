@@ -75,6 +75,7 @@ function freshIdentity(): RemoteSessionIdentity {
     hostPublicKey: `pubkey-${nextHostId}`,
     relayAttachUrl: `wss://relay.test/attach-${nextHostId}`,
     authRecovery: "revalidate",
+    authEpoch: "lease-1",
   };
 }
 
@@ -672,5 +673,61 @@ describe("auth-recovery policy is part of the session identity", () => {
 
     expect(staleDurable.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(durable.hostId)).toBe(false);
+  });
+
+  it("never warm-adopts a lingering session across an AUTH-CONTEXT change", () => {
+    // Sign out and back into the same account inside the linger window. Every
+    // other identity field is identical - same user, same host, same key, same
+    // relay - so without `authEpoch` this is a warm hit, and the adopted
+    // session keeps minting through the PREVIOUS context's released credential
+    // lease: it can look alive until its next drop and then never re-attach.
+    let builds = 0;
+    const firstContext = freshIdentity();
+    const firstSession = fakeSession();
+    acquireRemoteSession(firstContext, () => {
+      builds += 1;
+      return firstSession;
+    }).close();
+    expect(builds).toBe(1);
+
+    // Still lingering (not yet torn down) - so a same-epoch re-acquire here
+    // WOULD adopt it. That is what makes the assertion below about the epoch
+    // and not merely about timing.
+    expect(firstSession.closeCalls).toBe(0);
+
+    const secondContext: RemoteSessionIdentity = {
+      ...firstContext,
+      authEpoch: "lease-2",
+    };
+    acquireRemoteSession(secondContext, () => {
+      builds += 1;
+      return fakeSession();
+    });
+
+    // Ran its OWN factory rather than inheriting the dead context's closures.
+    expect(builds).toBe(2);
+  });
+
+  it("still shares one connection across a token refresh within a context", () => {
+    // The other half of the rule, and the reason the epoch is keyed on the
+    // bearer SOURCE rather than the token: a same-user refresh rotates the
+    // lease in place and emits no new context, so the epoch is unchanged and
+    // the connection must keep being shared. Keying on the token would make
+    // every refresh silently re-dial.
+    let builds = 0;
+    const identity = freshIdentity();
+    const shared = fakeSession();
+    const first = acquireRemoteSession(identity, () => {
+      builds += 1;
+      return shared;
+    });
+    const second = acquireRemoteSession(identity, () => {
+      builds += 1;
+      return fakeSession();
+    });
+
+    expect(builds).toBe(1);
+    first.close();
+    second.close();
   });
 });

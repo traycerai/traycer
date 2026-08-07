@@ -28,6 +28,10 @@ import {
   encodeMuxFrame,
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "../../host-messenger";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type {
   IStreamWebSocketFactory,
@@ -895,4 +899,50 @@ describe("RemoteSession dial-failure logging", () => {
     },
     TEST_BUDGET_MS,
   );
+
+  it("rejects on a TERMINAL session as a non-retryable transport failure", async () => {
+    // "Not ready" covers two opposite futures. A dialing session will become
+    // ready; a closed one never will - `close()` is terminal and `start()`
+    // only re-dials from idle. Calling both retryable makes the retry wrapper
+    // spend its whole budget on a session that cannot answer, and makes any UI
+    // reading the class as "still connecting" wait for a ready boundary no one
+    // will ever emit (the Providers panel did exactly that).
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    session.close();
+    expect(session.isClosed()).toBe(true);
+
+    const error: unknown = await session.sendUnary("host.status", {}).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+  });
+
+  it("still rejects a session that is merely DIALING as retryable", async () => {
+    // The other side of the same branch, so the change above reads as a
+    // narrowing rather than a blanket downgrade: a session on its way to ready
+    // keeps its retry license, which is what the pre-send no-dispatch
+    // guarantee exists for.
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      expect(session.isReady()).toBe(false);
+      expect(session.isClosed()).toBe(false);
+
+      const error: unknown = await session.sendUnary("host.status", {}).then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+
+      expect(error).toBeInstanceOf(RetryableTransportError);
+    } finally {
+      session.close();
+    }
+  });
 });

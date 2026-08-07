@@ -28,6 +28,7 @@ import type {
 import type { TimerHandle } from "../timer-handle";
 import {
   HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -344,9 +345,22 @@ export class RemoteSession<
   /**
    * Issues a single unary RPC over the session (single-flight, no post-send
    * auto-retry — local parity). Rejects with a `RetryableTransportError` only
-   * when the session is not yet ready (provably pre-send, safe to retry); any
-   * failure after the request frame is enqueued surfaces as a plain
-   * `HostRpcError`, since the host may already have begun applying it.
+   * when the session is not yet ready AND can still get there (provably
+   * pre-send, safe to retry); any failure after the request frame is enqueued
+   * surfaces as a plain `HostRpcError`, since the host may already have begun
+   * applying it.
+   *
+   * A CLOSED session is not-ready too, but it is never going to become ready:
+   * `close()` is terminal (a rejected credential, a plan restriction, an
+   * incompatible handshake, or the reconnect cap), and `start()` above only
+   * re-dials from `idle`. Calling that "retryable" would be a lie with real
+   * consequences - `createRetryingMessenger` would burn its whole budget on a
+   * session that cannot answer, and a UI that reads the class as "still
+   * dialing" (the Providers panel) would park on a spinner waiting for a ready
+   * boundary no one will ever emit. So a terminal session degrades to the
+   * non-retryable `HostTransportFailureError`, exactly as
+   * `HostRequestAbortedError` does for a disposed request authority: still a
+   * transport fault, no longer a promise that waiting will help.
    */
   sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
@@ -356,14 +370,19 @@ export class RemoteSession<
     const requestId = this.options.requestId();
     const connection = this.connection;
     if (this.phase !== "ready" || connection === null) {
+      const notReady = {
+        code: "RPC_ERROR" as const,
+        message: this.isClosed()
+          ? "Remote session is closed"
+          : "Remote session is not ready",
+        requestId,
+        method,
+        fatalDetails: null,
+      };
       return Promise.reject(
-        new RetryableTransportError({
-          code: "RPC_ERROR",
-          message: "Remote session is not ready",
-          requestId,
-          method,
-          fatalDetails: null,
-        }),
+        this.isClosed()
+          ? new HostTransportFailureError(notReady)
+          : new RetryableTransportError(notReady),
       );
     }
     const hostManifest = connection.hostManifest;

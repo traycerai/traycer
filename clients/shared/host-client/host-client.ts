@@ -328,6 +328,26 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   /**
+   * The un-stranding half of {@link notifyHostAvailabilityRecovered} WITHOUT
+   * the active-host change announcement - the same host-scope invalidation the
+   * non-active branch above performs, for a host that happens to be active.
+   *
+   * Exists for one caller: a remote binding that owes a ready boundary for a
+   * host which became active while its first dial was still in flight. Routing
+   * that through the active-host path would emit a `"availability-recovered"`
+   * change event, and the runtime answers a change by resetting the very
+   * binding delivering the news. Dropping it instead is not an option either -
+   * `subscribeAvailabilityRecovered` reports a RECOVERY, not current state, so
+   * the active stream runtime attaching afterwards to an already-ready session
+   * gets no replay and the queries stranded by that dial never refetch.
+   */
+  invalidateHostScopeForAvailability(hostId: string): void {
+    this.invalidator.invalidateHostScope(hostId, {
+      refetchActive: true,
+    });
+  }
+
+  /**
    * Updates the `RequestContext` the messenger threads onto outgoing
    * requests. An identity transition (the previous and next contexts have
    * different `userId`s, OR one side is `null`) invalidates the
