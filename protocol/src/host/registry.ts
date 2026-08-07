@@ -215,14 +215,19 @@ import {
   hostGetRateLimitUsageV20,
   hostGetRateLimitUsageV21,
   hostGetRateLimitUsageV30,
+  hostGetRateLimitUsageV40,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
   hostGetRateLimitUsageUpgradeV20ToV21,
   hostGetRateLimitUsageUpgradeV21ToV30,
+  hostGetRateLimitUsageUpgradeV30ToV40,
   hostGetRateLimitUsageDowngradeV2ToV1,
   hostGetRateLimitUsageDowngradeV3ToV2,
   hostGetRateLimitUsageDowngradeV3ToV1,
+  hostGetRateLimitUsageDowngradeV4ToV1,
+  hostGetRateLimitUsageDowngradeV4ToV2,
+  hostGetRateLimitUsageDowngradeV4ToV3,
   providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
@@ -3115,6 +3120,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {
         2: hostGetRateLimitUsageDowngradeV3ToV2,
         1: hostGetRateLimitUsageDowngradeV3ToV1,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV40,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV30ToV40,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostGetRateLimitUsageDowngradeV4ToV1,
+        2: hostGetRateLimitUsageDowngradeV4ToV2,
+        3: hostGetRateLimitUsageDowngradeV4ToV3,
       },
     },
   },
