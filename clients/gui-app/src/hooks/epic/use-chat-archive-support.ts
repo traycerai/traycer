@@ -16,7 +16,7 @@ export const SET_CHAT_ARCHIVED_METHOD = "epic.setChatArchived";
  * `epic.setChatArchived` is registered OFF the released floor with
  * `degrade: { kind: "unsupported" }`, so a host predating it negotiates the
  * method away rather than failing the handshake - and every archive affordance
- * (row hover button, row-menu entry, "Show archived") has to disappear on such
+ * (row hover button, row-menu entry, archive visibility filter) disappears on such
  * a host instead of offering an action that cannot work.
  *
  * Scoped to the surrounding Epic session's owning host, matching
@@ -39,7 +39,7 @@ export function useChatArchiveSupported(): boolean {
  * Hiding and revealing are gated differently, and deliberately so. Every
  * archive *affordance* is hidden unless support is positively known
  * (`useChatArchiveSupported`, fail-closed). But hiding rows on a host that is
- * KNOWN to lack the method would strand them: the "Show archived" toggle, the
+ * KNOWN to lack the method would strand them: the archive visibility filter, the
  * Unarchive entry and the empty-state hint are all capability-gated, so a row
  * archived on a newer host and then seen from an older one would be invisible
  * with nothing left to bring it back. Archived records must never become

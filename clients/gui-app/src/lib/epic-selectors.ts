@@ -1349,6 +1349,47 @@ export function useEpicNodeArchived(nodeId: string): boolean {
 }
 
 /**
+ * Provider-optional counterpart to {@link useEpicNodeArchived} for canvas tab
+ * icons. The shared tab icon also renders in provider-less drag previews and
+ * graph surfaces, so it resolves the epic through the session registry and
+ * degrades to active when that epic has no mounted session.
+ *
+ * The selected boolean is narrow on purpose: streaming/title churn elsewhere
+ * in the epic must not repaint every open tab.
+ */
+export function useRegisteredEpicNodeArchived(
+  epicId: string,
+  nodeId: string,
+): boolean {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveEpicNodeArchivedFromHandle(handle, nodeId),
+    () => false,
+  );
+}
+
+function liveEpicNodeArchivedFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  nodeId: string,
+): boolean {
+  if (handle === null) return false;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, nodeId)) {
+    return state.chats.byId[nodeId].archivedAt !== null;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, nodeId)) {
+    return state.tuiAgents.byId[nodeId].archivedAt !== null;
+  }
+  return false;
+}
+
+/**
  * A row's last-activity time, read from the CHAT / TERMINAL-AGENT PROJECTION
  * rather than from its `TreeNode`.
  *
