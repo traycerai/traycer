@@ -25,49 +25,60 @@ describe("ScrollToEndPill", () => {
     ];
 
     for (const state of states) {
-      const { container, unmount } = renderPill(state);
-      expect(
-        container.querySelector("button")?.getAttribute("aria-label"),
-      ).toBe("Scroll to end");
+      const { unmount } = renderPill(state);
+      const pill =
+        state.kind === "hidden"
+          ? screen.getByRole<HTMLButtonElement>("button", { hidden: true })
+          : screen.getByRole<HTMLButtonElement>("button", {
+              name: "Scroll to end",
+            });
+      expect(pill.getAttribute("aria-label")).toBe("Scroll to end");
       unmount();
     }
   });
 
   it("renders only the three-dot wave in the streaming state", () => {
-    const { container } = renderPill({ kind: "streaming" });
+    renderPill({ kind: "streaming" });
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Scroll to end",
+    });
 
     expect(
       screen.getByTestId("scroll-to-end-pill-streaming-dots"),
     ).toBeTruthy();
-    expect(container.querySelector("button")?.textContent).toBe("");
+    expect(pill.textContent).toBe("");
   });
 
   it("renders only the down arrow for new replies", () => {
-    const { container } = renderPill({ kind: "new-reply" });
+    renderPill({ kind: "new-reply" });
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Scroll to end",
+    });
 
-    expect(container.querySelector("svg.lucide-arrow-down")).toBeTruthy();
-    expect(container.querySelector("button")?.textContent).toBe("");
+    expect(pill.querySelector("svg.lucide-arrow-down")).toBeTruthy();
+    expect(pill.textContent).toBe("");
     expect(
       screen.queryByTestId("scroll-to-end-pill-streaming-dots"),
     ).toBeNull();
   });
 
   it("uses a compact circle and animates its presence", () => {
-    const { container } = renderPill({ kind: "plain" });
-    const pill = container.querySelector("button");
+    renderPill({ kind: "plain" });
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Scroll to end",
+    });
 
-    expect(pill?.classList.contains("size-8")).toBe(true);
-    expect(pill?.classList.contains("scale-100")).toBe(true);
-    expect(pill?.classList.contains("opacity-100")).toBe(true);
+    expect(pill.classList.contains("size-8")).toBe(true);
+    expect(pill.classList.contains("scale-100")).toBe(true);
+    expect(pill.classList.contains("opacity-100")).toBe(true);
   });
 
   it("hides interaction when hidden (tabIndex -1, opacity-0, pointer-events-none)", () => {
     const { onClick } = renderPill({ kind: "hidden" });
 
-    const pill = document.querySelector("button");
-    if (!(pill instanceof HTMLButtonElement)) {
-      throw new Error("Expected hidden scroll-to-end button");
-    }
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      hidden: true,
+    });
     expect(pill.getAttribute("aria-hidden")).toBe("true");
     expect(screen.queryByRole("button", { name: "Scroll to end" })).toBeNull();
     expect(pill.tabIndex).toBe(-1);

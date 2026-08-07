@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useLayoutEffect } from "react";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 
 function ShortcutOwner(props: {
@@ -7,6 +8,18 @@ function ShortcutOwner(props: {
   readonly action: () => void;
 }) {
   usePrimaryActionShortcut(props.active, props.action);
+  return null;
+}
+
+function ShortcutOwnerWithLayoutDispatch(props: {
+  readonly action: () => void;
+  readonly dispatch: boolean;
+}) {
+  usePrimaryActionShortcut(true, props.action);
+  useLayoutEffect(() => {
+    if (!props.dispatch) return;
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+  }, [props.dispatch]);
   return null;
 }
 
@@ -49,5 +62,23 @@ describe("usePrimaryActionShortcut", () => {
     fireEvent.keyDown(window, { key: "Enter", metaKey: true, repeat: true });
 
     expect(action).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the action before a layout effect can dispatch the shortcut", () => {
+    const previousAction = vi.fn();
+    const nextAction = vi.fn();
+    const view = render(
+      <ShortcutOwnerWithLayoutDispatch
+        action={previousAction}
+        dispatch={false}
+      />,
+    );
+
+    view.rerender(
+      <ShortcutOwnerWithLayoutDispatch action={nextAction} dispatch />,
+    );
+
+    expect(previousAction).not.toHaveBeenCalled();
+    expect(nextAction).toHaveBeenCalledTimes(1);
   });
 });

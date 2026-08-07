@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 type PrimaryActionGetter = () => () => void;
 
@@ -54,7 +54,7 @@ export function usePrimaryActionShortcut(
   action: () => void,
 ): void {
   const actionRef = useRef(action);
-  useEffect(() => {
+  useLayoutEffect(() => {
     actionRef.current = action;
   }, [action]);
 
