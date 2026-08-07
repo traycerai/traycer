@@ -31,9 +31,10 @@ import {
   useModelProviderPendingAuthStore,
 } from "@/stores/settings/model-provider-pending-auth-store";
 import {
-  SOURCE_BADGE_HINT,
-  SOURCE_BADGE_LABEL,
+  readOnlySourceLabel,
   sortModelProviderEntries,
+  sourceBadgeHint,
+  sourceBadgeLabel,
 } from "./model-provider-connect-model";
 import {
   filterModelProviders,
@@ -414,6 +415,7 @@ function ModelProvidersBody(props: {
         <ModelProviderRow
           key={entry.id}
           entry={entry}
+          providerLabel={props.providerLabel}
           canDisconnect={props.canDisconnect}
           connectable={props.connectable}
           busy={props.busyModelProviderId === entry.id}
@@ -437,6 +439,7 @@ function ModelProvidersBody(props: {
 
 function ModelProviderRow(props: {
   readonly entry: ModelProviderEntry;
+  readonly providerLabel: string;
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
   readonly busy: boolean;
@@ -460,6 +463,8 @@ function ModelProviderRow(props: {
   // where the credential actually comes from.
   const externallyManaged =
     entry.connected && entry.source !== null && entry.source !== "api";
+  const readOnlyLabel =
+    entry.source === null ? null : readOnlySourceLabel(entry.source);
   return (
     <li className="rounded-lg border border-border/60">
       <div className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5">
@@ -481,7 +486,7 @@ function ModelProviderRow(props: {
           </span>
           {entry.source !== null ? (
             <TooltipWrapper
-              label={SOURCE_BADGE_HINT[entry.source]}
+              label={sourceBadgeHint(entry.source, props.providerLabel)}
               side="top"
               sideOffset={undefined}
               align={undefined}
@@ -490,16 +495,16 @@ function ModelProviderRow(props: {
                 variant="outline"
                 className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
               >
-                {SOURCE_BADGE_LABEL[entry.source]}
+                {sourceBadgeLabel(entry.source, props.providerLabel)}
               </Badge>
             </TooltipWrapper>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {props.busy ? <MutedAgentSpinner /> : null}
-          {externallyManaged ? (
+          {externallyManaged && readOnlyLabel !== null ? (
             <span className="text-ui-xs text-muted-foreground">
-              Managed outside Traycer
+              {readOnlyLabel}
             </span>
           ) : null}
           {props.connectable && !externallyManaged ? (
@@ -515,16 +520,38 @@ function ModelProviderRow(props: {
             </Button>
           ) : null}
           {showDisconnect ? (
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              disabled={props.busy}
-              onClick={props.onDisconnect}
-              aria-label={`Remove ${entry.name} credential`}
+            // Destructive INTENT on hover, matching the icon-level pattern the
+            // rest of Settings uses for a delete affordance
+            // (`provider-cli-candidates-section`, `env-override-editor`): a
+            // quiet control that turns red only under the pointer, rather than
+            // a permanently-red button sitting in a list of neutral rows.
+            //
+            // The tooltip names what is actually removed - the key in the
+            // provider's store - because "disconnect" is not guaranteed: an
+            // env var or config block underneath can take over the moment the
+            // stored key is gone, and the row would come back connected from
+            // another source.
+            <TooltipWrapper
+              label="Remove saved key"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Unplug className="size-3.5" />
-            </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className={cn(
+                  "text-muted-foreground",
+                  "hover:bg-destructive/10 hover:text-destructive",
+                )}
+                disabled={props.busy}
+                onClick={props.onDisconnect}
+                aria-label={`Remove saved ${entry.name} key`}
+              >
+                <Unplug className="size-3.5" />
+              </Button>
+            </TooltipWrapper>
           ) : null}
         </div>
       </div>

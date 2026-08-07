@@ -31,23 +31,74 @@ export function sortModelProviderEntries(
   });
 }
 
-export const SOURCE_BADGE_LABEL: Readonly<Record<ModelProviderSource, string>> =
-  {
-    api: "Saved in Traycer",
-    env: "Environment",
-    config: "Config file",
-    custom: "Plugin",
-  };
+/**
+ * Where the credential in effect comes from, as a badge.
+ *
+ * `api` is provider-named rather than "Saved in Traycer", and the distinction
+ * is factual, not cosmetic: a key entered here is written to the PROVIDER's own
+ * credential store (OpenCode's `auth.json`, via `auth.set`) and never mirrored
+ * into Traycer's config. That was a deliberate plan decision - it is what keeps
+ * `opencode auth login` and this tab interchangeable - so a badge claiming
+ * Traycer holds the key would have described the one thing the design went out
+ * of its way not to do.
+ */
+export function sourceBadgeLabel(
+  source: ModelProviderSource,
+  providerLabel: string,
+): string {
+  switch (source) {
+    case "api":
+      return `Saved in ${providerLabel}`;
+    case "env":
+      return "Environment";
+    case "config":
+      return "Config file";
+    case "custom":
+      return "Plugin";
+  }
+}
 
-export const SOURCE_BADGE_HINT: Readonly<Record<ModelProviderSource, string>> =
-  {
-    api: "This credential was saved from here and can be removed from here.",
-    env: "This credential comes from an environment variable, so it's managed outside Traycer.",
-    config:
-      "This credential comes from an OpenCode config file, so it's managed outside Traycer.",
-    custom:
-      "This credential comes from a provider plugin, so it's managed outside Traycer.",
-  };
+export function sourceBadgeHint(
+  source: ModelProviderSource,
+  providerLabel: string,
+): string {
+  switch (source) {
+    case "api":
+      return `This key is stored in ${providerLabel}'s own credential store, shared with its CLI, and can be removed from here.`;
+    case "env":
+      return "This credential comes from an environment variable, so it's managed outside Traycer.";
+    case "config":
+      return `This credential comes from a ${providerLabel} config file, so it's managed outside Traycer.`;
+    case "custom":
+      return "This credential comes from a provider plugin, so it's managed outside Traycer.";
+  }
+}
+
+/**
+ * What a read-only row says on its trailing edge, or null for a credential
+ * Traycer itself stored (which is not read-only and has buttons instead).
+ *
+ * It names the CONTROLLING PARTY as a fact, not the restriction that follows
+ * from it. The badge beside the name already says where the credential comes
+ * from, so a line reading "Managed outside Traycer" spent the row's last words
+ * repeating that in the negative - telling the user what they cannot do here
+ * rather than who owns it. `config` and `custom` share a line on purpose:
+ * both resolve to something the user edits in OpenCode's own files, and the
+ * badge is what distinguishes them.
+ */
+export function readOnlySourceLabel(
+  source: ModelProviderSource,
+): string | null {
+  switch (source) {
+    case "env":
+      return "Set by environment";
+    case "config":
+    case "custom":
+      return "Set in config file";
+    case "api":
+      return null;
+  }
+}
 
 /**
  * One selectable way to sign in.

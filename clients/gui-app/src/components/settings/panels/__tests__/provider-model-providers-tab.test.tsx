@@ -261,7 +261,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getByText("Saved in Traycer")).toBeTruthy();
+    expect(screen.getByText("Saved in OpenCode")).toBeTruthy();
     expect(screen.queryByText("Environment")).toBeNull();
   });
 
@@ -283,15 +283,49 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     expect(screen.getByText("Environment")).toBeTruthy();
-    expect(screen.getByText("Managed outside Traycer")).toBeTruthy();
+    // The label names the controlling PARTY as a fact; the badge beside the
+    // name already says where the credential comes from.
+    expect(screen.getByText("Set by environment")).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Remove Groq credential" }),
+      screen.queryByRole("button", { name: "Remove saved Groq key" }),
     ).toBeNull();
     // Read-only means the WRITE affordance too. A "Replace" here would store a
     // key into the auth store that the env var keeps shadowing - the click
     // would appear to work and change nothing, and un-shadowing is explicitly
     // out of v1 scope.
     expect(screen.queryByRole("button", { name: /Replace/ })).toBeNull();
+  });
+
+  it("names the controlling party per source", () => {
+    // `config` and `custom` share a line on purpose - both resolve to something
+    // edited in OpenCode's own files - and the badge is what distinguishes
+    // them.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "groq",
+            name: "Groq",
+            connected: true,
+            source: "config",
+            canDisconnect: false,
+          }),
+          entry({
+            id: "poe",
+            name: "Poe",
+            connected: true,
+            source: "custom",
+            canDisconnect: false,
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    expect(screen.getAllByText("Set in config file")).toHaveLength(2);
+    expect(screen.getByText("Config file")).toBeTruthy();
+    expect(screen.getByText("Plugin")).toBeTruthy();
+    expect(screen.queryByText("Managed outside Traycer")).toBeNull();
   });
 
   it("still offers Replace for a credential Traycer itself stored", () => {
@@ -335,7 +369,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     expect(
-      screen.queryByRole("button", { name: "Remove OpenAI credential" }),
+      screen.queryByRole("button", { name: "Remove saved OpenAI key" }),
     ).toBeNull();
   });
 
@@ -357,8 +391,64 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: { actions: ["connect"] },
     });
     expect(
-      screen.queryByRole("button", { name: "Remove OpenAI credential" }),
+      screen.queryByRole("button", { name: "Remove saved OpenAI key" }),
     ).toBeNull();
+  });
+
+  it("names the provider's own store on the api badge", () => {
+    // A key entered here is written to OpenCode's `auth.json` via `auth.set`
+    // and never mirrored into Traycer - that ownership is what keeps
+    // `opencode auth login` and this tab interchangeable, so a "Saved in
+    // Traycer" badge described the one thing the design avoids.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: "api",
+            hasStoredCredential: true,
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    expect(screen.getByText("Saved in OpenCode")).toBeTruthy();
+    expect(screen.queryByText("Saved in Traycer")).toBeNull();
+  });
+
+  it("gives the remove control destructive intent and a tooltip", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: "api",
+            hasStoredCredential: true,
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    const remove = screen.getByRole("button", {
+      name: "Remove saved OpenAI key",
+    });
+    // The icon-level destructive pattern the rest of Settings uses: quiet until
+    // hovered, rather than a permanently-red button among neutral rows.
+    expect(remove.className).toContain("hover:text-destructive");
+    expect(remove.className).toContain("hover:bg-destructive/10");
+    // Radix renders tooltip CONTENT only once open, which jsdom's layout-free
+    // environment cannot drive. `TooltipWrapper` renders a bare Slot when its
+    // label is empty and a real `TooltipTrigger` otherwise, so this slot is the
+    // structural proof that a tooltip is wired at all.
+    expect(remove.getAttribute("data-slot")).toBe("tooltip-trigger");
   });
 
   it("confirms before removing a stored credential", () => {
@@ -379,7 +469,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Remove OpenAI credential" }),
+      screen.getByRole("button", { name: "Remove saved OpenAI key" }),
     );
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(hostMocks.authMutate).toHaveBeenCalledTimes(1);

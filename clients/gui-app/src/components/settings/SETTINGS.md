@@ -823,6 +823,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       (single-line rows, no per-row queries - and a virtualizer renders an empty
       viewport under jsdom's zero-height layout, which would put this list's
       behavior beyond test).
+    - **Keys entered here land in the PROVIDER's credential store, not
+      Traycer's.** A connect writes OpenCode's own `auth.json` through
+      `auth.set`, and nothing is mirrored into `provider-overrides.json` — so
+      this tab and `opencode auth login` are interchangeable, which was the
+      point. The `api` badge therefore reads **"Saved in OpenCode"** (built from
+      the provider label, so it names whichever module advertises the tab); it
+      used to say "Saved in Traycer", which described the one arrangement the
+      design deliberately avoids.
     - **`source` is badged only for a CONNECTED provider, and disconnect is
       gated on `canDisconnect` ALONE.** The host reports `source` as null unless
       connected, so a badge anywhere else would claim a credential origin the
@@ -830,15 +838,30 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       ("does Traycer hold a credential?") than `canDisconnect` ("may it be
       removed from here?"); today's host answers both `source === "api"`, a
       later one need not, and reading either for the other is how a button
-      appears that the host will refuse.
+      appears that the host will refuse. The control itself is an icon button
+      with hover-only destructive tone (the pattern
+      `provider-cli-candidates-section` and `env-override-editor` already use —
+      quiet among neutral rows, red under the pointer) and a **"Remove saved
+      key"** tooltip. The wording is deliberate: it removes the key from the
+      provider's store, and the row may well come back CONNECTED from an env
+      var or config block underneath, so promising a disconnect would overstate
+      what the button does.
     - **An externally-sourced row is read-only in BOTH directions.** `env` /
-      `config` / `custom` read as **Managed outside Traycer** and carry neither
-      Remove nor Connect/Replace. Dropping the remove button and keeping the
-      write one was the tempting half-measure and is worse than either: writing
-      a key into OpenCode's auth store while an env var still shadows it
-      succeeds at the host and changes nothing the user can see, and undoing
-      that shadowing is explicitly out of v1 scope (the host cannot read its own
-      auth store — see the plan's "Credential source display" decision).
+      `config` / `custom` carry neither Remove nor Connect/Replace. Dropping the
+      remove button and keeping the write one was the tempting half-measure and
+      is worse than either: writing a key into OpenCode's auth store while an
+      env var still shadows it succeeds at the host and changes nothing the user
+      can see, and undoing that shadowing is explicitly out of v1 scope (the
+      host cannot read its own auth store — see the plan's "Credential source
+      display" decision).
+      - **The trailing label names the controlling PARTY, not the restriction**
+        (`readOnlySourceLabel`): `env` → "Set by environment", `config` /
+        `custom` → "Set in config file". It used to read "Managed outside
+        Traycer" for all three, which spent the row's last words restating the
+        badge in the negative — telling the user what they could not do here
+        rather than who owns the credential. `config` and `custom` share a line
+        because both resolve to something edited in OpenCode's own files; the
+        badge is what still distinguishes them.
     - **`credentialKey` is the credential's home**, and the reason it is on the
       wire: the host's connect contract wants exactly ONE input keyed by the
       provider's models.dev env var, and only the host knows which member of a
