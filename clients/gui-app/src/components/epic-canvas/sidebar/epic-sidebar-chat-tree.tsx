@@ -56,7 +56,6 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
@@ -2054,7 +2053,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
     reserveArchiveSlot,
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
-  const openDialog = useAppDialogStore((state) => state.openDialog);
   const roleClaims = useEpicAgentRoleClaims(nodeId);
   const ownerHostId = useEpicNodeHostId(nodeId);
   const activeHostId = useReactiveActiveHostId();
@@ -2088,24 +2086,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
       onToggle(event);
     },
     [onToggle],
-  );
-  const handleRowClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest(
-          '[data-notification-indicator-action="chat-fork"]',
-        ) !== null
-      ) {
-        // The row is already the one native button. Delegating from it keeps
-        // the fork glyph clickable without nesting another interactive
-        // control inside a button (invalid HTML and broken keyboard semantics).
-        openDialog("chat-fork");
-        return;
-      }
-      onClick(event);
-    },
-    [onClick, openDialog],
   );
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
@@ -2212,7 +2192,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
       }}
-      onClick={handleRowClick}
+      onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
       <NodeChevron
@@ -2398,9 +2378,6 @@ function NestedChatStatusIcon(props: {
       <span
         role="status"
         aria-label={title}
-        data-notification-indicator-action={
-          props.rollup.kind === "fork" ? "chat-fork" : undefined
-        }
         data-testid={`chat-descendant-status-${props.rollup.kind}-${props.nodeId}`}
         className="inline-flex size-3.5 shrink-0 items-center justify-center opacity-60"
       >

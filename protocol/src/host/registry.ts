@@ -175,7 +175,6 @@ import {
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   chatForkGetV10,
-  chatForkResolveV10,
 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -3303,16 +3302,6 @@ export const HOST_SYSTEM_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.chatFork.resolve": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: chatForkResolveV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

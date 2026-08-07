@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Host <-> client wire shapes for ticket 07's fork event and its resolution.
+ * Host <-> client wire shapes for ticket 07's fork event.
  *
  * ## Verbatim pass-through
  *
@@ -28,14 +28,22 @@ import { z } from "zod";
  * additionally has a full readable view through the ordinary cloud-chat
  * reader, since it is simply the chat's current head.
  *
- * ## Both RPCs here are optional capabilities
+ * ## `get` is a READ, and the only RPC here
  *
- * `get` and `resolve` are registered as a SET (`degrade: { kind:
- * "unsupported" }`, not on the released floor): a host predating this surface
- * answers `E_HOST_UNSUPPORTED` for both, and the client's contract is to
- * degrade to no fork surface at all rather than a broken dialog - the chat
- * simply halts exactly as it always did, silently to the renderer, safely to
- * the data.
+ * There was a `host.chatFork.resolve` beside it, and its deletion is the whole
+ * point of this surface's revision (decision log, 2026-08-07, "Fork
+ * resolution: detect everywhere, arbitrate nowhere, destroy nothing"): the
+ * host now submits the deterministic decision ITSELF, through the server's
+ * existing resolve transaction, at detection. Nothing arbitrates from the
+ * client, so a client-facing resolve verb has no caller - and freezing one in
+ * a release would have carried a dead arbitration shape forever.
+ *
+ * What survives is the read: an open episode is a real, observable host state
+ * (it is what drives the per-chat `pendingFork` indicator) for the seconds
+ * between detection and adoption, and after a filing failure for as long as
+ * the report is undelivered. `get` is registered optional (`degrade: { kind:
+ * "unsupported" }`, not on the released floor): a host predating it answers
+ * `E_HOST_UNSUPPORTED` and the client degrades to no fork surface at all.
  */
 
 // ---- The fork event, mirrored from chat-fork-event.ts verbatim --------- //
@@ -81,6 +89,22 @@ export const chatForkChatNoticeSchema = z.object({
    * differs after the local lineage publishes through a fork clone.
    */
   publicationChatId: z.string().min(1),
+  /**
+   * The chat's human name, as the host's registry holds it.
+   *
+   * Carried on the notice rather than joined by whoever renders it. A fork
+   * notice is the one place a surface has nothing else to identify a chat
+   * with: it is host-global, it can name chats in epics the reader has never
+   * opened, and the local id it carries is a uuid. Every surface that renders
+   * one without this field renders a uuid, which is what the auto-fork
+   * notification exists not to do.
+   *
+   * Empty string when the registry row could not be read. Not nullable: a
+   * consumer choosing copy has one falsy check either way, and "" degrades to
+   * the same fallback a null would without adding a second absent-value shape
+   * to a schema that already has `candidate: null` meaning something else.
+   */
+  chatTitle: z.string(),
   /** The head the cloud holds - the lineage that would continue by default. */
   incumbent: chatForkCandidateSummarySchema,
   /**
@@ -91,30 +115,20 @@ export const chatForkChatNoticeSchema = z.object({
   candidate: chatForkCandidateSummarySchema.nullable(),
   /**
    * This CHAT's own repair era at detection, not the episode's. An episode
-   * can bundle several chats at different eras; `resolve` fences each one
-   * against exactly this value rather than a single episode-level scalar.
+   * can bundle several chats at different eras; the host's own auto-submission
+   * fences each one against exactly this value rather than against a single
+   * episode-level scalar.
    */
   repairEpoch: z.number().int().nonnegative(),
   /**
    * The host-minted identity of THIS fork occurrence. Not renderer content -
-   * nothing displays it - but mirrored like every other field, because the
-   * host reads it back off its own held event when `resolve` fans out, and
-   * this schema is that event's one shape.
+   * nothing displays it - but mirrored like every other field, because this
+   * schema is a verbatim mirror of the host event by contract, and the
+   * occurrence is what the server matches an auto-submitted decision against.
    */
   forkOccurrenceId: z.string().min(1),
 });
 export type ChatForkChatNotice = z.infer<typeof chatForkChatNoticeSchema>;
-
-/** Mirrors `ChatForkDecisionOption`. */
-export const chatForkDecisionOptionSchema = z.object({
-  /** `winningHeadSha256` per chat, keyed by chatId. Absent = not covered by this option. */
-  winners: z.record(z.string(), sha256HexSchema),
-  label: z.enum(["keep-cloud-lineage", "keep-this-host-lineage"]),
-  detail: z.string(),
-});
-export type ChatForkDecisionOption = z.infer<
-  typeof chatForkDecisionOptionSchema
->;
 
 /** Mirrors `ChatForkEvent`. */
 export const chatForkEventSchema = z.object({
@@ -126,7 +140,6 @@ export const chatForkEventSchema = z.object({
   /** The same thing in a sentence - the only place machine provenance appears. */
   diagnostic: z.string(),
   chats: z.array(chatForkChatNoticeSchema),
-  options: z.array(chatForkDecisionOptionSchema),
 });
 export type ChatForkEvent = z.infer<typeof chatForkEventSchema>;
 
@@ -140,74 +153,3 @@ export const chatForkGetResponseSchema = z.object({
   event: chatForkEventSchema.nullable(),
 });
 export type ChatForkGetResponse = z.infer<typeof chatForkGetResponseSchema>;
-
-// ---- host.chatFork.resolve ------------------------------------------------ //
-
-/**
- * `episodeId` + `label` rather than an echoed winners map: the host holds the
- * authoritative current event (the same one `get` just answered), so it looks
- * up `option.winners` itself. That is what makes a stale submission - the
- * episode already closed, a new one opened - detectable server-side instead
- * of trusted from the request.
- */
-export const chatForkResolveRequestSchema = z.object({
-  episodeId: z.string().min(1),
-  label: z.enum(["keep-cloud-lineage", "keep-this-host-lineage"]),
-});
-export type ChatForkResolveRequest = z.infer<
-  typeof chatForkResolveRequestSchema
->;
-
-/**
- * Three outcomes per chat, not a boolean - each needs a different render:
- *
- * - `resolved` - a decision covers this chat; show the clone mapping.
- * - `stale` - THIS chat's repair era raced (a delayed submission, a fork that
- *   moved on since the episode was fetched). Distinct from the top-level
- *   `outcome: "stale"` above: that means the whole episode view is stale;
- *   this means one chat's server-side resolve specifically lost a race. The
- *   client's contract is the same either way - re-fetch via `get`.
- * - `not-ready` - the host detected this fork and surfaced it, but its
- *   durable report has not reached the server yet. Never collapsed into
- *   `resolved`: a caller that did would tell the owner "recorded" for a
- *   decision the server has nowhere to act on yet.
- */
-export const chatForkResolveChatOutcomeSchema = z.discriminatedUnion(
-  "status",
-  [
-    z.object({
-      taskId: z.string().min(1),
-      chatId: z.string().min(1),
-      status: z.literal("resolved"),
-      repairEpoch: z.number().int().nonnegative(),
-      cloneChatId: z.string().nullable(),
-    }),
-    z.object({
-      taskId: z.string().min(1),
-      chatId: z.string().min(1),
-      status: z.literal("stale"),
-    }),
-    z.object({
-      taskId: z.string().min(1),
-      chatId: z.string().min(1),
-      status: z.literal("not-ready"),
-    }),
-  ],
-);
-export type ChatForkResolveChatOutcome = z.infer<
-  typeof chatForkResolveChatOutcomeSchema
->;
-
-export const chatForkResolveResponseSchema = z.object({
-  /**
-   * `stale` when `episodeId` no longer matches the currently open episode - it
-   * was already decided, or a genuinely new fork opened. `results` is empty in
-   * that case; the client's contract is to re-fetch via `get` rather than
-   * retry the same submission.
-   */
-  outcome: z.enum(["resolved", "stale"]),
-  results: z.array(chatForkResolveChatOutcomeSchema),
-});
-export type ChatForkResolveResponse = z.infer<
-  typeof chatForkResolveResponseSchema
->;

@@ -13,10 +13,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type { ChatForkEvent } from "@traycer/protocol/host/chat-fork/schemas";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
-import {
-  useChatForkEventQuery,
-  useChatForkResolveMutation,
-} from "@/hooks/chats/use-chat-fork-queries";
+import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -143,40 +140,6 @@ describe("fork lifecycle notification-indicator refresh", () => {
     ).toHaveLength(3);
   });
 
-  it("refreshes a mounted pendingFork immediately when resolve succeeds", async () => {
-    const harness = createHarness(sampleForkEvent());
-    const { result } = renderHook(
-      () => {
-        const indicators = useHostNotificationIndicators({
-          epicIds: [],
-          chatIds: [CHAT_ID],
-          enabled: true,
-        });
-        const resolve = useChatForkResolveMutation();
-        return {
-          pendingFork: indicators.isPending
-            ? false
-            : indicators.data.chats[CHAT_ID].pendingFork,
-          resolve,
-        };
-      },
-      { wrapper: wrapperFor(harness.queryClient) },
-    );
-
-    await waitFor(() => expect(result.current.pendingFork).toBe(true));
-    await act(async () => {
-      await result.current.resolve.mutateAsync({
-        episodeId: "episode-1",
-        label: "keep-cloud-lineage",
-      });
-    });
-    await waitFor(() => expect(result.current.pendingFork).toBe(false));
-    expect(harness.calls).toEqual([
-      "host.notifications.indicatorState",
-      "host.chatFork.resolve",
-      "host.notifications.indicatorState",
-    ]);
-  });
 });
 
 function createHarness(initialEvent: ChatForkEvent | null): Harness {
@@ -202,22 +165,6 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
           calls.push("host.chatFork.get");
           return { event: forkEvent.value };
         },
-        "host.chatFork.resolve": () => {
-          calls.push("host.chatFork.resolve");
-          forkEvent.value = null;
-          return {
-            outcome: "resolved",
-            results: [
-              {
-                taskId: "task-1",
-                chatId: CHAT_ID,
-                status: "resolved",
-                repairEpoch: 1,
-                cloneChatId: null,
-              },
-            ],
-          };
-        },
         "host.notifications.indicatorState": () => {
           calls.push("host.notifications.indicatorState");
           return indicatorResponse(forkEvent.value !== null);
@@ -230,10 +177,7 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   hostClientRef.current = client;
-  recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
-    "host.chatFork.get",
-    "host.chatFork.resolve",
-  ]);
+  recordNegotiatedHostMethods(mockLocalHostEntry.hostId, ["host.chatFork.get"]);
   useAuthStore.setState({
     contextMetadata: { userId: "user-a", username: "user-a" },
   });
@@ -274,6 +218,7 @@ function sampleForkEvent(): ChatForkEvent {
         taskId: "task-1",
         chatId: CHAT_ID,
         publicationChatId: CHAT_ID,
+        chatTitle: "Restore the shard publisher",
         incumbent: {
           headSha256: "a".repeat(64),
           parentHeadSha256: null,
@@ -290,18 +235,6 @@ function sampleForkEvent(): ChatForkEvent {
         },
         repairEpoch: 1,
         forkOccurrenceId: "occ-1",
-      },
-    ],
-    options: [
-      {
-        winners: { [CHAT_ID]: "a".repeat(64) },
-        label: "keep-cloud-lineage",
-        detail: "Keep the published lineage.",
-      },
-      {
-        winners: { [CHAT_ID]: "b".repeat(64) },
-        label: "keep-this-host-lineage",
-        detail: "Keep this host's lineage.",
       },
     ],
   };
