@@ -143,6 +143,41 @@ export function credentialPrecedenceNotice(
 }
 
 /**
+ * A confirmation code lifted out of a provider's OAuth `instructions`, or null
+ * when the text does not contain one worth isolating.
+ *
+ * The `auto` arm of some flows asks the user to READ a short code off our
+ * screen and type it into the browser, so it wants to be a copyable field
+ * rather than a sentence. Upstream extracts it as `instructions.split(":")
+ * .pop().trim()` and shows that in a read-only copyable input.
+ *
+ * That rule alone is lossy and we deliberately do not copy it: instruction text
+ * routinely contains a URL, and splitting `"Visit https://example.test/device
+ * and enter ABCD-1234"` on `:` yields `"//example.test/device and enter
+ * ABCD-1234"` - a confident, wrong "code". So the tail has to LOOK like a code
+ * before we present it as one, and anything else degrades to showing the whole
+ * instruction string, which is what the panel rendered before this existed.
+ *
+ * "Looks like a code" is deliberately narrow: one whitespace-free run of
+ * alphanumerics and dashes. A URL tail fails it on `/` or `.`, and a trailing
+ * sentence fails it on the spaces.
+ */
+const CONFIRMATION_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{2,31}$/;
+
+export function extractConfirmationCode(
+  instructions: string | null,
+): string | null {
+  if (instructions === null) return null;
+  const trimmed = instructions.trim();
+  if (trimmed.length === 0) return null;
+  if (CONFIRMATION_CODE_PATTERN.test(trimmed)) return trimmed;
+  const tail = trimmed.split(":").pop();
+  if (tail === undefined) return null;
+  const candidate = tail.trim();
+  return CONFIRMATION_CODE_PATTERN.test(candidate) ? candidate : null;
+}
+
+/**
  * One selectable way to sign in.
  *
  * The plain API-key path is a choice with `methodIndex: null` rather than a

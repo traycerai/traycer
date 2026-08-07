@@ -625,6 +625,38 @@ describe("OAuth code flow", () => {
 });
 
 describe("OAuth auto flow", () => {
+  it("promotes a transcribable confirmation code to a copyable field", () => {
+    // Some `auto` flows want the user to READ a code off this screen and type
+    // it into the browser. The instructions stay above it verbatim; this only
+    // lifts the fragment that has to be transcribed.
+    renderDialog({
+      entry: OAUTH_ONLY,
+      capabilities: FULL_CAPS,
+      onDone: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    settle(mocks.authCalls[0], {
+      kind: "authorizationUrl",
+      attemptId: "attempt-1",
+      authorizationUrl: "https://example.test/auth",
+      method: "auto",
+      instructions: "Enter this code in your browser: ABCD-1234",
+    });
+
+    const field = screen.getByLabelText("Confirmation code");
+    expect(
+      field.getAttribute("value") ?? (field as HTMLInputElement).value,
+    ).toBe("ABCD-1234");
+    expect(field.hasAttribute("readonly")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Copy confirmation code" }),
+    ).toBeTruthy();
+    // The provider's own wording is still shown in full above it.
+    expect(
+      screen.getByText("Enter this code in your browser: ABCD-1234"),
+    ).toBeTruthy();
+  });
+
   it("polls until the browser round trip completes, opening the browser ONCE", () => {
     // The host answers a still-pending attempt with the STORED
     // `authorizationUrl`, not `{kind:"pending"}` - so this is the real wire
@@ -649,6 +681,8 @@ describe("OAuth auto flow", () => {
     // No paste field: this arm completes on the server's own loopback, and a
     // code box would invite a paste the host refuses as invalid_input.
     expect(screen.queryByLabelText("Paste the code")).toBeNull();
+    // Nothing code-shaped in these instructions, so no field is invented.
+    expect(screen.queryByLabelText("Confirmation code")).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(1_600);

@@ -311,7 +311,12 @@ export function ProviderModelProvidersTab(props: {
         description={
           disconnectTarget === null
             ? ""
-            : `Remove the stored ${disconnectTarget.name} credential from ${providerLabel}? Models from this provider stop working until you connect it again.`
+            : // Says what removal GUARANTEES, and no more. It deletes the
+              // stored credential; whether the provider keeps working is not
+              // ours to promise, because an environment variable or config
+              // file underneath can take over the moment the stored one is
+              // gone - the same fact the row's own read-only copy states.
+              `Remove the stored ${disconnectTarget.name} credential from ${providerLabel}? If an environment variable or config file also provides it, ${disconnectTarget.name} keeps working from that source.`
         }
         cascadeSummary={null}
         actionLabel="Remove"

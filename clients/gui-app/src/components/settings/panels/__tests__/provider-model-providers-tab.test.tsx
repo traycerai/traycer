@@ -589,6 +589,14 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Remove saved OpenAI key" }),
     );
+    // Says what removal GUARANTEES and no more: an env var or config file
+    // underneath can take over the moment the stored credential is gone, so
+    // promising the provider stops working would contradict the row's own
+    // read-only copy.
+    expect(screen.getByText(/keeps working from that source/)).toBeTruthy();
+    expect(
+      screen.queryByText(/stop working until you connect it again/),
+    ).toBeNull();
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(hostMocks.authMutate).toHaveBeenCalledTimes(1);
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({

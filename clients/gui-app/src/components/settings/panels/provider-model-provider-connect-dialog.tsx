@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import type {
   ModelProviderAuthInput,
   ModelProviderAuthResult,
@@ -31,6 +31,7 @@ import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-m
 import { useProvidersAwaitModelProviderAuth } from "@/hooks/providers/use-providers-await-model-provider-auth-mutation";
 import { useProvidersCancelModelProviderAuth } from "@/hooks/providers/use-providers-cancel-model-provider-auth-mutation";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
   modelProviderAuthErrorDisposition,
   modelProviderAuthErrorMessage,
@@ -41,6 +42,7 @@ import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provid
 import {
   connectChoicesFor,
   credentialPrecedenceNotice,
+  extractConfirmationCode,
   initialConnectChoiceId,
   type ConnectChoice,
 } from "./model-provider-connect-model";
@@ -825,6 +827,59 @@ function PromptField(props: {
 }
 
 /**
+ * The code some `auto` flows ask the user to READ off this screen and type into
+ * the browser, lifted out of the instructions and given a field of its own.
+ *
+ * The instructions stay above it verbatim rather than being replaced: they are
+ * the provider's own wording for a flow Traycer does not otherwise understand,
+ * and this only promotes the one fragment that has to be transcribed. When
+ * nothing code-shaped can be lifted (see `extractConfirmationCode`), this
+ * renders nothing and the prose is all there is - which is exactly what the
+ * panel showed before.
+ */
+function ConfirmationCodeField(props: {
+  readonly code: string | null;
+}): ReactNode {
+  const fieldId = useId();
+  const { copied, copy } = useClipboardCopy({
+    resetMs: 1600,
+    onSuccess: null,
+    onError: null,
+  });
+  const code = props.code;
+  if (code === null) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={fieldId}>Confirmation code</Label>
+      <div className="flex items-center gap-2">
+        <Input
+          id={fieldId}
+          type="text"
+          readOnly
+          value={code}
+          className="min-w-0 flex-1 font-mono text-ui-sm"
+        />
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="secondary"
+          aria-label={
+            copied ? "Confirmation code copied" : "Copy confirmation code"
+          }
+          onClick={() => copy(code)}
+        >
+          {copied ? (
+            <Check className="size-3.5" aria-hidden />
+          ) : (
+            <Copy className="size-3.5" aria-hidden />
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The panel a live OAuth attempt owns.
  *
  * Both arms show the provider's own `instructions` verbatim when it sent any -
@@ -855,13 +910,18 @@ function OauthWaitingPanel(props: {
       ) : null}
 
       {attempt.method === "auto" ? (
-        <div
-          className="flex items-center gap-2 text-ui-sm text-muted-foreground"
-          role="status"
-        >
-          <MutedAgentSpinner />
-          Waiting for the browser to finish signing in
-        </div>
+        <>
+          <ConfirmationCodeField
+            code={extractConfirmationCode(attempt.instructions)}
+          />
+          <div
+            className="flex items-center gap-2 text-ui-sm text-muted-foreground"
+            role="status"
+          >
+            <MutedAgentSpinner />
+            Waiting for the browser to finish signing in
+          </div>
+        </>
       ) : (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={codeId}>Paste the code</Label>
