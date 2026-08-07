@@ -5103,14 +5103,95 @@ describe("ChatMessages scroll policy", () => {
       }
     });
 
+    it("regression: an exhausted visibility replay releases the persistence gate", async () => {
+      // A show-time replay whose bounded restore exhausts without validating
+      // has no retry (the effect only fires on hide/show transitions). The
+      // gate it armed must release on exhaustion - a stuck gate silently
+      // no-ops every later scroll-snapshot capture, so the NEXT hide would
+      // publish the stale pre-hide position instead of where the reader
+      // actually moved.
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const key = `t-visibility-exhausted-replay-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(key);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      act(() => {
+        getScrollNode().scrollTop = 0;
+      });
+      rerenderWith({ visible: false });
+      await settleLegendList();
+
+      const list = legendListRefHolder.current;
+      if (list === null) {
+        throw new Error("LegendList ref is not mounted");
+      }
+      // Force the replay's bounded restore (initial + retries) to resolve
+      // its scroll promise without ever applying the target offset, so every
+      // validate() fails and the operation exhausts.
+      const scrollToOffsetSpy = vi
+        .spyOn(list, "scrollToOffset")
+        .mockImplementation(() => Promise.resolve());
+      try {
+        rerenderWith({ visible: true });
+        // Initial issue + CHAT_TIMELINE_NAVIGATION_MAX_RETRIES reissues,
+        // each settling via promise + double-rAF quiet window.
+        await act(async () => {
+          for (let frame = 0; frame < 40; frame += 1) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
+        });
+      } finally {
+        scrollToOffsetSpy.mockRestore();
+      }
+
+      // The reader moves somewhere new WITHOUT a publishing gesture (a bare
+      // scroll report never clears the gate the way wheel/scrollbar input
+      // does), then the pane hides again and publishes the mirror.
+      const movedIndex = 100;
+      const movedScrollTop =
+        movedIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX;
+      await fireScrollTopAndFlush(movedScrollTop);
+      await settleLegendList();
+      rerenderWith({ visible: false });
+      await settleLegendList();
+
+      const persisted = restoreChatTabState(identity, messages);
+      expect(persisted.mode).toBe("free-scrolling");
+      // With the gate stuck, the capture no-ops and the second hide republishes
+      // the stale anchor-20 snapshot; a released gate persists the real move.
+      expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
+    });
+
     it("a bottom-following reader returns to the newest true bottom after hidden growth", async () => {
       // Fixup (callback-synchronous-follow): the follow latch's permission
-      // is updated by a real native `scroll` event on the scroll node - the
-      // manual `scrollTop = 0` write below needs the shim's synthetic-event
-      // dispatch enabled, matching what a real browser does for any
-      // scrollTop change (verified live against the real library), so the
-      // latch correctly learns the reader detached before the visibility
-      // toggle below.
+      // is updated by publishing wheel intent plus the resulting native
+      // `scroll` event. The manual `scrollTop = 0` write below needs the shim's
+      // synthetic-event dispatch enabled, matching what a real browser does,
+      // so the latch learns the reader detached before the visibility toggle.
       enableLegendListBrowserScrollEvents();
       const messages = makeCompletedTranscript(24);
       const key = `t-visibility-following-end-${Math.random().toString(36).slice(2)}`;
@@ -5125,6 +5206,9 @@ describe("ChatMessages scroll policy", () => {
       assertTrueBottomGeometry();
 
       act(() => {
+        getScrollNode().dispatchEvent(
+          new WheelEvent("wheel", { deltaY: -120 }),
+        );
         getScrollNode().scrollTop = 0;
       });
       rerenderWith({ visible: false });

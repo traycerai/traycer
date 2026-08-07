@@ -42,7 +42,7 @@ export function ScrollToEndPill({
       style={{ bottom: bottomOffsetPx }}
       className={cn(
         "pointer-events-auto absolute left-1/2 z-10 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-md ring-1 ring-foreground/10",
-        "transition-[opacity,transform,color,background-color,border-color,box-shadow] duration-200 ease-out hover:bg-secondary hover:shadow-lg active:scale-95",
+        "outline-none transition-[opacity,transform,color,background-color,border-color,box-shadow] duration-200 ease-out hover:bg-secondary hover:shadow-lg active:scale-95 focus-visible:border-ring/70 focus-visible:ring-2 focus-visible:ring-ring/70",
         "motion-reduce:transition-none",
         "[.traycer-panel-resizing_&]:pointer-events-none [.traycer-panel-resizing_&]:opacity-0",
         visible

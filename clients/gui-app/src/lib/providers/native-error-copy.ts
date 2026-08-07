@@ -12,6 +12,13 @@ const NATIVE_ERROR_COPY: Readonly<Record<ProviderNativeErrorCode, string>> = {
     "This provider store version is not supported for writes.",
   rollback_failed:
     "The change failed and automatic rollback could not restore the previous config.",
+  // The only LIST-side code: the provider's own config file is malformed or
+  // unreadable, so this provider has nothing to show. Deliberately says the
+  // config could not be read rather than "no servers configured", which is the
+  // wrong-bug answer this code exists to stop the UI from giving. The host
+  // sends a redacted parser/errno message as `detail`, which supersedes this.
+  config_unreadable:
+    "This provider's config could not be read. Check the file, then try again.",
 };
 
 export function nativeErrorMessage(

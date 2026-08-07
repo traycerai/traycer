@@ -75,7 +75,11 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
       pluginKey: mentionSuggestionPluginKey,
       char: "@",
       allowSpaces: true,
-      allowedPrefixes: null,
+      // Word-boundary trigger only: `@` opens the menu at the start of a
+      // block or after a space, never mid-word - typing an email
+      // (`user@host.com`) must not pop the menu at `@host`. (`null` here
+      // means "trigger anywhere".)
+      allowedPrefixes: [" "],
       decorationTag: "span",
       decorationClass: "",
       items: () => [],
@@ -84,6 +88,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
         kind: "mention",
         slashTrigger: null,
         slashScopeForProps: null,
+        suggestionPluginKey: mentionSuggestionPluginKey,
       }),
       command: ({ editor, range, props }) => {
         const item = props as ComposerPickerItem;
