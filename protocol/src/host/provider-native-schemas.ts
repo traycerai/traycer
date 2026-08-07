@@ -1310,6 +1310,56 @@ export const modelProviderEntrySchema = z.object({
   canDisconnect: z.boolean(),
   connected: z.boolean(),
   methods: z.array(modelProviderAuthMethodSchema),
+  /**
+   * The environment-variable name whose value IS this provider's credential -
+   * `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_API_KEY` - or `null` when
+   * this provider has no plain-API-key connect path.
+   *
+   * It is on the wire because without it the client cannot construct a legal
+   * `connect` payload at all. The host accepts a credential input only when its
+   * key is a member of the provider's models.dev `env[]`, and that array lived
+   * only in host memory - so for the ~170 providers that advertise no auth
+   * method (`methodIndex: null`, no prompts) the client had no key it was
+   * allowed to use. Guessing `<ID>_API_KEY` gets most of them and silently
+   * fails the rest.
+   *
+   * HOST-SELECTED, not the whole array, and that is the deliberate half. 13 of
+   * the 180 providers list more than one member and they are not alternatives:
+   * `azure` is `["AZURE_RESOURCE_NAME", "AZURE_API_KEY"]`, `databricks` is
+   * `["DATABRICKS_HOST", "DATABRICKS_TOKEN"]` - one credential plus one piece
+   * of configuration. Shipping the array would make the renderer decide which
+   * member is the secret, which is provider knowledge that belongs on the host.
+   * The accepted narrowing: the non-credential members of those providers are
+   * not settable from this tab and must come from the environment or an
+   * OpenCode config file.
+   *
+   * `null` is the honest answer where no single member IS the credential, and
+   * it is REQUIRED-and-nullable rather than omittable for the reason the rest
+   * of this file is: a producer must answer, and "the host could not resolve
+   * one" must not read the same as "the host forgot". Two real shapes need it:
+   *
+   * - MULTI-SECRET providers. `amazon-bedrock` is
+   *   `["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
+   *   "AWS_BEARER_TOKEN_BEDROCK"]`, and upstream's stored `ApiAuth` holds ONE
+   *   `key`. A required string would force the host to name one member
+   *   confidently and store a credential that cannot work.
+   * - Providers whose credential is not a pasteable secret at all - Vertex
+   *   authenticates from a service-account FILE PATH, so a masked paste field
+   *   is the wrong affordance even though a member exists.
+   *
+   * `null` constrains only this path. A provider can advertise OAuth or
+   * prompted methods in `methods` and be perfectly connectable through them;
+   * what `null` says is that the no-method plain-key shortcut is unavailable,
+   * so a renderer must not draw a bare key field for it.
+   *
+   * The membership check on `connect` remains the authority. This field is the
+   * host telling the client which key that check will accept - never a second,
+   * client-side rule that could drift from it.
+   *
+   * `.min(1)` on the string arm: an empty string would be a second spelling of
+   * `null`, and one of the two would end up unhandled.
+   */
+  credentialKey: z.string().min(1).nullable(),
 });
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 

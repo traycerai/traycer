@@ -29,6 +29,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
+import type { NativeListQueryV70 } from "@traycer/protocol/host/provider-native-schemas";
 
 const createTuiRegistry = hostRpcRegistry["epic.createTuiAgent"];
 const providersListRegistry = hostRpcRegistry["providers.list"];
@@ -168,36 +169,87 @@ describe("providers.list request lines 1.0..7.0 <-> latest", () => {
     }
   });
 
-  it("keeps native on the 8.0 -> 7.0 request hop, which is the one line that models it", () => {
-    // The inverse of the assertion above, and the reason the loop stops at 6:
-    // stripping `native` here would silently drop a v7.0 caller's list query.
-    const canonical = providersListRequestSchema.parse({
-      forceAuthRefresh: true,
-      native: {
-        kind: "mcp",
-        providerId: "claude-code",
-        scope: "global",
-        workspaceRoot: null,
-      },
-    });
-    const down = downgradeRequestAcrossMajors(
-      providersListRegistry,
-      8,
-      7,
-      canonical,
-    );
-    expect(down.ok).toBe(true);
-    if (!down.ok) return;
-    expect(down.value.native).toEqual({
+  // One payload per arm of the frozen v7.0 query union, keyed BY DISCRIMINANT
+  // so the type system owns the coverage: `Record<NativeListQueryV70["kind"],
+  // …>` does not compile until every arm has an entry, so a sixth arm added to
+  // the union fails here rather than quietly going untested.
+  //
+  // The arms are not interchangeable, which is the point. `mcp`/`plugins`/
+  // `skills` carry only the scope tuple, but `mcpDiscover` adds
+  // `serverName`/`forceRefresh` and `pluginIcon` adds `pluginId`/`theme` - a
+  // downgrade that reshaped the union could drop those and still look correct
+  // against an `mcp`-only assertion.
+  const V70_QUERY_CASES: Record<
+    NativeListQueryV70["kind"],
+    NativeListQueryV70
+  > = {
+    mcp: {
       kind: "mcp",
       providerId: "claude-code",
       scope: "global",
       workspaceRoot: null,
-    });
-    expect(
-      providersListRequestSchemaV70.safeParse(down.value).success,
-    ).toBe(true);
-  });
+    },
+    plugins: {
+      kind: "plugins",
+      providerId: "codex",
+      scope: "global",
+      workspaceRoot: null,
+    },
+    skills: {
+      kind: "skills",
+      providerId: "opencode",
+      scope: "global",
+      workspaceRoot: null,
+    },
+    // Project-scoped on purpose: carries the extra discovery fields AND the
+    // scope/workspaceRoot invariant across the hop.
+    mcpDiscover: {
+      kind: "mcpDiscover",
+      providerId: "amp",
+      scope: "project",
+      workspaceRoot: "/w",
+      serverName: "some-server",
+      forceRefresh: true,
+    },
+    pluginIcon: {
+      kind: "pluginIcon",
+      providerId: "codex",
+      scope: "global",
+      workspaceRoot: null,
+      pluginId: "pdf",
+      theme: "dark",
+    },
+  };
+
+  it.each(Object.entries(V70_QUERY_CASES))(
+    "keeps a %s native query intact on the 8.0 -> 7.0 request hop",
+    (_kind, native) => {
+      // The inverse of the strip assertion above, and the reason that loop
+      // stops at 6: v7.0 is the one older line whose request models `native`,
+      // so stripping here would silently drop a v7.0 caller's list query.
+      const canonical = providersListRequestSchema.parse({
+        forceAuthRefresh: true,
+        native,
+      });
+      const down = downgradeRequestAcrossMajors(
+        providersListRegistry,
+        8,
+        7,
+        canonical,
+      );
+      expect(down.ok).toBe(true);
+      if (!down.ok) return;
+      // Deep-equal against the ORIGINAL payload, not against a re-parse of the
+      // result: a dropped `serverName` would survive a reparse (the field is
+      // required, so it would fail - but a dropped `forceRefresh` or a
+      // defaulted one would not) and the round-trip has to be lossless, not
+      // merely valid.
+      expect(down.value.native).toEqual(native);
+      expect(
+        providersListRequestSchemaV70.safeParse(down.value).success,
+      ).toBe(true);
+    },
+  );
 
   it("response round-trip 8.0 -> 6.0 -> 8.0 still parses at both ends", () => {
     const canonicalResponse = providersListResponseSchema.parse({
