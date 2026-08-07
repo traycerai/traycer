@@ -85,7 +85,7 @@ import {
   nextComposerMode,
   type ComposerMode,
 } from "@/components/home/data/landing-options";
-import { ArrowLeftRight } from "lucide-react";
+import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useHostBinding, useHostClient } from "@/lib/host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
@@ -659,26 +659,17 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   const switcher = (
-    <button
-      type="button"
-      aria-label={
-        composerMode === "chat"
-          ? "Switch to the Terminal interface"
-          : "Switch to the Chat interface"
-      }
-      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <ComposerModeSwitcher
+      composerMode={composerMode}
       disabled={isSubmitting}
-      onClick={() => {
+      onSwitch={() => {
         const next = nextComposerMode(composerMode);
         setGlobalComposerMode(next);
         if (draftId !== null) {
           setDraftComposerMode(draftId, next);
         }
       }}
-    >
-      <ArrowLeftRight className="size-3 shrink-0" />
-      {composerMode === "chat" ? "Switch to Terminal" : "Switch to Chat"}
-    </button>
+    />
   );
 
   return (

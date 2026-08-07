@@ -12,8 +12,9 @@
  * Assertions target real DOM geometry (scrollTop at/away from the true end),
  * never `scrollToEnd` call counts. Production may skip a redundant
  * `scrollToEnd` when already at the strict edge (destructive-clamp contract).
- * The latch ResizeObserver is a maintain TRIGGER only - it does not rewrite
- * permission from post-resize geometry; only the direct scroll listener does.
+ * The latch ResizeObserver is a maintain trigger. It may reconcile a fresh
+ * strict-bottom landing, but non-bottom geometry never grants permission or
+ * moves a detached reader.
  *
  * Do not duplicate the hook-level numeric sequences; only real-library wiring
  * proofs belong here.
@@ -73,11 +74,13 @@ function parkAtStrictBottom(node: HTMLElement): number {
 }
 
 /**
- * Detach via a real DOM scrollTop write + native scroll event.
+ * Detach via recognized wheel intent, a real DOM scrollTop write, and a
+ * native scroll event.
  * Deliberately no React re-render - this is the review's silent-detach
  * ordering that must leave the latch denying follow on the next callback.
  */
 function detachReader(node: HTMLElement, scrollTop: number): number {
+  node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
   node.scrollTop = scrollTop;
   fireNativeScroll(node);
   return node.scrollTop;
@@ -493,6 +496,90 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     await settleLegendList();
     expectAtTrueEnd(node);
     correctionLanding.mockRestore();
+  });
+
+  it("retains follow through disclosure shrink and Todo inset growth without reader input", async () => {
+    const rowCount = 36;
+    const baseInset = 140;
+    const baseMessages = makeMessages(rowCount);
+    const baseHeight = contentHeightForRowCount(rowCount) + baseInset;
+    setLegendListScrollContainerScrollHeightOverride(baseHeight);
+    const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+    const onFollowIntentChange = vi.fn();
+    const { listRef, rerenderMessages } = renderTimeline({
+      messages: baseMessages,
+      contentInsetEndAdjustment: baseInset,
+      followLatchRef,
+      onFollowIntentChange,
+    });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    parkAtStrictBottom(node);
+    const list = listRef.current;
+    if (!list) throw new Error("LegendList ref not mounted");
+
+    // Expanded disclosure/stream growth moves the end. The first owned
+    // landing intentionally stops short so correction remains active.
+    const expandedHeight = baseHeight + 360;
+    setLegendListScrollContainerScrollHeightOverride(expandedHeight);
+    const scrollToEnd = vi
+      .spyOn(list, "scrollToEnd")
+      .mockImplementation((): Promise<void> => {
+        node.scrollTop = Math.max(0, maxScrollTop(node) - 40);
+        fireNativeScroll(node);
+        return Promise.resolve();
+      });
+    act(() => {
+      followLatchRef.current?.followEndIfPermitted();
+    });
+    expect(scrollToEnd).toHaveBeenCalled();
+
+    // LegendList's deferred web shrink/MVCP path may report a lower
+    // scrollTop after the disclosure's non-publishing pointer preflight has
+    // cancelled correction ownership. This is still layout motion, not a
+    // reader departure.
+    act(() => {
+      followLatchRef.current?.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: false,
+      });
+      node.scrollTop = Math.max(0, node.scrollTop - 180);
+      fireNativeScroll(node);
+    });
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    // Collapse settles at the new browser-clamped strict edge. A maintain
+    // callback must heal/reconcile it without issuing a semantic jump.
+    setLegendListScrollContainerScrollHeightOverride(baseHeight);
+    act(() => {
+      node.scrollTop = maxScrollTop(node);
+      followLatchRef.current?.followEndIfPermitted();
+    });
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    // The Todo dock now increases the lower-surface inset. Following must
+    // remain live and land at the new end instead of surfacing the pill.
+    scrollToEnd.mockImplementation((): Promise<void> => {
+      node.scrollTop = maxScrollTop(node);
+      fireNativeScroll(node);
+      return Promise.resolve();
+    });
+    const todoInset = baseInset + 180;
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(rowCount) + todoInset,
+    );
+    rerenderMessages(baseMessages, {
+      contentInsetEndAdjustment: todoInset,
+      initialScrollAtEnd: undefined,
+    });
+    await settleLegendList();
+
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    scrollToEnd.mockRestore();
   });
 
   // -----------------------------------------------------------------------
@@ -970,19 +1057,27 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       expect(parked).toBe(300);
     });
 
-    it("programmatic non-bottom scrollToOffset does not grant follow permission", async () => {
+    it("declared programmatic non-bottom navigation preserves its free-reading position", async () => {
       const rowCount = 40;
       setLegendListScrollContainerScrollHeightOverride(
         contentHeightForRowCount(rowCount),
       );
       const messages = makeMessages(rowCount);
-      const { listRef, rerenderMessages } = renderTimeline({ messages });
+      const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        followLatchRef,
+      });
       await settleLegendList();
 
       const node = requireScrollNode(listRef);
       parkAtStrictBottom(node);
 
       act(() => {
+        // Non-bottom navigation declares its destination explicitly. Bare
+        // scrollTop movement is not reader intent because MVCP and layout use
+        // the same browser signal.
+        followLatchRef.current?.beginOwnedFreeNavigation();
         void listRef.current?.scrollToOffset({ offset: 350, animated: false });
         // Mirror production: programmatic navigation also lands a real DOM
         // scrollTop the latch observes via its direct listener.

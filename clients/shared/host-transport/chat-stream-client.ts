@@ -116,6 +116,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "worktreeStateChanged" }
     >,
   ) => void;
+  readonly onManagedCommandsChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "managedCommandsChanged" }
+    >,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -274,6 +280,10 @@ export class ChatStreamClient {
       }
       case "worktreeStateChanged": {
         this.callbacks.onWorktreeStateChanged(frame);
+        return;
+      }
+      case "managedCommandsChanged": {
+        this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
       case "pong": {

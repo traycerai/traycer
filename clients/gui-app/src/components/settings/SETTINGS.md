@@ -284,12 +284,18 @@ false "Offline") are tested and load-bearing.
     and `terminalFontSize` are clamped 10-24. `theme-provider.tsx` applies
     `uiFontFamily`/`codeFontFamily` as inline overrides of
     `--traycer-font-ui`/`--traycer-font-mono` (chosen font + the default
-    stack as fallback), removing the override when `null`. The terminal host
-    (`terminal-tile-xterm.tsx`) resolves its own effective font
-    (`terminalFontFamily ?? codeFontFamily`) and size
-    (`terminalFontSize ?? codeFontSize`) directly from the store rather than
-    reading computed CSS, and live-syncs both into `term.options` (see
-    `resolveEffectiveFontFamily` and `useTerminalAppearanceSync`). The
+    stack as fallback), removing the override when `null`. The effective
+    TERMINAL font (`terminalFontFamily ?? codeFontFamily`,
+    `terminalFontSize ?? codeFontSize`) is resolved once by
+    `useEffectiveTerminalFont` (`hooks/settings/`) and applied inline by its
+    three consumers - the xterm host, this panel's `TerminalPreview`, and the
+    managed-command output window (`managed-command-output-tile.tsx`, whose
+    content is a program's stdout and so is terminal output too). None of
+    them can read it from CSS: `--traycer-font-mono` carries the CODE font,
+    so `font-mono` would silently ignore a Terminal override, and xterm
+    measures glyph cells on a canvas where CSS variables do not resolve at
+    all. `terminal-tile-xterm.tsx` additionally live-syncs both values into
+    `term.options` (see `useTerminalAppearanceSync`). The
     `@pierre/diffs` diff viewer follows the code font via
     `--diffs-font-family` / `--diffs-font-size` set on `[data-diffs-host]` in
     `diff-tokens-css.ts`.
@@ -448,12 +454,19 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       whichever half a provider lacked. Nothing about "does this take a key?"
       needs the host to say so, and adding an id to the enum would risk the
       whole-object `.catch` above for zero gain.
-    - **The visible set is advertised MINUS known-empty, PLUS client-derived.**
-      `general` holds only the CLI candidate table and the terminal-agent args
-      field; both self-gate on the same providers (`hidesCliCandidates` -
-      cursor/amp - which are GUI-only and so never advertise the `tui` mode the
-      args field needs), so the tab is dropped for them instead of listing one
-      that renders nothing. `usage` is taken at the host's word: the contract
+    - **The visible set is the host's advertisement, PLUS client-derived
+      `account`.** There is no per-provider subtraction left. `general` used to
+      be dropped for cursor and amp by a `hidesCliCandidates` id check, on the
+      premise that an SDK-driven provider has no CLI binary a user could pick.
+      Both of them spawn the Traycer-resolved binary for their MCP write verbs
+      (`runAmpCliCapture`, `runCursorMcpCli`), so that table was the only
+      control over the binary those verbs use - and hiding it turned "no `amp`
+      on PATH" into an MCP tab with Add/Delete/auth silently gone and no way to
+      supply a path. The emptiness worry it encoded is answered upstream
+      instead: the host's `baseBinaryName` is an exhaustive switch, and the
+      candidates section renders a real "not found, here's how to install it"
+      empty state rather than a bare table. `usage` is taken at the host's word:
+      the contract
       registry already gates it on being able to POPULATE it (managed profiles,
       the Traycer subscription card, or rate limits - see
       `providerCanPopulateUsageTab`), so re-deriving that here would just be a

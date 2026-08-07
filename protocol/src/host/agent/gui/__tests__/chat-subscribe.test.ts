@@ -1610,6 +1610,114 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
   });
 });
 
+describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
+  const monitor = {
+    id: "command-1",
+    kind: "monitor" as const,
+    description: "deploy watcher",
+    status: {
+      state: "running" as const,
+      pid: 4410,
+      startedAtMs: 1_700_000_000_000,
+    },
+    chatId: "chat-1",
+    createdAtMs: 1_699_999_000_000,
+    updatedAtMs: 1_700_000_000_000,
+  };
+
+  function snapshotFrameWithManagedCommands(
+    managedCommands: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        managedCommands,
+      },
+    };
+  }
+
+  const managedCommandsChangedFrame = {
+    kind: "managedCommandsChanged",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    managedCommands: [monitor],
+  };
+
+  it("carries the chat's commands on a live snapshot", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithManagedCommands([monitor]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.managedCommands).toEqual([monitor]);
+  });
+
+  // Optional on the wire, always present after parsing: no consumer ever
+  // null-checks the set, on either channel.
+  it("defaults an omitted set to empty rather than undefined", () => {
+    const frame = snapshotFrameWithManagedCommands([]);
+    const snapshot = frame["snapshot"] as Record<string, unknown>;
+    delete snapshot["managedCommands"];
+
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(frame);
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.managedCommands).toEqual([]);
+
+    const changed = chatSubscribeV16.serverFrameSchema.parse({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    if (changed.kind !== "managedCommandsChanged") {
+      throw new Error("expected managedCommandsChanged");
+    }
+    expect(changed.managedCommands).toEqual([]);
+  });
+
+  it("drops the field on the frozen 1.5 line", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse(
+      snapshotFrameWithManagedCommands([monitor]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot).not.toHaveProperty("managedCommands");
+  });
+
+  it("carries the whole set on every managedCommandsChanged frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      managedCommandsChangedFrame,
+    );
+    if (parsed.kind !== "managedCommandsChanged") {
+      throw new Error("expected managedCommandsChanged");
+    }
+    expect(parsed.managedCommands).toEqual([monitor]);
+  });
+
+  // The frame and the field arrive together or not at all - a 1.5 peer has no
+  // variant for it, so the host must never send one (see the host's
+  // `projectManagedCommandsForPreV16`).
+  it("is not a frame a 1.5 peer can parse", () => {
+    expect(
+      chatSubscribeV15.serverFrameSchema.safeParse(managedCommandsChangedFrame)
+        .success,
+    ).toBe(false);
+  });
+});
+
 describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
   // Pre-1.5 active turn shape: no sameTurnSteeringSupported field at all.
   // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state)

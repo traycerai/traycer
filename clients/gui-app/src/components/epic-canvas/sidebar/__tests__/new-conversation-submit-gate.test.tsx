@@ -307,6 +307,27 @@ describe("NewConversationModalBody focus round-trip (MED4)", () => {
 });
 
 describe("NewConversationModalBody direct submit gate", () => {
+  it("submits a new chat with Cmd+Enter from anywhere in the modal", () => {
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={ACTIVE_TILE_PLACEMENT}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+  });
+
   it("passes no paste predicate before snapshot readiness and the predicate afterward", () => {
     const view = render(
       <NewConversationModalBody

@@ -4,6 +4,7 @@ import { TerminalLaunchPanel } from "@/components/home/composer/terminal-launch-
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
+import { modLabel } from "@/lib/keybindings/platform";
 
 const panelMocks = vi.hoisted(() => ({
   providers: [
@@ -132,6 +133,16 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     cleanup();
   });
 
+  it("keeps the Start button visibly filled inside dialogs", () => {
+    renderPanel(vi.fn());
+
+    const start = screen.getByRole("button", { name: "Start agent" });
+    expect(start.getAttribute("data-variant")).toBe("secondary");
+    expect(start.className).toContain(
+      "in-data-[slot=dialog-content]:bg-input/60",
+    );
+  });
+
   it("prefills Settings args but sends null when the field is untouched", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
@@ -186,6 +197,22 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       expect.objectContaining({
         terminalAgentArgs: "--dangerously-skip-permissions",
       }),
+    );
+  });
+
+  it("starts the agent with Cmd+Enter from anywhere on the surface", () => {
+    const onStart = vi.fn();
+    renderPanel(onStart);
+
+    const startButton = screen.getByRole("button", { name: "Start agent" });
+    expect(startButton.textContent).toContain(modLabel());
+    expect(startButton.textContent).toContain("↵");
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({ harnessId: "claude" }),
     );
   });
 

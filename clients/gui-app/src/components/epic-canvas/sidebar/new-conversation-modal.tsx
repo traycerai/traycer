@@ -10,7 +10,7 @@ import {
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
-import { ArrowLeftRight, Plus, XIcon } from "lucide-react";
+import { Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
@@ -46,6 +46,7 @@ import {
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
+import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 import {
   isAttachmentIngestPending,
   useComposerPaste,
@@ -75,7 +76,6 @@ import {
   useEpicNodeWorkspaceFolders,
   useEpicPermissionRole,
 } from "@/lib/epic-selectors";
-import { displayTitle } from "@/lib/display-title";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import {
   ARIA_DISABLED_TRIGGER_CLASS,
@@ -95,6 +95,7 @@ import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-se
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
+import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
@@ -398,59 +399,18 @@ function NewConversationModalDialog(props: {
   );
 }
 
-/**
- * Modal title row. The chat/terminal switcher is always shown (it is the single
- * way to flip between a chat and a terminal agent, for both top-level and child
- * creation). When adding a child (`parentId !== null`) a muted subtext names the
- * parent (chat or terminal agent), and tracks the current mode ("child chat" vs
- * "child terminal agent") so it stays accurate as the user switches.
- */
 export function NewConversationModalHeader(props: {
-  readonly composerMode: ComposerMode;
-  readonly parentId: string | null;
   readonly switcher: ReactNode;
 }) {
-  const { composerMode, parentId, switcher } = props;
-  const isChildAgent = parentId !== null;
-  // The parent is an Agent either way - the two projection slices are just the
-  // interface it uses - so both arms resolve to the interface-agnostic
-  // "Untitled agent" fallback rather than naming the interface.
-  const parentTitle = useEpicStore((state) => {
-    if (parentId === null) return null;
-    if (Object.hasOwn(state.chats.byId, parentId)) {
-      return displayTitle(state.chats.byId[parentId].title, "agent");
-    }
-    if (Object.hasOwn(state.tuiAgents.byId, parentId)) {
-      return displayTitle(state.tuiAgents.byId[parentId].title, "agent");
-    }
-    return null;
-  });
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      <div className="flex min-w-0 items-center justify-between">
-        <span className="text-sm font-medium text-foreground">
-          Start a new agent
-        </span>
-        {switcher}
-      </div>
-      <span className="truncate text-ui-xs text-muted-foreground">
-        {isChildAgent
-          ? `Child agent of ${parentTitle ?? displayTitle("", "agent")} · ${AGENT_INTERFACE_LABELS[composerMode]} interface`
-          : `${AGENT_INTERFACE_LABELS[composerMode]} interface`}
+    <div className="flex min-w-0 flex-col items-start gap-2">
+      <span className="text-sm font-medium text-foreground">
+        Start a new agent
       </span>
+      {props.switcher}
     </div>
   );
 }
-
-/**
- * Interface names for the creation header. Chat and Terminal are how the user
- * interacts with the new Agent, not what it is - the title above stays
- * "Start a new agent" for both.
- */
-const AGENT_INTERFACE_LABELS: Readonly<Record<ComposerMode, string>> = {
-  chat: "Chat",
-  terminal: "Terminal",
-};
 
 /**
  * Stand-in host id for the terminal-agent create, used only until the
@@ -730,29 +690,15 @@ export function NewConversationModalBody(props: {
     />
   );
   const switcher = (
-    <button
-      type="button"
-      aria-label={
-        draftComposerMode === "chat"
-          ? "Switch to the Terminal interface"
-          : "Switch to the Chat interface"
-      }
-      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      onClick={() => {
+    <ComposerModeSwitcher
+      composerMode={draftComposerMode}
+      disabled={false}
+      onSwitch={() => {
         setComposerMode(epicId, nextComposerMode(draftComposerMode));
       }}
-    >
-      <ArrowLeftRight className="size-3 shrink-0" />
-      {draftComposerMode === "chat" ? "Switch to Terminal" : "Switch to Chat"}
-    </button>
-  );
-  const header = (
-    <NewConversationModalHeader
-      composerMode={draftComposerMode}
-      parentId={parentId}
-      switcher={switcher}
     />
   );
+  const header = <NewConversationModalHeader switcher={switcher} />;
   const cleanupAfterSubmit = useCallback((): void => {
     clearDraft(epicId);
     clearStagedIntent(stagingKey);
@@ -973,6 +919,7 @@ export function NewConversationModalBody(props: {
       workspaceCanStart,
     ],
   );
+  usePrimaryActionShortcut(chatComposerActive, handleSubmit);
   const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       setContent(epicId, content);

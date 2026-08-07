@@ -55,6 +55,51 @@ import {
 
 const COPY_CONFIRMATION_RESET_MS = 1600;
 
+/**
+ * Whether a new managed profile for this provider can SHARE the ambient
+ * `skills/` and `plugins/` directories instead of copying them - i.e. whether
+ * the "Share skills and plugins" checkbox does anything.
+ *
+ * The real driver is host-side: `seedManagedProfileDir` honours
+ * `shareSkillsAndPlugins` only on the `partial-overlay` layout branch
+ * (`profile-seeding.ts`), which today is claude-code alone. Codex also has
+ * profiles and is also excluded, and that exclusion is CORRECT rather than an
+ * oversight: codex takes the `overlay` branch, whose seeding never reads the
+ * flag, so offering the checkbox there would send a request the host silently
+ * discards.
+ *
+ * Exhaustive rather than the `providerId === "claude-code"` test it replaces.
+ * The old check would have kept quietly answering "no" for a future provider on
+ * the partial-overlay layout - a checkbox that should render and doesn't is
+ * invisible, so nothing would ever have reported it. This is still a second
+ * registration point for a host-side fact; a capability flag on the wire would
+ * be the deeper fix, and is deliberately not being minted for a single-member
+ * set on a released schema.
+ */
+const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
+  ProviderCliState["providerId"],
+  boolean
+> = {
+  "claude-code": true,
+  codex: false,
+  opencode: false,
+  cursor: false,
+  traycer: false,
+  openrouter: false,
+  grok: false,
+  qwen: false,
+  kiro: false,
+  droid: false,
+  kimi: false,
+  copilot: false,
+  kilocode: false,
+  amp: false,
+  devin: false,
+  pi: false,
+  hermes: false,
+  omp: false,
+};
+
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
   readonly message: string;
@@ -81,7 +126,8 @@ export function AddProviderProfileDialog({
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
-  const supportsShareSkillsAndPlugins = state.providerId === "claude-code";
+  const supportsShareSkillsAndPlugins =
+    PROVIDER_SHARES_SKILLS_AND_PLUGINS[state.providerId];
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
     supportsShareSkillsAndPlugins,
   );

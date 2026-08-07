@@ -9,7 +9,9 @@ interface AgentSpinnerPreset {
 }
 
 type AgentSpinnerPresets = {
-  readonly [Variant in AgentSpinnerVariant]: AgentSpinnerPreset;
+  readonly [
+    Variant in Exclude<AgentSpinnerVariant, "typing">
+  ]: AgentSpinnerPreset;
 };
 
 const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
@@ -602,9 +604,10 @@ export interface AgentSpinningDotsProps {
 
 export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   const frameRef = useRef<HTMLSpanElement | null>(null);
-  const preset = props.variant
-    ? AGENT_SPINNER_PRESETS[props.variant]
-    : AGENT_SPINNER_PRESETS.dots;
+  const variant = props.variant ?? "dots";
+  const preset = variant === "typing" ? null : AGENT_SPINNER_PRESETS[variant];
+  const presetFrames = preset?.frames ?? null;
+  const presetIntervalMs = preset?.intervalMs ?? null;
 
   // Advance the frames imperatively instead of via React state. The old
   // `useState(frameIndex)` re-rendered this component every `intervalMs` (up to
@@ -617,18 +620,33 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   // pre-paint, so the first frame shows immediately like the old version) is the
   // sole owner of `textContent`.
   useLayoutEffect(() => {
+    if (presetFrames === null || presetIntervalMs === null) return;
     const node = frameRef.current;
     if (node === null) return;
     let frameIndex = 0;
-    node.textContent = preset.frames[0];
-    if (preset.frames.length === 1) return;
+    node.textContent = presetFrames[0];
+    if (presetFrames.length === 1) return;
     const intervalId = window.setInterval(() => {
-      frameIndex = (frameIndex + 1) % preset.frames.length;
-      node.textContent = preset.frames[frameIndex];
-    }, preset.intervalMs);
+      frameIndex = (frameIndex + 1) % presetFrames.length;
+      node.textContent = presetFrames[frameIndex];
+    }, presetIntervalMs);
 
     return () => window.clearInterval(intervalId);
-  }, [preset.frames, preset.intervalMs]);
+  }, [presetFrames, presetIntervalMs]);
+
+  if (preset === null) {
+    return (
+      <span
+        data-testid={props.testId}
+        aria-hidden="true"
+        className={cn("working-dots text-current", props.className)}
+      >
+        <span />
+        <span />
+        <span />
+      </span>
+    );
+  }
 
   return (
     <span
