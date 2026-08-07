@@ -208,6 +208,8 @@ function remoteIdentity(publicKey: string): RemoteSessionIdentity {
     userId: FIXTURE_USER_ID,
     hostPublicKey: publicKey,
     relayAttachUrl: RELAY_URL,
+    // The stream runtime always supplies the app revalidator.
+    authRecovery: "revalidate",
   };
 }
 
@@ -430,6 +432,7 @@ describe("HostStreamProvider", () => {
             userId: options.userId,
             hostPublicKey: options.hostPublicKey,
             relayAttachUrl: options.relayAttachUrl,
+            authRecovery: "revalidate",
           },
           options.hostPublicKey === "pubkey-a"
             ? () => sessionForKeyA
@@ -469,10 +472,18 @@ describe("HostStreamProvider", () => {
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-b"))).toBe(1);
 
-    // The stale-key session lingers (keep-warm) - nothing can re-adopt it
-    // (its identity key includes the OLD public key), so the window expiring
-    // closes it for real, while the new key's live session is untouched.
-    expect(sessionForKeyA.closeCalls).toBe(0);
+    // The stale-key session is closed AT the rotation, not left to linger.
+    // Keep-warm exists so a prompt re-acquire of the SAME identity is free,
+    // and this identity can never be re-acquired - its cache key embeds the
+    // old public key. Lingering would only hold an obsolete authenticated
+    // relay socket open and, because `hasReadyRemoteSession` matches on
+    // `hostId` alone, report live-session evidence for a host whose real
+    // session is still dialing.
+    expect(sessionForKeyA.closeCalls).toBe(1);
+    expect(sessionForKeyB.closeCalls).toBe(0);
+
+    // ...and nothing is left armed to close the successor when the window
+    // that the old entry would have used elapses.
     act(() => {
       vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
     });

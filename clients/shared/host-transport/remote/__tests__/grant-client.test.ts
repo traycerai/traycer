@@ -287,6 +287,42 @@ describe("mint failure detail", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("decodes at most the cap even when ONE chunk exceeds it", async () => {
+    // The read loop only re-checks the budget between reads, so a single
+    // oversized chunk would be decoded whole — into a JS string, the expensive
+    // half — and the advertised cap would bound nothing. Counted at the
+    // decoder, which is the thing actually paying the cost.
+    const decodeSpy = vi.spyOn(TextDecoder.prototype, "decode");
+    const oneHugeChunk = new TextEncoder().encode("x".repeat(1024 * 1024));
+    let delivered = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        if (delivered) {
+          controller.close();
+          return;
+        }
+        delivered = true;
+        controller.enqueue(oneHugeChunk);
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(body, { status: 502 })),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    if (result.kind !== "network-error") {
+      throw new Error(`expected network-error, got ${result.kind}`);
+    }
+    const decodedBytes = decodeSpy.mock.calls.reduce(
+      (total, [input]) =>
+        total + (input instanceof Uint8Array ? input.byteLength : 0),
+      0,
+    );
+    expect(decodedBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(result.bodySnippet.length).toBeLessThan(300);
+    decodeSpy.mockRestore();
+  });
+
   it("never echoes a 2xx body - it carries the grant", async () => {
     vi.stubGlobal(
       "fetch",

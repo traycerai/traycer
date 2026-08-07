@@ -368,12 +368,21 @@ class RuntimeHostMessenger<
    * then removes itself. It is also removed if the session closes without ever
    * getting ready - a session-level fatal, or the keep-warm linger expiring -
    * so a churning host picker cannot accumulate listeners.
+   *
+   * The orphan is owed exactly ONE outstanding boundary. A binding that
+   * already saw one has nothing left to carry: the queries it would un-strand
+   * were re-armed then, so release detaches it on the spot. Otherwise a
+   * picker toggling between this host and another would pile up one permanent
+   * listener per visit on a session some other consumer (the active host, a
+   * bound tab) keeps open indefinitely, and every later reconnect would fan
+   * out that many duplicate host-scope invalidations.
    */
   private subscribeRemoteAvailability(
     session: IRemoteSession<Registry, HostStreamRpcRegistry>,
     hostId: string,
   ): () => void {
     let released = false;
+    let deliveredBoundary = false;
     let detached = false;
     let unsubscribeAvailability: (() => void) | null = null;
     let unsubscribeClosed: (() => void) | null = null;
@@ -386,6 +395,7 @@ class RuntimeHostMessenger<
       unsubscribeClosed?.();
     };
     unsubscribeAvailability = session.subscribeAvailabilityRecovered(() => {
+      deliveredBoundary = true;
       this.onRemoteAvailabilityRecovered(hostId);
       if (released) {
         detach();
@@ -394,6 +404,9 @@ class RuntimeHostMessenger<
     unsubscribeClosed = session.onClosed(detach);
     return () => {
       released = true;
+      if (deliveredBoundary) {
+        detach();
+      }
     };
   }
 

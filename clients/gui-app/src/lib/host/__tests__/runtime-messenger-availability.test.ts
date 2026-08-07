@@ -260,6 +260,40 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
+  it("detaches on release once a boundary has already been delivered", () => {
+    const h = harness();
+    h.requestRemote();
+
+    // The binding saw its ready boundary while still current, so the queries
+    // it would un-strand were re-armed then and it is owed nothing further.
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    h.requestLocal();
+    // Keeping it attached here is what accumulates listeners: a picker toggled
+    // N times would leave N of them on a session another consumer holds open,
+    // and every later reconnect would fan out N duplicate invalidations.
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.session.emitReady();
+    expect(h.recovered).toEqual([REMOTE_HOST_ID]);
+
+    h.dispose();
+  });
+
+  it("does not accumulate listeners across repeated picker switches", () => {
+    const h = harness();
+    for (let visit = 0; visit < 5; visit += 1) {
+      h.requestRemote();
+      h.session.emitReady();
+      h.requestLocal();
+    }
+    // Every visit's listener is settled: each delivered its boundary and left.
+    expect(h.session.availabilityListenerCount).toBe(0);
+
+    h.dispose();
+  });
+
   it("detaches when the session closes without ever getting ready", () => {
     const h = harness();
     h.requestRemote();

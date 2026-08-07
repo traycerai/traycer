@@ -132,8 +132,18 @@ async function readBodyText(response: Response): Promise<string> {
       if (chunk.done) {
         break;
       }
+      // Decode at most the REMAINING budget, not the whole chunk. The loop
+      // only re-checks the cap between reads, so a single oversized chunk
+      // would otherwise be decoded in full — into a JS string, which is the
+      // expensive half — and the advertised hard cap would bound nothing.
+      const remaining = BODY_READ_CAP_BYTES - bytesRead;
       bytesRead += chunk.value.byteLength;
-      text += decoder.decode(chunk.value, { stream: true });
+      text += decoder.decode(
+        chunk.value.byteLength > remaining
+          ? chunk.value.subarray(0, remaining)
+          : chunk.value,
+        { stream: true },
+      );
     }
     text += decoder.decode();
   } catch {

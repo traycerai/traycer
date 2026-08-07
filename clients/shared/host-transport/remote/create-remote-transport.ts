@@ -90,6 +90,10 @@ export function createRemoteHostTransport<
       userId: options.userId,
       hostPublicKey: options.hostPublicKey,
       relayAttachUrl: options.relayAttachUrl,
+      // Part of the identity, not a per-consumer option: on a cache hit the
+      // factory below never runs, so `auth` would otherwise be silently
+      // inherited from whichever consumer happened to build the session first.
+      authRecovery: options.auth === null ? "terminal" : "revalidate",
     },
     () => {
       const grantProvider = createAttachGrantProvider({

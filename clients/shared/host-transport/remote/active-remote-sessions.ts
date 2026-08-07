@@ -45,6 +45,26 @@ export interface RemoteSessionIdentity {
   readonly userId: string;
   readonly hostPublicKey: string;
   readonly relayAttachUrl: string;
+  /**
+   * What this consumer needs a session to do with an `UNAUTHORIZED` fatal.
+   * Part of the identity because it is not a preference the cache may serve
+   * from a session built under the OTHER policy:
+   *
+   *  - `"revalidate"` (a `RemoteSessionOptions.auth` revalidator) redials and
+   *    RE-SENDS every live subscription, which is right for the warm
+   *    chat/terminal/epic sessions - a re-subscribe just re-snapshots.
+   *  - `"terminal"` (`auth: null`) is what `openOneShotStreamTransport` picks
+   *    deliberately for a side-effecting one-shot (Settings ▸ Worktrees
+   *    `worktree.deleteByPath`): re-sending that subscribe would re-run the
+   *    teardown script and git removal.
+   *
+   * Sharing across the two is unsafe in BOTH directions - a one-shot adopting
+   * a revalidating session silently regains the replay it opted out of, and a
+   * durable stream adopting a terminal session silently loses auth recovery -
+   * and the factory that would have applied the policy never runs on a cache
+   * hit. So the two never share a physical connection.
+   */
+  readonly authRecovery: "revalidate" | "terminal";
 }
 
 interface CacheEntry {
@@ -76,6 +96,7 @@ export function remoteSessionCacheKey(identity: RemoteSessionIdentity): string {
     identity.userId,
     identity.hostPublicKey,
     identity.relayAttachUrl,
+    identity.authRecovery,
   ].join(KEY_SEPARATOR);
 }
 
@@ -122,6 +143,7 @@ export function acquireRemoteSession<
     entry = undefined;
   }
   if (entry === undefined) {
+    closeSupersededIdentities(identity, key);
     entry = { session: createSession(), refCount: 0, lingerTimer: null };
     entriesByKey.set(key, entry);
   }
@@ -191,9 +213,58 @@ export function acquireRemoteSession<
 }
 
 /**
+ * Closes any zero-reference entry this acquire SUPERSEDES: same host, same
+ * user, same recovery policy, but a different host public key or relay attach
+ * URL - i.e. the host re-keyed or its endpoint moved, and the render layer has
+ * just rebuilt its transport onto the new identity.
+ *
+ * Keep-warm exists so a prompt RE-ACQUIRE of the same identity is free. A
+ * superseded identity can never be re-acquired (its key embeds the old public
+ * key), so lingering buys nothing and costs two things: an authenticated relay
+ * socket held open for the rest of the window, and - because
+ * {@link hasReadyRemoteSession} matches on `hostId` alone - live-session
+ * evidence attributed to a host whose current identity may still be dialing or
+ * already failing, which is enough to render it Online and pass its scope gate.
+ *
+ * Entries at refCount > 0 are left alone: a consumer still holds them, and
+ * tearing a live session out from under it is not this function's call.
+ */
+function closeSupersededIdentities(
+  identity: RemoteSessionIdentity,
+  currentKey: string,
+): void {
+  for (const [key, entry] of [...entriesByKey]) {
+    if (key === currentKey || entry.refCount > 0) {
+      continue;
+    }
+    const [hostId, userId, , , authRecovery] = key.split(KEY_SEPARATOR);
+    if (
+      hostId !== identity.hostId ||
+      userId !== identity.userId ||
+      authRecovery !== identity.authRecovery
+    ) {
+      // A different user or a different recovery policy - a legitimately
+      // independent session for the same host, not a superseded one. (The two
+      // fields skipped above are exactly the ones that must DIFFER for this to
+      // be a supersession, and `key !== currentKey` already establishes that.)
+      continue;
+    }
+    if (entry.lingerTimer !== null) {
+      clearTimeout(entry.lingerTimer);
+      entry.lingerTimer = null;
+    }
+    entriesByKey.delete(key);
+    entry.session.close();
+  }
+}
+
+/**
  * True if the cached session for `hostId` (any signed-in user) is currently
  * ready. A lingering keep-warm session (refCount 0, window not yet expired)
- * counts: it is a live, attached connection, so it is honest evidence.
+ * counts: it is a live, attached connection, so it is honest evidence - and a
+ * session whose identity has been SUPERSEDED is closed at that moment (see
+ * {@link closeSupersededIdentities}) rather than left to answer for the host
+ * it can no longer serve.
  */
 export function hasReadyRemoteSession(hostId: string): boolean {
   for (const [key, entry] of entriesByKey) {

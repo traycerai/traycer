@@ -10,7 +10,10 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
-import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -1437,6 +1440,32 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Reconnecting to the host…")).toBeDefined();
     expect(screen.queryByText(/may need to be updated/)).toBeNull();
+  });
+
+  it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
+    providerMocks.listResult.isError = true;
+    // The base class, not the retryable subclass: the request frame WAS on the
+    // wire when the socket died, so nothing may assume it resolves itself.
+    // `useHostQuery` pins `retry: false` and no recovery event is owed, so
+    // showing this as "connecting" parks the panel on a spinner forever and
+    // hides the report-issue affordance.
+    providerMocks.listResult.error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "The connection dropped before a response arrived",
+      requestId: "req-3",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {

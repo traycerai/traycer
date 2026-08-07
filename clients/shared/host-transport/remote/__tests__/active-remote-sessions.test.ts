@@ -74,6 +74,7 @@ function freshIdentity(): RemoteSessionIdentity {
     userId: `user-${nextHostId}`,
     hostPublicKey: `pubkey-${nextHostId}`,
     relayAttachUrl: `wss://relay.test/attach-${nextHostId}`,
+    authRecovery: "revalidate",
   };
 }
 
@@ -461,5 +462,103 @@ describe("hasReadyRemoteSession", () => {
   it("is false for a host with no cached session", () => {
     const { hostId } = freshIdentity();
     expect(hasReadyRemoteSession(hostId)).toBe(false);
+  });
+
+  it("does not answer for a host off a SUPERSEDED identity's lingering session", () => {
+    // A host re-keys. The old identity is unadoptable from here on, but its
+    // entry is matched by hostId alone - so left lingering it would report the
+    // rotated host as live while its real session is still dialing, which is
+    // enough to render it Online and pass its scope gate.
+    const identity = freshIdentity();
+    const stale = fakeSession();
+    stale.ready = true;
+    const view = acquireRemoteSession(identity, () => stale);
+    view.close();
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
+
+    const rotated = { ...identity, hostPublicKey: "pubkey-rotated" };
+    const dialing = fakeSession();
+    dialing.ready = false;
+    acquireRemoteSession(rotated, () => dialing);
+
+    expect(stale.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
+  });
+});
+
+describe("auth-recovery policy is part of the session identity", () => {
+  it("never hands a terminal-recovery consumer a session built to revalidate", () => {
+    // `openOneShotStreamTransport` passes `auth: null` on purpose: every
+    // reconnect re-sends live subscriptions, and re-sending a
+    // `worktree.deleteByPath` subscribe re-runs the teardown script and git
+    // removal. On a cache hit the factory never runs, so without this the
+    // one-shot would silently adopt the durable session's revalidator and
+    // regain exactly the replay it opted out of.
+    const durable = freshIdentity();
+    const durableSession = fakeSession();
+    const view = acquireRemoteSession(durable, () => durableSession);
+    view.close(); // released, now lingering warm
+
+    const oneShot: RemoteSessionIdentity = {
+      ...durable,
+      authRecovery: "terminal",
+    };
+    let builtOwnSession = false;
+    const oneShotSession = fakeSession();
+    acquireRemoteSession(oneShot, () => {
+      builtOwnSession = true;
+      return oneShotSession;
+    });
+
+    expect(builtOwnSession).toBe(true);
+    expect(remoteSessionRefCountForTest(durable)).toBe(0);
+    expect(remoteSessionRefCountForTest(oneShot)).toBe(1);
+  });
+
+  it("never hands a revalidating consumer a session built to fail terminal", () => {
+    // The inverse ordering: a durable stream adopting the one-shot's session
+    // would silently lose auth recovery, so a wake-time expired bearer would
+    // brick it instead of redialing.
+    const oneShot: RemoteSessionIdentity = {
+      ...freshIdentity(),
+      authRecovery: "terminal",
+    };
+    const oneShotSession = fakeSession();
+    const view = acquireRemoteSession(oneShot, () => oneShotSession);
+    view.close();
+
+    const durable: RemoteSessionIdentity = {
+      ...oneShot,
+      authRecovery: "revalidate",
+    };
+    let builtOwnSession = false;
+    const durableSession = fakeSession();
+    acquireRemoteSession(durable, () => {
+      builtOwnSession = true;
+      return durableSession;
+    });
+
+    expect(builtOwnSession).toBe(true);
+    expect(remoteSessionRefCountForTest(durable)).toBe(1);
+  });
+
+  it("keeps the two policies' sessions independent rather than superseding each other", () => {
+    // They differ only in policy, not in host identity, so neither is stale:
+    // a backgrounded delete must not tear down the warm durable session, and
+    // acquiring the durable one must not kill the running delete.
+    const durable = freshIdentity();
+    const oneShot: RemoteSessionIdentity = {
+      ...durable,
+      authRecovery: "terminal",
+    };
+    const durableSession = fakeSession();
+    const oneShotSession = fakeSession();
+
+    const durableView = acquireRemoteSession(durable, () => durableSession);
+    durableView.close();
+    acquireRemoteSession(oneShot, () => oneShotSession);
+
+    expect(durableSession.closeCalls).toBe(0);
+    expect(remoteSessionRefCountForTest(oneShot)).toBe(1);
   });
 });

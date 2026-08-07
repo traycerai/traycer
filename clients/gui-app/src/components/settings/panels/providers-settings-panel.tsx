@@ -4,7 +4,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
-import { HostTransportFailureError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -440,12 +440,21 @@ function ProvidersPanelBody({
     );
   }
   if (query.isError) {
-    // A transport failure says nothing about the RPC or the host's version -
-    // the host never saw (or never answered) the request. On a remote host
-    // this is routinely just the session's first dial still in flight (the
-    // ready boundary refetches this query the moment the session is up), so
+    // A PRE-SEND transport failure says nothing about the RPC or the host's
+    // version - the request was never put on the wire. On a remote host this
+    // is routinely just the session's first dial still in flight, and the
+    // ready boundary refetches this query the moment the session is up, so
     // describe the connection instead of blaming the host.
-    if (query.error instanceof HostTransportFailureError) {
+    //
+    // Deliberately the `RetryableTransportError` subclass and not its
+    // `HostTransportFailureError` base: an AMBIGUOUS post-send drop (the
+    // socket died after the request frame went out) keeps the base class
+    // precisely because nothing may assume it will resolve itself. Nothing
+    // refetches it either - `useHostQuery` pins `retry: false`, and a healthy
+    // independent stream connection need not emit any recovery event - so
+    // showing it as "connecting" would park the panel on a spinner that never
+    // resolves and offers no way to report the fault.
+    if (query.error instanceof RetryableTransportError) {
       return (
         <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
           <MutedAgentSpinner />
