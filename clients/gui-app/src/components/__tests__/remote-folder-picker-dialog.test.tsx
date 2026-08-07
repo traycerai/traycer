@@ -11,7 +11,11 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
-import type { WorkspaceBrowseFoldersResponse } from "@traycer/protocol/host/workspace/unary-schemas";
+import type {
+  WorkspaceBrowseFoldersResponse,
+  WorkspacePrepareFoldersResponseV11,
+  WorkspaceRecentEntry,
+} from "@traycer/protocol/host/workspace/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
@@ -49,6 +53,65 @@ vi.mock("@/hooks/workspace/use-workspace-browse-folders-query", () => ({
     );
   },
 }));
+
+/**
+ * `workspace.prepareFolders` v1.1 conveniences, faked at the same seam as the
+ * browse query. `undefined` data stands in for the fail-closed
+ * `DOWNGRADE_UNSUPPORTED` a v1.0 host answers these with - the picker must
+ * treat that as "absent", never as an error.
+ */
+let recentEntries: readonly WorkspaceRecentEntry[] | undefined;
+let reportedHomeDir: string | null | undefined;
+const recordedRecents: string[] = [];
+
+function prepareFoldersResponse(
+  fields: Partial<WorkspacePrepareFoldersResponseV11>,
+): WorkspacePrepareFoldersResponseV11 {
+  return {
+    operation: "prepare",
+    folders: [],
+    repoIdentifiers: [],
+    homeDir: null,
+    validation: null,
+    recentWorkspaces: null,
+    ...fields,
+  };
+}
+
+vi.mock("@/hooks/workspace/use-workspace-recent-workspaces-query", () => ({
+  useWorkspaceRecentWorkspaces: () => ({
+    data:
+      recentEntries === undefined
+        ? undefined
+        : prepareFoldersResponse({
+            operation: "listRecentWorkspaces",
+            recentWorkspaces: [...recentEntries],
+          }),
+  }),
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-home-dir-query", () => ({
+  useWorkspaceHomeDir: () => ({
+    data:
+      reportedHomeDir === undefined
+        ? undefined
+        : prepareFoldersResponse({
+            operation: "getHomeDir",
+            homeDir: reportedHomeDir,
+          }),
+  }),
+}));
+
+vi.mock(
+  "@/hooks/workspace/use-workspace-record-recent-workspace-mutation",
+  () => ({
+    useWorkspaceRecordRecentWorkspace: () => ({
+      mutate: (path: string) => {
+        recordedRecents.push(path);
+      },
+    }),
+  }),
+);
 
 /**
  * A real (mock-messenger) HostClient: the store's request contract takes the
@@ -124,6 +187,11 @@ describe("<RemoteFolderPickerDialog />", () => {
       ),
       refetch: () => Promise.resolve(),
     });
+    // Default: a host that answers neither convenience operation, so every
+    // pre-existing expectation describes the picker WITHOUT recents.
+    recentEntries = undefined;
+    reportedHomeDir = undefined;
+    recordedRecents.length = 0;
     useRemoteFolderPickerStore.setState({
       open: false,
       client: null,
@@ -457,5 +525,97 @@ describe("<RemoteFolderPickerDialog />", () => {
     });
     expect(pathInput().value).toBe("/Users/tester/");
     expect(lastClient).toBe(secondClient);
+  });
+
+  it("offers the host's recent workspaces on the pristine field", async () => {
+    recentEntries = [
+      { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+      { path: "/srv/api", lastOpenedAt: "2026-07-30T00:00:00.000Z" },
+    ];
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    const chips = await screen.findAllByTestId("remote-folder-picker-recent");
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "/srv/app",
+      "/srv/api",
+    ]);
+  });
+
+  it("picking a recent fills the field and arms Add with exactly it", async () => {
+    recentEntries = [
+      { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+    ];
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-recent"))[0],
+    );
+    // Fills the field rather than adding outright - still editable, and shown
+    // in context (its parent, filtered to it).
+    expect(pathInput().value).toBe("/srv/app");
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/srv/app");
+  });
+
+  it("hides the recents once the field is edited", async () => {
+    recentEntries = [
+      { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+    ];
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findByTestId("remote-folder-picker-recents");
+    fireEvent.change(pathInput(), { target: { value: "/Users/tester/co" } });
+    expect(screen.queryByTestId("remote-folder-picker-recents")).toBeNull();
+  });
+
+  it("records the added folder as a recent on the host", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-row"))[0],
+    );
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/Users/tester/code");
+    expect(recordedRecents).toEqual(["/Users/tester/code"]);
+  });
+
+  it("a host that answers neither convenience operation still browses", async () => {
+    // Both fail closed on a v1.0 host. That is not an error state for the
+    // picker: no shortcut row, and the listing is untouched.
+    recentEntries = undefined;
+    reportedHomeDir = undefined;
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    expect(await screen.findByTestId("remote-folder-picker-rows")).toBeTruthy();
+    expect(screen.queryByTestId("remote-folder-picker-recents")).toBeNull();
+    expect(screen.queryByTestId("remote-folder-picker-error")).toBeNull();
+    expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
+  });
+
+  it("expands ~ off getHomeDir when the home listing never answers", async () => {
+    // The whole point of reading getHomeDir separately: home is unlistable, so
+    // the root browse can never teach the field where `~` points - but Add
+    // needs no listing, so picking out of it must still work.
+    queryByPath.set(pathKey(null), {
+      data: undefined,
+      isPending: false,
+      error: new Error(
+        "Access to this folder is denied on the host machine (System Settings > Privacy & Security on the host Mac)",
+      ),
+      refetch: () => Promise.resolve(),
+    });
+    reportedHomeDir = "/Users/tester";
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findByTestId("remote-folder-picker-path");
+    fireEvent.change(pathInput(), { target: { value: "~/code" } });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/Users/tester/code");
   });
 });

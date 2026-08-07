@@ -11,6 +11,8 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type {
   WorkspaceBrowseFolderEntry,
   WorkspaceBrowseFoldersResponse,
+  WorkspacePrepareFoldersResponseV11,
+  WorkspaceRecentEntry,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +25,9 @@ import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useWorkspaceBrowseFolders } from "@/hooks/workspace/use-workspace-browse-folders-query";
+import { useWorkspaceHomeDir } from "@/hooks/workspace/use-workspace-home-dir-query";
+import { useWorkspaceRecentWorkspaces } from "@/hooks/workspace/use-workspace-recent-workspaces-query";
+import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
 /**
@@ -95,7 +100,25 @@ function RemoteFolderPickerBody(): ReactNode {
     inputRef.current?.focus();
   }, []);
 
-  const parsed = parseBrowseInput(rawInput, homePath);
+  // Both are conveniences that must never gate browsing: each fails closed
+  // against a v1.0 host and is read here as "absent", never as an error.
+  const homeDirQuery = useWorkspaceHomeDir({ client, enabled: true });
+  const recentsQuery = useWorkspaceRecentWorkspaces({ client, enabled: true });
+  const recordRecent = useWorkspaceRecordRecentWorkspace({ client });
+
+  // Where `~` points. The root browse response is preferred - it is the
+  // directory actually being shown - and `getHomeDir` is the fallback that
+  // keeps `~` working when home is UNLISTABLE, so the root browse never
+  // answers and can never teach it. Add needs no listing, so picking out of an
+  // unlistable home still works. Null when neither answered (a v1.0 host fails
+  // `getHomeDir` closed); `~` then simply does not expand.
+  //
+  // Deliberately inline rather than extracted into a helper: routing it
+  // through a function makes `parsed` opaque to the React Compiler, which then
+  // bails out of preserving the `filteredEntries` memo below.
+  const effectiveHome = homePath ?? homeDirQuery.data?.homeDir ?? null;
+
+  const parsed = parseBrowseInput(rawInput, effectiveHome);
   const query = useWorkspaceBrowseFolders({
     client,
     directoryPath: parsed.directoryPath,
@@ -112,6 +135,8 @@ function RemoteFolderPickerBody(): ReactNode {
   ) {
     setHomePath(data.directoryPath);
   }
+
+  const recentEntries = readRecentShortcuts(rawInput, recentsQuery.data);
 
   const shownInput = readShownInput(rawInput, data);
   const filteredEntries = useMemo(
@@ -136,10 +161,14 @@ function RemoteFolderPickerBody(): ReactNode {
     if (upPath !== null) setPath(upPath === "/" ? "/" : `${upPath}/`);
   };
 
-  const addTarget = readAddTarget(rawInput, homePath, data);
+  const addTarget = readAddTarget(rawInput, effectiveHome, data);
 
   const addCurrent = (): void => {
     if (addTarget === null) return;
+    // Fire-and-forget, BEFORE settling closes this body: the recents list is
+    // incidental to the pick, so nothing here may delay or block it. The
+    // request is already in flight by the time this unmounts.
+    recordRecent.mutate(addTarget);
     settle(addTarget);
   };
 
@@ -219,6 +248,7 @@ function RemoteFolderPickerBody(): ReactNode {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <RemoteFolderPickerRecents entries={recentEntries} onPick={setPath} />
         <p className="px-2 pb-1 text-ui-xs text-muted-foreground">
           Directories
         </p>
@@ -254,6 +284,49 @@ function RemoteFolderPickerBody(): ReactNode {
         <span className="inline-flex items-center gap-1">
           <Kbd>Esc</Kbd> Close
         </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Recently-opened workspaces on the host, as one-tap shortcuts.
+ *
+ * Deliberately OUTSIDE the listbox: the combobox's keyboard model (arrows
+ * move through directories, Enter descends) stays exactly as it was, and
+ * these stay plain tab-reachable buttons. Picking one fills the field with
+ * that path rather than adding it outright - the field is the picker's single
+ * source of truth, so this arms Add with the recent while still showing it in
+ * context (its parent, filtered to it) and leaving it editable.
+ */
+function RemoteFolderPickerRecents(props: {
+  readonly entries: ReadonlyArray<WorkspaceRecentEntry>;
+  readonly onPick: (path: string) => void;
+}): ReactNode {
+  if (props.entries.length === 0) return null;
+  return (
+    <div data-testid="remote-folder-picker-recents">
+      <p className="px-2 pb-1 text-ui-xs text-muted-foreground">Recent</p>
+      <div className="flex flex-wrap gap-1 px-2 pb-3">
+        {props.entries.map((entry) => (
+          <Button
+            key={entry.path}
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 max-w-full min-w-0 font-mono font-normal"
+            data-testid="remote-folder-picker-recent"
+            // Keep focus (and the keyboard model) on the combobox field.
+            onMouseDown={(event) => {
+              event.preventDefault();
+            }}
+            onClick={() => {
+              props.onPick(entry.path);
+            }}
+          >
+            <span className="min-w-0 truncate">{entry.path}</span>
+          </Button>
+        ))}
       </div>
     </div>
   );
@@ -584,6 +657,21 @@ function parseBrowseInput(
     directoryPath: directory,
     filter: path.slice(lastSlash + 1),
   };
+}
+
+/**
+ * Recent-workspace shortcuts to offer: only on the PRISTINE field - the "just
+ * opened the picker" moment they are for - because once the user types, the
+ * listing is the subject and the shortcuts would only crowd it. Empty when the
+ * host did not answer the operation (v1.0 fails it closed), which renders
+ * nothing rather than an error.
+ */
+function readRecentShortcuts(
+  rawInput: string | null,
+  recentsData: WorkspacePrepareFoldersResponseV11 | undefined,
+): ReadonlyArray<WorkspaceRecentEntry> {
+  if (rawInput !== null) return [];
+  return recentsData?.recentWorkspaces ?? [];
 }
 
 function parentOf(path: string): string {
