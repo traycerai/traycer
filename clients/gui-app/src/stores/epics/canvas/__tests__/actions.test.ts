@@ -835,6 +835,26 @@ describe("dropOnTabStrip", () => {
     ]);
     expect(next.activePaneId).toBe(paneId);
   });
+
+  it("activates an already-open sidebar node dropped at its current position", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)[0]).toBe(SPEC_A.id);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
+  });
 });
 
 describe("splitPaneEmpty", () => {

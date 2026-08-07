@@ -176,6 +176,7 @@ export function PaneOpener(props: PaneOpenerProps) {
       <Command
         filter={paletteFilter}
         label="Open into pane"
+        loop
         shouldFilter={searchRunTarget === null && !hostRankedResultSubpage}
         onKeyDown={handleKeyDown}
         className="h-full min-h-0 bg-transparent"
