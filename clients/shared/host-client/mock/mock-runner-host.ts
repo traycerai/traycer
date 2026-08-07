@@ -170,6 +170,8 @@ export class MockRunnerHost implements IRunnerHost {
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
+    // The mock stands in for a desktop-style shell with a native dialog.
+    canPickNatively: true,
     pickFolders: async (): Promise<readonly string[]> => [
       ...this.workspaceFolderPickerPaths,
     ],

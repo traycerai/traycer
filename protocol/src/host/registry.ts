@@ -283,6 +283,7 @@ import {
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
 import {
+  workspaceBrowseFoldersV10,
   workspaceMentionFilesV10,
   workspaceMentionFoldersV10,
   workspaceMentionWorktreesV10,
@@ -4122,6 +4123,25 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: workspaceListDirectoryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Additive, post-v1.0.0 optional method: pre-workspace folder browsing for
+  // the remote folder picker. A host that predates it simply lacks it: the
+  // picker's browse request degrades to E_HOST_UNSUPPORTED and the picker
+  // shows update-the-host guidance. It rides the optional-capability channel
+  // (`degrade: unsupported`) and stays out of the released floor / baseline
+  // surface.
+  "workspace.browseFolders": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceBrowseFoldersV10,
           upgradeFromPreviousVersion: null,
         },
       },
