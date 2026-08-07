@@ -822,6 +822,30 @@ describe("NotificationsPopover", () => {
     expect(within(row).queryByTestId("notification-unread-rail")).toBeNull();
   });
 
+  it("does not render a row-level Clear action for an unread cloud row", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-unread", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationRead).toBe("false");
+    expect(within(row).queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Mark as read" }),
+    ).not.toBeNull();
+  });
+
   it("requires confirmation before clearing the cloud feed", async () => {
     notificationFeedMode.value = "cloud";
     bindHostClient();
