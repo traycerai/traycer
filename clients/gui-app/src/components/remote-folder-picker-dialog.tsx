@@ -664,8 +664,13 @@ const INVALID_INPUT: ParsedBrowseInput = {
  */
 const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
 
-/** `\\server\share` - the shortest thing on a UNC path that is still a root. */
-const WINDOWS_UNC_ROOT = /^\\\\[^\\/]+[\\/][^\\/]+/;
+/**
+ * `\\server\share` - the shortest thing on a UNC path that is still a root.
+ * Windows accepts forward slashes here too (`//server/share`), so both lead-in
+ * separators count; a genuine POSIX path virtually never starts with a doubled
+ * slash, and POSIX itself leaves that prefix implementation-defined.
+ */
+const WINDOWS_UNC_ROOT = /^[\\/]{2}[^\\/]+[\\/][^\\/]+/;
 
 function isAbsolutePath(path: string): boolean {
   return (
@@ -694,7 +699,9 @@ function rootLengthOf(path: string): number {
  * `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
  */
 function lastSeparatorIndex(path: string): number {
-  if (path.startsWith("/")) return path.lastIndexOf("/");
+  if (path.startsWith("/") && !WINDOWS_UNC_ROOT.test(path)) {
+    return path.lastIndexOf("/");
+  }
   return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
 }
 
@@ -736,8 +743,13 @@ function parseBrowseInput(
   if (rawInput === null) {
     return { valid: true, directoryPath: null, filter: "" };
   }
-  const raw = rawInput.trim();
-  if (raw === "" || isTildeOnly(raw)) {
+  // Trailing whitespace is SIGNIFICANT: a POSIX directory may legitimately end
+  // in one, so only the leading side is forgiven (nothing absolute starts with
+  // whitespace). Emptiness and tilde-only are judged on a fully-trimmed copy -
+  // whitespace alone is still "no path yet", not a filter.
+  const raw = rawInput.trimStart();
+  const collapsed = raw.trimEnd();
+  if (collapsed === "" || isTildeOnly(collapsed)) {
     return { valid: true, directoryPath: null, filter: "" };
   }
   let path = raw;
@@ -858,9 +870,13 @@ function readAddTarget(
   data: WorkspaceBrowseFoldersResponse | undefined,
 ): string | null {
   if (rawInput === null) return data?.directoryPath ?? homePath;
-  const raw = rawInput.trim();
-  if (raw === "") return null;
-  if (isTildeOnly(raw)) return homePath ?? data?.directoryPath ?? null;
+  // Same discipline as `parseBrowseInput`: trailing whitespace stays part of
+  // the path - `/srv/project ` and `/srv/project` are distinct siblings, and
+  // Add must submit exactly what the field shows.
+  const raw = rawInput.trimStart();
+  const collapsed = raw.trimEnd();
+  if (collapsed === "") return null;
+  if (isTildeOnly(collapsed)) return homePath ?? data?.directoryPath ?? null;
   let path = raw;
   if (startsWithTilde(path)) {
     if (homePath === null) return null;

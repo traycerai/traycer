@@ -646,6 +646,40 @@ describe("<RemoteFolderPickerDialog />", () => {
     await expect(pick).resolves.toBe("/Users/tester/foo\\bar");
   });
 
+  it("preserves trailing whitespace in a directory name through Add", async () => {
+    // `/srv/project ` and `/srv/project` are distinct POSIX siblings, so
+    // trimming before submit would silently pick the one the field never
+    // showed. Reachable by typing too, but a recent is how it arrives verbatim.
+    recentEntries = [
+      { path: "/srv/project ", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
+    ];
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-recent"))[0],
+    );
+    expect(pathInput().value).toBe("/srv/project ");
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/srv/project ");
+    expect(recordedRecents).toEqual(["/srv/project "]);
+  });
+
+  it("whitespace-only input is still no path at all", async () => {
+    // Trailing whitespace being significant must not promote a field holding
+    // ONLY whitespace into a filter or an addable path.
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.change(pathInput(), { target: { value: "   " } });
+    expect(screen.queryByTestId("remote-folder-picker-invalid")).toBeNull();
+    expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
+    expect(
+      screen.getByTestId("remote-folder-picker-add").hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
   it("hides the recents once the field is edited", async () => {
     recentEntries = [
       { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
@@ -888,6 +922,29 @@ describe("<RemoteFolderPickerDialog />", () => {
       await screen.findAllByTestId("remote-folder-picker-row");
       fireEvent.change(pathInput(), { target: { value: "\\\\build\\shared" } });
       expect(rowNames()).toEqual(["web"]);
+    });
+
+    it("recognizes a UNC root typed with forward slashes", async () => {
+      // Windows resolves `//build/shared` as UNC just like the backslash
+      // form. Falling through to POSIX handling would browse `//build`
+      // filtered by "shared" and never list the share itself.
+      queryByPath.set(
+        pathKey("//build/shared"),
+        readyLevel({
+          directoryPath: "//build/shared",
+          parentPath: null,
+          entries: [{ path: "//build/shared/web", name: "web" }],
+        }),
+      );
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      await screen.findAllByTestId("remote-folder-picker-row");
+      fireEvent.change(pathInput(), { target: { value: "//build/shared" } });
+      expect(requestedPaths).toContain("//build/shared");
+      expect(requestedPaths).not.toContain("//build");
+      expect(rowNames()).toEqual(["web"]);
+      // The share root is the walking-up fixpoint in this spelling too.
+      expect(screen.queryByTestId("remote-folder-picker-up-row")).toBeNull();
     });
 
     it("still rejects a drive-relative path", async () => {

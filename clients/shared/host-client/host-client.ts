@@ -210,22 +210,35 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   createRequester(entry: HostDirectoryEntry): HostClient<Registry> {
+    // Pins the host IDENTITY, not the transport snapshot. A host's directory
+    // entry refreshes in place (status, version, endpoint) and
+    // `captureAuthority` refuses a routed entry that no longer matches the
+    // live directory - so a requester frozen on its creation-time entry would
+    // fail every request after such a refresh until rebuilt, while a dialog
+    // holding it stays open. Each property access resolves the current entry;
+    // the creation-time one only serves once the host leaves the directory,
+    // where capture rejects it as stale either way.
+    const resolveEntry = (): HostDirectoryEntry =>
+      this.findHostById(entry.hostId) ?? entry;
     return new Proxy(this, {
       get: (target, property, receiver) => {
         if (property === "getActiveHost") {
-          return () => entry;
+          return () => resolveEntry();
         }
         if (property === "getActiveHostId") {
           return () => entry.hostId;
         }
         if (property === "request") {
-          return target.requestFor.bind(target, entry);
+          return target.requestFor.bind(target, resolveEntry());
         }
         if (property === "requestWithSignal") {
-          return target.requestForWithSignal.bind(target, entry);
+          return target.requestForWithSignal.bind(target, resolveEntry());
         }
         if (property === "requestWithResponseTimeout") {
-          return target.requestForWithResponseTimeout.bind(target, entry);
+          return target.requestForWithResponseTimeout.bind(
+            target,
+            resolveEntry(),
+          );
         }
         const value = Reflect.get(target, property, receiver);
         return typeof value === "function" ? value.bind(target) : value;
