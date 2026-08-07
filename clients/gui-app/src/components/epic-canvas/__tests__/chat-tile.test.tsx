@@ -16,6 +16,7 @@ import {
   restoreLegendListTestClock,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
+import { modLabel } from "@/lib/keybindings/platform";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -1574,7 +1575,11 @@ describe("<ChatTile />", () => {
     }
     expect(titleInput.value).toBe("Cross Question - Chat 1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    const forkButton = screen.getByRole("button", { name: "Fork" });
+    expect(within(forkButton).getByText(modLabel())).not.toBeNull();
+    expect(within(forkButton).getByText("↵")).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
     const [forkCall] = forkCreateTestState.mutate.mock.calls;
     expect(forkCall[0].forkSource.interviewBlockId).toBe("question-1");

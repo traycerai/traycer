@@ -25,6 +25,8 @@ import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-li
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 export interface NewTerminalPickerBodyProps {
   readonly epicId: string;
@@ -86,6 +88,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     hasLaunchedRef.current = true;
     onLaunch(launchTarget);
   }, [launchTarget, onLaunch]);
+  usePrimaryActionShortcut(true, handleLaunch);
 
   let folderlessCwdStatus: ReactNode = null;
   if (folderlessCwdFailed) {
@@ -129,10 +132,13 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
         <Button
           type="button"
           size="sm"
+          aria-label="Launch"
+          aria-keyshortcuts="Meta+Enter Control+Enter"
           disabled={launchTarget === null}
           onClick={handleLaunch}
         >
           Launch
+          <PrimaryActionShortcutHint />
         </Button>
       </div>
     </>
