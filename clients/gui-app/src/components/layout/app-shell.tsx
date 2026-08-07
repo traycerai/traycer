@@ -13,9 +13,8 @@ import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
-import { ChatForkDialog } from "@/components/chats/chat-fork-dialog";
-import { ChatForkIndicatorBanner } from "@/components/chats/chat-fork-indicator-banner";
 import { RemoteWorkspacePathPickerHost } from "@/components/home/host-workspace-selector/remote-workspace-path-picker-host";
+import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
 interface AppShellProps {
@@ -30,6 +29,13 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   const { children } = props;
   const activeHostId = useReactiveActiveHostId();
+  // Observed, never rendered. A publication fork resolves itself now - the
+  // banner and the dialog that used to read this query are gone - but the
+  // per-chat `pendingFork` indicator is derived from an open fork episode and
+  // its own query has no push channel for the moment one opens or closes. One
+  // app-wide mount supplies that edge, because an episode is a HOST fact and
+  // not a property of any open tab.
+  useChatForkEventQuery();
 
   return (
     <DiffWorkerPoolProvider>
@@ -38,7 +44,6 @@ export function AppShell(props: AppShellProps) {
           <div className="relative flex h-screen w-full flex-col">
             <AppHeader variant="app" />
             <HostConnectionDegradedBanner />
-            <ChatForkIndicatorBanner />
             <main className="relative flex min-h-0 flex-1 flex-col">
               {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}
@@ -65,7 +70,6 @@ export function AppShell(props: AppShellProps) {
               <TileSelectAllBridge />
             </main>
             <OpenFolderDialog />
-            <ChatForkDialog />
             <RemoteWorkspacePathPickerHost />
             <QuitInterceptBridge />
             <MigrationRunController />

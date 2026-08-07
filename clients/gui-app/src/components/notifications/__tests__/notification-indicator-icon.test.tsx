@@ -64,12 +64,6 @@ describe("<NotificationIndicatorIcon />", () => {
     expect(
       screen.getByTestId("indicator-fork-subject-1").getAttribute("class"),
     ).toContain("lucide-git-fork");
-    expect(
-      screen
-        .getByTestId("indicator-fork-subject-1")
-        .parentElement?.getAttribute("data-notification-indicator-action"),
-    ).toBe("chat-fork");
-
     rerender(
       renderIconContent(
         {

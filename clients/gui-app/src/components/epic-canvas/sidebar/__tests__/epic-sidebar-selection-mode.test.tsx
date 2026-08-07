@@ -2043,7 +2043,13 @@ describe("chat descendant status rollup", () => {
     };
   }
 
-  it("opens fork resolution from the affected chat's indicator without selecting the row", () => {
+  // The fork indicator is an OBSERVATION now, not an entry point: a
+  // publication fork resolves itself and the user is told afterwards by a
+  // notification, so clicking the glyph opens nothing. Pinned as a click that
+  // selects the row like any other part of it, because the previous behaviour
+  // (swallow the click, open an arbitration dialog) is exactly what the
+  // demolition removed and a silent no-op glyph would read as a bug.
+  it("shows the fork glyph as a status, with no arbitration to click into", () => {
     seedNestedChatTree();
     testState.indicatorChats = {
       "chat-root": indicator({ pendingFork: true }),
@@ -2051,10 +2057,22 @@ describe("chat descendant status rollup", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByTestId("chat-sidebar-spinner-fork-chat-root"));
+    const glyph = screen.getByTestId("chat-sidebar-spinner-fork-chat-root");
+    // The indicator survives - an open episode is real state and worth showing
+    // while it lasts - but it is an OBSERVATION now. The affordance that made
+    // it an entry point into the fork dialog is gone, and both halves of that
+    // are asserted structurally rather than through a click: the delegation
+    // hook the row used to read, and the pointer affordance that advertised
+    // it. A click assertion alone would pass against a handler that silently
+    // did nothing.
+    const span = glyph.parentElement;
+    expect(
+      span?.getAttribute("data-notification-indicator-action"),
+    ).toBeNull();
+    expect(span?.className).not.toContain("cursor-pointer");
 
-    expect(useAppDialogStore.getState().activeDialog).toBe("chat-fork");
-    expect(testState.activeArtifactId).toBeNull();
+    fireEvent.click(glyph);
+    expect(useAppDialogStore.getState().activeDialog).toBeNull();
   });
 
   it("bubbles a hidden grandchild's needs-attention status onto the collapsed root", () => {
