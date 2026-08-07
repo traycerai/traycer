@@ -553,12 +553,31 @@ describe("OAuth code flow", () => {
     // The host consumes the first, so the second returns a failure against an
     // attempt that actually succeeded - the user is told their code was
     // rejected when it was not.
+    //
+    // The dialog is RERENDERED rather than remounted: the mocked hook reads
+    // `authIsPending` at render time, and a fresh mount would have no live
+    // attempt at all - the second Enter would land on a Continue button and
+    // the test would pass with the guard deleted.
     mocks.authIsPending = false;
-    renderDialog({
-      entry: OAUTH_ONLY,
-      capabilities: FULL_CAPS,
-      onDone: vi.fn(),
-    });
+    // A FACTORY, not a stored element: React bails out of a re-render when the
+    // root element is referentially identical, so reusing one object would
+    // leave the mocked hook's `isPending` at its old value and the test would
+    // report a double-submit that never happened.
+    const element = (): ReactNode => (
+      <ProviderModelProviderConnectDialog
+        open
+        onOpenChange={() => {}}
+        providerId="opencode"
+        providerLabel="OpenCode"
+        entry={OAUTH_ONLY}
+        capabilities={FULL_CAPS}
+        hostId="host-1"
+        resumedAttempt={null}
+        onDone={vi.fn()}
+      />
+    );
+    const { rerender } = render(element());
+
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     settle(mocks.authCalls[0], {
       kind: "authorizationUrl",
@@ -573,20 +592,13 @@ describe("OAuth code flow", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     expect(mocks.authCalls).toHaveLength(2);
 
-    // The submit is now in flight; a second Enter must not reach the host.
+    // Same dialog, same live attempt, submit now in flight.
     mocks.authIsPending = true;
-    cleanup();
-    // Re-render with the pending flag set, drive Enter again on a live attempt.
-    renderDialog({
-      entry: OAUTH_ONLY,
-      capabilities: FULL_CAPS,
-      onDone: vi.fn(),
-    });
-    const before = mocks.authCalls.length;
-    fireEvent.keyDown(screen.getByRole("button", { name: "Continue" }), {
-      key: "Enter",
-    });
-    expect(mocks.authCalls).toHaveLength(before);
+    rerender(element());
+    expect(screen.getByLabelText("Paste the code")).toBe(field);
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(mocks.authCalls).toHaveLength(2);
   });
 
   it("re-prompts on code_rejected and KEEPS the attempt", () => {
