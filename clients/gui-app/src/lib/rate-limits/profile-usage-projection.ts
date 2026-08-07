@@ -194,6 +194,39 @@ function openRouterCreditProjection(
   };
 }
 
+// Hugging Face's only computable percentage is against the included
+// allowance - the same pair the settings credit bar renders - so an account
+// without one projects no window at all rather than a fabricated zero. `used`
+// can exceed the allowance once an account spends past it, so the consumed
+// figure is clamped to keep the projected percentage inside 0-100.
+function huggingFaceCreditProjection(
+  rateLimits: Extract<
+    ProviderRateLimits,
+    { provider: "huggingface"; available: true }
+  >,
+): ProfileUsageWindow | null {
+  if (rateLimits.includedUsd === null || rateLimits.includedUsd <= 0) {
+    return null;
+  }
+  const consumed = Math.min(
+    Math.max(0, rateLimits.usedUsd),
+    rateLimits.includedUsd,
+  );
+  const usedPercent = (consumed / rateLimits.includedUsd) * 100;
+  const window = {
+    usedPercent,
+    durationMinutes: null,
+    resetsAt: null,
+  };
+  return {
+    id: "credits",
+    role: "primary",
+    name: "Included credits",
+    window,
+    severity: creditUsageSeverity(usedPercent),
+  };
+}
+
 function projectedLiveWindows(
   rateLimits: ProviderRateLimits,
   now: number,
@@ -292,6 +325,10 @@ function projectedLiveWindows(
           now,
         }),
       ].filter((window): window is ProfileUsageWindow => window !== null);
+    case "huggingface": {
+      const credits = huggingFaceCreditProjection(rateLimits);
+      return credits === null ? [] : [credits];
+    }
     case "kilocode":
       return [];
   }
