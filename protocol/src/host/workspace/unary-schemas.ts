@@ -340,9 +340,27 @@ export type WorkspaceListDirectoryResponse = z.infer<
   typeof workspaceListDirectoryResponseSchema
 >;
 
+/**
+ * Absolute in HOST-native terms, which is not the same thing on every host:
+ * POSIX `/srv/app`, a Windows drive `C:\Users\alice` (or `C:/Users/alice`,
+ * which Windows accepts too), or a UNC share `\\server\share`.
+ *
+ * Enforced on the wire rather than left to the endpoints because both
+ * directions can do damage with a relative path: the host resolves a request
+ * against its own working directory, and the picker can submit a response
+ * path straight to `workspace.prepareFolders` without it passing through the
+ * typed-path validation that would otherwise have caught it.
+ */
+const ABSOLUTE_HOST_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
+const absoluteHostPathSchema = z
+  .string()
+  .min(1)
+  .regex(ABSOLUTE_HOST_PATH, "must be an absolute host path");
+
 export const workspaceBrowseFolderEntrySchema = z.object({
   /** Absolute host-native path of the folder. */
-  path: z.string().min(1),
+  path: absoluteHostPathSchema,
   /** Display basename, computed by the host. */
   name: z.string().min(1),
 });
@@ -367,7 +385,7 @@ export type WorkspaceBrowseFolderEntry = z.infer<
  * is the remote consent flow.
  */
 export const workspaceBrowseFoldersRequestSchema = z.object({
-  directoryPath: z.string().min(1).nullable(),
+  directoryPath: absoluteHostPathSchema.nullable(),
 });
 export type WorkspaceBrowseFoldersRequest = z.infer<
   typeof workspaceBrowseFoldersRequestSchema
@@ -375,9 +393,9 @@ export type WorkspaceBrowseFoldersRequest = z.infer<
 
 export const workspaceBrowseFoldersResponseSchema = z.object({
   /** Absolute path that was listed (resolved from a null request). */
-  directoryPath: z.string().min(1),
+  directoryPath: absoluteHostPathSchema,
   /** Null only at the filesystem root; even the home directory walks up. */
-  parentPath: z.string().min(1).nullable(),
+  parentPath: absoluteHostPathSchema.nullable(),
   /** Direct child DIRECTORIES only; files never cross the wire. */
   entries: z.array(workspaceBrowseFolderEntrySchema),
 });

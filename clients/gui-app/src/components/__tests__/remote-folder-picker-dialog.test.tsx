@@ -78,8 +78,8 @@ function prepareFoldersResponse(
   };
 }
 
-vi.mock("@/hooks/workspace/use-workspace-recent-workspaces-query", () => ({
-  useWorkspaceRecentWorkspaces: () => ({
+vi.mock("@/hooks/workspace/use-workspace-list-recent-workspaces-query", () => ({
+  useWorkspaceListRecentWorkspaces: () => ({
     data:
       recentEntries === undefined
         ? undefined
@@ -90,8 +90,8 @@ vi.mock("@/hooks/workspace/use-workspace-recent-workspaces-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/workspace/use-workspace-home-dir-query", () => ({
-  useWorkspaceHomeDir: () => ({
+vi.mock("@/hooks/workspace/use-workspace-get-home-dir-query", () => ({
+  useWorkspaceGetHomeDir: () => ({
     data:
       reportedHomeDir === undefined
         ? undefined
@@ -789,6 +789,25 @@ describe("<RemoteFolderPickerDialog />", () => {
       });
       expect(rowNames()).toEqual(["web"]);
       expect(screen.queryByTestId("remote-folder-picker-up-row")).toBeNull();
+    });
+
+    it("browses a UNC share root typed WITHOUT a trailing separator", async () => {
+      // The form a user types first. Unlike `/` and `C:\`, a share root does
+      // not end in a separator, so deriving the filter from the last one would
+      // filter the share by its own name ("shared") and hide every row.
+      queryByPath.set(
+        pathKey("\\\\build\\shared"),
+        readyLevel({
+          directoryPath: "\\\\build\\shared",
+          parentPath: null,
+          entries: [{ path: "\\\\build\\shared\\web", name: "web" }],
+        }),
+      );
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      await screen.findAllByTestId("remote-folder-picker-row");
+      fireEvent.change(pathInput(), { target: { value: "\\\\build\\shared" } });
+      expect(rowNames()).toEqual(["web"]);
     });
 
     it("still rejects a drive-relative path", async () => {

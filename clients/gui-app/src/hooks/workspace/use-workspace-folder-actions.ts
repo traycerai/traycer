@@ -183,13 +183,15 @@ export function useWorkspaceFolderActionsForClient(
     ) {
       folderPaths = await runnerHost.workspaceFolders.pickFolders();
     } else {
-      // Hand the picker THIS client: in a tab it is host-bound for life, and
-      // the picked path is submitted through the same client below — the
-      // globally mounted dialog must browse that host, not whichever host is
-      // app-wide-active at the time.
+      // Hand the picker a requester PINNED to dispatchHost. A tab's client is
+      // host-bound for life, but an app-wide one is not: if the active host
+      // changed while the dialog was open, an unpinned client would browse -
+      // and record recents on - whichever host became active, even though the
+      // path is submitted to dispatchHost below. The guard after this only
+      // catches the prepare call, by which point the browsing already leaked.
       const pickedPath = await useRemoteFolderPickerStore
         .getState()
-        .requestPick(client);
+        .requestPick(client.createRequester(dispatchHost));
       folderPaths = pickedPath === null ? [] : [pickedPath];
     }
     if (folderPaths.length === 0) {

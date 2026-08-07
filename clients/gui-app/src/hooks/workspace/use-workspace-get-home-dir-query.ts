@@ -23,7 +23,7 @@ const GET_HOME_DIR_PARAMS: WorkspacePrepareFoldersRequestV11 = {
  * Fails closed with `DOWNGRADE_UNSUPPORTED` against a v1.0 host; the picker
  * falls back to the browse-derived home and shows nothing about it.
  */
-export function useWorkspaceHomeDir(args: {
+export function useWorkspaceGetHomeDir(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
 }) {

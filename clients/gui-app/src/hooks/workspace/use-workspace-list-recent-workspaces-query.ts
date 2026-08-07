@@ -27,7 +27,7 @@ const LIST_RECENT_WORKSPACES_PARAMS: WorkspacePrepareFoldersRequestV11 = {
  * `useWorkspaceBrowseFolders` - the recents shown must belong to the same
  * machine the picked path is sent to.
  */
-export function useWorkspaceRecentWorkspaces(args: {
+export function useWorkspaceListRecentWorkspaces(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
 }) {

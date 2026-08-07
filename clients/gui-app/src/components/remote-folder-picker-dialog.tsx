@@ -25,8 +25,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useWorkspaceBrowseFolders } from "@/hooks/workspace/use-workspace-browse-folders-query";
-import { useWorkspaceHomeDir } from "@/hooks/workspace/use-workspace-home-dir-query";
-import { useWorkspaceRecentWorkspaces } from "@/hooks/workspace/use-workspace-recent-workspaces-query";
+import { useWorkspaceGetHomeDir } from "@/hooks/workspace/use-workspace-get-home-dir-query";
+import { useWorkspaceListRecentWorkspaces } from "@/hooks/workspace/use-workspace-list-recent-workspaces-query";
 import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
@@ -102,8 +102,11 @@ function RemoteFolderPickerBody(): ReactNode {
 
   // Both are conveniences that must never gate browsing: each fails closed
   // against a v1.0 host and is read here as "absent", never as an error.
-  const homeDirQuery = useWorkspaceHomeDir({ client, enabled: true });
-  const recentsQuery = useWorkspaceRecentWorkspaces({ client, enabled: true });
+  const homeDirQuery = useWorkspaceGetHomeDir({ client, enabled: true });
+  const recentsQuery = useWorkspaceListRecentWorkspaces({
+    client,
+    enabled: true,
+  });
   const recordRecent = useWorkspaceRecordRecentWorkspace({ client });
 
   // Where `~` points. The root browse response is preferred - it is the
@@ -360,9 +363,12 @@ function RemoteFolderPickerListing(props: {
   const rows: ReactNode[] = [];
   // role/id/aria-selected live on the BUTTON: assistive tech flattens option
   // descendants, so the option element must itself be the actionable node.
+  // The <li> wrappers are therefore `role="presentation"` - a listbox must own
+  // its options directly, and an <li> sitting between the two is an invalid
+  // owned-element hop.
   if (props.upPresent) {
     rows.push(
-      <li key="..">
+      <li key=".." role="presentation">
         <Button
           type="button"
           variant="ghost"
@@ -393,7 +399,7 @@ function RemoteFolderPickerListing(props: {
   (props.error === null ? (props.entries ?? []) : []).forEach(
     (entry, index) => {
       rows.push(
-        <li key={entry.path}>
+        <li key={entry.path} role="presentation">
           <Button
             type="button"
             variant="ghost"
@@ -728,13 +734,22 @@ function parseBrowseInput(
   if (!isAbsolutePath(path)) return INVALID_INPUT;
   const lastSlash = lastSeparatorIndex(path);
   const rootLength = rootLengthOf(path);
-  const directory =
-    lastSlash < rootLength
-      ? path.slice(0, rootLength)
-      : path.slice(0, lastSlash);
+  if (lastSlash < rootLength) {
+    // Still inside the root itself, so the root IS the directory and whatever
+    // follows it is the filter. This cannot be derived from the last
+    // separator: `/` and `C:\` end in theirs so the two happen to agree, but
+    // a UNC share root does not - `\\server\share` would take its filter from
+    // the separator before `share` and filter the share by its own name,
+    // hiding every row.
+    return {
+      valid: true,
+      directoryPath: path.slice(0, rootLength),
+      filter: path.slice(rootLength),
+    };
+  }
   return {
     valid: true,
-    directoryPath: directory,
+    directoryPath: path.slice(0, lastSlash),
     filter: path.slice(lastSlash + 1),
   };
 }

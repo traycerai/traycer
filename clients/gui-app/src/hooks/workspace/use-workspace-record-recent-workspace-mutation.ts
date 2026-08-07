@@ -1,6 +1,12 @@
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+
+interface RecordRecentContext {
+  readonly hostId: string | null;
+}
 
 /**
  * Append a picked folder to the host's recent-workspaces list
@@ -20,10 +26,11 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 export function useWorkspaceRecordRecentWorkspace(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
 }) {
+  const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "workspace.prepareFolders",
-    unknown,
+    RecordRecentContext,
     string
   >({
     client: args.client,
@@ -35,6 +42,21 @@ export function useWorkspaceRecordRecentWorkspace(args: {
     }),
     options: {
       retry: false,
+      // The host is the only owner of the recents order, so the appended list
+      // has to be re-read rather than guessed at. Host captured in `onMutate`
+      // and used in `onSuccess`: the picker settles and closes the moment this
+      // is fired, so the active host can have moved on by the time it lands -
+      // invalidating the CURRENT host would refetch the wrong machine's list
+      // and leave the right one stale.
+      onMutate: () => ({ hostId: args.client?.getActiveHostId() ?? null }),
+      onSuccess: async (_result, _variables, context) => {
+        await queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            context.hostId,
+            "workspace.prepareFolders",
+          ),
+        });
+      },
     },
   });
 }
