@@ -20,6 +20,7 @@ import {
   mockLocalHostEntry,
   mockRemoteHostEntry,
 } from "../mock/mock-host-directory";
+import type { HostDirectoryEntry } from "../host-directory";
 import type { RemoteHostDirectoryEntry } from "../remote-fetcher";
 import { WsRpcClient } from "../../host-transport/ws-rpc-client";
 import { HostRpcError } from "../../host-transport/host-messenger";
@@ -378,6 +379,45 @@ describe("HostClient", () => {
         bearer: client.getRequestContext()?.credentials,
       },
     });
+  });
+
+  it("createRequester follows same-host directory refreshes instead of freezing its snapshot", async () => {
+    // A host's directory entry refreshes in place (status, version, endpoint)
+    // while a dialog holding a requester stays open. `captureAuthority`
+    // refuses a routed entry that no longer matches the live directory, so a
+    // requester frozen on its creation-time snapshot would fail every request
+    // after the refresh until rebuilt.
+    const invalidator = new RecordingInvalidator();
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: { "host.ping": () => ({ pong: true }) },
+      requestId: () => "req-1",
+    });
+    let current: HostDirectoryEntry = mockLocalHostEntry;
+    const client = new HostClient({
+      registry,
+      messenger,
+      invalidator,
+      schedulingPolicy,
+      requestCoordinator: null,
+      findHostById: (hostId) => (hostId === current.hostId ? current : null),
+    });
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+    const requester = client.createRequester(mockLocalHostEntry);
+
+    await expect(requester.request("host.ping", {})).resolves.toEqual({
+      pong: true,
+    });
+
+    // The host restarts on a new version: same id, refreshed transport fields.
+    current = { ...mockLocalHostEntry, version: "0.0.1-mock" };
+
+    await expect(requester.request("host.ping", {})).resolves.toEqual({
+      pong: true,
+    });
+    expect(requester.getActiveHost()).toBe(current);
+    expect(requester.getActiveHostId()).toBe(mockLocalHostEntry.hostId);
+    expect(messenger.calls).toHaveLength(2);
   });
 
   it("rejects unary requests before the messenger when auth context is missing", async () => {

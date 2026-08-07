@@ -544,6 +544,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "workspace.listFileTree": { ...LATEST_SCHEDULING, poll: null },
   "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.browseFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
   // Saving a file writes to disk and each attempt carries the revision
   // acknowledged by the previous save, so writes must not be coalesced.
