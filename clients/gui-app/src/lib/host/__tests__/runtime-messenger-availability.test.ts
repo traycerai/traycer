@@ -513,8 +513,11 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     const aborted = new AbortController();
     aborted.abort();
 
+    // Abort-classified, not the invalid-transport error: downstream surfaces
+    // render the latter as an actionable failure card, which is wrong for a
+    // request whose owner already moved on.
     await expect(h.requestRemoteWithSignal(aborted.signal)).rejects.toThrow(
-      "does not expose a valid remote transport",
+      "Request authority was aborted before dispatch",
     );
     expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
     expect(h.session.availabilityListenerCount).toBe(0);

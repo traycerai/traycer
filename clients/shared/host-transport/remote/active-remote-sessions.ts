@@ -379,8 +379,8 @@ function closeSupersededIdentities(
       // another `userId` was necessarily built by a sign-in that has since
       // ended - never a live parallel context. `userId` sits in THIS guard
       // rather than the skip above so the verdict does not ride on the epoch
-      // label alone: even where two contexts' epochs could read equal (the
-      // no-bearer degenerate case), the user mismatch still retires the entry.
+      // label alone: even if two contexts' epoch labels ever read equal, the
+      // user mismatch still retires the entry.
       continue;
     }
     entry.superseded = true;

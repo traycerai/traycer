@@ -789,15 +789,13 @@ describe("auth-recovery policy is part of the session identity", () => {
     // sign-in that has since ended - and `hasReadyRemoteSession` matches on
     // hostId across users, so left current it would report the host Online
     // off the signed-out user's connection while the new user is still
-    // dialing. The epoch label cannot be relied on to catch this (two
-    // contexts can both degenerate to "no-bearer"), so the user mismatch
-    // itself must retire the entry.
-    // Both contexts sit on the SAME degenerate epoch, same key, same relay:
-    // every equality in the parallel-entry guard holds except the user, so
-    // this passes only if the user mismatch alone retires the entry.
+    // dialing. Both identities deliberately hold the SAME epoch label, same
+    // key, same relay: every equality in the parallel-entry guard holds
+    // except the user, so this passes only if the user mismatch alone
+    // retires the entry - the verdict must not ride on the epoch label.
     const previousUser: RemoteSessionIdentity = {
       ...freshIdentity(),
-      authEpoch: "no-bearer",
+      authEpoch: "lease-shared",
     };
     const staleSession = fakeSession();
     staleSession.ready = true;

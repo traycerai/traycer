@@ -7,6 +7,7 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   type HostRequestAuthority,
   type IHostMessenger,
@@ -251,6 +252,10 @@ class RuntimeHostMessenger<
       return this.localMessenger.request(method, params, authority);
     }
 
+    const abortedRejection = this.rejectIfAborted(authority, method);
+    if (abortedRejection !== null) {
+      return abortedRejection;
+    }
     const remoteMessenger = this.remoteMessengerFor(target, authority);
     if (remoteMessenger === null) {
       return Promise.reject(
@@ -287,6 +292,10 @@ class RuntimeHostMessenger<
       );
     }
 
+    const abortedRejection = this.rejectIfAborted(authority, method);
+    if (abortedRejection !== null) {
+      return abortedRejection;
+    }
     const remoteMessenger = this.remoteMessengerFor(target, authority);
     if (remoteMessenger === null) {
       return Promise.reject(
@@ -335,16 +344,6 @@ class RuntimeHostMessenger<
   ): IHostMessenger<Registry> | null {
     const nextKey = remoteTransportKey(target);
     if (nextKey === null) {
-      return null;
-    }
-    if (authority.abortSignal.aborted) {
-      // A retired authority must never reach the session cache: the cache's
-      // supersession sweep treats the acquiring identity as the NEWEST
-      // context, so an acquire under a stale lease's epoch would mark the
-      // LIVE entry superseded and build a doomed successor. The retrying
-      // wrapper already throws pre-dispatch on an aborted authority, but that
-      // gate lives three layers up - this seam is where the assumption is
-      // load-bearing, so it must not depend on who composed the wrappers.
       return null;
     }
     // Publish this request's bearer before any dial so both a cache hit and a
@@ -523,6 +522,34 @@ class RuntimeHostMessenger<
     this.remoteBinding = null;
     binding.availability.detach();
     binding.transport.session.close();
+  }
+
+  /**
+   * A retired authority must never reach the session cache: the cache's
+   * supersession sweep treats the acquiring identity as the NEWEST auth
+   * context, so an acquire under a stale lease's epoch would mark the LIVE
+   * entry superseded and build a doomed successor. The retrying wrapper
+   * already throws pre-dispatch on an aborted authority, but that gate lives
+   * three layers up - this seam is where the assumption is load-bearing, so
+   * it must not depend on who composed the wrappers. Rejected as the abort
+   * class, not the invalid-transport error: downstream surfaces render the
+   * latter as an actionable failure card, wrong for a request whose owner
+   * already moved on.
+   */
+  private rejectIfAborted(
+    authority: HostRequestAuthority,
+    method: string,
+  ): Promise<never> | null {
+    if (!authority.abortSignal.aborted) {
+      return null;
+    }
+    return Promise.reject(
+      new HostRequestAbortedError({
+        message: "Request authority was aborted before dispatch",
+        requestId: this.requestId(),
+        method,
+      }),
+    );
   }
 
   private rejectIfDisposed(method: string): Promise<never> | null {
