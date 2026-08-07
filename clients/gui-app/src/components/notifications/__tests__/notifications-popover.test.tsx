@@ -814,9 +814,11 @@ describe("NotificationsPopover", () => {
 
     const row = await screen.findByTestId("notification-entry");
     expect(row.dataset.notificationRead).toBe("true");
-    expect(within(row).queryByTestId("notification-mark-read")).toBeNull();
-    expect(within(row).queryByTestId("notification-dismiss")).toBeNull();
-    expect(within(row).queryByTestId("notification-clear")).toBeNull();
+    expect(
+      within(row).queryByRole("button", { name: "Mark as read" }),
+    ).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Clear" })).toBeNull();
     expect(within(row).queryByTestId("notification-unread-rail")).toBeNull();
   });
 
@@ -1837,9 +1839,11 @@ describe("NotificationsPopover", () => {
 
     // Read rows do not reuse the unread-state tick for another disposition.
     expect(readPrompt.dataset.notificationRead).toBe("true");
-    expect(within(readPrompt).queryByTestId("notification-dismiss")).toBeNull();
     expect(
-      within(readPrompt).queryByTestId("notification-mark-read"),
+      within(readPrompt).queryByRole("button", { name: "Dismiss" }),
+    ).toBeNull();
+    expect(
+      within(readPrompt).queryByRole("button", { name: "Mark as read" }),
     ).toBeNull();
 
     expect(

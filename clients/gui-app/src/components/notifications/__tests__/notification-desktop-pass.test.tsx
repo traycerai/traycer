@@ -585,10 +585,10 @@ describe("notification desktop-pass design corrections", () => {
         within(attention).queryByTestId("notification-unread-rail"),
       ).toBeNull();
       expect(
-        within(attention).queryByTestId("notification-dismiss"),
+        within(attention).queryByRole("button", { name: "Dismiss" }),
       ).toBeNull();
       expect(
-        within(attention).queryByTestId("notification-mark-read"),
+        within(attention).queryByRole("button", { name: "Mark as read" }),
       ).toBeNull();
       expect(recentRead.dataset.notificationRead).toBe("true");
       expect(
