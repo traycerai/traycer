@@ -1310,56 +1310,6 @@ export const modelProviderEntrySchema = z.object({
   canDisconnect: z.boolean(),
   connected: z.boolean(),
   methods: z.array(modelProviderAuthMethodSchema),
-  /**
-   * The environment-variable name whose value IS this provider's credential -
-   * `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_API_KEY` - or `null` when
-   * this provider has no plain-API-key connect path.
-   *
-   * It is on the wire because without it the client cannot construct a legal
-   * `connect` payload at all. The host accepts a credential input only when its
-   * key is a member of the provider's models.dev `env[]`, and that array lived
-   * only in host memory - so for the ~170 providers that advertise no auth
-   * method (`methodIndex: null`, no prompts) the client had no key it was
-   * allowed to use. Guessing `<ID>_API_KEY` gets most of them and silently
-   * fails the rest.
-   *
-   * HOST-SELECTED, not the whole array, and that is the deliberate half. 13 of
-   * the 180 providers list more than one member and they are not alternatives:
-   * `azure` is `["AZURE_RESOURCE_NAME", "AZURE_API_KEY"]`, `databricks` is
-   * `["DATABRICKS_HOST", "DATABRICKS_TOKEN"]` - one credential plus one piece
-   * of configuration. Shipping the array would make the renderer decide which
-   * member is the secret, which is provider knowledge that belongs on the host.
-   * The accepted narrowing: the non-credential members of those providers are
-   * not settable from this tab and must come from the environment or an
-   * OpenCode config file.
-   *
-   * `null` is the honest answer where no single member IS the credential, and
-   * it is REQUIRED-and-nullable rather than omittable for the reason the rest
-   * of this file is: a producer must answer, and "the host could not resolve
-   * one" must not read the same as "the host forgot". Two real shapes need it:
-   *
-   * - MULTI-SECRET providers. `amazon-bedrock` is
-   *   `["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
-   *   "AWS_BEARER_TOKEN_BEDROCK"]`, and upstream's stored `ApiAuth` holds ONE
-   *   `key`. A required string would force the host to name one member
-   *   confidently and store a credential that cannot work.
-   * - Providers whose credential is not a pasteable secret at all - Vertex
-   *   authenticates from a service-account FILE PATH, so a masked paste field
-   *   is the wrong affordance even though a member exists.
-   *
-   * `null` constrains only this path. A provider can advertise OAuth or
-   * prompted methods in `methods` and be perfectly connectable through them;
-   * what `null` says is that the no-method plain-key shortcut is unavailable,
-   * so a renderer must not draw a bare key field for it.
-   *
-   * The membership check on `connect` remains the authority. This field is the
-   * host telling the client which key that check will accept - never a second,
-   * client-side rule that could drift from it.
-   *
-   * `.min(1)` on the string arm: an empty string would be a second spelling of
-   * `null`, and one of the two would end up unhandled.
-   */
-  credentialKey: z.string().min(1).nullable(),
 });
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 
@@ -1470,16 +1420,17 @@ export type ModelProvidersListResult = z.infer<
 >;
 
 /**
- * One answer to a prompt, keyed by that prompt's `key`. Values are plaintext
- * and travel exactly once, on the way in: nothing reads them back (see
- * `modelProviderEntrySchema`).
+ * Prompt answers, keyed by each prompt's `key` - the shape upstream stores as
+ * `ApiAuth.metadata`. A map rather than a list of `{key, value}` pairs because
+ * a prompt key answered twice is not a state anything downstream can act on,
+ * and a map makes it unrepresentable instead of merely wrong.
+ *
+ * Values are plaintext and travel exactly once, on the way in: nothing reads
+ * them back (see `modelProviderEntrySchema`).
  */
-export const modelProviderAuthInputSchema = z.object({
-  key: z.string().min(1),
-  value: z.string(),
-});
-export type ModelProviderAuthInput = z.infer<
-  typeof modelProviderAuthInputSchema
+export const modelProviderAuthInputsSchema = z.record(z.string(), z.string());
+export type ModelProviderAuthInputs = z.infer<
+  typeof modelProviderAuthInputsSchema
 >;
 
 /**
@@ -1490,11 +1441,25 @@ export type ModelProviderAuthInput = z.infer<
  * `providerId`. Two different namespaces that would be very easy to collapse
  * into one field and impossible to separate afterwards.
  *
- * `methodIndex: null` on `connect` means "no advertised method applies" - the
- * plain API-key path, which is what a provider with no `/provider/auth` entry
- * gets (the models.dev `env[]` name is the key's home, and the host owns that
- * mapping). `startOauth` requires an index because an OAuth flow only exists
- * as an advertised method.
+ * `connect` carries the credential itself and nothing that names it. `key` is
+ * the SECRET VALUE the user pasted - it lands in upstream's `ApiAuth.key` - and
+ * `inputs` are the answers to that method's prompts, which land in
+ * `ApiAuth.metadata`. The name is upstream's and it reads like an identifier,
+ * which it is not; nothing on this wire identifies a credential by name.
+ *
+ * An earlier shape carried the models.dev `env[]` member the value should be
+ * stored under, because the host validated the submitted key against that
+ * array. Upstream does no such thing: when `/provider/auth` offers no methods
+ * it SYNTHESIZES a generic API-key method and submits the value alone. The
+ * name was validated and then discarded, so it is gone from the wire entirely
+ * - and a plain-key connect is now legal for every provider rather than only
+ * those whose env member the host could resolve.
+ *
+ * `methodIndex: null` therefore means "the client chose no advertised method",
+ * which the host serves with that same synthesized generic method. A host that
+ * surfaces the synthesized method in `methods[]` is addressed by index like
+ * any other - one rule, not a special case. `startOauth` requires an index
+ * because an OAuth flow only ever exists as an advertised method.
  *
  * `submitCode` carries `attemptId` rather than re-identifying the flow by
  * provider: attempts are single-flight per `(providerId, modelProviderId)` and
@@ -1507,13 +1472,15 @@ export const modelProviderAuthActionSchema = z.discriminatedUnion("action", [
     action: z.literal("connect"),
     modelProviderId: z.string().min(1),
     methodIndex: z.number().int().nonnegative().nullable(),
-    inputs: z.array(modelProviderAuthInputSchema),
+    /** The pasted secret. Upstream's `ApiAuth.key`, not a key NAME. */
+    key: z.string().min(1),
+    inputs: modelProviderAuthInputsSchema,
   }),
   z.object({
     action: z.literal("startOauth"),
     modelProviderId: z.string().min(1),
     methodIndex: z.number().int().nonnegative(),
-    inputs: z.array(modelProviderAuthInputSchema),
+    inputs: modelProviderAuthInputsSchema,
   }),
   z.object({
     action: z.literal("submitCode"),

@@ -569,7 +569,6 @@ describe("providers.listModelProviders payloads", () => {
       hasStoredCredential: true,
       canDisconnect: true,
       connected: true,
-      credentialKey: "ANTHROPIC_API_KEY",
       methods: [
         {
           type: "api",
@@ -593,7 +592,6 @@ describe("providers.listModelProviders payloads", () => {
       hasStoredCredential: false,
       canDisconnect: false,
       connected: true,
-      credentialKey: "OPENAI_API_KEY",
       methods: [],
     });
     expect(entry.canDisconnect).toBe(false);
@@ -609,7 +607,6 @@ describe("providers.listModelProviders payloads", () => {
         hasStoredCredential: false,
         canDisconnect: false,
         connected: false,
-        credentialKey: "GROQ_API_KEY",
         methods: [],
       }).success,
     ).toBe(true);
@@ -621,126 +618,9 @@ describe("providers.listModelProviders payloads", () => {
         hasStoredCredential: false,
         canDisconnect: false,
         connected: false,
-        credentialKey: "GROQ_API_KEY",
         methods: [],
       }).success,
     ).toBe(false);
-  });
-
-  it("requires the credentialKey KEY - absent must not read as 'no path'", () => {
-    // The gap this field closes: the host accepts a `connect` input only when
-    // its key is a member of the provider's models.dev `env[]`, and that array
-    // never left host memory. For the ~170 providers advertising no auth
-    // method there was no legal key a client could send.
-    //
-    // Required-and-nullable: a producer must ANSWER. If the key were omittable
-    // "the host could not resolve one" and "the host forgot" would arrive
-    // identically, and only one of those is a legitimate state.
-    const { credentialKey: _omitted, ...withoutKey } = {
-      id: "groq",
-      name: "Groq",
-      source: null,
-      hasStoredCredential: false,
-      canDisconnect: false,
-      connected: false,
-      credentialKey: "GROQ_API_KEY",
-      methods: [],
-    };
-    expect(modelProviderEntrySchema.safeParse(withoutKey).success).toBe(false);
-  });
-
-  it("rejects an empty credentialKey - null is the one spelling of 'no path'", () => {
-    // An empty string would be a second spelling of `null`, and one of the two
-    // would end up unhandled by some consumer.
-    expect(
-      modelProviderEntrySchema.safeParse({
-        id: "groq",
-        name: "Groq",
-        source: null,
-        hasStoredCredential: false,
-        canDisconnect: false,
-        connected: false,
-        credentialKey: "",
-        methods: [],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("accepts a null credentialKey for a provider with no plain-key path", () => {
-    // `amazon-bedrock` is the case that made this nullable rather than a
-    // required string: its `env[]` is
-    // ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
-    // "AWS_BEARER_TOKEN_BEDROCK"] and upstream's stored `ApiAuth` holds ONE
-    // `key`. No single member IS the credential, so a required string would
-    // have forced the host to name one confidently and store something that
-    // cannot work. Vertex is the other shape - the credential is a
-    // service-account FILE PATH, not a secret to paste.
-    const entry = modelProviderEntrySchema.parse({
-      id: "amazon-bedrock",
-      name: "Amazon Bedrock",
-      source: null,
-      hasStoredCredential: false,
-      canDisconnect: false,
-      connected: false,
-      credentialKey: null,
-      methods: [],
-    });
-    expect(entry.credentialKey).toBeNull();
-  });
-
-  it("null constrains only the plain-key path, never the advertised methods", () => {
-    // What `null` must NOT be read as: "this provider cannot be connected".
-    // A provider can have no single credential env member and still be fully
-    // connectable through an advertised OAuth flow - the renderer just must
-    // not draw a bare key field for it.
-    const entry = modelProviderEntrySchema.parse({
-      id: "amazon-bedrock",
-      name: "Amazon Bedrock",
-      source: null,
-      hasStoredCredential: false,
-      canDisconnect: false,
-      connected: false,
-      credentialKey: null,
-      methods: [
-        { type: "oauth", label: "Sign in with AWS", prompts: [] },
-      ],
-    });
-    expect(entry.credentialKey).toBeNull();
-    expect(entry.methods).toHaveLength(1);
-    expect(entry.methods[0].type).toBe("oauth");
-  });
-
-  it("round-trips: the key a row advertises is the key a connect action carries", () => {
-    // The contract in one assertion, end to end. The client does not derive
-    // the key, guess it from the provider id, or read `env[]` itself - it
-    // echoes what the host advertised, so the host's membership check on
-    // `connect` stays the single authority.
-    const entry = modelProviderEntrySchema.parse({
-      id: "azure",
-      name: "Azure",
-      source: null,
-      hasStoredCredential: false,
-      canDisconnect: false,
-      connected: false,
-      // Azure's `env[]` is ["AZURE_RESOURCE_NAME", "AZURE_API_KEY"] - the host
-      // picks the credential member, and the client never sees the other.
-      credentialKey: "AZURE_API_KEY",
-      methods: [],
-    });
-    const request = providersModelProviderAuthRequestSchema.parse({
-      providerId: "opencode",
-      action: {
-        action: "connect",
-        modelProviderId: entry.id,
-        methodIndex: null,
-        inputs: [{ key: entry.credentialKey, value: "sk-secret" }],
-      },
-    });
-    expect(request.action.action).toBe("connect");
-    if (request.action.action !== "connect") return;
-    expect(request.action.inputs).toEqual([
-      { key: "AZURE_API_KEY", value: "sk-secret" },
-    ]);
   });
 
   it("answers with a success arm or a typed error, never a bare throw", () => {
@@ -805,19 +685,75 @@ describe("providers.listModelProviders payloads", () => {
 });
 
 describe("providers.modelProviderAuth actions", () => {
-  it("accepts a plain API-key connect with no advertised method", () => {
-    // `methodIndex: null` is the providers with no `/provider/auth` entry -
-    // the models.dev env-var name is the key's home and the host owns that
-    // mapping, so there is no method to point at.
+  it("accepts a plain-key connect with no advertised method, for ANY provider", () => {
+    // `methodIndex: null` means "the client chose no advertised method". The
+    // host serves it with the generic API-key method upstream synthesizes when
+    // `/provider/auth` offers none - so this path is legal for every provider,
+    // not only the ones whose env member the host could resolve.
     const parsed = modelProviderAuthActionSchema.parse({
       action: "connect",
       modelProviderId: "anthropic",
       methodIndex: null,
-      inputs: [{ key: "key", value: "sk-secret" }],
+      key: "sk-secret",
+      inputs: {},
     });
     expect(parsed.action).toBe("connect");
     if (parsed.action !== "connect") return;
     expect(parsed.methodIndex).toBeNull();
+    expect(parsed.key).toBe("sk-secret");
+    expect(parsed.inputs).toEqual({});
+  });
+
+  it("carries the credential VALUE and nothing that names it", () => {
+    // The shape this surface settled on after auditing upstream: `key` is the
+    // pasted secret (upstream's `ApiAuth.key`), `inputs` are prompt answers
+    // (its `metadata`). An earlier draft carried the models.dev `env[]` member
+    // the value would be stored under, because the host validated the key
+    // against that array - a name it then discarded. Upstream never asks for
+    // it, so it is not on the wire.
+    const parsed = modelProviderAuthActionSchema.parse({
+      action: "connect",
+      modelProviderId: "azure",
+      methodIndex: 0,
+      key: "sk-secret",
+      inputs: { resourceName: "my-resource" },
+    });
+    expect(parsed.action).toBe("connect");
+    if (parsed.action !== "connect") return;
+    expect(Object.keys(parsed)).not.toContain("credentialKey");
+    expect(parsed.inputs).toEqual({ resourceName: "my-resource" });
+  });
+
+  it("rejects a connect with no credential value", () => {
+    // `key` is the whole point of the action; an empty one would be stored as
+    // an unusable credential and report success.
+    for (const key of [undefined, ""]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "connect",
+          modelProviderId: "anthropic",
+          methodIndex: null,
+          key,
+          inputs: {},
+        }).success,
+        String(key),
+      ).toBe(false);
+    }
+  });
+
+  it("keys prompt answers by prompt key, so one cannot be answered twice", () => {
+    // A map, not a list of `{key, value}` pairs: a duplicate key is not a
+    // state anything downstream can act on, and this makes it unrepresentable
+    // rather than merely wrong.
+    const parsed = modelProviderAuthActionSchema.parse({
+      action: "startOauth",
+      modelProviderId: "anthropic",
+      methodIndex: 0,
+      inputs: { mode: "advanced", region: "us-east-1" },
+    });
+    expect(parsed.action).toBe("startOauth");
+    if (parsed.action !== "startOauth") return;
+    expect(parsed.inputs).toEqual({ mode: "advanced", region: "us-east-1" });
   });
 
   it("requires a method index to start OAuth", () => {
@@ -826,7 +762,7 @@ describe("providers.modelProviderAuth actions", () => {
         action: "startOauth",
         modelProviderId: "anthropic",
         methodIndex: null,
-        inputs: [],
+        inputs: {},
       }).success,
     ).toBe(false);
     expect(
@@ -834,7 +770,7 @@ describe("providers.modelProviderAuth actions", () => {
         action: "startOauth",
         modelProviderId: "anthropic",
         methodIndex: 0,
-        inputs: [],
+        inputs: {},
       }).success,
     ).toBe(true);
   });
