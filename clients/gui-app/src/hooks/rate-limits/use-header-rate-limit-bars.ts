@@ -76,12 +76,14 @@ function fiveHourWindow(
       return rateLimits.primary;
     case "claude-code":
       return rateLimits.fiveHour;
-    // OpenRouter/Kilo Code/Grok are never queried for a glyph slot (grok stays
-    // out of `GLYPH_PROVIDER_IDS` - its billing period isn't a short rolling
-    // window); kept for exhaustiveness over the union.
+    // OpenRouter/Kilo Code/Grok/Hugging Face are never queried for a glyph slot
+    // (grok stays out of `GLYPH_PROVIDER_IDS` - its billing period isn't a
+    // short rolling window, and the credit providers report money rather than a
+    // window at all); kept for exhaustiveness over the union.
     case "openrouter":
     case "kilocode":
     case "grok":
+    case "huggingface":
       return null;
   }
 }
@@ -99,6 +101,7 @@ function weeklyWindow(
     case "openrouter":
     case "kilocode":
     case "grok":
+    case "huggingface":
       return null;
   }
 }
@@ -187,7 +190,8 @@ function selectGlyphBars(
  * The header glyph's bar data: a fixed two-bar summary scoped to Codex and
  * Claude Code only. When both are configured the glyph shows each provider's 5h
  * window (codex first); when only one is configured that provider fills both
- * bars with its 5h and Weekly windows. OpenRouter/Kilo Code never appear here
+ * bars with its 5h and Weekly windows. OpenRouter/Kilo Code/Hugging Face never
+ * appear here
  * (popover-only). See `selectGlyphBars` for the exact selection and the
  * partial-load policy; a return of `[]` means "render the neutral placeholder".
  *
@@ -195,7 +199,8 @@ function selectGlyphBars(
  * fetch-on-mount for the two glyph providers (both `ephemeralProcess`); the
  * serial queue only bounds their *subsequent* background/turn/manual
  * triggers. Because this hook no longer queries the `httpFetch` lane,
- * OpenRouter/Kilo Code are fetched lazily on popover / Settings open rather
+ * OpenRouter/Kilo Code/Hugging Face are fetched lazily on popover / Settings
+ * open rather
  * than pre-fetched at app-shell mount - which is fine, since nothing at the
  * shell level displays their usage.
  *

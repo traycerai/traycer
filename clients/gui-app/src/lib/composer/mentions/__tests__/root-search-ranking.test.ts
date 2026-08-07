@@ -39,7 +39,9 @@ function rankedLabels(
   candidates: ReadonlyArray<RootSearchCandidate>,
   query: string,
 ): string[] {
-  return rankRootSearchEntries(candidates, query).map((item) => item.label);
+  return rankRootSearchEntries(candidates, query).entries.map(
+    (item) => item.label,
+  );
 }
 
 describe("rankRootSearchEntries", () => {
@@ -76,8 +78,43 @@ describe("rankRootSearchEntries", () => {
     ];
     expect(rankedLabels(candidates, "auth")).toEqual(["auth", "auth"]);
     expect(
-      rankRootSearchEntries(candidates, "auth").map((item) => item.id),
+      rankRootSearchEntries(candidates, "auth").entries.map((item) => item.id),
     ).toEqual(["a1", "f1"]);
+  });
+
+  it("ranks a label-prefix hit above a shorter label-substring hit with a better fuse score", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "oauth.ts" }),
+      candidate("files", { id: "f2", label: "authorization-helpers.test.ts" }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "authorization-helpers.test.ts",
+      "oauth.ts",
+    ]);
+  });
+
+  it("does not let the provider boost push a label-substring hit above a label-prefix hit", () => {
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "oauth rollout plan" }),
+      candidate("files", { id: "f1", label: "auth-helpers.ts" }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "auth-helpers.ts",
+      "oauth rollout plan",
+    ]);
+  });
+
+  it("keeps unmatched rows appended after all tiered rows", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "zz-unrelated.bin" }),
+      candidate("files", { id: "f2", label: "oauth.ts" }),
+      candidate("artifacts", { id: "a1", label: "Auth spec" }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "Auth spec",
+      "oauth.ts",
+      "zz-unrelated.bin",
+    ]);
   });
 
   it("appends source-matched rows the client cannot re-match instead of dropping them", () => {
@@ -91,6 +128,30 @@ describe("rankRootSearchEntries", () => {
     ];
     const labels = rankedLabels(candidates, "auth");
     expect(labels).toEqual(["Auth spec", "zz-unrelated.bin"]);
+  });
+
+  it("reports how many rows actually matched, not counting appended rows", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "zz-unrelated.bin" }),
+      candidate("artifacts", { id: "a1", label: "Auth spec" }),
+    ];
+    const ranked = rankRootSearchEntries(candidates, "auth");
+    expect(ranked.entries).toHaveLength(2);
+    expect(ranked.matchedCount).toBe(1);
+  });
+
+  it("reports zero matches when only appended rows remain", () => {
+    const candidates = [
+      candidate("files", { id: "f1", label: "zz-unrelated.bin" }),
+    ];
+    const ranked = rankRootSearchEntries(candidates, "qqqq");
+    expect(ranked.entries).toHaveLength(1);
+    expect(ranked.matchedCount).toBe(0);
+  });
+
+  it("reports no match count for an empty query", () => {
+    const candidates = [candidate("files", { id: "f1", label: "zeta.ts" })];
+    expect(rankRootSearchEntries(candidates, "  ").matchedCount).toBeNull();
   });
 
   it("keeps original order among appended unmatched rows", () => {

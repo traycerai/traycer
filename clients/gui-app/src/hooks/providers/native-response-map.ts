@@ -12,6 +12,7 @@ import type {
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
+import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 
 export type ProvidersListWireResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -52,7 +53,15 @@ export class ProviderNativeRpcError extends HostRpcError {
   }) {
     super({
       code: "RPC_ERROR",
-      message: args.detail ?? `Native provider error: ${args.code}`,
+      // `nativeErrorMessage`, not `detail ?? code`. The panels render
+      // `error.message` directly, so a protocol-valid `{ detail: null }` put
+      // the raw enum member on screen ("Native provider error:
+      // config_unreadable") and the friendly copy map was never consulted on
+      // the list path at all. Building the message here fixes every code at
+      // once rather than the one that happened to surface it, and
+      // `nativeErrorMessage` already prefers a non-blank trimmed `detail`, so
+      // a whitespace-only detail falls back too.
+      message: nativeErrorMessage(args.code, args.detail),
       requestId: "native-error",
       method: args.method,
       fatalDetails: null,

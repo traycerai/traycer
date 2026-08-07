@@ -101,6 +101,22 @@ export const providerNativeErrorCodeSchema = z.enum([
   "external_drift",
   "store_version_unsupported",
   "rollback_failed",
+  // The provider's own config could not be READ or PARSED - a malformed
+  // `config.yaml`/`config.toml`/`mcp.json`, or an unreadable one.
+  //
+  // This is a LIST-side failure, unlike every code above it, and it exists
+  // because the alternative is worse in both directions. Swallowing the
+  // failure into an empty list tells the user "this provider has no MCP
+  // servers", which is indistinguishable from the truth and sends them
+  // looking for the wrong bug. Letting it reject instead takes down the whole
+  // `providers.list` response - native results ride on that call, so one
+  // malformed file would empty the entire provider catalog on every poll.
+  //
+  // A typed result is the only option that scopes the failure to the provider
+  // it belongs to. `detail` carries a REDACTED parser message (see
+  // `ConfigParseError`, which redacts at construction): parse errors quote the
+  // offending source line, which is routinely a credential.
+  "config_unreadable",
 ]);
 export type ProviderNativeErrorCode = z.infer<
   typeof providerNativeErrorCodeSchema

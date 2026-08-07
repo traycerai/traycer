@@ -999,6 +999,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       "external_drift",
       "store_version_unsupported",
       "rollback_failed",
+      "config_unreadable",
     ] as const) {
       expect(providerNativeErrorCodeSchema.parse(code)).toBe(code);
     }

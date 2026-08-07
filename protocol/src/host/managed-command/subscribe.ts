@@ -1,14 +1,24 @@
 /**
- * The two managed-command streams - the transport half of the "Monitors &
+ * The managed-command output stream - the transport half of the "Monitors &
  * Shells" surface described in the host's `domain/managed-command/UI.md`.
  *
- * ## `managedCommand.subscribeList@1.0` - the directory
+ * ## Where the LIST lives
  *
- * One stream per EPIC, carrying every managed command in it regardless of which
- * chat created it. That scope is the point: finding a watcher must not require
- * remembering which chat made it. The stream is the list - nothing is persisted
- * client-side, so a `snapshot` followed by `changed`/`removed` is the whole
- * contract.
+ * There is deliberately no list stream here. Every surface that reads the set
+ * of commands is chat-scoped (the chat tile's menu, the chat's Background
+ * panel), so the set rides the chat's own stream instead: `chat.subscribe`'s
+ * `snapshot.managedCommands` and its `managedCommandsChanged` frame, both
+ * filtered to the commands that chat created. That also binds the set to the
+ * tab's host the way every other chat surface is bound, which an epic-wide
+ * stream on the app-wide active-host connection could not be.
+ *
+ * Re-entry path: a future GLOBAL panel (one that lists an epic's commands
+ * across chats) needs what the chat stream cannot give it, and would re-add an
+ * epic-level `managedCommand.subscribeList@1.0` here - a `snapshot` of every
+ * command in the epic followed by `changed`/`removed` upserts, served off the
+ * supervisor's events exactly as the output stream below is. It is a new
+ * method at that point, not a revival: nothing on the wire depends on its
+ * absence today.
  *
  * ## `managedCommand.subscribeOutput@1.0` - the viewer
  *
@@ -36,10 +46,10 @@
  *
  * ## Degrade story
  *
- * Both are brand-new methods, deliberately off the released floor. A host that
- * does not serve them rejects the open as an unknown method; the client shows
- * the surface as unavailable rather than empty. There is no older transport to
- * fall back to - this is the first one.
+ * A brand-new method, deliberately off the released floor. A host that does not
+ * serve it rejects the open as an unknown method; the client shows the surface
+ * as unavailable rather than empty. There is no older transport to fall back
+ * to - this is the first one.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -55,63 +65,6 @@ export const MANAGED_COMMAND_MAX_WINDOW_LINES = 2_000;
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
 } as const;
-
-// ─── `managedCommand.subscribeList@1.0` ─────────────────────────────────────
-
-export const managedCommandSubscribeListOpenRequestSchema = z.object({
-  epicId: z.string(),
-});
-export type ManagedCommandSubscribeListOpenRequest = z.infer<
-  typeof managedCommandSubscribeListOpenRequestSchema
->;
-
-export const managedCommandSubscribeListServerFrameSchema =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("snapshot"),
-      ...textFrameFields,
-      commands: z.array(managedCommandSchema),
-    }),
-    // Upsert, not a patch: a command that was created, restarted, stopped,
-    // relabelled or reached a terminal state arrives whole. One frame kind for
-    // every change keeps the client's reducer a map write.
-    z.object({
-      kind: z.literal("changed"),
-      ...textFrameFields,
-      command: managedCommandSchema,
-    }),
-    z.object({
-      kind: z.literal("removed"),
-      ...textFrameFields,
-      commandId: z.string(),
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ]);
-export type ManagedCommandSubscribeListServerFrame = z.infer<
-  typeof managedCommandSubscribeListServerFrameSchema
->;
-
-export const managedCommandSubscribeListClientFrameSchema =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("ping"),
-      ...textFrameFields,
-    }),
-  ]);
-export type ManagedCommandSubscribeListClientFrame = z.infer<
-  typeof managedCommandSubscribeListClientFrameSchema
->;
-
-export const managedCommandSubscribeListV10 = defineStreamRpcContract({
-  method: "managedCommand.subscribeList",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  openRequestSchema: managedCommandSubscribeListOpenRequestSchema,
-  serverFrameSchema: managedCommandSubscribeListServerFrameSchema,
-  clientFrameSchema: managedCommandSubscribeListClientFrameSchema,
-});
 
 // ─── `managedCommand.subscribeOutput@1.0` ───────────────────────────────────
 

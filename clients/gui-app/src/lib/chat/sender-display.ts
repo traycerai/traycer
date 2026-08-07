@@ -140,6 +140,7 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   opencode: "OpenCode",
   traycer: "Traycer",
   openrouter: "OpenRouter",
+  huggingface: "Hugging Face",
   cursor: "Cursor",
   grok: "Grok",
   qwen: "Qwen Code",

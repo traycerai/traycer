@@ -18,6 +18,7 @@ const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   cursor: "CLI arguments (optional)",
   traycer: "CLI arguments (optional)",
   openrouter: "CLI arguments (optional)",
+  huggingface: "CLI arguments (optional)",
   grok: "CLI arguments (optional)",
   qwen: "CLI arguments (optional)",
   kiro: "CLI arguments (optional)",

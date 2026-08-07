@@ -31,6 +31,7 @@ describe("OnboardingDiorama", () => {
       "OpenCode",
       "Traycer Inference",
       "OpenRouter",
+      "Hugging Face",
       "Droid",
       "Cursor",
       "Copilot",

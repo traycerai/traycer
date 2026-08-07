@@ -470,6 +470,7 @@ function emitChatSnapshot(
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }
@@ -896,8 +897,17 @@ async function waitForPillVisible(
 /**
  * Real gesture to strict bottom: leave the end first (so this is not just the
  * fresh-mount bootstrap default), then land at max scrollTop.
+ *
+ * The wheel is load-bearing, not decoration. Since #1042 the follow latch
+ * treats only PUBLISHING READER INPUT as a departure and leaves layout-owned
+ * scroll reports (MVCP, deferred measurement, inset compensation) corrective —
+ * so a bare `scrollTop =` assignment no longer leaves the end, and this helper
+ * was asserting a departure it never actually performed. `noteReaderGesture`
+ * is armed from the wheel/touch listeners, which is what a real reader
+ * produces; the same `fireEvent.wheel` idiom is used by the pill tests below.
  */
 async function gestureToTrueBottom(scrollNode: HTMLElement): Promise<void> {
+  fireEvent.wheel(scrollNode, { deltaY: -80 });
   act(() => {
     scrollNode.scrollTop = 1000;
   });
@@ -1687,19 +1697,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     setLegendListScrollContainerScrollHeightOverride(
       LEGEND_LIST_HEADER_PX + messageCount * LEGEND_LIST_ROW_HEIGHT_PX + 40,
     );
-    saveChatTabState({
-      identity: {
-        tileInstanceId: CHAT_TRACKED.instanceId,
-        epicId: EPIC_ID,
-        chatId: CHAT_TRACKED.id,
-        hostId: CHAT_TRACKED.hostId,
-      },
-      mode: "free-scrolling",
-      anchorMessageId,
-      anchorIndex,
-      offset: savedViewOffset,
-    });
-
+    enableLegendListBrowserScrollEvents();
     seedCanvas(pane("p1", [CHAT_TRACKED.instanceId]), [CHAT_TRACKED], "p1");
     const { container } = renderMatrix(undefined);
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
@@ -1709,6 +1707,17 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await settleLegendList();
 
     const scrollNode = messagesScroll(container, CHAT_TRACKED.instanceId);
+    expect(scrollNode.dataset.scrollMode).toBe("following-end");
+    const readingPosition =
+      LEGEND_LIST_HEADER_PX +
+      anchorIndex * LEGEND_LIST_ROW_HEIGHT_PX -
+      savedViewOffset;
+    act(() => {
+      fireEvent.wheel(scrollNode, { deltaY: -80 });
+      scrollNode.scrollTop = readingPosition;
+      fireEvent.scroll(scrollNode);
+    });
+    await settleLegendList();
     expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
     const beforeHide = scrollNode.scrollTop;
     expect(beforeHide).toBeGreaterThan(0);
@@ -1787,19 +1796,11 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await waitForHostedChatLoaded(container, CHAT_TRACKED.instanceId);
 
     const trackedScroll = messagesScroll(container, CHAT_TRACKED.instanceId);
-    // Real gesture: leave the bottom, then scroll back down to the true max -
-    // not just the untouched fresh-mount bootstrap default.
-    act(() => {
-      trackedScroll.scrollTop = 1000;
-    });
-    await settleLegendList();
-    expect(trackedScroll.dataset.scrollMode).toBe("free-scrolling");
-    act(() => {
-      trackedScroll.scrollTop =
-        trackedScroll.scrollHeight - trackedScroll.clientHeight;
-    });
-    await settleLegendList();
-    expect(trackedScroll.dataset.scrollMode).toBe("following-end");
+    // The shared helper, not a second copy of it. This block was a verbatim
+    // inline duplicate that drifted: when the helper gained the wheel that
+    // makes the departure real (see its note on #1042), this one did not, so
+    // it kept asserting a departure it never performed.
+    await gestureToTrueBottom(trackedScroll);
     const bottomTop = trackedScroll.scrollTop;
     expect(bottomTop).toBeGreaterThan(0);
 

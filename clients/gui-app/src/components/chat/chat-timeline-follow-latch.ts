@@ -43,11 +43,11 @@ export function isChatTimelineAtStrictBottom(
 
 export interface ChatTimelineFollowLatch {
   /**
-   * Imperatively re-issues `list.scrollToEnd()` iff the latch currently
-   * grants strict-bottom permission - a no-op otherwise. Call this from
-   * every real LegendList maintain trigger (data change, item resize,
-   * footer/header resize, viewport resize, content-inset change) - never
-   * from a component's render body.
+   * Reconciles fresh strict-bottom geometry, otherwise re-issues
+   * `list.scrollToEnd()` iff the latch currently grants permission. Call this
+   * from every real LegendList maintain trigger (data change, item resize,
+   * footer/header resize, viewport resize, content-inset change) - never from
+   * a component's render body.
    */
   readonly followEndIfPermitted: () => void;
   /** Explicit controller transition (pill click / navigation fallback). */
@@ -56,6 +56,9 @@ export interface ChatTimelineFollowLatch {
   readonly noteReaderGesture: (intent: ChatTimelineReaderGestureIntent) => void;
   /** Owns an explicit animated/non-animated "go live" operation. */
   readonly beginOwnedEndNavigation: () => void;
+  /** Arms an explicit programmatic navigation to publish free-scrolling only
+   *  if its live geometry actually leaves the strict bottom. */
+  readonly beginOwnedFreeNavigation: () => void;
   /** Resolves owned navigation without letting its intermediate reports flap. */
   readonly completeOwnedEndNavigation: (didLandAtEnd: boolean) => void;
   /** Fresh DOM validation for explicit-navigation settle loops. */
@@ -78,7 +81,6 @@ interface ActiveEndCorrection {
   readonly readerGestureGeneration: number;
   attempts: number;
   animationFrameId: number | null;
-  highWaterScrollTop: number;
 }
 
 interface ReaderEndCandidate {
@@ -86,7 +88,9 @@ interface ReaderEndCandidate {
   readonly targetScrollTop: number;
 }
 
-/** One immediate issue plus four measured reissues, each after two frames. */
+/** One immediate issue plus four measured reissues, each after two frames.
+ *  Exhaustion ends only the current correction burst; reader intent is never
+ *  inferred from a layout operation failing to settle inside this window. */
 export const CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS = 5;
 
 interface ChatTimelineFollowLatchOptions {
@@ -134,15 +138,18 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
  * reimplemented here instead, owned entirely by the app:
  *
  * - `permissionRef` is the single live follow authority. Native and LegendList
- *   scroll delivery both route through the same fresh DOM geometry observer;
- *   the latter closes bootstrap ordering gaps without introducing another
- *   state owner. `initialScrollAtEnd` seeds the ref once and never resets it.
+ *   scroll delivery both route through the same fresh DOM geometry observer.
+ *   A non-bottom report revokes permission only when publishing reader input
+ *   armed it; layout-owned scroll reports retain the current intent.
+ *   `initialScrollAtEnd` seeds the ref once and never resets it.
  * - An app-owned correction carries a generation and reader-gesture token.
  *   Its intermediate non-bottom scroll reports cannot revoke permission;
  *   validation reissues after two-frame measurement windows with a bounded
- *   retry budget. Wheel/touch/key intent cancels ownership before its scroll
- *   report; opposed scrollTop motion also detects OS-scrollbar departures
- *   that have no precursor event, so reader departure revokes immediately.
+ *   retry budget. Wheel/touch/key/pointer intent cancels ownership before its
+ *   scroll report. Scroll direction during an owned correction is never used
+ *   as reader-intent evidence because MVCP, ResizeObserver delivery, browser
+ *   clamping, and content-inset compensation can all move `scrollTop` in the
+ *   opposite direction without reader input.
  * - `followEndIfPermitted` is the one automatic path that turns permission
  *   into an actual scroll. Explicit go-live navigation declares its own
  *   ownership through the same latch and uses the same fresh-DOM authority.
@@ -171,12 +178,12 @@ export function useChatTimelineFollowLatch(
     resolveSuppressedEndLanding,
   } = options;
   const permissionRef = useRef(initialScrollAtEnd);
-  const hasConfirmedStrictEndRef = useRef(false);
   const [scrollNode, setScrollNode] = useState<HTMLElement | null>(null);
   const onFollowIntentChangeRef = useRef(onFollowIntentChange);
   const onReaderGestureRef = useRef(onReaderGesture);
   const correctionGenerationRef = useRef(0);
   const readerGestureGenerationRef = useRef(0);
+  const readerDepartureArmedRef = useRef(false);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   const lastTouchClientYRef = useRef<number | null>(null);
@@ -200,7 +207,15 @@ export function useChatTimelineFollowLatch(
   const setFollowIntent = useCallback(
     (isFollowing: boolean): void => {
       if (!isFollowing) cancelActiveCorrection();
+      // Disarm only on an actual intent TRANSITION. An owned free navigation
+      // (minimap/find/deep-link) arms departure while the viewport is still
+      // latched at the bottom; an animated jump's first smooth-scroll frame
+      // can report geometry still inside the strict-bottom epsilon, and that
+      // report must not consume the armed flag - otherwise every subsequent
+      // (genuinely departing) report reads as layout-owned and the latch
+      // yanks the jump straight back to the tail.
       if (permissionRef.current === isFollowing) return;
+      readerDepartureArmedRef.current = false;
       permissionRef.current = isFollowing;
       onFollowIntentChangeRef.current?.(isFollowing);
     },
@@ -210,6 +225,7 @@ export function useChatTimelineFollowLatch(
   const noteReaderGesture = useCallback(
     (intent: ChatTimelineReaderGestureIntent): void => {
       readerGestureGenerationRef.current += 1;
+      readerDepartureArmedRef.current = intent.publishesReaderPosition;
       cancelActiveCorrection();
       const node = listRef.current?.getScrollableNode();
       const geometry = node ? readScrollGeometry(node) : null;
@@ -230,36 +246,22 @@ export function useChatTimelineFollowLatch(
     [cancelActiveCorrection, listRef],
   );
 
-  const captureActiveCorrectionHighWater = useCallback((): void => {
-    const correction = activeCorrectionRef.current;
-    const node = listRef.current?.getScrollableNode();
-    if (correction === null || !node) return;
-    correction.highWaterScrollTop = Math.max(
-      correction.highWaterScrollTop,
-      node.scrollTop,
-    );
-  }, [listRef]);
-
-  const createActiveCorrection = useCallback(
-    (node: HTMLElement): ActiveEndCorrection => {
-      cancelActiveCorrection();
-      const correction: ActiveEndCorrection = {
-        generation: correctionGenerationRef.current + 1,
-        readerGestureGeneration: readerGestureGenerationRef.current,
-        attempts: 0,
-        animationFrameId: null,
-        highWaterScrollTop: node.scrollTop,
-      };
-      correctionGenerationRef.current = correction.generation;
-      activeCorrectionRef.current = correction;
-      return correction;
-    },
-    [cancelActiveCorrection],
-  );
+  const createActiveCorrection = useCallback((): ActiveEndCorrection => {
+    cancelActiveCorrection();
+    const correction: ActiveEndCorrection = {
+      generation: correctionGenerationRef.current + 1,
+      readerGestureGeneration: readerGestureGenerationRef.current,
+      attempts: 0,
+      animationFrameId: null,
+    };
+    correctionGenerationRef.current = correction.generation;
+    activeCorrectionRef.current = correction;
+    return correction;
+  }, [cancelActiveCorrection]);
 
   const startEndCorrection = useCallback(
     (list: LegendListRef, node: HTMLElement): void => {
-      const correction = createActiveCorrection(node);
+      const correction = createActiveCorrection();
 
       const isCurrent = (): boolean =>
         activeCorrectionRef.current?.generation === correction.generation &&
@@ -295,29 +297,22 @@ export function useChatTimelineFollowLatch(
         if (
           correction.attempts >= CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS
         ) {
-          // A mount seed may begin correcting before LegendList has finished
-          // its own initial measurement/positioning. Do not turn that
-          // bootstrap ordering into a reader-visible departure. Once this
-          // mount has confirmed a real strict edge, however, an exhausted
-          // correction is an honest loss of follow and must surface the pill.
-          if (hasConfirmedStrictEndRef.current) setFollowIntent(false);
-          else cancelActiveCorrection();
+          // LegendList may still be settling a deferred web shrink, MVCP
+          // adjustment, streaming row resize, or content-inset change. A
+          // bounded correction is a CPU-safety mechanism, not evidence that
+          // the reader left the tail. Retain permission; the final layout
+          // callback (or the next stream mutation) will start a fresh burst.
+          cancelActiveCorrection();
           return;
         }
         correction.attempts += 1;
         void list.scrollToEnd({ animated: false });
-        captureActiveCorrectionHighWater();
         scheduleValidation();
       };
 
       issue();
     },
-    [
-      cancelActiveCorrection,
-      captureActiveCorrectionHighWater,
-      createActiveCorrection,
-      setFollowIntent,
-    ],
+    [cancelActiveCorrection, createActiveCorrection],
   );
 
   const isAtStrictEnd = useCallback((): boolean => {
@@ -334,8 +329,14 @@ export function useChatTimelineFollowLatch(
     const node = listRef.current?.getScrollableNode();
     if (!node) return;
     setFollowIntent(true);
-    createActiveCorrection(node);
+    createActiveCorrection();
   }, [createActiveCorrection, listRef, setFollowIntent]);
+
+  const beginOwnedFreeNavigation = useCallback((): void => {
+    cancelActiveCorrection();
+    readerEndCandidateRef.current = null;
+    readerDepartureArmedRef.current = true;
+  }, [cancelActiveCorrection]);
 
   const completeOwnedEndNavigation = useCallback(
     (didLandAtEnd: boolean): void => {
@@ -352,7 +353,6 @@ export function useChatTimelineFollowLatch(
     const mayReleaseSuppression =
       isSuppressed && resolveSuppressedEndLanding?.() === true;
     const mayFollow = !isSuppressed || mayReleaseSuppression;
-    if (mayFollow) hasConfirmedStrictEndRef.current = true;
     setFollowIntent(mayFollow);
   }, [
     cancelActiveCorrection,
@@ -360,39 +360,6 @@ export function useChatTimelineFollowLatch(
     resolveSuppressedEndLanding,
     setFollowIntent,
   ]);
-
-  const handleOwnedCorrectionReport = useCallback(
-    (
-      correction: ActiveEndCorrection | null,
-      geometry: ChatTimelineScrollGeometry,
-    ): boolean => {
-      if (
-        correction === null ||
-        correction.readerGestureGeneration !==
-          readerGestureGenerationRef.current
-      ) {
-        return false;
-      }
-      if (
-        geometry.scrollTop <
-        correction.highWaterScrollTop - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
-      ) {
-        noteReaderGesture({
-          direction: "away-from-end",
-          freezeInFlightScroll: true,
-          publishesReaderPosition: true,
-        });
-        setFollowIntent(false);
-        return true;
-      }
-      correction.highWaterScrollTop = Math.max(
-        correction.highWaterScrollTop,
-        geometry.scrollTop,
-      );
-      return true;
-    },
-    [noteReaderGesture, setFollowIntent],
-  );
 
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
@@ -426,43 +393,69 @@ export function useChatTimelineFollowLatch(
       return;
     }
 
-    if (handleOwnedCorrectionReport(activeCorrectionRef.current, geometry))
+    const correction = activeCorrectionRef.current;
+    if (
+      correction !== null &&
+      correction.readerGestureGeneration === readerGestureGenerationRef.current
+    ) {
       return;
+    }
     if (tryReattachReader(node, geometry)) return;
-    setFollowIntent(false);
+    if (!permissionRef.current) return;
+    if (readerDepartureArmedRef.current) {
+      readerDepartureArmedRef.current = false;
+      setFollowIntent(false);
+      return;
+    }
+    // A non-bottom scroll report with no publishing reader input is layout-
+    // owned (MVCP, deferred row measurement, browser clamp, or inset
+    // compensation). Preserve intent and immediately correct; waiting for a
+    // separate maintain callback can leave the DOM parked away from the tail.
+    if (isCorrectionSuppressed?.() === true) return;
+    const list = listRef.current;
+    if (list) startEndCorrection(list, node);
   }, [
-    handleOwnedCorrectionReport,
+    isCorrectionSuppressed,
     listRef,
     reconcileStrictBottom,
     setFollowIntent,
+    startEndCorrection,
     tryReattachReader,
   ]);
 
   const followEndIfPermitted = useCallback((): void => {
-    if (!permissionRef.current) return;
-    if (isCorrectionSuppressed?.() === true) return;
-    // Skip when a fresh read shows the reader is ALREADY at the edge -
-    // e.g. a destructive deletion the UA itself already clamped to the new
-    // max. `scrollToEnd()` there would be a geometric no-op but still reads
-    // as "the app issued imperative navigation" to anything watching the
-    // list's own imperative API, which the destructive-mutation contract
-    // ("no invented destination") explicitly forbids - passive landings are
-    // not reader-earned follow, but they also need no correction.
     const list = listRef.current;
     const node = list?.getScrollableNode();
     if (!list || !node) return;
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
     if (isChatTimelineAtStrictBottom(geometry)) {
-      cancelActiveCorrection();
+      if (isCorrectionSuppressed?.() === true) {
+        // A partial hydration restore may be temporarily clamped to its own
+        // short snapshot's end. Maintenance is not reader evidence and must
+        // not resolve that pending transaction; only a live scroll report can
+        // validate its frozen target through `reconcileStrictBottom`.
+        cancelActiveCorrection();
+        return;
+      }
+      // Maintenance can be the only observable boundary after a collapsing
+      // row or end-inset change passively clamps the DOM to the strict edge.
+      // Reconcile before consulting permission so a stale false latch cannot
+      // leave a jump pill visible when there is no useful bottom to reach.
+      // This performs no imperative navigation, preserving destructive-clamp
+      // behavior while allowing subsequent streaming growth to stay latched.
+      reconcileStrictBottom();
       return;
     }
+    if (!permissionRef.current) return;
+    if (isCorrectionSuppressed?.() === true) return;
 
     startEndCorrection(list, node);
   }, [
     cancelActiveCorrection,
     isCorrectionSuppressed,
     listRef,
+    reconcileStrictBottom,
     startEndCorrection,
   ]);
 
@@ -513,14 +506,9 @@ export function useChatTimelineFollowLatch(
     node.addEventListener("touchend", clearTouch, { passive: true });
     node.addEventListener("touchcancel", clearTouch, { passive: true });
     // Viewport-layout trigger (divider drag / pane resize): fires with no
-    // ChatTimeline render at all. Deliberately does NOT also refresh
-    // permission from the post-resize geometry - a container resize alone
-    // (clientHeight changing with scrollTop untouched) moves the strict-edge
-    // distance exactly like content growth does, for the same reason: it is
-    // not reader motion. Only an ACTUAL scrollTop change (the scroll
-    // listener above) is trusted to grant or revoke permission; a resize is
-    // purely a maintain TRIGGER that re-consults whatever permission already
-    // holds.
+    // ChatTimeline render at all. Like every maintain trigger, it may heal a
+    // stale false latch only when fresh geometry is already at the strict
+    // edge; non-bottom geometry still preserves a detached reader's position.
     const resizeObserver = new ResizeObserver(() => {
       followEndIfPermitted();
     });
@@ -551,12 +539,14 @@ export function useChatTimelineFollowLatch(
       setFollowIntent,
       noteReaderGesture,
       beginOwnedEndNavigation,
+      beginOwnedFreeNavigation,
       completeOwnedEndNavigation,
       isAtStrictEnd,
       observeLiveGeometry,
     }),
     [
       beginOwnedEndNavigation,
+      beginOwnedFreeNavigation,
       completeOwnedEndNavigation,
       followEndIfPermitted,
       isAtStrictEnd,
