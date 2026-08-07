@@ -850,9 +850,16 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       connected, so a badge anywhere else would claim a credential origin the
       row does not have. `hasStoredCredential` answers a different question
       ("does Traycer hold a credential?") than `canDisconnect` ("may it be
-      removed from here?"); today's host answers both `source === "api"`, a
-      later one need not, and reading either for the other is how a button
-      appears that the host will refuse. The control itself is an icon button
+      removed from here?"); a later host may answer them differently, and
+      reading either for the other is how a button appears that the host will
+      refuse. Today the host answers both `source ∈ {api, custom}` — the two
+      that are auth-store-backed in practice, `api` for a key written through
+      `auth.set` and `custom` for a provider whose loader is fed by that same
+      store (`xai` signs in through OAuth and reports `custom`). `env` and
+      `config` stay read-only: neither is ours to remove, and `auth.remove`
+      cannot touch a config block anyway — OpenCode's own app compensates for
+      that case by ALSO writing `disabled_providers`, which is out of v1 scope
+      here. The control itself is an icon button
       with hover-only destructive tone (the pattern
       `provider-cli-candidates-section` and `env-override-editor` already use —
       quiet among neutral rows, red under the pointer) and a **"Remove saved
@@ -880,12 +887,21 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       that loader is frequently fed by the auth store — `xai` signs in through
       OAuth and still reports `custom` — so pointing at a file would send the
       user where the credential is not.
-    - **KNOWN HOST GAP:** `canDisconnect` is `source === "api"` host-side, so a
-      `custom`-loader provider whose credential really is in OpenCode's auth
-      store (again `xai`) shows no Remove, while OpenCode's own app offers one.
-      The wire contract already anticipates a host that reads the auth store
-      answering `hasStoredCredential` / `canDisconnect` differently; the client
-      gates on `canDisconnect` alone and needs no change when it does.
+    - **ACCEPTED RESIDUAL: a `custom` row can have nothing to remove.** Upstream
+      assigns `custom` from two different passes, and only one of them requires
+      a stored credential: a plugin auth loader (guarded on an `auth.json` entry
+      existing) and an AUTOLOADING provider loader (guarded on nothing). The
+      wire's `source` cannot tell them apart, so `{api, custom}` shows Remove on
+      the second kind too — the live example being OpenCode's own `opencode` row
+      on a free plan, connected with no `auth.json` entry at all. The failure is
+      the mild direction: `auth.remove` no-ops, the row re-lists as connected,
+      and nothing is misreported. Being exact would mean reading `auth.json` key
+      names, which the plan defers. Special-casing the `opencode` id was
+      considered and rejected — that is the hardcoded-id rule the plan bans, and
+      upstream's own version of that filter turns out to be a PAID-PLAN check
+      (`m.id !== "opencode" || Object.values(m.models).find(v => v.cost?.input)`,
+      the same predicate as their `paid()`), not a credential one, so mirroring
+      it would import their monetisation rule and still not make us exact.
     - **`credentialKey` is the credential's home**, and the reason it is on the
       wire: the host's connect contract wants exactly ONE input keyed by the
       provider's models.dev env var, and only the host knows which member of a

@@ -82,9 +82,7 @@ export function sourceBadgeHint(
  * from it. The badge beside the name already says where the credential comes
  * from, so a line reading "Managed outside Traycer" spent the row's last words
  * repeating that in the negative - telling the user what they cannot do here
- * rather than who owns it. `config` and `custom` share a line on purpose:
- * both resolve to something the user edits in OpenCode's own files, and the
- * badge is what distinguishes them.
+ * rather than who owns it.
  */
 export function readOnlySourceLabel(
   source: ModelProviderSource,
