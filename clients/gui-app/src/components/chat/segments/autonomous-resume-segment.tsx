@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { managedCommandKindLabel } from "@/lib/managed-commands/managed-command-copy";
+import { MANAGED_COMMAND_NOUN } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -15,11 +15,11 @@ import { SegmentPanel } from "./segment-panel";
 
 /**
  * Lean marker at the head of an AUTONOMOUS turn (one with no user message),
- * naming which backgrounded command/Monitor/subagent completion or scheduled
+ * naming which backgrounded command/shell/subagent completion or scheduled
  * wakeup woke the agent - so the resume reads as a consequence, not an abrupt
  * reply.
  *
- * - Command / monitor / wakeup triggers: rendered as cards that lazy-fetch
+ * - Command / shell / wakeup triggers: rendered as cards that lazy-fetch
  *   output on expand when an output file is available.
  * - Subagent triggers with a result summary: rendered as expandable cards
  *   showing the full markdown result.
@@ -98,7 +98,7 @@ function ResumeCompletionCard(props: {
 
   // Non-subagent triggers only have something to reveal when there's a captured
   // output file - without one the body is just "Output file unavailable." every
-  // time, so collapse to a static single-row card. Monitor and wakeup triggers
+  // time, so collapse to a static single-row card. Shell and wakeup triggers
   // do not normally have capturable output files; subagents always have a
   // markdown result to show.
   const expandable = trigger.kind === "subagent" || trigger.outputFile !== null;
@@ -173,9 +173,6 @@ function ResumeManagedCommandDoor(props: {
 
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
-  // Prefer the real managed-command kind when the host reported one: the
-  // persisted `kind` enum is frozen at "monitor" for a Shell too, so without
-  // this a completed shell reads "Monitor completed".
   const noun = resumeNoun(trigger);
   // A producer that is still running has no terminal outcome: `status` is
   // carrying its least-wrong placeholder for readers that predate `live`, and
@@ -198,9 +195,7 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
 }
 
 function resumeNoun(trigger: AutonomousResumeTrigger): string {
-  if (trigger.managedCommand !== null) {
-    return managedCommandKindLabel(trigger.managedCommand.kind);
-  }
+  if (trigger.managedCommand !== null) return MANAGED_COMMAND_NOUN;
   if (trigger.mcp !== null) return "MCP tool";
   return resumeKindTitle(trigger.kind);
 }
@@ -220,6 +215,10 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
   switch (kind) {
     case "command":
       return "Command";
+    // NOT the Traycer shell entity: a trigger with no `managedCommand` block
+    // that still says "monitor" is the harness's OWN background task - Claude
+    // Code's native Monitor tool - and keeps that tool's real name. Traycer
+    // shells are titled through `resumeNoun`'s `managedCommand` branch.
     case "monitor":
       return "Monitor";
     case "subagent":

@@ -1,5 +1,5 @@
 /**
- * A chat's monitors and shells, as a chip in the workspace-controls row under
+ * A chat's shells, as a chip in the workspace-controls row under
  * the composer. The chat that started a command is where a human goes looking
  * for it, so this menu is the home for them - there is no epic-wide list any
  * more.
@@ -9,7 +9,7 @@
  * the transcript put it where the reading happens instead.
  *
  * The button exists only while the chat owns something. That makes its mere
- * presence the first piece of information: a chat with no monitors says so by
+ * presence the first piece of information: a chat with no shells says so by
  * showing nothing at all, rather than by offering an empty drawer.
  */
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
@@ -26,7 +26,7 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
-import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
+import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
@@ -78,14 +78,13 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
   const acknowledge = useManagedCommandAttentionStore(
     (state) => state.acknowledge,
   );
-  const acknowledgedUpdatedAtMsById = useManagedCommandAttentionStore(
-    (state) => state.acknowledgedUpdatedAtMsById,
+  const acknowledgedEndingById = useManagedCommandAttentionStore(
+    (state) => state.acknowledgedEndingById,
   );
   const attentionCount = useMemo(
     () =>
-      unacknowledgedAttentionCommands(commands, acknowledgedUpdatedAtMsById)
-        .length,
-    [commands, acknowledgedUpdatedAtMsById],
+      unacknowledgedAttentionCommands(commands, acknowledgedEndingById).length,
+    [commands, acknowledgedEndingById],
   );
   const runningCount = commands.filter(
     (command) => command.status.state === "running",
@@ -117,7 +116,7 @@ export function ManagedCommandChatMenu(props: ManagedCommandChatMenuProps) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        label="Monitors and shells"
+        label="Shells"
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -193,16 +192,16 @@ function menuAccessibleName(
   runningCount: number,
 ): string {
   if (attentionCount > 0) {
-    return `Monitors and shells, ${attentionCount} need attention`;
+    return `Shells, ${attentionCount} need attention`;
   }
   if (runningCount > 0) {
-    return `Monitors and shells, ${runningCount} running`;
+    return `Shells, ${runningCount} running`;
   }
-  return "Monitors and shells";
+  return "Shells";
 }
 
 /**
- * Attention beats running: a monitor that died is the thing to say even while
+ * Attention beats running: a shell that died is the thing to say even while
  * three others are healthy. With neither, the glyph carries no count at all -
  * "some exist, none of them need you" is best said by saying nothing.
  */
@@ -246,14 +245,14 @@ function ManagedCommandMenuRows(props: {
         className="px-2 py-3 text-center text-ui-xs text-muted-foreground"
         data-testid="managed-command-chat-menu-empty"
       >
-        No monitors or shells left
+        No shells left
       </p>
     );
   }
   return (
     // `useManagedCommandsForChat` orders running-first, then most recent
     // activity, so the menu inherits its order rather than sorting again.
-    <ul aria-label="Monitors and shells" className="space-y-0.5">
+    <ul aria-label="Shells" className="space-y-0.5">
       {props.commands.map((command) => (
         <ManagedCommandMenuRow
           key={command.id}
@@ -343,7 +342,10 @@ function ManagedCommandMenuRow(props: {
         }}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <ManagedCommandKindIcon kind={command.kind} className={undefined} />
+        <ManagedCommandNotifyIcon
+          notifying={command.notifying}
+          className={undefined}
+        />
         <ManagedCommandStatusDot
           status={command.status}
           className={undefined}

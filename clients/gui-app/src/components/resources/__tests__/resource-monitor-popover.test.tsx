@@ -2556,10 +2556,10 @@ describe("ResourceMonitorPopover", () => {
     outside.remove();
   });
 
-  // Copy is kind-explicit wherever the kind is known (CONTEXT.md): a managed
-  // command reads as the Monitor or Shell it is, never as the umbrella term.
+  // A managed command reads as the shell it is (CONTEXT.md), never as the
+  // umbrella term, and the notify flag only ever moves the glyph.
   function managedCommandOwner(
-    kind: "monitor" | "shell",
+    notifying: boolean,
     description: string,
   ): OwnerResourceSnapshotWireV14 {
     return owner({
@@ -2570,34 +2570,35 @@ describe("ResourceMonitorPopover", () => {
         ownerId: "cmd-1",
       },
       activeProcessName: "node",
-      managedCommand: { commandId: "cmd-1", kind, description },
+      managedCommand: { commandId: "cmd-1", notifying, description },
     });
   }
 
-  it("names a Monitor owner row by its kind and description", () => {
+  it("names a notifying owner row Shell, by its description", () => {
     const stub = installStubFactory();
     renderPopover();
 
     act(() => {
       stub.emit().onSnapshot(
         projection({
-          owners: [managedCommandOwner("monitor", "deploy watcher")],
+          owners: [managedCommandOwner(true, "deploy watcher")],
         }),
       );
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    expect(screen.getByText("Monitor · deploy watcher")).not.toBeNull();
+    expect(screen.getByText("Shell · deploy watcher")).not.toBeNull();
+    expect(screen.queryByText(/Monitor/)).toBeNull();
   });
 
-  it("names a Shell owner row by its kind and description", () => {
+  it("names a quiet owner row the same way", () => {
     const stub = installStubFactory();
     renderPopover();
 
     act(() => {
       stub.emit().onSnapshot(
         projection({
-          owners: [managedCommandOwner("shell", "run migrations")],
+          owners: [managedCommandOwner(false, "run migrations")],
         }),
       );
     });
@@ -2606,14 +2607,14 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Shell · run migrations")).not.toBeNull();
   });
 
-  it("spends the managed-command subtitle on what is running, not the kind again", () => {
+  it("spends the managed-command subtitle on what is running, not the noun again", () => {
     const stub = installStubFactory();
     renderPopover();
 
     act(() => {
       stub.emit().onSnapshot(
         projection({
-          owners: [managedCommandOwner("monitor", "deploy watcher")],
+          owners: [managedCommandOwner(true, "deploy watcher")],
         }),
       );
     });

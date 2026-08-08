@@ -24,8 +24,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * The chat's own managed-command surfaces: the chip and the resume divider are
- * doors into the output window, both kind-explicit; the Background panel lists
- * what this chat has running right now; and the monitors menu is the home for
+ * doors into the output window, both naming the Shell entity; the Background panel lists
+ * what this chat has running right now; and the Shells menu is the home for
  * the chat's commands in every state.
  */
 
@@ -97,7 +97,7 @@ const HARNESS_ITEM: BackgroundItem = {
 function command(over: Partial<ManagedCommand>): ManagedCommand {
   return {
     id: "cmd-1",
-    kind: "monitor",
+    notifying: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: 10 },
     chatId: CHAT_ID,
@@ -205,9 +205,9 @@ afterEach(() => {
 });
 
 describe("queued-delivery chip", () => {
-  it("names the kind of command whose output is waiting", () => {
+  it("names the shell whose output is waiting, notifying or not", () => {
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" commandKind="shell" />,
+      <ManagedCommandBadge commandId="cmd-1" notifying={false} />,
     );
 
     expect(screen.getByTestId("queued-managed-command-badge").textContent).toBe(
@@ -215,41 +215,39 @@ describe("queued-delivery chip", () => {
     );
   });
 
-  it("falls back to a kind-free label when the host did not say", () => {
+  it("still names the shell when the item predates the notify flag", () => {
+    // The entity is known even when the flag is not, so only the glyph falls
+    // back - the label never says "command".
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" commandKind={null} />,
-    );
-
-    expect(screen.getByTestId("queued-managed-command-badge").textContent).toBe(
-      "Command output",
-    );
-  });
-
-  it("shows the kind's own glyph rather than a terminal one", () => {
-    renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" commandKind="shell" />,
+      <ManagedCommandBadge commandId="cmd-1" notifying={null} />,
     );
 
     const badge = screen.getByTestId("queued-managed-command-badge");
-    expect(badge.querySelector("[data-kind-icon='shell']")).not.toBeNull();
+    expect(badge.textContent).toBe("Shell output");
+    expect(badge.querySelector("[data-notify-icon]")).toBeNull();
   });
 
-  it("describes what is waiting in monitor/shell words, not 'background command'", () => {
+  it("shows the notify glyph rather than a terminal one", () => {
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" commandKind="monitor" />,
+      <ManagedCommandBadge commandId="cmd-1" notifying={false} />,
     );
+
+    const badge = screen.getByTestId("queued-managed-command-badge");
+    expect(badge.querySelector("[data-notify-icon='off']")).not.toBeNull();
+  });
+
+  it("describes what is waiting in shell words, not 'background command'", () => {
+    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" notifying />);
 
     fireEvent.focus(screen.getByTestId("queued-managed-command-badge"));
 
     const tip = screen.getAllByRole("tooltip")[0];
-    expect(tip.textContent).toContain("monitor");
+    expect(tip.textContent).toContain("shell");
     expect(tip.textContent).not.toContain("background command");
   });
 
-  it("is a door into the command's output window", () => {
-    renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" commandKind="monitor" />,
-    );
+  it("is a door into the shell's output window", () => {
+    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" notifying />);
 
     fireEvent.click(screen.getByTestId("queued-managed-command-badge"));
 
@@ -258,30 +256,14 @@ describe("queued-delivery chip", () => {
 });
 
 describe("resume divider", () => {
-  it("names the real kind while the command is still running", () => {
-    renderInChatTile(
-      <AutonomousResumeSegment
-        triggers={[
-          trigger({
-            blockId: "block-live-monitor",
-            live: true,
-            managedCommand: { commandId: "cmd-1", kind: "monitor" },
-          }),
-        ]}
-      />,
-    );
-
-    expect(screen.getByText("Monitor still running")).not.toBeNull();
-  });
-
-  it("says Shell, not Command, for a backgrounded shell's mid-run output", () => {
+  it("says Shell, not Command, for a shell's mid-run output", () => {
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[
           trigger({
             blockId: "block-live-shell",
             live: true,
-            managedCommand: { commandId: "cmd-2", kind: "shell" },
+            managedCommand: { commandId: "cmd-2", notifying: true },
           }),
         ]}
       />,
@@ -290,7 +272,7 @@ describe("resume divider", () => {
     expect(screen.getByText("Shell still running")).not.toBeNull();
   });
 
-  it("keeps the kind-free copy for a legacy trigger that names no kind", () => {
+  it("keeps the generic copy for a legacy trigger that names no shell", () => {
     // Written before the trigger carried `managedCommand`, so the divider has
     // nothing to be specific about and must not guess.
     renderInChatTile(
@@ -308,24 +290,25 @@ describe("resume divider", () => {
     expect(screen.getByText("Command still running")).not.toBeNull();
   });
 
-  it("names the real kind in its terminal copy", () => {
+  it("names the shell in its terminal copy", () => {
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[
           trigger({
             status: "completed",
-            managedCommand: { commandId: "cmd-1", kind: "shell" },
+            managedCommand: { commandId: "cmd-1", notifying: false },
           }),
         ]}
       />,
     );
 
-    // The persisted trigger kind is frozen at "monitor" for both; the real
-    // kind rides `trigger.managedCommand`.
     expect(screen.getByText("Shell completed")).not.toBeNull();
   });
 
-  it("keeps the generic copy and offers no door for an old trigger", () => {
+  it("keeps the harness Monitor name for a kind-only trigger, and offers it no door", () => {
+    // No `managedCommand` block means this is not a Traycer shell - kind-only
+    // "monitor" triggers are produced live by Claude Code's own Monitor tool,
+    // which keeps its real name.
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[trigger({ status: "failed", managedCommand: null })]}
@@ -338,12 +321,12 @@ describe("resume divider", () => {
     ).toBeNull();
   });
 
-  it("opens the command's output window when it carries one", () => {
+  it("opens the shell's output window when it carries one", () => {
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[
           trigger({
-            managedCommand: { commandId: "cmd-1", kind: "monitor" },
+            managedCommand: { commandId: "cmd-1", notifying: true },
           }),
         ]}
       />,
@@ -393,7 +376,7 @@ describe("running commands in the Background panel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Background/ }));
   }
 
-  it("lists only this chat's running commands, kind-explicit", () => {
+  it("lists only this chat's running shells, entity-named", () => {
     renderPanel([]);
     act(() => {
       setCommands(
@@ -411,7 +394,7 @@ describe("running commands in the Background panel", () => {
         ],
         CHAT_ID,
       );
-      // Another chat's monitor rides another chat's stream, so this panel can
+      // Another chat's shell rides another chat's stream, so this panel can
       // never see it however busy that chat is.
       setCommands([command({ id: "other-chat", chatId: "chat-2" })], "chat-2");
     });
@@ -421,7 +404,7 @@ describe("running commands in the Background panel", () => {
     expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
       "managed-command-background-row-mine-running",
     ]);
-    expect(rows[0].textContent).toContain("Monitor · deploy watcher");
+    expect(rows[0].textContent).toContain("Shell · deploy watcher");
   });
 
   it("drops a row the moment its command reaches a terminal state", () => {
@@ -467,14 +450,14 @@ describe("running commands in the Background panel", () => {
     expect(findOpenArtifactInTab(TAB_ID, "mine-running")).not.toBeNull();
   });
 
-  it("reads in the panel's own row grammar: kind glyph, uppercase kind pill, elapsed, hover stop", () => {
+  it("reads in the panel's own row grammar: glyph, uppercase pill, elapsed, hover stop", () => {
     renderPanel([]);
     act(() => {
       setCommands(
         [
           command({
             id: "mine-running",
-            kind: "shell",
+            notifying: false,
             status: {
               state: "running",
               pid: 4410,
@@ -492,7 +475,7 @@ describe("running commands in the Background panel", () => {
     );
     // The glyph is what keeps a supervised shell apart from the harness's own
     // background kinds; the pill names it in the panel's existing grammar.
-    expect(row.querySelector("[data-kind-icon='shell']")).not.toBeNull();
+    expect(row.querySelector("[data-notify-icon='off']")).not.toBeNull();
     expect(row.textContent).toContain("Shell");
     // Same clock format the harness rows use, so two rows side by side read
     // as one list rather than two conventions.
@@ -516,8 +499,8 @@ describe("running commands in the Background panel", () => {
     expect(
       screen.getByTestId("managed-command-stop-mine-running"),
     ).not.toBeNull();
-    // Delete destroys the command's whole output history. It belongs to the
-    // chat's monitors menu and the output window, where a command is a durable
+    // Delete destroys the shell's whole output history. It belongs to the
+    // chat's Shells menu and the output window, where a shell is a durable
     // object - not to a row that exists only while the process does.
     expect(
       screen.queryByTestId("managed-command-delete-mine-running"),
@@ -532,9 +515,9 @@ describe("running commands in the Background panel", () => {
     act(() => {
       setCommands(
         [
-          command({ id: "m1", kind: "monitor" }),
-          command({ id: "m2", kind: "monitor" }),
-          command({ id: "s1", kind: "shell" }),
+          command({ id: "m1" }),
+          command({ id: "m2" }),
+          command({ id: "s1", notifying: false }),
         ],
         CHAT_ID,
       );
@@ -562,7 +545,7 @@ describe("running commands in the Background panel", () => {
     const panel = renderPanel([HARNESS_ITEM]);
     act(() => {
       setCommands(
-        [command({ id: "m1" }), command({ id: "m2", kind: "shell" })],
+        [command({ id: "m1" }), command({ id: "m2", notifying: false })],
         CHAT_ID,
       );
     });
@@ -641,7 +624,7 @@ describe("running commands in the Background panel", () => {
 
     // And the aggregate follows the same split: the button stays live for the
     // managed half, and a press skips the unreachable harness half rather
-    // than dying with it - a reconnect is exactly when a runaway monitor
+    // than dying with it - a reconnect is exactly when a runaway shell
     // needs the one-click stop.
     const stopAllButton = screen.getByRole<HTMLButtonElement>("button", {
       name: "Stop all",
@@ -665,11 +648,11 @@ describe("running commands in the Background panel", () => {
     expandPanel();
 
     expect(screen.queryByText("Not stopped by Stop all")).toBeNull();
-    expect(screen.queryByText("Monitors and shells")).toBeNull();
+    expect(screen.queryByText("Shells")).toBeNull();
   });
 });
 
-describe("the chat's monitors menu", () => {
+describe("the chat's Shells menu", () => {
   function renderMenu(): void {
     renderInChatTile(
       <DndContext>
@@ -728,7 +711,7 @@ describe("the chat's monitors menu", () => {
       setCommands(
         [
           command({ id: "r1" }),
-          command({ id: "r2", kind: "shell" }),
+          command({ id: "r2", notifying: false }),
           command({
             id: "done",
             status: { state: "stopped", stoppedAtMs: 30 },
@@ -748,7 +731,7 @@ describe("the chat's monitors menu", () => {
           command({ id: "r1", status: { state: "stopped", stoppedAtMs: 31 } }),
           command({
             id: "r2",
-            kind: "shell",
+            notifying: false,
             status: { state: "stopped", stoppedAtMs: 31 },
           }),
           command({
@@ -768,18 +751,17 @@ describe("the chat's monitors menu", () => {
     ).toBeNull();
   });
 
-  it("lights attention for a failed shell and a monitor that exited on its own, never for a stop", () => {
+  it("lights attention for a failure only - never a clean exit, notifying or not", () => {
     renderMenu();
     act(() => {
       setCommands(
         [
-          // A shell that failed: its ending is not the one it promised.
-          exited({ id: "shell-failed", kind: "shell" }),
-          // A monitor that exited cleanly is still a watcher that stopped
-          // watching, which is exactly the thing worth being told.
+          // Failed: its ending is not the one it promised.
+          exited({ id: "shell-failed", notifying: false }),
+          // A notifying shell that exited cleanly stopped watching, which its
+          // own final digest already says. The badge is for failures.
           exited({
-            id: "monitor-clean-exit",
-            kind: "monitor",
+            id: "watcher-clean-exit",
             status: {
               state: "exited",
               exitCode: 0,
@@ -792,10 +774,10 @@ describe("the chat's monitors menu", () => {
             id: "stopped-by-someone",
             status: { state: "stopped", stoppedAtMs: 20 },
           }),
-          // A clean shell run ended the way it said it would.
+          // A clean run ended the way it said it would.
           exited({
             id: "shell-clean",
-            kind: "shell",
+            notifying: false,
             status: {
               state: "exited",
               exitCode: 0,
@@ -810,14 +792,14 @@ describe("the chat's monitors menu", () => {
 
     expect(
       screen.getByTestId("managed-command-chat-menu-attention").textContent,
-    ).toBe("2");
+    ).toBe("1");
   });
 
   it("lets attention beat running, then clears it once the menu has been opened", () => {
     renderMenu();
     act(() => {
       setCommands(
-        [command({ id: "live" }), exited({ id: "failed", kind: "shell" })],
+        [command({ id: "live" }), exited({ id: "failed", notifying: false })],
         CHAT_ID,
       );
     });
@@ -861,9 +843,9 @@ describe("the chat's monitors menu", () => {
       </DndContext>,
     );
     act(() => {
-      setCommands([exited({ id: "a-failed", kind: "shell" })], CHAT_ID);
+      setCommands([exited({ id: "a-failed", notifying: false })], CHAT_ID);
       setCommands(
-        [exited({ id: "b-failed", kind: "shell", chatId: "chat-2" })],
+        [exited({ id: "b-failed", notifying: false, chatId: "chat-2" })],
         "chat-2",
       );
     });
@@ -887,7 +869,7 @@ describe("the chat's monitors menu", () => {
   it("treats an ending that arrives while the menu is open as seen", () => {
     renderMenu();
     act(() => {
-      setCommands([command({ id: "flaky", kind: "shell" })], CHAT_ID);
+      setCommands([command({ id: "flaky", notifying: false })], CHAT_ID);
     });
     openMenu();
 
@@ -898,7 +880,7 @@ describe("the chat's monitors menu", () => {
         [
           exited({
             id: "flaky",
-            kind: "shell",
+            notifying: false,
             status: {
               state: "exited",
               exitCode: 2,
@@ -926,7 +908,7 @@ describe("the chat's monitors menu", () => {
   it("re-arms when an acknowledged command fails again after the menu closes", () => {
     renderMenu();
     act(() => {
-      setCommands([exited({ id: "flaky", kind: "shell" })], CHAT_ID);
+      setCommands([exited({ id: "flaky", notifying: false })], CHAT_ID);
     });
     openMenu();
     expect(
@@ -940,7 +922,7 @@ describe("the chat's monitors menu", () => {
         [
           exited({
             id: "flaky",
-            kind: "shell",
+            notifying: false,
             status: {
               state: "exited",
               exitCode: 2,
@@ -975,10 +957,35 @@ describe("the chat's monitors menu", () => {
     expect(trigger$()).not.toBeNull();
     expect(
       screen.getByTestId("managed-command-chat-menu-empty").textContent,
-    ).toBe("No monitors or shells left");
+    ).toBe("No shells left");
   });
 
-  it("opens the command's output window from a row", () => {
+  it("swaps a live row's glyph when its notify flag is turned off", () => {
+    renderMenu();
+    act(() => {
+      setCommands([command({ id: "watcher", notifying: true })], CHAT_ID);
+    });
+    openMenu();
+
+    const row = () => screen.getByTestId("managed-command-menu-row-watcher");
+    expect(row().querySelector("[data-notify-icon='on']")).not.toBeNull();
+
+    // Muting is applied live by the host - no restart, same record - so the
+    // row stays where it is and only the glyph reports the change.
+    act(() => {
+      setCommands(
+        [command({ id: "watcher", notifying: false, updatedAtMs: 40 })],
+        CHAT_ID,
+      );
+    });
+
+    expect(row().querySelector("[data-notify-icon='on']")).toBeNull();
+    expect(row().querySelector("[data-notify-icon='off']")).not.toBeNull();
+    // The noun never moved with the flag: it is a shell either way.
+    expect(row().textContent).toContain("Shell · deploy watcher");
+  });
+
+  it("opens the shell's output window from a row", () => {
     renderMenu();
     act(() => {
       setCommands([command({ id: "door" })], CHAT_ID);
@@ -1040,7 +1047,7 @@ describe("the chat's monitors menu", () => {
     renderMenu();
     act(() => {
       setCommands(
-        [command({ id: "live" }), exited({ id: "over", kind: "shell" })],
+        [command({ id: "live" }), exited({ id: "over", notifying: false })],
         CHAT_ID,
       );
     });

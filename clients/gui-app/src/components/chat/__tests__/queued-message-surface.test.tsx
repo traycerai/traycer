@@ -887,7 +887,7 @@ function managedCommandQueuedItem(
     queueItemId,
     commandId: `${queueItemId}-command`,
     description,
-    commandKind: "monitor",
+    notifying: true,
     delivery: "next_turn",
     targetTurnId: null,
     status: "pending",

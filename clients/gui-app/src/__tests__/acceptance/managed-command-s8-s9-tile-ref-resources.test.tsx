@@ -8,7 +8,7 @@
  * keeps state from creeping into storage later.
  *
  * S9 (GUI) is the readout join (`UI.md` §6): CPU/mem chips appear on the rows
- * of a chat's monitors menu for commands the resources stream names, absence
+ * of a chat's Shells menu for commands the resources stream names, absence
  * means "untracked" (never zero), and a pre-@1.4 host's frames — which cannot
  * carry a managed-command owner at all — degrade to no chip rather than a
  * wrong one. The old-peer fold itself and its frame invariant are proven
@@ -118,7 +118,7 @@ let epicHandle: OpenEpicStoreHandle | null = null;
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: "cmd-res",
-    kind: "monitor",
+    notifying: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: CHAT_ID,
@@ -170,7 +170,7 @@ function managedCommandOwnerRow(commandId: string): Record<string, unknown> {
     harnessId: null,
     managedCommand: {
       commandId,
-      kind: "monitor",
+      notifying: true,
       description: "deploy watcher",
     },
   };
@@ -301,8 +301,8 @@ function renderMenuWithResources(): void {
  */
 function openMenu(): void {
   // Prefix match: the trigger's accessible name carries the live counts
-  // ("Monitors and shells, 2 running").
-  fireEvent.click(screen.getByRole("button", { name: /^Monitors and shells/ }));
+  // ("Shells, 2 running").
+  fireEvent.click(screen.getByRole("button", { name: /^Shells/ }));
 }
 
 function chipOnRow(commandId: string): HTMLElement | null {
@@ -378,10 +378,10 @@ describe("S8 · tile-ref minimalism", () => {
       type: TILE_KIND_MANAGED_COMMAND_OUTPUT,
       hostId: HOST_ID,
       // The creep §9a rules out — none of it may survive a round-trip.
-      kind: "monitor",
+      notifying: true,
       description: "deploy watcher",
       status: { state: "running", pid: 4410 },
-      name: "Monitor · deploy watcher",
+      name: "Shell · deploy watcher",
     });
     expect(parsed).not.toBeNull();
     if (parsed === null) throw new Error("unreachable");
@@ -492,7 +492,7 @@ describe("S9 · resource readouts (GUI half)", () => {
 
     // The row still says everything the chat's set knows — only the readout
     // the old host could not express is missing.
-    expect(screen.getByText("Monitor · deploy watcher")).toBeTruthy();
+    expect(screen.getByText("Shell · deploy watcher")).toBeTruthy();
     expect(chipOnRow("cmd-res")).toBeNull();
   });
 });

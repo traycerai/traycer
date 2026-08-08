@@ -19,7 +19,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
- * Dragging a row out of a chat's monitors menu onto the canvas, driven as a
+ * Dragging a row out of a chat's Shells menu onto the canvas, driven as a
  * real pointer gesture through the real `RootDndProvider`.
  *
  * dnd-kit reads a drag's payload LIVE off the draggable that started it, so
@@ -85,7 +85,7 @@ const SEED_TILE: EpicNodeRef = {
 
 const MONITOR: ManagedCommand = {
   id: "cmd-1",
-  kind: "monitor",
+  notifying: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: CHAT_ID,
@@ -267,7 +267,7 @@ afterEach(async () => {
   useEpicDndStore.getState().dragEnded();
 });
 
-describe("dragging a monitors-menu row onto the canvas", () => {
+describe("dragging a Shells-menu row onto the canvas", () => {
   it("carries the row's payload all the way to the drop and lands its window", async () => {
     const paneId = seedCanvasPane();
     await renderHarness(paneId);

@@ -6,9 +6,10 @@
  * appear as rows of the chat's Background panel, leave as soon as a later set
  * stops naming them as running, and click through to the output window. S7 is
  * the doors: the
- * queued-delivery chip and the resume divider open or focus the command's
- * output window, the divider's terminal copy is kind-explicit per the REAL
- * kind (`UI.md` §3, §8), and one command never has two windows (`UI.md` §9).
+ * queued-delivery chip and the resume divider open or focus the shell's
+ * output window, the divider's terminal copy names the Shell entity (a
+ * kind-only "monitor" trigger is the harness's own tool and keeps that name),
+ * and one shell never has two windows (`UI.md` §9).
  *
  * Expected behavior derives from the records only. Real stores, registry,
  * stream mount and canvas store; frames and triggers are authored through the
@@ -51,7 +52,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // The Background panel's managed rows carry the same lifecycle actions the
-// chat's monitors menu does, so this suite fakes the one boundary behind them:
+// chat's Shells menu does, so this suite fakes the one boundary behind them:
 // the RPCs. What the rows render and where they lead is still real.
 vi.mock(
   "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
@@ -106,7 +107,7 @@ function chatSession(chatId: string): ManagedCommandChatSessionStub {
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: "cmd-default",
-    kind: "monitor",
+    notifying: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: CHAT_A,
@@ -243,7 +244,7 @@ describe("S6 · running work in the chat's Background panel", () => {
         makeCommand({ id: "cmd-mine-running", description: "deploy watcher" }),
         makeCommand({
           id: "cmd-mine-done",
-          kind: "shell",
+          notifying: false,
           description: "db migration",
           status: {
             state: "exited",
@@ -269,7 +270,7 @@ describe("S6 · running work in the chat's Background panel", () => {
     const mine = screen.getByTestId(
       "managed-command-background-row-cmd-mine-running",
     );
-    expect(mine.textContent).toContain("Monitor · deploy watcher");
+    expect(mine.textContent).toContain("Shell · deploy watcher");
     expect(
       screen.queryByTestId("managed-command-background-row-cmd-theirs-running"),
     ).toBeNull();
@@ -326,9 +327,9 @@ describe("S6 · running work in the chat's Background panel", () => {
 });
 
 describe("S7 · doors", () => {
-  it("S7a: the queued-delivery chip is kind-explicit and opens the output window", () => {
+  it("S7a: the queued-delivery chip names the shell and opens the output window", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-chip" commandKind="shell" />,
+      <ManagedCommandBadge commandId="cmd-chip" notifying={false} />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -337,48 +338,47 @@ describe("S7 · doors", () => {
     expect(findOpenArtifactInTab(TAB_ID, "cmd-chip")).not.toBeNull();
   });
 
-  it("S7b: a chip from a host that reported no kind stays kind-free rather than guessing", () => {
+  it("S7b: a chip from a build that recorded no notify flag still names the shell", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-old" commandKind={null} />,
+      <ManagedCommandBadge commandId="cmd-old" notifying={null} />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
-    expect(badge.textContent).toContain("Command output");
-    expect(badge.textContent).not.toMatch(/monitor|shell/i);
+    expect(badge.textContent).toContain("Shell output");
+    // Only the glyph waits on the flag - it is not guessed either way.
+    expect(badge.querySelector("[data-notify-icon]")).toBeNull();
   });
 
-  it("S7c: the divider names the REAL kind — a completed shell reads 'Shell completed', never 'Monitor completed'", () => {
-    // The persisted trigger kind is frozen at "monitor" for a Shell too; the
-    // structured managedCommand key carries the truth (UI.md §8 as-built).
+  it("S7c: the divider says Shell whether or not the shell was notifying", () => {
     renderInChatContext(
       <AutonomousResumeSegment
         triggers={[
           makeTrigger({
-            blockId: "blk-shell",
+            blockId: "blk-quiet",
             title: "db migration",
             status: "completed",
-            managedCommand: { commandId: "cmd-shell", kind: "shell" },
+            managedCommand: { commandId: "cmd-quiet", notifying: false },
           }),
           makeTrigger({
-            blockId: "blk-monitor",
+            blockId: "blk-watcher",
             title: "deploy watcher",
             status: "failed",
-            managedCommand: { commandId: "cmd-monitor", kind: "monitor" },
+            managedCommand: { commandId: "cmd-watcher", notifying: true },
           }),
         ]}
       />,
     );
     expect(screen.getByText("Shell completed")).toBeTruthy();
-    expect(screen.getByText("Monitor failed")).toBeTruthy();
-    expect(screen.queryByText("Monitor completed")).toBeNull();
+    expect(screen.getByText("Shell failed")).toBeTruthy();
+    expect(screen.queryByText(/Monitor/)).toBeNull();
   });
 
-  it("S7d: the divider is a door — 'View output' opens the named command's window", () => {
+  it("S7d: the divider is a door — 'View output' opens the named shell's window", () => {
     renderInChatContext(
       <AutonomousResumeSegment
         triggers={[
           makeTrigger({
             blockId: "blk-door",
-            managedCommand: { commandId: "cmd-divider", kind: "monitor" },
+            managedCommand: { commandId: "cmd-divider", notifying: true },
           }),
         ]}
       />,
@@ -387,7 +387,7 @@ describe("S7 · doors", () => {
     expect(findOpenArtifactInTab(TAB_ID, "cmd-divider")).not.toBeNull();
   });
 
-  it("S7e: a legacy trigger without a command identity gets generic copy and no dead door", () => {
+  it("S7e: a kind-only monitor trigger keeps the harness tool's name, and gets no dead door", () => {
     renderInChatContext(
       <AutonomousResumeSegment
         triggers={[
@@ -395,7 +395,9 @@ describe("S7 · doors", () => {
         ]}
       />,
     );
-    // Falls back to the frozen persisted kind's presentation.
+    // No `managedCommand` block means this is NOT a Traycer shell: the live
+    // producer of kind-only "monitor" triggers is Claude Code's own Monitor
+    // tool, which keeps its real name.
     expect(screen.getByText("Monitor completed")).toBeTruthy();
     expect(
       screen.queryByTestId("resume-managed-command-door-blk-legacy"),
@@ -409,21 +411,21 @@ describe("S7 · doors", () => {
           makeTrigger({
             blockId: "blk-live",
             live: true,
-            managedCommand: { commandId: "cmd-live", kind: "monitor" },
+            managedCommand: { commandId: "cmd-live", notifying: true },
           }),
         ]}
       />,
     );
-    // Kind-explicit, like every other state: the trigger names a monitor, so
-    // the divider says Monitor. Only a legacy trigger with no `managedCommand`
-    // at all falls back to the generic "Command still running".
-    expect(screen.getByText("Monitor still running")).toBeTruthy();
+    // Named, like every other state: the trigger identifies a shell, so the
+    // divider says Shell. Only a legacy trigger with no `managedCommand` at
+    // all falls back to the generic "Command still running".
+    expect(screen.getByText("Shell still running")).toBeTruthy();
     expect(screen.queryByText(/completed|failed|stopped/)).toBeNull();
   });
 
-  it("S7g: one window per command — every door and a second press converge on a single pane", () => {
+  it("S7g: one window per shell — every door and a second press converge on a single pane", () => {
     renderBackgroundPanelInChat(
-      <ManagedCommandBadge commandId="cmd-one" commandKind="monitor" />,
+      <ManagedCommandBadge commandId="cmd-one" notifying />,
     );
     emitCommands(
       [makeCommand({ id: "cmd-one", description: "solo watcher" })],

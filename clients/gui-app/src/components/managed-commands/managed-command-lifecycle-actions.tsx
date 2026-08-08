@@ -81,7 +81,7 @@ export function ManagedCommandLifecycleActions(
         open={confirmingDelete}
         onOpenChange={setConfirmingDelete}
         title={`Delete ${managedCommandTitle(command)}?`}
-        description="This stops the command and deletes its entire output history. There is nothing to restore afterwards."
+        description="This stops the shell and deletes its entire output history. There is nothing to restore afterwards."
         cascadeSummary={null}
         actionLabel="Delete"
         isPending={remove.isPending}

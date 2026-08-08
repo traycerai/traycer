@@ -83,7 +83,7 @@ const COMMAND_ID = "cmd-1";
 
 const COMMAND: ManagedCommand = {
   id: COMMAND_ID,
-  kind: "monitor",
+  notifying: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
@@ -320,7 +320,7 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
     expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Monitor · deploy watcher",
+      "Shell · deploy watcher",
     );
 
     act(() => {

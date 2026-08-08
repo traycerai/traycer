@@ -2700,7 +2700,16 @@ function useChatRowOwnStatusKind(args: {
   const sessionActivity = useSyncExternalStore(subscribeSession, () =>
     sessionHandle === null
       ? null
-      : chatActivityIndicator(sessionHandle.store.getState()),
+      : // Shells are deliberately EXCLUDED from this read. `running` feeds the
+        // archive gate below, and the host allows archiving a chat whose only
+        // live thing is a shell (`AgentActivityTracker` does not track them) -
+        // gating here on the shell-aware indicator would block an action the
+        // host permits, which is exactly the dishonesty the gate's own comment
+        // forbids. The row's progress ICON keeps the shell-aware read.
+        chatActivityIndicator({
+          ...sessionHandle.store.getState(),
+          managedCommands: [],
+        }),
   );
   const sessionRole = useSyncExternalStore(subscribeSession, () =>
     sessionHandle === null

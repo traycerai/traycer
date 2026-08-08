@@ -46,7 +46,8 @@ import {
 } from "@/components/ui/input-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
+import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
+import { MANAGED_COMMAND_NOUN } from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -1672,11 +1673,11 @@ function ownerRowClickHandler(
  * harness-less owner. Subscript-scale (`size-3`) so it reads as part of the
  * secondary text line, not a second row element.
  *
- * A managed command has no provider at all, and the generic `Server` glyph told
- * a viewer nothing that the row did not already say. It gets its own kind glyph
- * instead - the same one the sidebar, the strip and the chip use - so the row
- * is recognisable as the monitor or shell it is. The kind is still in the row's
- * title in words, so the glyph stays decorative.
+ * A shell has no provider at all, and the generic `Server` glyph told a viewer
+ * nothing that the row did not already say. It gets the shell glyph instead -
+ * the same one the sidebar, the strip and the chip use - so the row is
+ * recognisable as the shell it is, watching or not. The noun is still in the
+ * row's title in words, so the glyph stays decorative.
  */
 function OwnerProviderIcon(props: {
   readonly harnessId: string | null;
@@ -1684,8 +1685,8 @@ function OwnerProviderIcon(props: {
 }) {
   if (props.managedCommand !== null) {
     return (
-      <ManagedCommandKindIcon
-        kind={props.managedCommand.kind}
+      <ManagedCommandNotifyIcon
+        notifying={props.managedCommand.notifying}
         className={undefined}
       />
     );
@@ -3081,21 +3082,11 @@ function ownerKindLabel(
   if (kind === "terminal") return "Terminal";
   if (kind === "terminal-agent") return "Agent (Terminal)";
   if (kind === "managed-command") {
-    return managedCommandKindLabel(managedCommand);
+    // The umbrella term is the fallback for a host that sent the owner
+    // without naming it, which nothing does today.
+    return managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN;
   }
   return "Agent (Chat)";
-}
-
-/**
- * Copy for a managed command is kind-explicit wherever the kind is known: it
- * reads as the Monitor or Shell it is. The umbrella term is the fallback for a
- * host that sent the owner without naming it, which nothing does today.
- */
-function managedCommandKindLabel(
-  managedCommand: ManagedCommandOwnerWire | null,
-): string {
-  if (managedCommand === null) return "Managed command";
-  return managedCommand.kind === "monitor" ? "Monitor" : "Shell";
 }
 
 /**
@@ -3106,9 +3097,11 @@ function managedCommandKindLabel(
 function managedCommandLabel(
   managedCommand: ManagedCommandOwnerWire | null,
 ): string {
-  const kindLabel = managedCommandKindLabel(managedCommand);
-  const description = managedCommand?.description ?? "";
-  return description === "" ? kindLabel : `${kindLabel} · ${description}`;
+  if (managedCommand === null) return "Managed command";
+  const description = managedCommand.description;
+  return description === ""
+    ? MANAGED_COMMAND_NOUN
+    : `${MANAGED_COMMAND_NOUN} · ${description}`;
 }
 
 // Subtitle beside the provider icon. Always non-empty so the icon never sits
@@ -3121,10 +3114,13 @@ function harnessProviderSubtitle(
   activeProcessName: string | null,
   managedCommand: ManagedCommandOwnerWire | null,
 ): string {
-  // A managed command already names its kind in the row title, so its subtitle
+  // A managed command already names itself in the row title, so its subtitle
   // spends the width on what is actually running instead of repeating it.
   if (kind === "managed-command") {
-    return activeProcessName ?? managedCommandKindLabel(managedCommand);
+    return (
+      activeProcessName ??
+      (managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN)
+    );
   }
   const providerId = harnessId === null ? null : normalizeProviderId(harnessId);
   const base =

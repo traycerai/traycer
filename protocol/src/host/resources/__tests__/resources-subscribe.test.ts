@@ -401,7 +401,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     harnessId: null,
     managedCommand: {
       commandId: "cmd-1",
-      kind: "monitor" as const,
+      notifying: true,
       description: "deploy watcher",
     },
   };
@@ -420,7 +420,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     };
   }
 
-  it("carries the managed-command kind with its command descriptor", () => {
+  it("carries the shell's notifying state with its command descriptor", () => {
     const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
       frameWithOwners([MANAGED_OWNER]),
     );
@@ -428,7 +428,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     expect(parsed.owners[0].owner.kind).toBe("managed-command");
     expect(parsed.owners[0].managedCommand).toEqual({
       commandId: "cmd-1",
-      kind: "monitor",
+      notifying: true,
       description: "deploy watcher",
     });
   });
@@ -448,13 +448,18 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     ).toThrow();
   });
 
-  it("rejects a command kind outside monitor | shell", () => {
+  it("requires `notifying` to be stated on a managed-command owner", () => {
+    // Not defaulted: this row is projected fresh from the record on every
+    // sampler tick, so an absent flag is a host bug, never an old write.
     expect(() =>
       resourcesSubscribeServerFrameSchemaV14.parse(
         frameWithOwners([
           {
             ...MANAGED_OWNER,
-            managedCommand: { ...MANAGED_OWNER.managedCommand, kind: "task" },
+            managedCommand: {
+              commandId: "cmd-1",
+              description: "deploy watcher",
+            },
           },
         ]),
       ),

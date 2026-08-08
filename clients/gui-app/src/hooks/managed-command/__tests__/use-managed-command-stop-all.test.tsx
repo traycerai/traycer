@@ -56,7 +56,7 @@ let queryClient: QueryClient;
 function stoppedCommand(commandId: string): ManagedCommand {
   return {
     id: commandId,
-    kind: "monitor",
+    notifying: true,
     description: "deploy watcher",
     status: { state: "stopped", stoppedAtMs: 5 },
     chatId: "chat-1",
@@ -163,9 +163,7 @@ describe("useManagedCommandStopAll", () => {
     // outcome is judged.
     expect(stoppedCommandIds).toEqual(["cmd-1", "cmd-3"]);
     expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastError).toHaveBeenCalledWith(
-      "Couldn't stop 1 of 3 monitors and shells.",
-    );
+    expect(toastError).toHaveBeenCalledWith("Couldn't stop 1 of 3 shells.");
   });
 
   it("routes a wholesale failure through the host-error policy, once", async () => {

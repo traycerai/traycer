@@ -19,14 +19,14 @@ import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
+import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import {
   useManagedCommandStopAll,
   useManagedCommandStopAllIsPending,
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import {
-  managedCommandKindLabel,
+  MANAGED_COMMAND_NOUN,
   managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
@@ -388,16 +388,16 @@ function backgroundHeaderSummary(input: {
 }
 
 /**
- * A running monitor or shell as an ordinary row of this list, in the same
- * grammar as a harness background row beside it - glyph, title, kind pill,
- * live elapsed, hover stop. To a human these are the same thing: work running
- * behind the chat. The radar / play glyphs are what keep a supervised monitor
- * apart from the harness's own "Monitor" kind; no copy carries that load.
+ * A running shell as an ordinary row of this list, in the same grammar as a
+ * harness background row beside it - glyph, title, entity pill, live elapsed,
+ * hover stop. To a human these are the same thing: work running behind the
+ * chat. The radar / play glyphs are what keep a host-supervised shell apart
+ * from the harness's own "Monitor" kind; no copy carries that load.
  *
  * Stop and nothing else. This is a "running right now" surface, so a row here
- * is a passing status rather than a durable object; deleting a command - which
- * destroys its whole output history - belongs to the chat's monitors menu and
- * the output window, where the command itself is the subject.
+ * is a passing status rather than a durable object; deleting a shell - which
+ * destroys its whole output history - belongs to the chat's Shells menu and
+ * the output window, where the shell itself is the subject.
  */
 function ManagedCommandRow(props: {
   readonly command: ManagedCommand;
@@ -430,8 +430,8 @@ function ManagedCommandRow(props: {
             }}
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
-            <ManagedCommandKindIcon
-              kind={command.kind}
+            <ManagedCommandNotifyIcon
+              notifying={command.notifying}
               className="size-3.5 text-primary/80"
             />
             <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
@@ -441,7 +441,7 @@ function ManagedCommandRow(props: {
               <LiveElapsed startedAt={command.status.startedAtMs} />
             ) : null}
             <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
-              {managedCommandKindLabel(command.kind)}
+              {MANAGED_COMMAND_NOUN}
             </span>
           </button>
         </TooltipWrapper>
@@ -602,7 +602,7 @@ export function BackgroundItemsPanel(props: {
   // A harness background item is stopped over the chat's own stream, so it
   // needs that stream open. A managed command is stopped by an RPC to its
   // host, which a reconnecting chat has no bearing on - gating it on `canAct`
-  // too left a reconnecting chat with no way to stop a runaway monitor.
+  // too left a reconnecting chat with no way to stop a runaway shell.
   const stoppable = props.canAct && !props.readOnly;
   const managedStoppable = !props.readOnly;
   const items = useMemo(() => dedupeByTaskId(props.items), [props.items]);
@@ -651,7 +651,7 @@ export function BackgroundItemsPanel(props: {
   // managed half is an RPC to the host that a reconnecting chat has no bearing
   // on. Each half is offered and sent on its own capability - gating the
   // button on the harness half alone left it dead during a reconnect, which is
-  // exactly when a runaway monitor most needs the one-click stop.
+  // exactly when a runaway shell most needs the one-click stop.
   const harnessStopAllReady = stoppable && !props.stopAllPending;
   const managedStopAllReady =
     managedStoppable && managedCommands.length > 0 && !stopAllManagedPending;

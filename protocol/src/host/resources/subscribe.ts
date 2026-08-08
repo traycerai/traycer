@@ -324,7 +324,7 @@ export const resourcesSubscribeV13 = defineStreamRpcContract({
 
 /**
  * `@1.4` grows the owner vocabulary by `managed-command` - the host's
- * supervised long-running commands (Monitors and Shells). Their trees were
+ * supervised long-running commands (shells). Their trees were
  * always tracked; before `@1.4` the host folded them into `other` because the
  * wire had no kind for them, and it still does that for any peer negotiated
  * below `@1.4`. The `@1.0`-`@1.3` enum stays frozen: a kind is not an additive
@@ -347,15 +347,16 @@ export const resourceOwnerRefSchemaV14 = z.object({
 export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
 
 /**
- * What a `managed-command` owner row needs beyond the generic owner fields:
- * the kind the UI names ("Monitor …" / "Shell …") and the human description
- * the command was created with. `commandId` repeats `owner.ownerId` - the same
+ * What a `managed-command` owner row needs beyond the generic owner fields: the
+ * human description the command was created with, and whether it is notifying -
+ * the same state its row in the Shells list renders, so one process tree is not
+ * labelled two different ways. `commandId` repeats `owner.ownerId` - the same
  * value by construction - so a client joining this row to the managed-command
  * list stream does it through a named field rather than a convention.
  */
 export const managedCommandOwnerSchema = z.object({
   commandId: z.string(),
-  kind: z.enum(["monitor", "shell"]),
+  notifying: z.boolean(),
   description: z.string(),
 });
 export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;

@@ -610,16 +610,23 @@ export const autonomousResumeTriggerSchema = z.object({
   // `live` must prefer it, because a running command has no terminal outcome
   // and `status` is reporting the least-wrong of three wrong answers.
   live: z.boolean().default(false),
-  // Structured identity of the managed command whose delivery woke this turn.
-  // Exactly the `mcp` pattern above and for the same reason: `kind` is a
-  // PERSISTED enum, and an unknown value in it fails the WHOLE chat's
-  // `safeParse` on an older host, whereas an unknown defaulted key is silently
-  // stripped. So `kind` stays `"monitor"` for both a Monitor and a Shell, and
-  // the real kind rides here - along with the id the divider needs to open the
-  // command's output window on click. Renderers prefer this when present and
-  // fall back to the generic Monitor presentation when absent/stripped.
+  // Structured identity of the shell whose delivery woke this turn. Exactly the
+  // `mcp` pattern above and for the same reason: `kind` is a PERSISTED enum,
+  // and an unknown value in it fails the WHOLE chat's `safeParse` on an older
+  // host, whereas an unknown defaulted key is silently stripped. So `kind`
+  // stays `"monitor"` for every shell, and the id the divider needs to open the
+  // output window on click rides here.
+  //
+  // `notifying` is defaulted rather than required because this key is READ BACK
+  // from chats written before it existed (and from ones written while it was
+  // still `kind`, whose value strips on parse): a trigger that cannot say
+  // whether its shell was watching renders as a plain shell rather than failing
+  // the whole chat.
   managedCommand: z
-    .object({ commandId: z.string(), kind: z.enum(["monitor", "shell"]) })
+    .object({
+      commandId: z.string(),
+      notifying: z.boolean().default(false),
+    })
     .nullable()
     .default(null),
 });

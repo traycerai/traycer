@@ -143,7 +143,7 @@ function connectedWire(): OutputWire {
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: COMMAND_ID,
-    kind: "monitor",
+    notifying: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: "chat-owner",
@@ -334,9 +334,9 @@ describe("S4 · output window", () => {
       reachedStart: true,
     });
 
-    // Kind-explicit naming (UI.md §3): the record's own example copy.
+    // Entity naming: "Shell · <description>", the record's own example copy.
     expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Monitor · deploy watcher",
+      "Shell · deploy watcher",
     );
     expect(
       screen.getByTestId("managed-command-output-status").textContent,
