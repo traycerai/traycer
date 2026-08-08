@@ -132,6 +132,7 @@ import {
 } from "@/hooks/chats/use-chat-publication-targets";
 import {
   mergeChatListEntries,
+  publishedCloudChatIds,
   selectUnfoldedCloudChats,
 } from "@/lib/chats/unified-chat-list";
 import { AgentRoleBadges } from "./agent-role-badges";
@@ -653,6 +654,14 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     chatIds: localChatIds,
     enabled: epicId.length > 0,
   });
+  const publishedChatIds = useMemo(
+    () =>
+      publishedCloudChatIds(
+        localChatIds,
+        publicationTargetMap(publicationTargets.data),
+      ),
+    [localChatIds, publicationTargets.data],
+  );
   const unfoldedCloudChats = useMemo(
     () =>
       selectUnfoldedCloudChats({
@@ -871,6 +880,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
             <EpicSidebarCloudChatRow
               key={entry.key}
               chat={entry.chat}
+              publishedChatIds={publishedChatIds}
               epicId={epicId}
               tabId={tabId}
               depth={0}

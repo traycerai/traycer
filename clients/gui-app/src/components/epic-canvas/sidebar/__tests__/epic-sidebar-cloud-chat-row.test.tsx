@@ -47,17 +47,16 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   },
 }));
 
-/** Whether this device's epic tree holds the chat behind the row. */
-const localRecord: { current: object | null } = { current: null };
-
-vi.mock("@/lib/epic-selectors", () => ({
-  useChatById: () => localRecord.current,
-}));
+/**
+ * The fold's publication-identity set - what licenses a live open. Holding the
+ * row's chatId means "this row IS a local chat's live lineage".
+ */
+const publishedIds: { current: Set<string> } = { current: new Set() };
 
 afterEach(() => {
   cleanup();
   reachability.status = "unreachable";
-  localRecord.current = null;
+  publishedIds.current = new Set();
   openedRefs.length = 0;
 });
 
@@ -97,6 +96,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
+        publishedChatIds={publishedIds.current}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
@@ -114,6 +114,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
+        publishedChatIds={publishedIds.current}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
@@ -131,6 +132,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
+        publishedChatIds={publishedIds.current}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
@@ -147,10 +149,11 @@ describe("EpicSidebarCloudChatRow", () => {
     // owner answering; a reachable host that does not hold the chat cannot
     // steer it, so claiming otherwise would be the false statement.
     reachability.status = "reachable";
-    localRecord.current = { id: CHAT.identity.chatId };
+    publishedIds.current = new Set([CHAT.identity.chatId]);
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
+        publishedChatIds={publishedIds.current}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
@@ -167,6 +170,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
+        publishedChatIds={publishedIds.current}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
@@ -182,6 +186,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
+          publishedChatIds={publishedIds.current}
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
@@ -195,7 +200,7 @@ describe("EpicSidebarCloudChatRow", () => {
       // chat absent from this device's tree - and the canvas silently opened
       // nothing at all. Reachable is necessary, not sufficient.
       reachability.status = "reachable";
-      localRecord.current = null;
+      publishedIds.current = new Set();
       renderRow();
       clickRow();
       expect(openedRefs).toHaveLength(1);
@@ -204,7 +209,7 @@ describe("EpicSidebarCloudChatRow", () => {
 
     it("opens the live chat when the chat IS here and its owner answers", () => {
       reachability.status = "reachable";
-      localRecord.current = { id: CHAT.identity.chatId };
+      publishedIds.current = new Set([CHAT.identity.chatId]);
       renderRow();
       clickRow();
       expect(openedRefs).toEqual([
@@ -214,7 +219,7 @@ describe("EpicSidebarCloudChatRow", () => {
 
     it("opens the published copy when the owner is unreachable", () => {
       reachability.status = "unreachable";
-      localRecord.current = { id: CHAT.identity.chatId };
+      publishedIds.current = new Set([CHAT.identity.chatId]);
       renderRow();
       clickRow();
       expect(openedRefs[0].type).toBe("published-chat");
@@ -226,7 +231,9 @@ describe("EpicSidebarCloudChatRow", () => {
       for (const status of ["reachable", "unreachable", "checking"]) {
         for (const present of [true, false]) {
           reachability.status = status;
-          localRecord.current = present ? { id: CHAT.identity.chatId } : null;
+          publishedIds.current = present
+            ? new Set([CHAT.identity.chatId])
+            : new Set();
           renderRow();
           clickRow();
           expect(openedRefs.length).toBeGreaterThan(0);
@@ -242,10 +249,11 @@ describe("EpicSidebarCloudChatRow", () => {
       // No row-kind iconography: a distinct glyph for "came from the cloud
       // list" would re-encode the demolished section as an icon.
       reachability.status = "reachable";
-      localRecord.current = { id: CHAT.identity.chatId };
+      publishedIds.current = new Set([CHAT.identity.chatId]);
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
+          publishedChatIds={publishedIds.current}
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
@@ -262,10 +270,11 @@ describe("EpicSidebarCloudChatRow", () => {
 
     it("badges the lock exactly when the click would open a published copy", () => {
       reachability.status = "reachable";
-      localRecord.current = null;
+      publishedIds.current = new Set();
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
+          publishedChatIds={publishedIds.current}
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
@@ -274,6 +283,70 @@ describe("EpicSidebarCloudChatRow", () => {
       expect(
         screen.getByTestId(`epic-sidebar-cloud-lock-${CHAT.identity.chatId}`),
       ).toBeTruthy();
+    });
+  });
+
+  describe("the reviewer's identity probes", () => {
+    function renderWith(chat: CloudChatSummary): void {
+      render(
+        <EpicSidebarCloudChatRow
+          chat={chat}
+          publishedChatIds={publishedIds.current}
+          epicId={chat.identity.taskId}
+          tabId="tab-1"
+          depth={0}
+        />,
+      );
+    }
+
+    it("never opens a collaborator's same-id chat live", () => {
+      // A colliding host-minted id is legal, which is why the fold is
+      // owner-scoped. A presence check keyed on the bare id called THEIR chat
+      // "already here" and offered to open it as the viewer's own.
+      const collaborator: CloudChatSummary = {
+        ...CHAT,
+        identity: { ...CHAT.identity, ownerUserId: "user-2" },
+        isOwnedByViewer: false,
+      };
+      reachability.status = "reachable";
+      // The viewer's OWN chat of the same id is here and publishing.
+      publishedIds.current = new Set([CHAT.identity.chatId]);
+      renderWith(collaborator);
+      clickRow();
+      expect(openedRefs[0].type).toBe("published-chat");
+    });
+
+    it("never opens the fork incumbent live", () => {
+      // The ticket's own geometry, and the case owner-matching alone still got
+      // wrong: both lineages share the id AND the user, differing only in which
+      // host kept the row. The local chat publishes to its CLONE, so the
+      // incumbent is not in the published set and is not this device's lineage.
+      reachability.status = "reachable";
+      publishedIds.current = new Set(["d44cc96fc1d364fe4a9e3cd2d5eb2eea"]);
+      renderWith(CHAT);
+      clickRow();
+      expect(openedRefs[0].type).toBe("published-chat");
+      expect(
+        screen.getByTestId(`epic-sidebar-cloud-lock-${CHAT.identity.chatId}`),
+      ).toBeTruthy();
+    });
+
+    it("says read-only, not offline, when the owner answers", () => {
+      // Major 2: rendered copy is a consumer of the state too. "Offline" about
+      // a reachable host is a false status with a false remedy.
+      reachability.status = "reachable";
+      publishedIds.current = new Set();
+      renderWith(CHAT);
+      expect(
+        screen.getByLabelText("On Tanveer's laptop, read-only"),
+      ).toBeTruthy();
+    });
+
+    it("still says offline when the owner really is unreachable", () => {
+      reachability.status = "unreachable";
+      publishedIds.current = new Set();
+      renderWith(CHAT);
+      expect(screen.getByLabelText("On Tanveer's laptop, offline")).toBeTruthy();
     });
   });
 });
