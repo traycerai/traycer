@@ -34,6 +34,11 @@ import {
 } from "@/components/chat/chat-plan-actions-context";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useAgentPlanQuery } from "@/hooks/agent/use-agent-plan-query";
+import {
+  usePublishedChatSource,
+  usePublishedPlanContent,
+  type PublishedChatSource,
+} from "@/lib/chats/published-chat-source";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { TraycerMarkdown } from "@/markdown";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
@@ -210,7 +215,7 @@ function PlanStepRow(props: {
   );
 }
 
-function PlanModal(props: {
+interface PlanModalProps {
   readonly segment: PlanSegmentModel;
   readonly planActions: ChatPlanActionsContextValue | null;
   readonly markdownFallback: string;
@@ -219,25 +224,73 @@ function PlanModal(props: {
   readonly actionsVisible: boolean;
   readonly actionsDisabled: boolean;
   readonly onImplement: () => void;
-}) {
+}
+
+function PlanModal(props: PlanModalProps) {
+  // Hookless dispatcher - see `FileChangeInlineDiff`'s note. A live plan must
+  // not mount the cloud payload observer at all, so the two sources are
+  // component boundaries rather than two disabled queries side by side.
+  const published = usePublishedChatSource();
+  if (published === null) return <LivePlanModal {...props} />;
+  return <PublishedPlanModal {...props} source={published} />;
+}
+
+function LivePlanModal(props: PlanModalProps) {
   const { segment, planActions, markdownFallback, open } = props;
-  const hasFullContent = segment.fullContentRef !== null;
   const planQuery = useAgentPlanQuery({
     epicId: planActions?.epicId ?? "",
     chatId: planActions?.chatId ?? "",
     planId: segment.planId,
     contentIdentity: segment.contentIdentity,
-    enabled: open && hasFullContent && planActions !== null,
+    enabled: open && segment.fullContentRef !== null && planActions !== null,
   });
+  const resolved = resolvePlanModalContent(planQuery, markdownFallback);
+  return (
+    <PlanModalView
+      {...props}
+      modalMarkdown={resolved.markdown}
+      unavailable={resolved.unavailable}
+      isFetching={planQuery.isFetching}
+    />
+  );
+}
+
+function PublishedPlanModal(
+  props: PlanModalProps & { readonly source: PublishedChatSource },
+) {
+  const { segment, markdownFallback, open } = props;
+  // The full markdown is a cloud payload the owning host uploaded; the reading
+  // host's `agent.gui.getPlan` has never heard of this chat.
+  const publishedPlan = usePublishedPlanContent({
+    source: props.source,
+    contentHash: segment.fullContentRef?.hash ?? null,
+    enabled: open && segment.fullContentRef !== null,
+  });
+  return (
+    <PlanModalView
+      {...props}
+      modalMarkdown={publishedPlan.markdown ?? markdownFallback}
+      unavailable={!publishedPlan.isLoading && publishedPlan.markdown === null}
+      isFetching={publishedPlan.isLoading}
+    />
+  );
+}
+
+/** The modal itself; only where its markdown came from differs by source. */
+function PlanModalView(
+  props: PlanModalProps & {
+    readonly modalMarkdown: string;
+    readonly unavailable: boolean;
+    /** Whether the full markdown is still on its way, from either source. */
+    readonly isFetching: boolean;
+  },
+) {
+  const { segment, open, modalMarkdown, unavailable } = props;
   // The Dialog portals to <body>; re-assert the active theme on the modal so its
   // tokens (e.g. --primary-foreground for the Implement button) resolve to the
   // SAME values as the inline card, even if the portal escapes the themed root in
   // some shells.
   const { resolvedTheme, themePreset } = useResolvedTheme();
-  const { markdown: modalMarkdown, unavailable } = resolvePlanModalContent(
-    planQuery,
-    markdownFallback,
-  );
   const modalHeadline = planHeadline(segment, modalMarkdown);
   const modalBody = stripRedundantTitleHeading(modalMarkdown, modalHeadline);
   return (
@@ -261,7 +314,7 @@ function PlanModal(props: {
           </div>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-5 py-4">
-          {planQuery.isFetching ? (
+          {props.isFetching ? (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground">
               <AgentSpinningDots
                 className="text-muted-foreground"
