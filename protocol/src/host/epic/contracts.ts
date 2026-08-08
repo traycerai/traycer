@@ -107,6 +107,10 @@ import {
   listChatPublicationTargetsRequestSchema,
   listChatPublicationTargetsResponseSchema,
 } from "@traycer/protocol/host/epic/chat-publication-identity";
+import {
+  chatBackupStatusRequestSchema,
+  chatBackupStatusResponseSchema,
+} from "@traycer/protocol/host/epic/chat-backup-status";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -597,6 +601,13 @@ export const epicListChatPublicationTargetsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listChatPublicationTargetsRequestSchema,
   responseSchema: listChatPublicationTargetsResponseSchema,
+});
+
+export const epicChatBackupStatusV10 = defineRpcContract({
+  method: "epic.chatBackupStatus",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatBackupStatusRequestSchema,
+  responseSchema: chatBackupStatusResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

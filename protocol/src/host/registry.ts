@@ -249,6 +249,7 @@ import {
   epicEditCommentV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
+  epicChatBackupStatusV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -4929,6 +4930,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicListChatPublicationTargetsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional local observability. Older hosts omit the quiet sidebar signal;
+  // there is no cloud fallback because publication lag belongs to the machine
+  // whose durable store and publisher are being compared.
+  "epic.chatBackupStatus": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicChatBackupStatusV10,
           upgradeFromPreviousVersion: null,
         },
       },

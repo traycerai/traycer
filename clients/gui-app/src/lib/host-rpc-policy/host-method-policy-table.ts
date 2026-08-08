@@ -745,6 +745,12 @@ export const HOST_METHOD_POLL_TABLE = {
   // fork's own notification is the signal that something changed, and a
   // reopened task picks the new mapping up.
   "epic.listChatPublicationTargets": { ...LATEST_SCHEDULING, poll: null },
+  // The publisher's own convergence sweep is 30s, so a 45s local read is
+  // responsive without asking faster than the underlying state can change.
+  "epic.chatBackupStatus": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected
   // after this query first cached would never surface. 45s sits between the
