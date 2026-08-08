@@ -1,6 +1,6 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
-import { useHostClient } from "@/lib/host/runtime";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
@@ -31,11 +31,12 @@ import { v4 as uuidv4 } from "uuid";
  *
  * ## The host binding is untouched
  *
- * The tile reads through `useHostClient()` - the app's own reachable host -
- * because the cloud read is a byte pipe: any host the device can reach serves
- * it, which is exactly what makes an offline owner readable. Nothing here binds
- * the OWNING host, so the tab-host-for-life rule is not bent; the owner is row
- * metadata that the notice names and nothing addresses.
+ * The tile reads through the TAB's host client. The cloud read is a byte pipe -
+ * any host the device can reach serves it, which is exactly what makes an
+ * offline owner readable - but "any host" is chosen once, at open, and recorded
+ * on the ref; it must not follow the app's active host afterwards. Nothing here
+ * binds the OWNING host, so the tab-host-for-life rule is not bent; the owner is
+ * row metadata that the notice names and nothing addresses.
  */
 
 export interface PublishedChatTileProps {
@@ -47,7 +48,13 @@ export interface PublishedChatTileProps {
 
 export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const { node } = props;
-  const client = useHostClient();
+  // The TAB's client, not the app's. The ref records which host was chosen to
+  // serve this read at open, and `renderTile` binds exactly that host - so the
+  // app-wide client silently moved an open tab's cloud reads onto whatever host
+  // became active later, taking its credential and its capabilities with it. A
+  // previously readable tab could turn unsupported without anything about the
+  // chat changing. Host-for-life applies to the serving host too.
+  const client = useTabHostClient();
   // The SAME reachability source the live dead-tile banner reads, so the two
   // surfaces can never describe one host two ways. Only the label is used here:
   // this tile is opened precisely because the owner is out of reach, and it

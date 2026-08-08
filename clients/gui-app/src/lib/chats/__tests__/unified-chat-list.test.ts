@@ -221,3 +221,51 @@ describe("mergeChatListEntries", () => {
     expect(entries[0].key).not.toBe(localChatRowKey(WALKTHROUGH));
   });
 });
+
+describe("cross-owner folding", () => {
+  /**
+   * The reviewer's executable case. `chatId` is host-minted and not unique
+   * under a task, and the cloud list carries every task-visible chat including
+   * other people's - so an id-only fold can delete a collaborator's genuinely
+   * different chat from the only agent list there now is.
+   */
+  const COLLABORATOR_ROW: CloudChatSummary = {
+    ...cloudChat({
+      chatId: "chat-a",
+      ownerHostId: OTHER_HOST,
+      title: "Their chat",
+      publishedAt: 200,
+      metadataUpdatedAt: 200,
+      createdAt: 100,
+    }),
+    identity: { taskId: TASK, chatId: "chat-a", ownerUserId: "user-2" },
+    isOwnedByViewer: false,
+  };
+
+  it("never folds another owner's row into a local entry", () => {
+    const kept = selectUnfoldedCloudChats({
+      chats: [COLLABORATOR_ROW],
+      localChatIds: ["chat-a"],
+      publicationChatIdByChatId: NO_REDIRECTS,
+    });
+    expect(kept).toEqual([COLLABORATOR_ROW]);
+  });
+
+  it("still folds the viewer's own backup with the same id", () => {
+    // The owner check must not disable the fold it guards.
+    const own = cloudChat({
+      chatId: "chat-a",
+      ownerHostId: LOCAL_HOST,
+      title: "My chat",
+      publishedAt: 200,
+      metadataUpdatedAt: 200,
+      createdAt: 100,
+    });
+    const kept = selectUnfoldedCloudChats({
+      chats: [own, COLLABORATOR_ROW],
+      localChatIds: ["chat-a"],
+      publicationChatIdByChatId: NO_REDIRECTS,
+    });
+    expect(kept).toEqual([COLLABORATOR_ROW]);
+  });
+});

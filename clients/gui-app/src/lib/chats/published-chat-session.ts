@@ -8,6 +8,8 @@ import {
   messageSchema,
   type Message,
 } from "@traycer/protocol/persistence/epic/messages";
+import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
 import type {
   ChatSessionState,
@@ -36,11 +38,20 @@ import type {
  * harness this build never heard of stays readable). So the conversion is to
  * hand each message's preserved `raw` back to the live schema.
  *
- * That widening is also why the re-parse can REFUSE: a message from an
- * unknown harness parses as chat-sync and not as an epic message. Refusals are
- * counted rather than swallowed, because a dropped message is indistinguishable
- * from a chat that never had one - the same rule the presentation layer already
- * enforces for unknown blocks.
+ * That widening is also why the re-parse can REFUSE, and refusal has to be
+ * handled at the RIGHT GRANULARITY. Reparsing a whole assistant record and
+ * dropping it on any failure inverts the guarantee the presentation layer
+ * exists to provide: one future block type inside an otherwise ordinary message
+ * deleted its known text, file changes and plan along with it. A message is
+ * therefore rebuilt block by block - every block this build understands is
+ * kept, and a block it does not is replaced by a visible placeholder rather
+ * than taking its siblings down with it.
+ *
+ * What still refuses at record granularity is a message whose ENVELOPE this
+ * build cannot represent - an unknown role, or a sender naming a harness
+ * outside the closed live enum. Those are counted, not silently swallowed,
+ * because a dropped message is indistinguishable from a chat that never had
+ * one. See the note on `UNREPRESENTABLE_ENVELOPE` below.
  *
  * ## Everything live is empty, and empty is the honest value
  *
@@ -76,9 +87,13 @@ export function convertPublishedChat(
   const events: ChatEvent[] = [];
   let unreadableCount = 0;
   for (const message of presented.messages) {
-    const parsed = messageSchema.safeParse(message.raw);
-    if (parsed.success) messages.push(parsed.data);
-    else unreadableCount += 1;
+    const rebuilt = rebuildMessage(message.raw, message.blocks);
+    if (rebuilt === null) {
+      unreadableCount += 1;
+      continue;
+    }
+    messages.push(rebuilt.message);
+    unreadableCount += rebuilt.replacedBlockCount;
   }
   for (const event of presented.events) {
     const parsed = chatEventSchema.safeParse(event.raw);
@@ -86,6 +101,60 @@ export function convertPublishedChat(
     else unreadableCount += 1;
   }
   return { messages, events, unreadableCount };
+}
+
+/**
+ * One message, with every block this build understands preserved.
+ *
+ * Blocks are screened individually against the live schema and an unreadable
+ * one is swapped for a placeholder, so the record as a whole can still parse.
+ * Returns `null` only when the ENVELOPE itself is unrepresentable, which the
+ * caller counts.
+ */
+function rebuildMessage(
+  raw: JsonObject,
+  presentedBlocks: PresentedChat["messages"][number]["blocks"],
+): { readonly message: Message; readonly replacedBlockCount: number } | null {
+  if (presentedBlocks.length === 0) {
+    const parsed = messageSchema.safeParse(raw);
+    return parsed.success
+      ? { message: parsed.data, replacedBlockCount: 0 }
+      : null;
+  }
+  let replacedBlockCount = 0;
+  const blocks = presentedBlocks.map((block, index) => {
+    const parsed = contentBlockSchema.safeParse(block.raw);
+    if (parsed.success) return block.raw;
+    replacedBlockCount += 1;
+    return placeholderBlockRaw(block.blockId ?? `unreadable-${index}`, index);
+  });
+  const parsed = messageSchema.safeParse({ ...raw, blocks });
+  if (!parsed.success) return null;
+  return { message: parsed.data, replacedBlockCount };
+}
+
+/**
+ * A block this build cannot interpret, as one it can.
+ *
+ * A `text` block carrying a plain statement, rather than a dropped entry: the
+ * gap has to be VISIBLE where it happened. An omitted block is
+ * indistinguishable from a message that never had one, which is the exact
+ * confusion the presentation layer's preservation rules exist to prevent, and
+ * the composer's summary line cannot say WHERE the missing content sat.
+ *
+ * `timestamp: 0` and a derived `blockId` keep it inert and stably keyed; it
+ * carries no payload refs, so nothing downstream tries to fetch it.
+ */
+function placeholderBlockRaw(blockId: string, index: number): JsonObject {
+  return {
+    blockId: `${blockId}:unreadable-${index}`,
+    status: "completed",
+    timestamp: 0,
+    parentBlockId: null,
+    type: "text",
+    text: "This part of the message needs a newer version of Traycer to display.",
+    providerNotice: null,
+  };
 }
 
 export interface PublishedChatSessionInput {
