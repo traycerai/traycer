@@ -173,9 +173,7 @@ import {
   managedCommandSubscribeOutputV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
-import {
-  chatForkGetV10,
-} from "@traycer/protocol/host/chat-fork/contracts";
+import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,

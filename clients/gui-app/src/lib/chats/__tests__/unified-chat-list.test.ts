@@ -129,9 +129,9 @@ describe("selectUnfoldedCloudChats", () => {
 
     it("folds the clone row the local chat now publishes into", () => {
       const kept = selectUnfoldedCloudChats(inputs);
-      expect(
-        kept.some((chat) => chat.identity.chatId === CLONE_ROW),
-      ).toBe(false);
+      expect(kept.some((chat) => chat.identity.chatId === CLONE_ROW)).toBe(
+        false,
+      );
     });
 
     it("keeps the incumbent row even though it shares the local chat's id", () => {

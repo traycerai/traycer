@@ -42,9 +42,10 @@ const openedRefs: { type: string; id: string }[] = [];
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   // The canvas actions take `(tabId, ref)`; the ref is the second argument.
-  useEpicCanvasStore: () => (_tabId: string, ref: { type: string; id: string }) => {
-    openedRefs.push({ type: ref.type, id: ref.id });
-  },
+  useEpicCanvasStore:
+    () => (_tabId: string, ref: { type: string; id: string }) => {
+      openedRefs.push({ type: ref.type, id: ref.id });
+    },
 }));
 
 afterEach(() => {
@@ -111,9 +112,7 @@ describe("EpicSidebarCloudChatRow", () => {
         depth={0}
       />,
     );
-    expect(
-      screen.getByLabelText("On Tanveer's laptop, offline"),
-    ).toBeTruthy();
+    expect(screen.getByLabelText("On Tanveer's laptop, offline")).toBeTruthy();
   });
 
   it("keeps the row's accessible name to the chat title", () => {
@@ -128,9 +127,7 @@ describe("EpicSidebarCloudChatRow", () => {
         depth={0}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: "Walkthrough" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Walkthrough" })).toBeTruthy();
   });
 
   it("drops the lock when the chat is here and its owner is reachable", () => {
@@ -148,9 +145,7 @@ describe("EpicSidebarCloudChatRow", () => {
       />,
     );
     expect(
-      screen.queryByTestId(
-        `epic-sidebar-cloud-lock-${CHAT.identity.chatId}`,
-      ),
+      screen.queryByTestId(`epic-sidebar-cloud-lock-${CHAT.identity.chatId}`),
     ).toBeNull();
   });
 
@@ -173,7 +168,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-            epicId={CHAT.identity.taskId}
+          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
         />,
@@ -191,7 +186,6 @@ describe("EpicSidebarCloudChatRow", () => {
       expect(openedRefs).toHaveLength(1);
       expect(openedRefs[0].type).toBe("published-chat");
     });
-
 
     it("opens the published copy when the owner is unreachable", () => {
       reachability.status = "unreachable";
@@ -224,7 +218,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-            epicId={CHAT.identity.taskId}
+          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
         />,
@@ -243,7 +237,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-            epicId={CHAT.identity.taskId}
+          epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
         />,
@@ -253,5 +247,4 @@ describe("EpicSidebarCloudChatRow", () => {
       ).toBeTruthy();
     });
   });
-
 });

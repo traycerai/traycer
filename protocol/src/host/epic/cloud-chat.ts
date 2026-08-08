@@ -191,28 +191,31 @@ export type ResolveCloudChatHeadRequest = z.infer<
  * v1's server-side gate bought: a reader that cannot interpret a publication
  * spends no part egress on it.
  */
-export const resolveCloudChatHeadOutcomeSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("ok"),
-    /**
-     * The head document, verbatim, byte for byte as the publisher committed it.
-     *
-     * A STRING, not an object, and that is load-bearing twice over: the digest
-     * below is over these exact bytes, and any normalizing round trip through a
-     * JSON object would silently break the check. The host does not parse it.
-     */
-    head: z.string().min(1),
-    /** Digest of `head`'s bytes, from the row. The client re-computes and checks. */
-    headSha256: sha256HexSchema,
-  }),
-  /** The owning host has never published this chat. Not an error. */
-  z.object({ status: z.literal("unpublished") }),
-  /** `(task, chat)` resolved to a row owned by someone else - see the identity note. */
-  z.object({
-    status: z.literal("ambiguous-identity"),
-    resolvedOwnerUserId: z.string().min(1),
-  }),
-]);
+export const resolveCloudChatHeadOutcomeSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({
+      status: z.literal("ok"),
+      /**
+       * The head document, verbatim, byte for byte as the publisher committed it.
+       *
+       * A STRING, not an object, and that is load-bearing twice over: the digest
+       * below is over these exact bytes, and any normalizing round trip through a
+       * JSON object would silently break the check. The host does not parse it.
+       */
+      head: z.string().min(1),
+      /** Digest of `head`'s bytes, from the row. The client re-computes and checks. */
+      headSha256: sha256HexSchema,
+    }),
+    /** The owning host has never published this chat. Not an error. */
+    z.object({ status: z.literal("unpublished") }),
+    /** `(task, chat)` resolved to a row owned by someone else - see the identity note. */
+    z.object({
+      status: z.literal("ambiguous-identity"),
+      resolvedOwnerUserId: z.string().min(1),
+    }),
+  ],
+);
 export type ResolveCloudChatHeadOutcome = z.infer<
   typeof resolveCloudChatHeadOutcomeSchema
 >;
@@ -387,22 +390,25 @@ export type ReadCloudChatPayloadRequest = z.infer<
  * A transport failure is NOT this. It throws, so a client retries rather than
  * caching a permanent "unavailable" for a payload one bad request away.
  */
-export const readCloudChatPayloadOutcomeSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("ok"),
-    /** Base64 of the RAW payload bytes - what `ref.sha256` is over. */
-    bytesBase64: z.string(),
-    /** Length of the DECODED bytes, so a client can check what it decoded. */
-    byteLength: z.number().int().nonnegative(),
-  }),
-  z.object({ status: z.literal("unavailable") }),
-  /**
-   * Carries no resolved owner, unlike the head resolve: the reader's action is
-   * identical either way, and a value nobody acts on is a channel not worth
-   * opening.
-   */
-  z.object({ status: z.literal("ambiguous-identity") }),
-]);
+export const readCloudChatPayloadOutcomeSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({
+      status: z.literal("ok"),
+      /** Base64 of the RAW payload bytes - what `ref.sha256` is over. */
+      bytesBase64: z.string(),
+      /** Length of the DECODED bytes, so a client can check what it decoded. */
+      byteLength: z.number().int().nonnegative(),
+    }),
+    z.object({ status: z.literal("unavailable") }),
+    /**
+     * Carries no resolved owner, unlike the head resolve: the reader's action is
+     * identical either way, and a value nobody acts on is a channel not worth
+     * opening.
+     */
+    z.object({ status: z.literal("ambiguous-identity") }),
+  ],
+);
 export type ReadCloudChatPayloadOutcome = z.infer<
   typeof readCloudChatPayloadOutcomeSchema
 >;
