@@ -1,8 +1,10 @@
 import { useCallback, type ReactNode } from "react";
-import { Lock, MessagesSquare } from "lucide-react";
+import { Lock } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
+import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { useChatById } from "@/lib/epic-selectors";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -32,6 +34,9 @@ import {
  * than a flat one.
  */
 
+/** Exactly what a local chat row draws - see the note at its use site. */
+const ChatIcon = EPIC_NODE_ICONS.chat;
+
 export interface EpicSidebarCloudChatRowProps {
   readonly chat: CloudChatSummary;
   readonly epicId: string;
@@ -59,6 +64,17 @@ export function EpicSidebarCloudChatRow(
   // as a tree row would. Only an unreachable owner produces a locked row and
   // the published-copy surface behind it.
   const ownerReachable = ownerReachability.status === "reachable";
+  // Reachable is NECESSARY but not SUFFICIENT. A host that answers may still
+  // not hold this chat - most visibly when two dev slots share one host id, but
+  // equally for a chat that host lost or a row that outlived it. The live tile
+  // is record-backed, so opening one for a chat absent from this device's tree
+  // produced nothing at all: the click was received and the canvas never
+  // changed. Openable-live therefore means the chat is HERE and its owner
+  // answers; everything else opens the published copy, which is the honest
+  // surface for "this exists but not on this machine" and, unlike a no-op,
+  // always renders something.
+  const localRecord = useChatById(chat.identity.chatId);
+  const opensLive = ownerReachable && localRecord !== null;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTilePreviewInTabFocusTarget,
@@ -93,7 +109,7 @@ export function EpicSidebarCloudChatRow(
   );
 
   const open = useCallback(() => {
-    const ref = ownerReachable ? liveTileRef() : publishedTileRef();
+    const ref = opensLive ? liveTileRef() : publishedTileRef();
     navigateNested(props.epicId, props.tabId, () =>
       prepareOpenTilePreviewInTabFocusTarget(props.tabId, {
         ...ref,
@@ -101,7 +117,7 @@ export function EpicSidebarCloudChatRow(
       }),
     );
   }, [
-    ownerReachable,
+    opensLive,
     liveTileRef,
     publishedTileRef,
     navigateNested,
@@ -111,7 +127,7 @@ export function EpicSidebarCloudChatRow(
   ]);
 
   const openPermanent = useCallback(() => {
-    const ref = ownerReachable ? liveTileRef() : publishedTileRef();
+    const ref = opensLive ? liveTileRef() : publishedTileRef();
     navigateNested(props.epicId, props.tabId, () =>
       prepareOpenTileInTabFocusTarget(props.tabId, {
         ...ref,
@@ -119,7 +135,7 @@ export function EpicSidebarCloudChatRow(
       }),
     );
   }, [
-    ownerReachable,
+    opensLive,
     liveTileRef,
     publishedTileRef,
     navigateNested,
@@ -149,13 +165,18 @@ export function EpicSidebarCloudChatRow(
         onDoubleClick={openPermanent}
       >
         <TreeChevronSpacer />
-        <MessagesSquare className="size-3.5 shrink-0 text-muted-foreground" />
+        {/* The SAME icon a local chat row renders. A distinct glyph for
+            "arrived via the cloud list" would re-encode the demolished "other
+            devices" section as iconography - provenance, not state. State is
+            the lock badge below; the cause stays in words (host chip, tooltip,
+            composer notice). */}
+        <ChatIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate">{title}</span>
           {/* The lock states what is true of the CHAT - its owner is out of
               reach - so it travels with the row rather than with a section, and
               it is absent when that is not true of this chat. */}
-          {ownerReachable ? null : (
+          {opensLive ? null : (
             <TooltipWrapper
               label={`Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`}
               side="right"
