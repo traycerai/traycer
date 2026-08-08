@@ -710,6 +710,20 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // Not polled, and this is a deliberate freshness choice rather than a copy of
+  // the row above it. The answer is "which cloud row does this local chat
+  // publish into", which changes exactly once in a chat's life - when a fork
+  // sends its lineage into a clone row - and never again. A cadence would spend
+  // a request per interval per open sidebar to re-learn a constant.
+  //
+  // What it costs: between a fork's auto-resolution and the next refetch, one
+  // sidebar row can be stale - the chat's OLD publication row briefly shows as
+  // a separate entry. That is a duplicate-looking row for a moment, not wrong
+  // content: the transcript a locked row renders comes from the head read, not
+  // from this mapping, so nothing a user is reading goes stale with it. The
+  // fork's own notification is the signal that something changed, and a
+  // reopened task picks the new mapping up.
+  "epic.listChatPublicationTargets": { ...LATEST_SCHEDULING, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected
   // after this query first cached would never surface. 45s sits between the
