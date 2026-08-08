@@ -13,6 +13,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -154,6 +155,7 @@ function reopenClosedTilePreview(href: string): void {
       preserved.node,
       state.pendingCreateArtifactIds,
       hasLiveRecord,
+      getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
     )
   ) {
     state.discardClosedTilePayload(epicTab.tabId, nestedTarget.tileInstanceId);

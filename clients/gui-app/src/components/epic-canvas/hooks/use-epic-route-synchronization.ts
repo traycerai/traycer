@@ -13,6 +13,7 @@ import {
   useEpicTab,
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -399,6 +400,13 @@ export function useEpicRouteSynchronization(
     handle.store.getState().setLastFocusedArtifactId(activeArtifactId);
   }, [snapshotLoaded, activeArtifactId, handle]);
 
+  // The host whose projection feeds `records` - the app-wide active host.
+  // Cross-host chat tiles are exempt from record policing (see
+  // `isTileRefRecordLive`); everything else is judged against this host's
+  // projection, which is also correct across a host switch (the records
+  // swap with the host, and so does the policing identity).
+  const activeHostId = useReactiveActiveHostId();
+
   // Close any open tab whose underlying record was removed (sidebar delete,
   // server-side cascade, or remote delete by another collaborator). The
   // sidebar's optimistic Y.Doc delete unmounts the row before the mutation's
@@ -416,7 +424,14 @@ export function useEpicRouteSynchronization(
       for (const instanceId of pane.tabInstanceIds) {
         const tab = canvas.tilesByInstanceId[instanceId];
         if (tab === undefined) continue;
-        if (isTileRefRecordLive(tab, pendingCreateArtifactIds, hasLiveRecord)) {
+        if (
+          isTileRefRecordLive(
+            tab,
+            pendingCreateArtifactIds,
+            hasLiveRecord,
+            activeHostId,
+          )
+        ) {
           continue;
         }
         closeCanvasTab(tabId, pane.id, tab.instanceId);
@@ -427,6 +442,7 @@ export function useEpicRouteSynchronization(
     canvas,
     records,
     pendingCreateArtifactIds,
+    activeHostId,
     epicId,
     tabId,
     closeCanvasTab,

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
   PaneActivationFocusIntentContext,
   registerHostedPaneActivationClaim,
@@ -476,6 +477,11 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   const role = useEpicPermissionRole();
   const snapshotLoaded = useEpicSnapshotLoaded();
   const liveArtifact = useEpicArtifact(activeTab.id);
+  // The projection feeding `liveArtifact` is served by the app-wide active
+  // host; cross-host CHAT refs are exempt from its record gate (see
+  // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
+  // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
+  const activeHostIdForRecordGate = useReactiveActiveHostId();
   // Per-tab membership selectors: each tab only re-renders when its own
   // entry flips, not when any other tab is marked/unmarked.
   const isSelfDeleted = useEpicCanvasStore((s) =>
@@ -508,6 +514,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           liveArtifact,
           isSelfDeleted,
           isPendingCreate,
+          projectionHostId: activeHostIdForRecordGate,
         });
   const isActive = role !== null && props.selected && props.globallyActive;
 
@@ -627,6 +634,8 @@ interface ComputeIsRemoteDeletedArgs {
    * creation. The projection miss is "creation in flight", not deletion.
    */
   readonly isPendingCreate: boolean;
+  /** The host whose projection `liveArtifact` was resolved from. */
+  readonly projectionHostId: string | null;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -636,9 +645,26 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
     liveArtifact,
     isSelfDeleted,
     isPendingCreate,
+    projectionHostId,
   } = args;
   if (!snapshotLoaded) return false;
   if (leafArtifact === null) return false;
+  // A CHAT ref bound to another host is invisible to this device's
+  // projection by construction - chat records are host-authoritative, so a
+  // cross-host live tab (reachable owner opened from the unified sidebar)
+  // must not read as "remotely deleted". Its record lives in the OWNER
+  // host's registry, which this projection cannot see. Chat-only: artifact
+  // and terminal-agent records are doc-shared, so their projection miss
+  // still means deleted regardless of the ref's bound host. Mirrors
+  // `isTileRefRecordLive`'s exemption - the two record-liveness gates must
+  // agree or a click opens a tile the surface refuses to mount.
+  if (
+    leafArtifact.type === "chat" &&
+    projectionHostId !== null &&
+    leafArtifact.hostId !== projectionHostId
+  ) {
+    return false;
+  }
   if (liveArtifact !== null) return false;
   if (isSelfDeleted) return false;
   if (isPendingCreate) return false;

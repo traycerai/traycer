@@ -131,8 +131,25 @@ export function isTileRefRecordLive(
   ref: EpicCanvasTileRef,
   pendingCreateArtifactIds: ReadonlySet<string>,
   hasLiveRecord: (id: string) => boolean,
+  projectionHostId: string | null,
 ): boolean {
   if (!isTileRefRecordBacked(ref)) return true;
+  // A chat ref bound to ANOTHER host is not policed by this device's
+  // projection. Chat records are HOST-AUTHORITATIVE (each host's own chat
+  // registry), so a cross-host live tab - a reachable owner's chat opened
+  // from the unified sidebar - legitimately has no local record, and reaping
+  // it here is what turned those clicks into silent no-ops. Scoped to
+  // `chat` alone: artifact and terminal-agent records live in the SHARED
+  // epic doc, so their absence still means deleted, whatever host the ref
+  // is bound to. Cross-host chat tiles are closed by the user, never by
+  // record sync - this device cannot see the owner's registry to know more.
+  if (
+    ref.type === "chat" &&
+    projectionHostId !== null &&
+    ref.hostId !== projectionHostId
+  ) {
+    return true;
+  }
   if (pendingCreateArtifactIds.has(ref.id)) return true;
   return hasLiveRecord(ref.id);
 }
