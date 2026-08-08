@@ -51,14 +51,18 @@ const BLOCKED_REASON: Record<ProviderSkillSourceBadge, string> = {
 export function skillRemovability(args: {
   readonly removeScopes: readonly ProviderNativeScope[];
   readonly source: ProviderSkillSourceBadge;
+  /** Scope the tab is currently listing/mutating at. */
+  readonly effectiveScope: ProviderNativeScope;
 }): SkillRemovability {
-  // `global` specifically, not "any scope": this whole tab is global-scoped -
-  // it lists with `scope: "global"` and `onRemove` sends the same - so a
-  // provider advertising only `project` would get a button whose request the
-  // host must refuse. Testing the scope that is actually invoked is the point
-  // of this module; testing merely that SOME scope exists would reintroduce
-  // exactly the always-fails button it was written to prevent.
-  if (!args.removeScopes.includes("global")) return { kind: "hidden" };
+  // The selected scope specifically, not "any scope": the tab lists and
+  // mutates at `effectiveScope`, so a provider advertising only the other
+  // scope would get a button whose request the host must refuse. Testing the
+  // scope that is actually invoked is the point of this module; testing merely
+  // that SOME scope exists would reintroduce exactly the always-fails button
+  // it was written to prevent.
+  if (!args.removeScopes.includes(args.effectiveScope)) {
+    return { kind: "hidden" };
+  }
   if (!isWritableSkillSource(args.source)) {
     return { kind: "blocked", reason: BLOCKED_REASON[args.source] };
   }

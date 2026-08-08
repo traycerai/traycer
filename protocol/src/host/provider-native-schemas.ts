@@ -101,6 +101,22 @@ export const providerNativeErrorCodeSchema = z.enum([
   "external_drift",
   "store_version_unsupported",
   "rollback_failed",
+  // The provider's own config could not be READ or PARSED - a malformed
+  // `config.yaml`/`config.toml`/`mcp.json`, or an unreadable one.
+  //
+  // This is a LIST-side failure, unlike every code above it, and it exists
+  // because the alternative is worse in both directions. Swallowing the
+  // failure into an empty list tells the user "this provider has no MCP
+  // servers", which is indistinguishable from the truth and sends them
+  // looking for the wrong bug. Letting it reject instead takes down the whole
+  // `providers.list` response - native results ride on that call, so one
+  // malformed file would empty the entire provider catalog on every poll.
+  //
+  // A typed result is the only option that scopes the failure to the provider
+  // it belongs to. `detail` carries a REDACTED parser message (see
+  // `ConfigParseError`, which redacts at construction): parse errors quote the
+  // offending source line, which is routinely a credential.
+  "config_unreadable",
 ]);
 export type ProviderNativeErrorCode = z.infer<
   typeof providerNativeErrorCodeSchema
@@ -126,6 +142,20 @@ export const providerSettingsTabSchema = z.enum([
   "skills",
 ]);
 export type ProviderSettingsTab = z.infer<typeof providerSettingsTabSchema>;
+
+/**
+ * Which provider operations receive Settings → Providers environment
+ * overrides. Most harnesses receive them for both their chat process and
+ * native configuration operations; an in-process harness can only use them
+ * for the latter.
+ */
+export const providerEnvOverrideScopeSchema = z.enum([
+  "harness-and-native-config",
+  "native-config-only",
+]);
+export type ProviderEnvOverrideScope = z.infer<
+  typeof providerEnvOverrideScopeSchema
+>;
 
 export const providerMcpTransportSchema = z.enum(["stdio", "http", "sse"]);
 export type ProviderMcpTransport = z.infer<typeof providerMcpTransportSchema>;
@@ -387,6 +417,12 @@ export type ProviderSkillsCapabilities = z.infer<
  */
 export const providerNativeCapabilitiesSchema = z.object({
   supportedTabs: z.array(providerSettingsTabSchema),
+  /**
+   * Omitted by older hosts and ordinary contracts, which retain the existing
+   * harness-and-native-config behaviour. A non-default value lets the client
+   * make the Env tab honest without a provider-id special case.
+   */
+  envOverrideScope: providerEnvOverrideScopeSchema.optional(),
   mcp: providerMcpCapabilitiesSchema.nullable(),
   plugins: providerPluginsCapabilitiesSchema.nullable(),
   skills: providerSkillsCapabilitiesSchema.nullable(),

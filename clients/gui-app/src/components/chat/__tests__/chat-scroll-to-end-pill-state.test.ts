@@ -8,7 +8,6 @@ function resolve(input: {
   readonly visible: boolean;
   readonly turnRunning: boolean;
   readonly unseenCompletion: boolean;
-  readonly workingVerb: string;
 }): ScrollToEndPillState {
   return resolveScrollToEndPillState(input);
 }
@@ -20,7 +19,6 @@ describe("resolveScrollToEndPillState", () => {
         visible: false,
         turnRunning: true,
         unseenCompletion: true,
-        workingVerb: "Cogitating",
       }),
     ).toEqual({ kind: "hidden" });
 
@@ -29,20 +27,18 @@ describe("resolveScrollToEndPillState", () => {
         visible: false,
         turnRunning: false,
         unseenCompletion: false,
-        workingVerb: "Cogitating",
       }),
     ).toEqual({ kind: "hidden" });
   });
 
-  it("returns streaming with the working verb when visible and the turn is running", () => {
+  it("returns streaming when visible and the turn is running", () => {
     expect(
       resolve({
         visible: true,
         turnRunning: true,
         unseenCompletion: false,
-        workingVerb: "Pondering",
       }),
-    ).toEqual({ kind: "streaming", workingVerb: "Pondering" });
+    ).toEqual({ kind: "streaming" });
   });
 
   it("returns new-reply when visible, not running, and an unseen completion is pending", () => {
@@ -51,7 +47,6 @@ describe("resolveScrollToEndPillState", () => {
         visible: true,
         turnRunning: false,
         unseenCompletion: true,
-        workingVerb: "Pondering",
       }),
     ).toEqual({ kind: "new-reply" });
   });
@@ -62,7 +57,6 @@ describe("resolveScrollToEndPillState", () => {
         visible: true,
         turnRunning: false,
         unseenCompletion: false,
-        workingVerb: "Pondering",
       }),
     ).toEqual({ kind: "plain" });
   });
@@ -76,8 +70,7 @@ describe("resolveScrollToEndPillState", () => {
         visible: true,
         turnRunning: true,
         unseenCompletion: true,
-        workingVerb: "Brewing",
       }),
-    ).toEqual({ kind: "streaming", workingVerb: "Brewing" });
+    ).toEqual({ kind: "streaming" });
   });
 });

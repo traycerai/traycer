@@ -4,6 +4,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -114,7 +115,8 @@ function initialActiveProviderId(
 }
 
 // Initial tab for the deep-linked (or first) provider: honor `focusTab` when
-// the target advertises it, else the first supported tab.
+// the target supports it, else the first supported tab in
+// {@link PROVIDER_TAB_ORDER} (account → usage → general → …).
 function initialActiveTab(
   providers: readonly ProviderCliState[],
   providerId: ProviderId,
@@ -124,12 +126,11 @@ function initialActiveTab(
   const tabs = resolveSupportedTabs(providerTabInputs(state));
   // `focusTab` is a plain `string` in the store, so a deep link CAN name the
   // client-only `account` tab even though it is absent from the wire enum -
-  // the match below is against the resolved tab list, not the schema. No
-  // caller sets it today; the "Add API key" CTA passes only `focusHarnessId`
-  // and therefore lands on `tabs[0]`, which is `general` for every provider
-  // that has one. That predates the Account/Usage split (the key field sat on
-  // `usage`, also not first) and is a CTA-side change, not one this pane can
-  // make on its own.
+  // the match below is against the resolved tab list, not the schema. When no
+  // focusTab is set (including the "Add API key" CTA that only sets
+  // `focusHarnessId`), `tabs[0]` is the first supported tab — account when the
+  // provider takes a key, usage when it has profiles/limits, otherwise the
+  // next supported tab in display order.
   const focusTab = useProvidersFocusStore.getState().focusTab;
   if (focusTab !== null) {
     const match = tabs.find((tab) => tab === focusTab);
@@ -175,6 +176,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
+  huggingface:
+    "Hugging Face - OpenAI-compatible router authenticated with your Hugging Face token.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
   qwen: "Qwen Code CLI agent.",
   kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",
@@ -439,6 +442,58 @@ function ProvidersPanelBody({
     );
   }
   if (query.isError) {
+    // A PRE-SEND transport failure says nothing about the RPC or the host's
+    // version - the request was never put on the wire. On a remote host this
+    // is routinely just the session's first dial still in flight, and the
+    // ready boundary refetches this query the moment the session is up, so
+    // describe the connection instead of blaming the host.
+    //
+    // Deliberately the `RetryableTransportError` subclass and not its
+    // `HostTransportFailureError` base: an AMBIGUOUS post-send drop (the
+    // socket died after the request frame went out) keeps the base class
+    // precisely because nothing may assume it will resolve itself. Nothing
+    // refetches it either - `useHostQuery` pins `retry: false`, and a healthy
+    // independent stream connection need not emit any recovery event - so
+    // showing it as "connecting" would park the panel on a spinner that never
+    // resolves and offers no way to report the fault.
+    //
+    // REMOTE only, for exactly the same reason. A spinner is a promise that
+    // something will refetch, and only the remote path can keep it: the
+    // messenger holds a remote binding for the selected host whose ready
+    // boundary invalidates this query (`subscribeRemoteAvailability` ->
+    // `onRemoteAvailabilityRecovered`). A local host has no such binding, and
+    // by the time this error arrives the retry wrapper has already spent its
+    // whole budget - its final attempt rethrows unchanged, so "retryable" here
+    // describes what the class of failure WAS, not that anything is still
+    // retrying. The only thing that could refetch a local host is a durable
+    // stream tab that happens to be bound to it, which Settings cannot assume
+    // exists. So local falls through to the actionable card, which at worst
+    // shows a recoverable fault with a way out and is replaced the moment a
+    // recovery invalidation does land.
+    //
+    // A remote host that dialed and then went TERMINAL - an incompatible
+    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // owes no boundary either, and would strand this spinner just as badly.
+    // That case never PERSISTS here, enforced at two layers. New requests:
+    // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
+    // `HostTransportFailureError`, so the class keeps meaning "still dialing"
+    // at this branch. The query that already CACHED a retryable error from
+    // racing the dial (the retry budget is shorter than a full attach):
+    // `RuntimeHostMessenger` records the terminal verdict, fires one
+    // host-scope invalidation, and rejects the resulting refetch with the
+    // verdict instead of transparently redialing - without that, the refetch
+    // would race a FRESH dial, cache "retryable" again, and spin forever.
+    if (
+      query.error instanceof RetryableTransportError &&
+      !isSelectedHostLocal
+    ) {
+      return (
+        <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
+          <MutedAgentSpinner />
+          Connecting to the remote host…
+        </div>
+      );
+    }
     return (
       <div className="px-6 py-8 text-ui-sm text-destructive">
         Couldn't load provider state. The host may need to be updated.
@@ -511,10 +566,19 @@ function ProvidersRailLayout({
   const [activeId, setActiveId] = useState<ProviderId>(() =>
     initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
+  // Same provider id as `activeId` above, deliberately: the default tab is now
+  // provider-dependent (account → usage → …), so deriving it from the rail's
+  // first provider lands the deep link on the wrong tab. The "Add API key" CTA
+  // sets `focusHarnessId` with no `focusTab`; with a first provider defaulting
+  // to `usage`, a focused provider that also supports `usage` would keep
+  // "Profiles & Limits" instead of opening its own first tab, "Account" — the
+  // one field the CTA exists to reach. When the deep link is not consumed (no
+  // focus, or a different host) `initialFocus.harnessId` is already null, so
+  // this stays the rail's first provider.
   const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
     initialActiveTab(
       orderedProviders,
-      initialActiveProviderId(orderedProviders, null),
+      initialActiveProviderId(orderedProviders, initialFocus.harnessId),
     ),
   );
   useEffect(() => {
@@ -932,6 +996,7 @@ function ProviderTabBody({
         <ProviderEnvOverridesSection
           providerId={state.providerId}
           overrides={state.envOverrides}
+          envOverrideScope={state.nativeCapabilities.envOverrideScope}
         />
       );
     // The key IS the account for these providers, so it owns a tab rather than
@@ -994,6 +1059,11 @@ function ProviderTabBody({
           providerId={state.providerId}
           capabilities={mcp}
           providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+          // An old host omits the key entirely; `?? true` matches the schema's
+          // own `.catch(true)` - assume resolved, show no notice - so a host
+          // that cannot report this never accuses a provider of a missing
+          // binary it knows nothing about.
+          cliBinaryResolved={state.cliBinaryResolved ?? true}
         />
       );
     }

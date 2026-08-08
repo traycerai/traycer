@@ -109,6 +109,10 @@ type OpenRouterRateLimits = Extract<
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type HuggingFaceRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "huggingface" }
+>;
 
 const MINUTES_PER_HOUR = 60;
 // A manual reset expiring inside this window is tinted `text-destructive` in the
@@ -975,6 +979,146 @@ function OpenRouterCreditBar({
 }
 
 /**
+ * Hugging Face's usage detail: a credits bar built from the included allowance,
+ * plus the spend figures as plain neutral rows. All figures are $-denominated.
+ *
+ * Two shapes, because the endpoint reports two genuinely different accounts:
+ * one WITH an included allowance (the bar is remaining-included, the primary
+ * number the user cares about), and one with none at all - a pay-as-you-go
+ * account that only ever reports what it has spent. In the second case there is
+ * no denominator, so no bar and no fabricated "0 of unknown" row; spend stands
+ * alone (Core Flows: "Windows without a percentage"). No plan chip either -
+ * Hugging Face reports no tier on this endpoint.
+ */
+export function HuggingFaceRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: HuggingFaceRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  // Overview keeps the credits bar and the headline remaining/spent figure;
+  // the spend limit, request count and billing period are single-provider-tab
+  // detail.
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      <HuggingFaceCreditBar
+        includedUsd={data.includedUsd}
+        usedUsd={data.usedUsd}
+      />
+      {data.includedUsd === null ? (
+        <ProviderNumberRow
+          label="Spent this period"
+          value={data.usedUsd}
+          format={formatProviderCurrency}
+        />
+      ) : (
+        <ProviderNumberRow
+          label="Included credits left"
+          value={data.remainingIncludedUsd}
+          format={formatProviderCurrency}
+        />
+      )}
+      {!overview ? (
+        <>
+          {data.includedUsd === null ? null : (
+            <ProviderNumberRow
+              label="Included credits"
+              value={data.includedUsd}
+              format={formatProviderCurrency}
+            />
+          )}
+          {data.includedUsd === null ? null : (
+            <ProviderNumberRow
+              label="Used this period"
+              value={data.usedUsd}
+              format={formatProviderCurrency}
+            />
+          )}
+          <ProviderNumberRow
+            label="Spend limit"
+            value={data.limitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Spend limit left"
+            value={data.remainingLimitUsd}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="Requests"
+            value={data.numRequests}
+            format={(value) => value.toLocaleString()}
+          />
+          <HuggingFacePeriodRow
+            periodStart={data.periodStart}
+            periodEnd={data.periodEnd}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// Hugging Face dates the usage window it reports, so the detail view says which
+// period the figures cover - the same orientation grok's billing-period row
+// gives. Rendered only when both bounds are present and parseable: the endpoint
+// is schema-less, so an unparseable value degrades to no row rather than to
+// "Invalid Date". The wire carries ISO strings here, not the epoch ms grok
+// uses, hence the separate formatter.
+function HuggingFacePeriodRow({
+  periodStart,
+  periodEnd,
+}: {
+  readonly periodStart: string | null;
+  readonly periodEnd: string | null;
+}): ReactNode {
+  if (periodStart === null || periodEnd === null) return null;
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const format = (value: Date): string =>
+    value.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  return (
+    <div className="flex items-center justify-between text-ui-sm">
+      <span className="text-muted-foreground">Billing period</span>
+      <span className="font-medium text-foreground">{`${format(start)} - ${format(end)}`}</span>
+    </div>
+  );
+}
+
+// The included allowance is the only Hugging Face pair that yields a real
+// percentage, and it is the one the user reads as "how much of my free credit
+// is gone". Absent an included allowance (a pay-as-you-go account) there is no
+// denominator, so no bar renders and the spend row stands alone. `usedUsd` can
+// exceed the allowance once an account spends past it, so the fill is clamped
+// rather than allowed to overflow the meter.
+function HuggingFaceCreditBar({
+  includedUsd,
+  usedUsd,
+}: {
+  readonly includedUsd: number | null;
+  readonly usedUsd: number;
+}): ReactNode {
+  if (includedUsd === null || includedUsd <= 0) return null;
+  const consumed = Math.min(Math.max(0, usedUsd), includedUsd);
+  const usedPercent = (consumed / includedUsd) * 100;
+  return (
+    <MeterRow
+      label="Included credits"
+      usedPercent={usedPercent}
+      severity={creditUsageSeverity(usedPercent)}
+      detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(includedUsd)}`}
+    />
+  );
+}
+
+/**
  * Kilo Code's usage detail: a credit balance and Kilo Pass state, both as plain
  * neutral rows. No computable percentage exists for Kilo Code, so it never
  * renders a bar (Core Flows: "Windows without a percentage").
@@ -1299,5 +1443,10 @@ export function ProviderRateLimitDetail({
     // `variant` drives just the Overview-vs-detail trim.
     case "grok":
       return <GrokRateLimitView data={data} variant={variant} />;
+    // Hugging Face is a credit provider like OpenRouter/Kilo Code: the only
+    // percentage it can report is against an included allowance, and accounts
+    // without one render spend figures alone.
+    case "huggingface":
+      return <HuggingFaceRateLimitView data={data} variant={variant} />;
   }
 }

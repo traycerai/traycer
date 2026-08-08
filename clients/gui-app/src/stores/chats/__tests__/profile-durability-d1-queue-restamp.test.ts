@@ -115,6 +115,8 @@ function emitSnapshot(harness: Harness): void {
         messages: [],
         events: [],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -126,6 +128,7 @@ function emitSnapshot(harness: Harness): void {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }
@@ -159,6 +162,8 @@ function managedCommandItem(queueItemId: string): ChatQueuedManagedCommandItem {
     commandId: `${queueItemId}-command`,
     description: "bun test --watch",
     commandKind: "monitor",
+    delivery: "next_turn" as const,
+    targetTurnId: null,
     status: "pending" as const,
     createdAt: 1,
     updatedAt: 1,

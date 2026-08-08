@@ -6,6 +6,7 @@ import {
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  MANAGED_COMMAND_OUTPUT_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
@@ -215,8 +216,12 @@ export function mentionAttachmentFromDragSource(
       return activeAgentMention(source, targetHostId);
     case ARTIFACT_TAB_DND_TYPE:
     case TERMINAL_TILE_DND_TYPE:
+    case MANAGED_COMMAND_OUTPUT_DND_TYPE:
     case LEFT_PANEL_RAIL_ITEM_DND_TYPE:
-      // Tabs, raw terminals, and panel chrome are not message context.
+      // Tabs, raw terminals, monitor rows, and panel chrome are not message
+      // context. A monitor's output reaches the agent through the host's own
+      // delivery, so mentioning the window would be a second, weaker path to
+      // the same bytes.
       return null;
     default:
       return unreachableDragSource(source);

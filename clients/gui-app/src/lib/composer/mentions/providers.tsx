@@ -29,8 +29,18 @@ import {
   terminalCategoryIcon,
   worktreeIcon,
 } from "./mention-entry-display";
-import { rankRootSearchEntries } from "./root-search-ranking";
+import {
+  rankRootSearchEntries,
+  type RankedRootSearch,
+} from "./root-search-ranking";
 import { taskMentionQueryForRequest } from "./task-mention-helpers";
+
+/**
+ * One step's menu rows plus the ranked root search's real-match count
+ * (null when the list is not a ranked root search - empty query, or a
+ * provider step). Same shape the ranking itself returns.
+ */
+export type MentionStepEntries = RankedRootSearch;
 
 const EMPTY_MENU_ENTRIES: ReadonlyArray<MentionMenuEntry> = [];
 const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
@@ -767,9 +777,7 @@ class MentionProviderRegistry {
     );
   }
 
-  rootEntries(
-    context: ComposerMentionProviderContext,
-  ): ReadonlyArray<MentionMenuEntry> {
+  rootEntries(context: ComposerMentionProviderContext): MentionStepEntries {
     if (context.query.trim().length > 0) {
       return rankRootSearchEntries(
         this.orderedProviders.flatMap((provider) =>
@@ -780,18 +788,37 @@ class MentionProviderRegistry {
         context.query,
       );
     }
-    return this.orderedProviders.flatMap((provider) => {
-      const entry = provider.rootEntry(context);
-      return entry === null ? [] : [entry];
-    });
+    return {
+      entries: this.orderedProviders.flatMap((provider) => {
+        const entry = provider.rootEntry(context);
+        return entry === null ? [] : [entry];
+      }),
+      matchedCount: null,
+    };
   }
 
   entries(
     step: MentionFlowStep,
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
+    return this.entriesWithMatches(step, context).entries;
+  }
+
+  /**
+   * Entries plus the ranked root search's real-match count, for the one
+   * consumer (the mention item hook) whose dismissal policy needs to know
+   * whether anything actually matched - the entry list alone cannot say,
+   * because unmatched-but-source-matched rows are appended, never dropped.
+   */
+  entriesWithMatches(
+    step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): MentionStepEntries {
     if (step.kind === "root") return this.rootEntries(context);
-    return this.provider(step.providerId).stepEntries(step, context);
+    return {
+      entries: this.provider(step.providerId).stepEntries(step, context),
+      matchedCount: null,
+    };
   }
 
   workspaceRequests(

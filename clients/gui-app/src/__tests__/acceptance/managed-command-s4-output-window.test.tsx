@@ -80,6 +80,7 @@ vi.mock(
       mutate: mocks.deleteMutate,
       isPending: false,
     }),
+    useManagedCommandStopAllIsPending: () => false,
   }),
 );
 

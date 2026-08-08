@@ -68,7 +68,19 @@ describe("providerSignInUnavailableHint", () => {
       false,
     );
     expect(hint).toContain("does not support browser sign-in");
+    expect(hint).toContain("Account tab");
+    expect(hint).not.toContain("above");
     expect(hint).not.toContain("local host");
+  });
+
+  it("does not invent a CLI or API-key path for traycer", () => {
+    const hint = providerSignInUnavailableHint(
+      providerState({ providerId: "traycer", loginCapability: null }),
+      true,
+    );
+    expect(hint).toContain("does not support browser sign-in");
+    expect(hint).not.toContain("CLI");
+    expect(hint).not.toContain("API key");
   });
 
   it("explains the remote-host case in terms of what sign-in does", () => {

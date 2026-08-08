@@ -130,6 +130,9 @@ describe("ChatStreamClient", () => {
     const fileEditApprovalFrames: string[] = [];
     const interviewFrames: string[] = [];
     const restoreFrames: string[] = [];
+    // Collected as whole sets, because that is what the frame carries - there
+    // is no per-command delta to accumulate.
+    const managedCommandSets: string[][] = [];
     const callbacks: ChatStreamCallbacks = {
       onSnapshot: (frame) => {
         snapshots.push(frame.snapshot.chat.id);
@@ -177,6 +180,11 @@ describe("ChatStreamClient", () => {
                 ),
                 entryCount: frame.worktreeBinding.entries.length,
               },
+        );
+      },
+      onManagedCommandsChanged: (frame) => {
+        managedCommandSets.push(
+          frame.managedCommands.map((command) => command.id),
         );
       },
       onConnectionStatus: () => undefined,
@@ -258,6 +266,33 @@ describe("ChatStreamClient", () => {
           },
         ],
       },
+    });
+
+    sockets[0].fireText({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      managedCommands: [
+        {
+          id: "cmd-1",
+          kind: "monitor",
+          description: "deploy watcher",
+          status: { state: "running", pid: 4410, startedAtMs: 10 },
+          chatId: "chat-1",
+          createdAtMs: 10,
+          updatedAtMs: 10,
+        },
+      ],
+    });
+    // The set going empty is how a chat's last command goes away; a frame that
+    // omits the field entirely is what a host sends when it has none, and the
+    // schema's default has to make both read identically here.
+    sockets[0].fireText({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
     });
 
     sockets[0].fireText({
@@ -372,6 +407,7 @@ describe("ChatStreamClient", () => {
       "restoreProgress",
       "restoreCompleted",
     ]);
+    expect(managedCommandSets).toEqual([["cmd-1"], []]);
     expect(parseText(sockets[0].textSent[2])).toEqual(frame);
 
     client.close();

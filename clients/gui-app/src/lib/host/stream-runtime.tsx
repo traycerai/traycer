@@ -32,6 +32,16 @@ export interface HostStreamProviderProps {
 }
 
 /**
+ * A client that survives at least this long before closing underneath the
+ * provider is considered to have genuinely worked - its close resets the
+ * rebuild backoff below. Anything shorter is a "quick close": the rebuild
+ * likely dials straight into the same failure.
+ */
+const REBUILD_HEALTHY_LIFETIME_MS = 30_000;
+const REBUILD_BACKOFF_BASE_MS = 1_000;
+const REBUILD_BACKOFF_MAX_MS = 30_000;
+
+/**
  * Mounts the app-wide `WsStreamClient` for the React-lifetime stream consumers
  * (notifications, git-diff, voice dictation, migration) bound to the active
  * host + `RequestContext`.
@@ -89,6 +99,13 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // teardown-close apart from a genuine underneath-close and skip a redundant
   // (and otherwise infinitely-looping) rebuild.
   const teardownInProgressRef = useRef(false);
+  // Backoff state for the liveness guard's rebuilds. Without it, a
+  // terminal-class close (incompatible protocol, plan restriction) loops hot:
+  // rebuild → fresh session → grant mint + relay dial + handshake → same
+  // fatal → onClosed → rebuild, one full mint/dial cycle per round trip,
+  // indefinitely. Quick successive closes back the next rebuild off
+  // exponentially; a client that lived a while resets the streak.
+  const rebuildBackoffRef = useRef({ quickCloses: 0, builtAt: 0 });
 
   // Builds AND owns the client's lifecycle inside this ONE effect, rather
   // than a `useMemo` (as this provider did before S1's session cache) - see
@@ -140,6 +157,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       client: wsStreamClient.instanceId,
       hasTransport: true,
     });
+    rebuildBackoffRef.current.builtAt = Date.now();
     setValue({ wsStreamClient });
 
     return () => {
@@ -167,22 +185,61 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   useEffect(() => {
     if (value === null) return;
     const client = value.wsStreamClient;
+    let backoffTimer: number | null = null;
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      const backoff = rebuildBackoffRef.current;
+      const lifetimeMs = Date.now() - backoff.builtAt;
+      if (lifetimeMs >= REBUILD_HEALTHY_LIFETIME_MS) {
+        backoff.quickCloses = 0;
+      } else {
+        backoff.quickCloses += 1;
+      }
+      // The FIRST quick close still rebuilds immediately - the guard's whole
+      // point is instant recovery from the closed-client wedge. Backoff kicks
+      // in from the second consecutive quick close, which is what a
+      // terminal-class fatal (each fresh dial ending the same way) looks like
+      // and a one-off wedge does not.
+      const delayMs =
+        backoff.quickCloses <= 1
+          ? 0
+          : Math.min(
+              REBUILD_BACKOFF_MAX_MS,
+              REBUILD_BACKOFF_BASE_MS * 2 ** (backoff.quickCloses - 2),
+            );
       appLogger.warn(
         "[stream] app stream client closed underneath the provider - rebuilding",
         {
           client: client.instanceId,
           closedReason: client.getClosedReason(),
+          rebuildDelayMs: delayMs,
         },
       );
-      setRebuildNonce((nonce) => nonce + 1);
+      if (delayMs === 0) {
+        setRebuildNonce((nonce) => nonce + 1);
+        return;
+      }
+      backoffTimer = window.setTimeout(() => {
+        backoffTimer = null;
+        setRebuildNonce((nonce) => nonce + 1);
+      }, delayMs);
     };
     if (client.isClosed()) {
       rebuild();
-      return;
+    } else {
+      const unsubscribe = client.onClosed(rebuild);
+      return () => {
+        unsubscribe();
+        if (backoffTimer !== null) {
+          window.clearTimeout(backoffTimer);
+        }
+      };
     }
-    return client.onClosed(rebuild);
+    return () => {
+      if (backoffTimer !== null) {
+        window.clearTimeout(backoffTimer);
+      }
+    };
   }, [value]);
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
   useReconnectStreamOnEndpointChange(

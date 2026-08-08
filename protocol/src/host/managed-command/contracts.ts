@@ -5,7 +5,8 @@
  * guidance a human form would skip), and changing one is a sentence to the
  * agent. There is deliberately no create or update here.
  *
- * The output itself is carried by the two streams in `./subscribe.ts`.
+ * The output itself is carried by the stream in `./subscribe.ts`; the set of
+ * commands a chat owns rides that chat's `chat.subscribe` stream.
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -14,10 +15,7 @@ import {
   managedCommandDeleteRequestSchema,
   managedCommandDeleteResponseSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
-import {
-  managedCommandSubscribeListV10,
-  managedCommandSubscribeOutputV10,
-} from "@traycer/protocol/host/managed-command/subscribe";
+import { managedCommandSubscribeOutputV10 } from "@traycer/protocol/host/managed-command/subscribe";
 
 /** Idempotent: starting an already-running command is a no-op, not an error. */
 export const managedCommandStartV10 = defineRpcContract({
@@ -47,4 +45,4 @@ export const managedCommandDeleteV10 = defineRpcContract({
   responseSchema: managedCommandDeleteResponseSchema,
 });
 
-export { managedCommandSubscribeListV10, managedCommandSubscribeOutputV10 };
+export { managedCommandSubscribeOutputV10 };

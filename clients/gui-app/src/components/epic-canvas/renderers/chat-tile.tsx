@@ -176,6 +176,7 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
+import { ManagedCommandChatMenu } from "@/components/managed-commands/managed-command-chat-menu";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
@@ -1919,14 +1920,36 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // the context-usage leaf owning its trailing chip and optional full-width
   // pinned strip. Per-folder Environment config lives inside the selected
   // Workspace panel.
+  //
+  // The monitors menu rides the leading cell rather than becoming a third grid
+  // column: the usage chip's pinned strip spans the row via `col-span-full`,
+  // which only works while it is a direct child of `ComposerWorkspaceRow`'s
+  // two-column grid. `justify-between` parks the menu at that cell's trailing
+  // edge, so it reads as the chip's left-hand neighbour, and the selector -
+  // the only shrinkable thing here - gives up width first.
   const workspaceControls = useMemo(
     () => (
       <>
-        <div className="min-w-0 overflow-hidden">{hostWorkspaceSelector}</div>
+        <div className="flex min-w-0 items-center justify-between gap-2 overflow-hidden">
+          {hostWorkspaceSelector}
+          <ManagedCommandChatMenu
+            epicId={currentEpicId}
+            chatId={node.id}
+            hostId={activeHostId}
+            viewTabId={viewTabId}
+          />
+        </div>
         {usageChip}
       </>
     ),
-    [hostWorkspaceSelector, usageChip],
+    [
+      hostWorkspaceSelector,
+      usageChip,
+      currentEpicId,
+      node.id,
+      activeHostId,
+      viewTabId,
+    ],
   );
 
   const lowerRuntime = useMemo(

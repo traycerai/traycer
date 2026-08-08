@@ -980,6 +980,12 @@ export const ompUserMessageAnchorResolvedSchema = z.object({
   ompSessionId: z.string().nullable(),
 });
 
+export const huggingFaceUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("huggingface"),
+  sessionId: z.string(),
+  opencodeUserMessageId: z.string(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1003,6 +1009,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     piUserMessageAnchorResolvedSchema,
     hermesUserMessageAnchorResolvedSchema,
     ompUserMessageAnchorResolvedSchema,
+    huggingFaceUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

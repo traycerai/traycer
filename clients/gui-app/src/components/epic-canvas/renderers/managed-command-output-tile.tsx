@@ -29,6 +29,7 @@ import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-c
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
 import { ManagedCommandDeletedBanner } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
 import type {
@@ -226,6 +227,7 @@ function ManagedCommandOutputTileBody(props: {
   const loadOlder = useStore(store, (state) => state.loadOlder);
   const unsupported =
     useStreamMethodSupport("managedCommand.subscribeOutput") === "unsupported";
+  const terminalFont = useEffectiveTerminalFont();
 
   const visible = useTileBodyVisible();
   const readingIdentity = useMemo(
@@ -349,6 +351,21 @@ function ManagedCommandOutputTileBody(props: {
     scrollToNewest();
   }, [following, lines, scrollToNewest]);
 
+  // A Terminal typography change resizes every row at once, so the geometry
+  // both the follow latch and the prepend correction were measured against is
+  // wrong the moment it lands - and no line arrived to trigger the effects that
+  // normally re-measure. Re-pin before paint instead of leaving the reader
+  // somewhere they did not scroll to.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    if (following) view.scrollTop = view.scrollHeight;
+    anchorRef.current = {
+      firstSeq: anchorRef.current.firstSeq,
+      scrollHeight: view.scrollHeight,
+    };
+  }, [following, terminalFont.fontFamily, terminalFont.fontSize]);
+
   const onScroll = useCallback(() => {
     const view = viewRef.current;
     if (view === null) return;
@@ -464,7 +481,17 @@ function ManagedCommandOutputTileBody(props: {
               ? "Output"
               : managedCommandOutputWindowTitle(command.kind)
           }
-          className="h-full w-full overflow-y-auto px-3 py-2 font-mono text-ui-xs leading-relaxed"
+          // Command output is terminal output, so it follows the Terminal
+          // typography settings the way a terminal tile does. `font-mono` and
+          // the `text-*` scales would silently track the Code font instead,
+          // leaving a Terminal override with no effect on the one surface
+          // whose whole content is a program's stdout. Colours stay the log
+          // view's own (stderr tint, lifecycle rows).
+          style={{
+            fontFamily: terminalFont.fontFamily,
+            fontSize: `${terminalFont.fontSize}px`,
+          }}
+          className="h-full w-full overflow-y-auto px-3 py-2 leading-relaxed"
         >
           {loadingOlder ? (
             <div className="flex justify-center py-1">

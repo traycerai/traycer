@@ -16,6 +16,7 @@ import {
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  MANAGED_COMMAND_OUTPUT_DND_TYPE,
   PANEL_NODE_FAMILY,
   SIDEBAR_NODE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
@@ -38,6 +39,7 @@ import {
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
+  type ManagedCommandOutputTileRef,
 } from "@/stores/epics/canvas/types";
 import {
   areLeftPanelGroupsEqual,
@@ -101,7 +103,8 @@ export function canDropOnHeaderStrip(
       | typeof GIT_DIFF_TILE_DND_TYPE
       | typeof WORKSPACE_FILE_DND_TYPE
       | typeof CHAT_ARTIFACT_DND_TYPE
-      | typeof ACTIVE_AGENT_DND_TYPE;
+      | typeof ACTIVE_AGENT_DND_TYPE
+      | typeof MANAGED_COMMAND_OUTPUT_DND_TYPE;
   }
 > {
   // Every openable canvas source can tear off into a new header tab. The
@@ -116,7 +119,8 @@ export function canDropOnHeaderStrip(
     source?.kind === GIT_DIFF_TILE_DND_TYPE ||
     source?.kind === WORKSPACE_FILE_DND_TYPE ||
     source?.kind === CHAT_ARTIFACT_DND_TYPE ||
-    source?.kind === ACTIVE_AGENT_DND_TYPE
+    source?.kind === ACTIVE_AGENT_DND_TYPE ||
+    source?.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE
   );
 }
 
@@ -136,7 +140,7 @@ function activeHostIdOrPlaceholder(): string {
  */
 export function sourceToTileRef(
   source: EpicCanvasDragSourceData,
-): EpicNodeRef | GitDiffTileRef | null {
+): EpicNodeRef | GitDiffTileRef | ManagedCommandOutputTileRef | null {
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
     const handle = getOpenEpicRegistry().peek(source.epicId);
     if (handle === null) return null;
@@ -148,6 +152,10 @@ export function sourceToTileRef(
   }
   if (source.kind === TERMINAL_TILE_DND_TYPE) return source.tile;
   if (source.kind === GIT_DIFF_TILE_DND_TYPE) return source.tile;
+  // The ref was minted at the menu row; the drop dedupes on its content id
+  // (the command id), so an already-open output window moves rather than
+  // doubling.
+  if (source.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE) return source.tile;
   if (source.kind === WORKSPACE_FILE_DND_TYPE) return source.ref;
   if (source.kind === CHAT_ARTIFACT_DND_TYPE) {
     // Mint a FRESH instanceId per call (constraint C2): the payload carries
@@ -415,7 +423,7 @@ function commitArtifactTabDrop(
 function placeResolvedCanvasTile(
   resolved: {
     readonly epicId: string;
-    readonly tile: EpicNodeRef | GitDiffTileRef;
+    readonly tile: EpicNodeRef | GitDiffTileRef | ManagedCommandOutputTileRef;
     readonly target: EpicCanvasDropTargetData;
     readonly preview: NonNullable<EpicCanvasDropPreview>;
   },
