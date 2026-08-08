@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
-import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -38,7 +38,7 @@ import {
 interface MockSummariesQuery {
   readonly data:
     | {
-        readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+        readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
       }
     | undefined;
   readonly isFetching: boolean;
@@ -114,7 +114,7 @@ const mocks = vi.hoisted(() => {
 
 const GIT_REPO_IDENTIFIER = { owner: "acme", repo: "app" };
 
-const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
+const GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   workspacePath: "/workspace/app",
   isGitRepo: true,
   repoIdentifier: GIT_REPO_IDENTIFIER,
@@ -129,16 +129,18 @@ const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
     },
   ],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
 };
 
-const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   workspacePath: "/workspace/app",
   isGitRepo: false,
   repoIdentifier: null,
   mainBranch: null,
   worktrees: [],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
 };
 
@@ -711,7 +713,7 @@ describe("landing workspace summary empty state", () => {
     const folderAPath = GIT_SUMMARY.workspacePath;
     const folderBPath = "/workspace/lib";
     const folderBRepo = { owner: "acme", repo: "lib" };
-    const folderBSummary: WorktreeWorkspaceSummaryV13 = {
+    const folderBSummary: WorktreeWorkspaceSummaryV14 = {
       workspacePath: folderBPath,
       isGitRepo: true,
       repoIdentifier: folderBRepo,
@@ -726,6 +728,7 @@ describe("landing workspace summary empty state", () => {
         },
       ],
       scripts: null,
+      repoBranchPrefix: { status: "absent" },
       resolvedAt: 1,
     };
 

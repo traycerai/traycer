@@ -64,6 +64,7 @@ import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   draftRuntimeRegistry,
   EMPTY_DRAFT_RUNTIME_CONTENT,
@@ -593,6 +594,19 @@ export function LandingComposer(props: LandingComposerProps) {
           useComposerRunSettingsStore.getState().globalLastRunSettings,
         );
       createdUnboundDraftIdRef.current = createdDraftId;
+      // The workspace picker's staging key is keyed by this draft id
+      // (`{surface:"landing", draftId}`), so minting it here flips that key
+      // from `landing:` to `landing:<id>` the instant this commits. Carry any
+      // staged worktree intent over synchronously, before React re-renders
+      // the picker on the new key - otherwise it briefly reads as unstaged
+      // and the Environment dialog (keyed off the resolved target's kind)
+      // remounts and drops an in-progress edit.
+      useWorktreeIntentStagingStore
+        .getState()
+        .migrateKey(
+          { surface: "landing", draftId: null },
+          { surface: "landing", draftId: createdDraftId },
+        );
       useLandingDraftStore
         .getState()
         .setDraftContent(createdDraftId, content, selection);

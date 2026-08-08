@@ -110,6 +110,117 @@ describe("worktree-intent-staging-store", () => {
     expect(readStagedWorktreeIntent(OWNER_KEY)).toBeNull();
   });
 
+  describe("migrateKey", () => {
+    const fromKey: WorktreeStagingKey = {
+      surface: "landing",
+      draftId: null,
+    };
+    const toKey: WorktreeStagingKey = {
+      surface: "landing",
+      draftId: "draft-minted",
+    };
+
+    it("moves staged intent and suspended paths, clears the source, and bumps both revisions", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(fromKey, worktreeEntry("/a"));
+      store.setSuspendedWorkspacePaths(fromKey, ["/a"]);
+      const fromId = worktreeStagingKeyString(fromKey);
+      const toId = worktreeStagingKeyString(toKey);
+      const fromRevisionBefore =
+        useWorktreeIntentStagingStore.getState().revisionByKey[fromId] ?? 0;
+      const toRevisionBefore =
+        useWorktreeIntentStagingStore.getState().revisionByKey[toId] ?? 0;
+
+      store.migrateKey(fromKey, toKey);
+
+      expect(readStagedWorktreeIntent(fromKey)).toBeNull();
+      expect(readStagedWorktreeIntent(toKey)?.entries).toEqual([
+        worktreeEntry("/a"),
+      ]);
+      expect(
+        useWorktreeIntentStagingStore.getState().suspendedWorkspacePathsByKey[
+          fromId
+        ],
+      ).toBeUndefined();
+      expect(
+        useWorktreeIntentStagingStore.getState().suspendedWorkspacePathsByKey[
+          toId
+        ],
+      ).toEqual(["/a"]);
+      expect(
+        useWorktreeIntentStagingStore.getState().revisionByKey[fromId] ?? 0,
+      ).toBeGreaterThan(fromRevisionBefore);
+      expect(
+        useWorktreeIntentStagingStore.getState().revisionByKey[toId] ?? 0,
+      ).toBeGreaterThan(toRevisionBefore);
+    });
+
+    it("never clobbers an existing destination intent", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(fromKey, worktreeEntry("/a"));
+      store.stageEntry(toKey, localEntry("/b", true));
+      store.setSuspendedWorkspacePaths(fromKey, ["/a"]);
+
+      store.migrateKey(fromKey, toKey);
+
+      expect(readStagedWorktreeIntent(fromKey)?.entries).toEqual([
+        worktreeEntry("/a"),
+      ]);
+      expect(readStagedWorktreeIntent(toKey)?.entries).toEqual([
+        localEntry("/b", true),
+      ]);
+      expect(
+        useWorktreeIntentStagingStore.getState().suspendedWorkspacePathsByKey[
+          worktreeStagingKeyString(fromKey)
+        ],
+      ).toEqual(["/a"]);
+    });
+
+    it("no-ops when the source key has nothing staged", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(toKey, localEntry("/b", true));
+      const before = useWorktreeIntentStagingStore.getState();
+
+      store.migrateKey(fromKey, toKey);
+
+      const after = useWorktreeIntentStagingStore.getState();
+      expect(after.intentByKey).toEqual(before.intentByKey);
+      expect(after.revisionByKey).toEqual(before.revisionByKey);
+      expect(after.suspendedWorkspacePathsByKey).toEqual(
+        before.suspendedWorkspacePathsByKey,
+      );
+    });
+
+    it("no-ops when fromKey and toKey serialize identically", () => {
+      const store = useWorktreeIntentStagingStore.getState();
+      store.stageEntry(fromKey, worktreeEntry("/a"));
+      const before = useWorktreeIntentStagingStore.getState();
+
+      store.migrateKey(fromKey, { surface: "landing", draftId: null });
+
+      const after = useWorktreeIntentStagingStore.getState();
+      expect(after.intentByKey).toEqual(before.intentByKey);
+      expect(after.revisionByKey).toEqual(before.revisionByKey);
+    });
+  });
+
+  it("stageBranchName replaces only the targeted type:new branch name", () => {
+    const store = useWorktreeIntentStagingStore.getState();
+    store.setIntent(LANDING_KEY, {
+      entries: [worktreeEntry("/b"), localEntry("/a", false)],
+    });
+    store.stageBranchName(LANDING_KEY, "/b", "team/regenerated");
+    const staged = readStagedWorktreeIntent(LANDING_KEY);
+    const worktree = staged?.entries.find((e) => e.workspacePath === "/b");
+    expect(worktree?.kind === "worktree" ? worktree.branch.name : null).toBe(
+      "team/regenerated",
+    );
+    // Local sibling is untouched.
+    expect(staged?.entries.find((e) => e.workspacePath === "/a")?.kind).toBe(
+      "local",
+    );
+  });
+
   it("clear removes only the targeted key", () => {
     const store = useWorktreeIntentStagingStore.getState();
     store.stageEntry(LANDING_KEY, localEntry("/a", true));

@@ -6,6 +6,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -209,6 +210,15 @@ export function GeneralSettingsPanel() {
               />
             }
           />
+        </SettingsGroup>
+
+        <SettingsGroup
+          title="Worktrees"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <WorktreeBranchPrefixSection />
         </SettingsGroup>
 
         {featureSettingsAvailable ? (
