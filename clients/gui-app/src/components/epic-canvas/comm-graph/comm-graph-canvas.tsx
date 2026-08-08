@@ -130,6 +130,26 @@ function nodeHostStatus(
   return byHost.get(hostId) ?? "connecting";
 }
 
+/**
+ * A panel only needs to wait for the hosts that contribute rows to it. A host
+ * snapshot is bounded; its cursor reaches the snapshot head only after any
+ * overflow has arrived as event frames. Empty snapshots are caught up at once.
+ */
+function isPanelInitialHistoryCaughtUp(
+  events: ReadonlyArray<CommGraphEvent>,
+  hosts: ReadonlyArray<CommGraphHostState>,
+): boolean {
+  const hostIds = new Set(events.map((event) => event.hostId));
+  if (hostIds.size === 0) return false;
+  const hostsById = new Map(hosts.map((host) => [host.hostId, host]));
+  return Array.from(hostIds).every((hostId) => {
+    const host = hostsById.get(hostId);
+    if (host?.snapshotBoundary === null || host === undefined) return false;
+    const headId = host.snapshotBoundary.highestId;
+    return headId === null || (host.cursor !== null && host.cursor >= headId);
+  });
+}
+
 export function CommGraphCanvas(props: CommGraphCanvasProps) {
   // ReactFlow must create its own provider from the computed nodes below. An
   // empty outer provider would make it reuse a store initialized before those
@@ -323,6 +343,13 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       commGraphEventTouchesAgent(event, selectedAgent.id),
     );
   }, [events, selectedAgent]);
+  const selectedEdgeHistoryCaughtUp =
+    selectedEdge !== null &&
+    isPanelInitialHistoryCaughtUp(selectedEdge.events, hosts);
+  const selectedAgentHistoryCaughtUp = isPanelInitialHistoryCaughtUp(
+    selectedAgentEvents,
+    hosts,
+  );
 
   const handleMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
@@ -413,6 +440,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           edge={selectedEdge}
           epicId={epicId}
           agentNames={nameById}
+          initialHistoryCaughtUp={selectedEdgeHistoryCaughtUp}
           canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={onJump}
@@ -431,6 +459,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           epicId={epicId}
           agentNames={nameById}
           events={selectedAgentEvents}
+          initialHistoryCaughtUp={selectedAgentHistoryCaughtUp}
           canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={onJump}

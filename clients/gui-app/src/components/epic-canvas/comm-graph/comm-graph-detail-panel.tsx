@@ -39,6 +39,8 @@ export interface CommGraphDetailPanelProps {
   readonly ariaLabel: string;
   readonly testId: string;
   readonly events: ReadonlyArray<CommGraphEvent>;
+  /** The selected events' initial subscription history is fully present. */
+  readonly initialHistoryCaughtUp: boolean;
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly emptyLabel: string;
@@ -68,6 +70,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
     emptyLabel,
     epicId,
     events,
+    initialHistoryCaughtUp,
     onClose,
     onJump,
     onJumpToCreated,
@@ -81,22 +84,23 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
   const hasPositionedInitialEventsRef = useRef(false);
 
   // Chronology reads down the panel (oldest first), but the useful opening
-  // position is its newest row. Wait for the first non-empty render so an agent
-  // panel opened while history is loading still lands correctly. This is
-  // deliberately a one-time position: later arrivals must not pull a reader
+  // position is its newest row. A snapshot is bounded, so wait until the
+  // selected hosts have drained their initial backlog before positioning. This
+  // is deliberately a one-time position: later arrivals must not pull a reader
   // away from older rows they intentionally scrolled back to.
   useLayoutEffect(() => {
     const eventList = eventListRef.current;
     if (
       eventList === null ||
       events.length === 0 ||
+      !initialHistoryCaughtUp ||
       hasPositionedInitialEventsRef.current
     ) {
       return;
     }
     eventList.scrollTop = eventList.scrollHeight;
     hasPositionedInitialEventsRef.current = true;
-  }, [events.length]);
+  }, [events.length, initialHistoryCaughtUp]);
 
   return (
     <aside

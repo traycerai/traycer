@@ -95,6 +95,7 @@ function renderPanelWithCapabilities(
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        initialHistoryCaughtUp
         canOpenAgentForEvent={() => capabilities.plainOpen}
         canJump={() => canJump}
         onJump={onJump}
@@ -132,6 +133,7 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        initialHistoryCaughtUp
         canOpenAgentForEvent={() => true}
         canJump={() => false}
         onJump={() => undefined}
@@ -192,6 +194,59 @@ describe("CommGraphThreadPanel", () => {
       expect.stringContaining("oldest"),
       expect.stringContaining("newest"),
     ]);
+  });
+
+  it("waits for streamed initial backlog before positioning at the newest row", () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(720);
+    const events = [
+      event({ id: 1, timestamp: 100, messageText: "snapshot" }),
+      event({ id: 2, timestamp: 200, messageText: "backlog" }),
+    ];
+    const [edge] = aggregateCommGraphEdges(events, new Set(["a", "b"]));
+    const { rerender } = render(
+      <TooltipProvider>
+        <CommGraphThreadPanel
+          edge={edge}
+          epicId="epic-1"
+          agentNames={AGENT_NAMES}
+          initialHistoryCaughtUp={false}
+          canOpenAgentForEvent={() => true}
+          canJump={() => false}
+          onJump={() => undefined}
+          canJumpToSender={() => false}
+          onJumpToSender={() => undefined}
+          canJumpToCreated={() => false}
+          onJumpToCreated={() => undefined}
+          onOpenAgentId={() => undefined}
+          onClose={() => undefined}
+        />
+      </TooltipProvider>,
+    );
+
+    const eventList = screen.getByTestId("comm-graph-thread-panel-events");
+    expect(eventList.scrollTop).toBe(0);
+
+    rerender(
+      <TooltipProvider>
+        <CommGraphThreadPanel
+          edge={edge}
+          epicId="epic-1"
+          agentNames={AGENT_NAMES}
+          initialHistoryCaughtUp
+          canOpenAgentForEvent={() => true}
+          canJump={() => false}
+          onJump={() => undefined}
+          canJumpToSender={() => false}
+          onJumpToSender={() => undefined}
+          canJumpToCreated={() => false}
+          onJumpToCreated={() => undefined}
+          onOpenAgentId={() => undefined}
+          onClose={() => undefined}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(eventList.scrollTop).toBe(720);
   });
 
   it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
