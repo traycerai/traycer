@@ -14,6 +14,7 @@ import {
   FileDiff,
   FilePlus,
   GitPullRequest,
+  Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -56,6 +57,7 @@ import type {
 import {
   isBlankTileRef,
   isCommGraphTileRef,
+  isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
@@ -941,6 +943,12 @@ function TabIcon(props: {
   }
   if (isCommGraphTileRef(props.tab)) {
     return <CommGraphTileIcon className="size-3.5" />;
+  }
+  // A published copy carries the lock rather than a chat glyph: the tab is
+  // readable but cannot be steered, and that is the one thing about it that
+  // differs from the chat tab beside it.
+  if (isPublishedChatTileRef(props.tab)) {
+    return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

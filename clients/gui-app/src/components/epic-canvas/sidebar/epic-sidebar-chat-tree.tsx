@@ -4,6 +4,7 @@
  */
 import { useDraggable } from "@dnd-kit/core";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -123,7 +124,16 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
-import { EpicSidebarCloudChats } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chats";
+import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  publicationTargetMap,
+  useChatPublicationTargets,
+} from "@/hooks/chats/use-chat-publication-targets";
+import {
+  mergeChatListEntries,
+  selectUnfoldedCloudChats,
+} from "@/lib/chats/unified-chat-list";
 import { AgentRoleBadges } from "./agent-role-badges";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -201,6 +211,7 @@ import {
 } from "@/components/notifications/notification-indicator-icon";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostClient } from "@/lib/host/runtime";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 
 interface ChatTreePanelBodyProps {
@@ -236,6 +247,9 @@ const SidebarViewerContext = createContext<boolean>(false);
  * hidden until a handshake proves the method present.
  */
 const SidebarArchiveSupportedContext = createContext<boolean>(false);
+
+/** Frozen so an absent cloud list does not re-run the fold every render. */
+const EMPTY_CLOUD_CHATS: readonly CloudChatSummary[] = [];
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
 const noopToggleSelection = (_id: string): void => undefined;
@@ -620,9 +634,36 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [originVisibleIds, archiveHiddenIds, tree],
   );
   // Resolved once here and threaded down, matching how this body already
-  // handles every other epic-level fact: the section is a pure function of its
-  // props, so it stays testable without an open-epic store.
+  // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
+  // The task's chats on hosts this device cannot reach, folded against the
+  // local tree by PUBLICATION identity and interleaved into one recency-sorted
+  // list. There is no "other devices" section: a chat's host is a property of
+  // the chat, and a lock on the row says what its state is. App-wide client,
+  // not the tab's - the cloud read is served by whatever host this device runs.
+  const appHostClient = useHostClient();
+  const cloudChats = useCloudChatList({
+    client: appHostClient,
+    taskId: epicId,
+    enabled: epicId.length > 0,
+  });
+  const publicationTargets = useChatPublicationTargets({
+    client: appHostClient,
+    epicId,
+    chatIds: localChatIds,
+    enabled: epicId.length > 0,
+  });
+  const unfoldedCloudChats = useMemo(
+    () =>
+      selectUnfoldedCloudChats({
+        chats: cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
+        localChatIds,
+        publicationChatIdByChatId: publicationTargetMap(
+          publicationTargets.data,
+        ),
+      }),
+    [cloudChats.data, localChatIds, publicationTargets.data],
+  );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -744,8 +785,27 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     preAckRootCreates,
     visiblePendingRootCreates,
   });
+  // One list: local roots and unreachable-host rows, interleaved. Nested local
+  // children still render under their parents through `ChatNode`; only ROOTS
+  // take part in the interleave, and a cloud row is always a leaf.
+  const listEntries = useMemo(
+    () =>
+      mergeChatListEntries({
+        localRootIds: rootIds,
+        nodeById: tree.nodeById,
+        cloudChats: unfoldedCloudChats,
+        comparator,
+      }),
+    [rootIds, tree.nodeById, unfoldedCloudChats, comparator],
+  );
+  // "No agents yet" is now a statement about the TASK rather than this device,
+  // so a task whose only agents live on an unreachable host is not empty - it
+  // is a list of locked rows. That is the whole restoration.
   const showEmptyState =
-    originVisibleIds === null && allRootIds.length === 0 && !hasPendingRootRows;
+    originVisibleIds === null &&
+    allRootIds.length === 0 &&
+    unfoldedCloudChats.length === 0 &&
+    !hasPendingRootRows;
   // Rows exist and survive the origin filter, yet archiving hid every one of
   // them. Distinct from both other arms: the tree is neither empty nor filtered
   // down to nothing, and the user needs to be told where the rows went.
@@ -790,23 +850,33 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   } else {
     panelContent = (
       <ul role="tree" aria-label="Epic agents tree" className="space-y-0.5">
-        {rootIds.map((nodeId) => (
-          <ChatNode
-            key={nodeId}
-            epicId={epicId}
-            tabId={tabId}
-            nodeId={nodeId}
-            depth={0}
-            expansion={expansion}
-            canEdit={canEdit}
-            canMutate={canMutate}
-            isDisconnected={isDisconnected}
-            treeFilter={CHATS_TREE_FILTER}
-            selectionMode={selectionMode}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-          />
-        ))}
+        {listEntries.map((entry) =>
+          entry.kind === "local" ? (
+            <ChatNode
+              key={entry.key}
+              epicId={epicId}
+              tabId={tabId}
+              nodeId={entry.nodeId}
+              depth={0}
+              expansion={expansion}
+              canEdit={canEdit}
+              canMutate={canMutate}
+              isDisconnected={isDisconnected}
+              treeFilter={CHATS_TREE_FILTER}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+            />
+          ) : (
+            <EpicSidebarCloudChatRow
+              key={entry.key}
+              chat={entry.chat}
+              epicId={epicId}
+              tabId={tabId}
+              depth={0}
+            />
+          ),
+        )}
         {localRootPending !== null && (
           <PendingCreateRow depth={0} name={localRootPending.name} />
         )}
@@ -835,18 +905,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                 <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
                   <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
                     {panelContent}
-                    {/* Below the local tree, and OUTSIDE the empty-state
-                        branches on purpose: "no agents yet" is a statement
-                        about this device, and the case where it is true while
-                        another device has published chats is exactly the one
-                        this section exists for. It renders nothing at all when
-                        there is nothing to add - an older host, no viewer, or
-                        no cloud-only chats - so the ordinary sidebar is
-                        unchanged. */}
-                    <EpicSidebarCloudChats
-                      taskId={epicId}
-                      localChatIds={localChatIds}
-                    />
                   </SidebarGroupContent>
                 </SidebarGroup>
               </SidebarContent>

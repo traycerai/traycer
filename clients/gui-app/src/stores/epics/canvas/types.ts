@@ -16,6 +16,7 @@ import {
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
+  TILE_KIND_PUBLISHED_CHAT,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -337,6 +338,42 @@ export interface CommGraphTileRef {
 }
 
 /**
+ * A chat rendered from the last copy its owning host published.
+ *
+ * ## The identity is the cloud row, not the chat id
+ *
+ * `chatId` is host-minted and is NOT unique under a task - two hosts can mint
+ * the same one, and after a fork they demonstrably do. So this ref carries the
+ * whole `(taskId, ownerUserId, chatId)` triple the cloud read is addressed by,
+ * and `id` is derived from all three. That is what lets a published copy and a
+ * live session sharing a chat id both be open in one tab: `findOpenArtifactInTab`
+ * matches on `id` alone, so two rows that differ only in owning host would
+ * otherwise resolve to each other's tile.
+ *
+ * ## `hostId` is the READING host, not the owner
+ *
+ * The cloud read is a byte pipe: any host the device can reach serves it, which
+ * is precisely what makes an offline owner readable at all. So this binds the
+ * tab's own host like every other tile - the tab-host-for-life rule is
+ * untouched - and `ownerHostId` is carried separately as the thing the locked
+ * composer names. Opening this is not "opening a chat on another host"; nothing
+ * here is bound to the owner.
+ */
+export interface PublishedChatTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_PUBLISHED_CHAT;
+  readonly name: string;
+  /** The host serving the cloud read - this tab's own. See above. */
+  readonly hostId: string;
+  readonly taskId: string;
+  readonly chatId: string;
+  readonly ownerUserId: string;
+  /** The host that owns the chat. Row metadata; nothing is bound to it. */
+  readonly ownerHostId: string;
+}
+
+/**
  * A blank tab. A real strip tab (titled "New tab", closable) whose body renders
  * the inline opener; picking content replaces it in place. `hostId` is a
  * placeholder - the opener binds the real default host at create time, and
@@ -404,9 +441,16 @@ export type EpicCanvasTileRef =
   | SnapshotDiffTileRef
   | ManagedCommandOutputTileRef
   | CommGraphTileRef
+  | PublishedChatTileRef
   | PrDetailTileRef
   | PrDiffTileRef
   | BlankTileRef;
+
+export function isPublishedChatTileRef(
+  value: EpicCanvasTileRef,
+): value is PublishedChatTileRef {
+  return value.type === TILE_KIND_PUBLISHED_CHAT;
+}
 
 export function isBlankTileRef(
   value: EpicCanvasTileRef,
