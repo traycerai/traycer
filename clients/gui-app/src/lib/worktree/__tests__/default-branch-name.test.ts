@@ -415,7 +415,7 @@ describe("regenerateSingleWorkspaceBranchName", () => {
     expect(second).toBe("team/calm-badger");
     expect(third).toBe("team/bright-fox");
     // pickFriendlyBranchSuffix is only used by buildDefaultBranchByPath now.
-    expect(first).not.toContain("swift-otter");
+    expect(randomMocks.pickFriendlyBranchSuffix).not.toHaveBeenCalled();
   });
 
   it("inserts the repo slug when multiple workspaces are staged together", () => {

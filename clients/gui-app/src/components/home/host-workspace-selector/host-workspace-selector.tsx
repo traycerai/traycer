@@ -2258,7 +2258,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               currentIntent,
               defaultNewBranchName,
               emit,
-              isGitRepo: true,
+              isGitRepo: rowIsGitRepo,
               isPrimary,
               mode: currentMode,
               nextMode,
