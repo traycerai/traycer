@@ -12,7 +12,7 @@
  * must not be labelled as either - an agent's turn is full of work that never
  * reaches this record.
  */
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -82,6 +82,14 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
   const panelWidthPx = useCommGraphPanelWidthPx();
   const eventListRef = useRef<HTMLDivElement | null>(null);
   const hasPositionedInitialEventsRef = useRef(false);
+  const setEventListRef = useCallback((eventList: HTMLDivElement | null) => {
+    if (eventListRef.current === eventList) return;
+    eventListRef.current = eventList;
+    // Switching graph authority briefly replaces the list with the empty
+    // state. The following list is a new history source, so it needs its own
+    // one-time initial position; ordinary live arrivals retain this element.
+    hasPositionedInitialEventsRef.current = false;
+  }, []);
 
   // Chronology reads down the panel (oldest first), but the useful opening
   // position is its newest row. A snapshot is bounded, so wait until the
@@ -150,7 +158,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
         </p>
       ) : (
         <div
-          ref={eventListRef}
+          ref={setEventListRef}
           data-testid={`${testId}-events`}
           className="min-h-0 flex-1 overflow-y-auto"
         >

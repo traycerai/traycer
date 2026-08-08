@@ -203,13 +203,13 @@ describe("CommGraphThreadPanel", () => {
       event({ id: 2, timestamp: 200, messageText: "backlog" }),
     ];
     const [edge] = aggregateCommGraphEdges(events, new Set(["a", "b"]));
-    const { rerender } = render(
+    const panel = (currentEdge: typeof edge, caughtUp: boolean) => (
       <TooltipProvider>
         <CommGraphThreadPanel
-          edge={edge}
+          edge={currentEdge}
           epicId="epic-1"
           agentNames={AGENT_NAMES}
-          initialHistoryCaughtUp={false}
+          initialHistoryCaughtUp={caughtUp}
           canOpenAgentForEvent={() => true}
           canJump={() => false}
           onJump={() => undefined}
@@ -220,31 +220,14 @@ describe("CommGraphThreadPanel", () => {
           onOpenAgentId={() => undefined}
           onClose={() => undefined}
         />
-      </TooltipProvider>,
+      </TooltipProvider>
     );
+    const { rerender } = render(panel(edge, false));
 
     const eventList = screen.getByTestId("comm-graph-thread-panel-events");
     expect(eventList.scrollTop).toBe(0);
 
-    rerender(
-      <TooltipProvider>
-        <CommGraphThreadPanel
-          edge={edge}
-          epicId="epic-1"
-          agentNames={AGENT_NAMES}
-          initialHistoryCaughtUp
-          canOpenAgentForEvent={() => true}
-          canJump={() => false}
-          onJump={() => undefined}
-          canJumpToSender={() => false}
-          onJumpToSender={() => undefined}
-          canJumpToCreated={() => false}
-          onJumpToCreated={() => undefined}
-          onOpenAgentId={() => undefined}
-          onClose={() => undefined}
-        />
-      </TooltipProvider>,
-    );
+    rerender(panel(edge, true));
 
     expect(eventList.scrollTop).toBe(720);
     eventList.scrollTop = 240;
@@ -253,27 +236,17 @@ describe("CommGraphThreadPanel", () => {
       new Set(["a", "b"]),
     );
 
-    rerender(
-      <TooltipProvider>
-        <CommGraphThreadPanel
-          edge={edgeWithLiveEvent}
-          epicId="epic-1"
-          agentNames={AGENT_NAMES}
-          initialHistoryCaughtUp
-          canOpenAgentForEvent={() => true}
-          canJump={() => false}
-          onJump={() => undefined}
-          canJumpToSender={() => false}
-          onJumpToSender={() => undefined}
-          canJumpToCreated={() => false}
-          onJumpToCreated={() => undefined}
-          onOpenAgentId={() => undefined}
-          onClose={() => undefined}
-        />
-      </TooltipProvider>,
-    );
+    rerender(panel(edgeWithLiveEvent, true));
 
     expect(eventList.scrollTop).toBe(240);
+    rerender(panel({ ...edgeWithLiveEvent, events: [] }, false));
+    expect(screen.queryByTestId("comm-graph-thread-panel-events")).toBeNull();
+
+    rerender(panel(edgeWithLiveEvent, true));
+
+    expect(screen.getByTestId("comm-graph-thread-panel-events").scrollTop).toBe(
+      720,
+    );
   });
 
   it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
