@@ -4,6 +4,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -441,6 +442,58 @@ function ProvidersPanelBody({
     );
   }
   if (query.isError) {
+    // A PRE-SEND transport failure says nothing about the RPC or the host's
+    // version - the request was never put on the wire. On a remote host this
+    // is routinely just the session's first dial still in flight, and the
+    // ready boundary refetches this query the moment the session is up, so
+    // describe the connection instead of blaming the host.
+    //
+    // Deliberately the `RetryableTransportError` subclass and not its
+    // `HostTransportFailureError` base: an AMBIGUOUS post-send drop (the
+    // socket died after the request frame went out) keeps the base class
+    // precisely because nothing may assume it will resolve itself. Nothing
+    // refetches it either - `useHostQuery` pins `retry: false`, and a healthy
+    // independent stream connection need not emit any recovery event - so
+    // showing it as "connecting" would park the panel on a spinner that never
+    // resolves and offers no way to report the fault.
+    //
+    // REMOTE only, for exactly the same reason. A spinner is a promise that
+    // something will refetch, and only the remote path can keep it: the
+    // messenger holds a remote binding for the selected host whose ready
+    // boundary invalidates this query (`subscribeRemoteAvailability` ->
+    // `onRemoteAvailabilityRecovered`). A local host has no such binding, and
+    // by the time this error arrives the retry wrapper has already spent its
+    // whole budget - its final attempt rethrows unchanged, so "retryable" here
+    // describes what the class of failure WAS, not that anything is still
+    // retrying. The only thing that could refetch a local host is a durable
+    // stream tab that happens to be bound to it, which Settings cannot assume
+    // exists. So local falls through to the actionable card, which at worst
+    // shows a recoverable fault with a way out and is replaced the moment a
+    // recovery invalidation does land.
+    //
+    // A remote host that dialed and then went TERMINAL - an incompatible
+    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // owes no boundary either, and would strand this spinner just as badly.
+    // That case never PERSISTS here, enforced at two layers. New requests:
+    // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
+    // `HostTransportFailureError`, so the class keeps meaning "still dialing"
+    // at this branch. The query that already CACHED a retryable error from
+    // racing the dial (the retry budget is shorter than a full attach):
+    // `RuntimeHostMessenger` records the terminal verdict, fires one
+    // host-scope invalidation, and rejects the resulting refetch with the
+    // verdict instead of transparently redialing - without that, the refetch
+    // would race a FRESH dial, cache "retryable" again, and spin forever.
+    if (
+      query.error instanceof RetryableTransportError &&
+      !isSelectedHostLocal
+    ) {
+      return (
+        <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
+          <MutedAgentSpinner />
+          Connecting to the remote host…
+        </div>
+      );
+    }
     return (
       <div className="px-6 py-8 text-ui-sm text-destructive">
         Couldn't load provider state. The host may need to be updated.

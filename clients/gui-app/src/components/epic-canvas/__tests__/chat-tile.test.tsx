@@ -458,6 +458,8 @@ function emitChatSnapshotWithMessages(input: {
         messages: [...input.messages],
         events: [],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: {
         role: input.access,
