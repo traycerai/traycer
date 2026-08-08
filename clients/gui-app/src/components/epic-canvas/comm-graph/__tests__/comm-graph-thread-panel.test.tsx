@@ -247,6 +247,14 @@ describe("CommGraphThreadPanel", () => {
     expect(screen.getByTestId("comm-graph-thread-panel-events").scrollTop).toBe(
       720,
     );
+
+    rerender(panel({ ...edgeWithLiveEvent, events: [] }, false));
+    rerender(panel({ ...edgeWithLiveEvent, events: [] }, true));
+    rerender(panel(edgeWithLiveEvent, true));
+
+    expect(screen.getByTestId("comm-graph-thread-panel-events").scrollTop).toBe(
+      0,
+    );
   });
 
   it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
