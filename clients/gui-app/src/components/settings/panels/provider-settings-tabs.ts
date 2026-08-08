@@ -30,12 +30,20 @@ export type ProviderTabKey = ProviderSettingsTab | "account";
  * setup and sits after them. The first *supported* tab is also the default
  * selection ({@link supportedTabsFor} keeps this order), so a provider with
  * neither account nor usage still opens on a sensible first tab (env, mcp, …).
+ *
+ * `modelProviders` sits after `env` and before the three inventory tabs, for
+ * two reasons. It is CONFIGURATION - which upstream models this provider can
+ * reach at all - rather than an inventory of things installed into it, so it
+ * belongs with the other configuration tabs. And placing it there cannot move
+ * any provider's DEFAULT tab: every provider that advertises it also advertises
+ * `general` and `env`, which come first.
  */
 export const PROVIDER_TAB_ORDER: readonly ProviderTabKey[] = [
   "account",
   "usage",
   "general",
   "env",
+  "modelProviders",
   "mcp",
   "plugins",
   "skills",

@@ -113,6 +113,7 @@ function providerState(args: {
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
     selected: args.selected,
     candidates: [...args.candidates],

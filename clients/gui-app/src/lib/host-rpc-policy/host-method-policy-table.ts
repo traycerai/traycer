@@ -987,6 +987,33 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Reading the upstream LLM provider catalog for a provider - a pure read, so
+  // `latest`. `poll: null`: the catalog only changes as a result of an auth
+  // mutation on this same surface, which invalidates the query directly.
+  "providers.listModelProviders": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Upstream credential writes (connect / start OAuth / submit code /
+  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: two rapid
+  // actions must both land, in order, not be coalesced into one.
+  "providers.modelProviderAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Bounded status poll for an in-flight OAuth attempt - a pure read, so
+  // `latest` (a superseded poll carries no information the newer one lacks).
+  "providers.awaitModelProviderAuth": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Cancelling an in-flight OAuth attempt tears down host-side pending state.
+  "providers.cancelModelProviderAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // A user-initiated "get this provider's managed pack ready" kick. `fifo`
   // because it mutates host-side scheduling state (clears the cell's backoff,
   // promotes it to the front of the install queue) and two rapid retry taps

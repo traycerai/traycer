@@ -46,6 +46,7 @@ export {
   nativeSkillsListParams,
   providersNativeQueryKeys,
 } from "@/lib/query-keys/providers-native-query-keys";
+export { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";

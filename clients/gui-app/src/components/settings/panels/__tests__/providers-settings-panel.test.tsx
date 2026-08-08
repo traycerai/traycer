@@ -775,6 +775,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
       remove: [...BOTH_SCOPES],
     },
   },
+  modelProviders: null,
 };
 
 const CURSOR_TABS: ProviderNativeCapabilities = {
@@ -804,6 +805,7 @@ const CURSOR_TABS: ProviderNativeCapabilities = {
       remove: ["global"],
     },
   },
+  modelProviders: null,
 };
 
 const ENV_ONLY_TABS: ProviderNativeCapabilities = {
@@ -811,6 +813,7 @@ const ENV_ONLY_TABS: ProviderNativeCapabilities = {
   mcp: null,
   plugins: null,
   skills: null,
+  modelProviders: null,
 };
 
 type TestProfileInput = {
@@ -1525,6 +1528,7 @@ describe("<ProvidersSettingsPanel />", () => {
             mcp: SAMPLE_MCP,
             plugins: null,
             skills: null,
+            modelProviders: null,
           },
           apiKey: { supported: true, configured: false, source: null },
         }),
@@ -1596,6 +1600,7 @@ describe("<ProvidersSettingsPanel />", () => {
               traycerSessionToolsNotice: true,
             },
             skills: null,
+            modelProviders: null,
           },
         }),
       ],

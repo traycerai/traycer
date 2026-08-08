@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
   downgradeProviderCliStateToV10,
   providerCliStateSchema,
   providerMutationCliStateSchemaV20,
@@ -20,6 +21,7 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -54,10 +56,10 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   hostRpcRegistry,
-  providersListDowngradeV7ToV1,
-  providersListDowngradeV7ToV2,
-  providersListDowngradeV7ToV3,
-  providersListDowngradeV7ToV6,
+  providersListDowngradeV8ToV1,
+  providersListDowngradeV8ToV2,
+  providersListDowngradeV8ToV3,
+  providersListDowngradeV8ToV6,
   providersListUpgradeV3ToV4,
   providersListUpgradeV5ToV6,
   providersListUpgradeV6ToV7,
@@ -236,6 +238,7 @@ describe("nativeCapabilities on ProviderCliState", () => {
             remove: [],
           },
         },
+        modelProviders: null,
       },
     });
     expect(state.nativeCapabilities.mcp?.perToolBacking).toBe("store");
@@ -263,6 +266,7 @@ describe("nativeCapabilities on ProviderCliState", () => {
         },
         plugins: null,
         skills: null,
+        modelProviders: null,
       }).mcp?.perToolBacking,
     ).toBe("degraded-server-level");
   });
@@ -290,11 +294,13 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       providers: [baseState("amp")],
     });
     const upgraded = providersListUpgradeV6ToV7.upgradeResponse(v60);
+    // The v7.0-shaped default, not the live one: this hop's target is the
+    // frozen v7.0 line, which predates the `modelProviders` block entirely.
     expect(upgraded.providers[0]?.nativeCapabilities).toEqual(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
     );
     expect(upgraded.native).toBeNull();
-    expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
+    expect(() => providersListResponseSchemaV70.parse(upgraded)).not.toThrow();
   });
 
   // `native` rides v7.0 ALONE. It was authored against the live request object
@@ -331,8 +337,8 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     expect(upgraded.native).toBeNull();
   });
 
-  it("downgrades v7.0 → v6.0 requests by stripping native", () => {
-    const result = providersListDowngradeV7ToV6.downgradeRequest(
+  it("downgrades v8.0 → v6.0 requests by stripping native", () => {
+    const result = providersListDowngradeV8ToV6.downgradeRequest(
       providersListRequestSchema.parse({
         forceAuthRefresh: true,
         native: {
@@ -352,7 +358,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
   // The adjacent hop, and the one most likely to rot: v6.0 is a RELEASED line
   // (`cli-v1.1.9`) that never carried either field, so it is the first client
   // a leak would actually reach. The far downgrades below cover v3/v2/v1.
-  it("downgrades v7.0 → v6.0 by stripping nativeCapabilities and native", () => {
+  it("downgrades v8.0 → v6.0 by stripping nativeCapabilities and native", () => {
     const v70 = providersListResponseSchema.parse({
       providers: [
         {
@@ -362,7 +368,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
       native: { ok: true, kind: "mcp", servers: [] },
     });
-    const result = providersListDowngradeV7ToV6.downgradeResponse(v70);
+    const result = providersListDowngradeV8ToV6.downgradeResponse(v70);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -372,7 +378,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("downgrades v7.0 → v3.0 by stripping nativeCapabilities and native", () => {
+  it("downgrades v8.0 → v3.0 by stripping nativeCapabilities and native", () => {
     const v31 = providersListResponseSchema.parse({
       providers: [
         {
@@ -396,7 +402,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV3.downgradeResponse(v31);
+    const result = providersListDowngradeV8ToV3.downgradeResponse(v31);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -406,7 +412,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("downgrades v7.0 → v2.0 dropping Amp and nativeCapabilities", () => {
+  it("downgrades v8.0 → v2.0 dropping Amp and nativeCapabilities", () => {
     const v31 = providersListResponseSchema.parse({
       providers: [
         {
@@ -419,7 +425,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV2.downgradeResponse(v31);
+    const result = providersListDowngradeV8ToV2.downgradeResponse(v31);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(
@@ -451,7 +457,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     const list = providersListResponseSchema.parse({
       providers: [latest],
     });
-    const listResult = providersListDowngradeV7ToV1.downgradeResponse(list);
+    const listResult = providersListDowngradeV8ToV1.downgradeResponse(list);
     expect(listResult.ok).toBe(true);
     if (!listResult.ok) return;
     expect(listResult.value.providers[0]).not.toHaveProperty(

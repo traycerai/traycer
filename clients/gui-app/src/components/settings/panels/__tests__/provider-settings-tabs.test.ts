@@ -12,7 +12,13 @@ const ALL_TABS: readonly ProviderSettingsTab[] = [
   "mcp",
   "plugins",
   "skills",
+  "modelProviders",
 ];
+
+/** What a provider that is not the `opencode` module advertises. */
+const WITHOUT_MODEL_PROVIDERS: readonly ProviderSettingsTab[] = ALL_TABS.filter(
+  (tab) => tab !== "modelProviders",
+);
 
 /**
  * Deliberately a PURE test, not a render of `ProvidersSettingsPanel`.
@@ -126,6 +132,40 @@ describe("supportedTabsFor", () => {
     expect(tabs[0]).toBe("env");
     expect(tabs).not.toContain("account");
     expect(tabs).not.toContain("usage");
+  });
+
+  it("shows Model Providers only for a host that advertises it", () => {
+    // The whole graceful-degrade story for this tab: an old host, an old CLI
+    // below the version gate, or any provider that is not the `opencode`
+    // module simply leaves the id out, and the tab is then absent - there is no
+    // client-side derivation to disagree with that.
+    expect(
+      supportedTabsFor({
+        apiKeySupported: false,
+        advertised: WITHOUT_MODEL_PROVIDERS,
+      }),
+    ).not.toContain("modelProviders");
+    expect(
+      supportedTabsFor({ apiKeySupported: false, advertised: ALL_TABS }),
+    ).toContain("modelProviders");
+  });
+
+  it("keeps Model Providers out of the default-tab position", () => {
+    // It sits after env and before the inventory tabs, so adding it cannot
+    // change which tab a provider opens on.
+    const before = supportedTabsFor({
+      apiKeySupported: false,
+      advertised: WITHOUT_MODEL_PROVIDERS,
+    });
+    const after = supportedTabsFor({
+      apiKeySupported: false,
+      advertised: ALL_TABS,
+    });
+    expect(after[0]).toBe(before[0]);
+    expect(after.indexOf("modelProviders")).toBeGreaterThan(
+      after.indexOf("env"),
+    );
+    expect(after.indexOf("modelProviders")).toBeLessThan(after.indexOf("mcp"));
   });
 
   it("leaves an API-key provider with at least one reachable tab", () => {

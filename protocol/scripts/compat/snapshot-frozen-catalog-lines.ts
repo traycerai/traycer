@@ -32,6 +32,7 @@ import {
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
@@ -68,6 +69,12 @@ const FIXTURES = {
   "providers.list@4.0": dump(providersListResponseSchemaV40),
   "providers.list@5.0": dump(providersListResponseSchemaV50),
   "providers.list@6.0": dump(providersListResponseSchemaV60),
+  // Frozen the moment v8.0 opened. This is the first line that carries
+  // `nativeCapabilities`, so it is the first whose drift can cost a client an
+  // entire capability object rather than one field - the `supportedTabs` enum
+  // is closed, and a member it cannot decode collapses MCP/Plugins/Skills with
+  // it.
+  "providers.list@7.0": dump(providersListResponseSchemaV70),
 };
 
 const HEADER =

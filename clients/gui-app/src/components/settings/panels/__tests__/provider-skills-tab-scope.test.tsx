@@ -192,6 +192,7 @@ function skillsState(): ProviderCliState {
           remove: [...skillMocks.removeScopes],
         },
       },
+      modelProviders: null,
     },
     selected: { kind: "bundled" },
     candidates: [],

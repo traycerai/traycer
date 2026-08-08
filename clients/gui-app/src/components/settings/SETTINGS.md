@@ -402,8 +402,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
   force-refreshes the list and harness availability on demand.
   - **The detail pane is tabbed, and the tab RAIL is the only thing between the
-    provider header and its config.** Order is `general` · `account` · `usage` ·
-    `env` · `mcp` · `plugins` · `skills`, filtered per provider through
+    provider header and its config.** Order is `account` · `usage` · `general` ·
+    `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
     `supportedTabsFor` (`provider-settings-tabs.ts` - pure, so the rule is
     tested without rendering the panel).
     - **The provider header and the rail are PINNED rows; only the active tab's
@@ -799,6 +799,235 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         must not touch the create/import draft fields; failure closes only the
         confirmation and renders inside the skill dialog, since the tab's own
         error banner sits behind it and would be invisible.
+  - **Model Providers is the visual layer of `opencode auth login`**
+    (`provider-model-providers-tab.tsx` +
+    `provider-model-provider-connect-dialog.tsx`): the UPSTREAM LLM credentials
+    a provider calls with, not a Traycer account and not a CLI binary. Backed by
+    four dedicated RPCs on the optional-capability channel
+    (`providers.listModelProviders` / `modelProviderAuth` /
+    `awaitModelProviderAuth` / `cancelModelProviderAuth`) through
+    `useHostQuery` / `useHostMutation`, with keys in
+    `lib/query-keys/model-providers-query-keys.ts`.
+    - **The tab exists only when the host says so.** It rides `supportedTabs`
+      like every other wire tab, and only the `opencode` module advertises it -
+      so an old host, an old CLI below the version gate, or any other provider
+      simply has no tab. There is no client-side derivation that could disagree.
+      It sits after `env` and before `mcp` in `PROVIDER_TAB_ORDER`: it is
+      configuration (what this provider can reach) rather than an inventory of
+      what is installed into it, and that position cannot move any provider's
+      DEFAULT tab, since every provider advertising it also advertises the tabs
+      ahead of it.
+    - **NO scope picker**, unlike MCP. OpenCode's upstream auth is per-user;
+      there are no project-scoped credentials for a `global`/`project` control
+      to choose between. The sidebar host picker still scopes the tab.
+    - **ONE list, connected first** (`sortModelProviderEntries`), not a
+      "Connected" section above a searchable catalog. Search has to be able to
+      find a connected provider, and the two-section shape is precisely the one
+      where it cannot. ~180 rows in a scroll region of their own, capped against
+      the VIEWPORT alone (`max-h-[60vh]`, no px/rem branch, so the cap follows
+      the window rather than the text size); deliberately NOT virtualized
+      (single-line rows, no per-row queries - and a virtualizer renders an empty
+      viewport under jsdom's zero-height layout, which would put this list's
+      behavior beyond test).
+      - **One filter beside the search box**
+        (`model-provider-filter.ts` + `model-provider-list-controls.tsx`): All /
+        Browser sign-in / API key, in the same `ListFilter` menu shape the
+        provider rail uses (`provider-rail-controls.tsx`), down to the dot that
+        marks an active filter and the trigger's accessible name carrying the
+        current value. Per-row method badges were the other option and would
+        have lit "API key" on ~170 of ~180 rows to say nothing — the failure the
+        removed per-tab content dots had. The interesting answer is the rare
+        one, so it lives one click away instead.
+        Both buckets read off `methods[]`. The API-key bucket is every row
+        carrying an `api` arm — which, since the host synthesizes a generic key
+        method for any provider whose `/provider/auth` advertises nothing, is
+        nearly all of them; an EMPTY method list means the host offered nothing
+        and belongs in neither bucket. The two deliberately OVERLAP rather than
+        partition: a provider advertising both arms belongs under either.
+        Filtering runs BEFORE the fuzzy search, so a query cannot quietly
+        re-widen the bucket the user picked.
+    - **`source` is badged only for a CONNECTED provider, and disconnect is
+      gated on `canDisconnect` ALONE.** The host reports `source` as null unless
+      connected, so a badge anywhere else would claim a credential origin the
+      row does not have. `hasStoredCredential` answers a different question
+      ("does Traycer hold a credential?") than `canDisconnect` ("may it be
+      removed from here?"); a later host may answer them differently, and
+      reading either for the other is how a button appears that the host will
+      refuse. Today the host answers both `source ∈ {api, custom}` — the two
+      that are auth-store-backed in practice, `api` for a key written through
+      `auth.set` and `custom` for a provider whose loader is fed by that same
+      store (`xai` signs in through OAuth and reports `custom`). `env` and
+      `config` stay read-only: neither is ours to remove, and `auth.remove`
+      cannot touch a config block anyway — OpenCode's own app compensates for
+      that case by ALSO writing `disabled_providers`, which is out of v1 scope
+      here. The control itself is an icon button
+      with hover-only destructive tone (the pattern
+      `provider-cli-candidates-section` and `env-override-editor` already use —
+      quiet among neutral rows, red under the pointer) and a **"Remove saved
+      key"** tooltip. The wording is deliberate: it removes the key from the
+      provider's store, and the row may well come back CONNECTED from an env
+      var or config block underneath, so promising a disconnect would overstate
+      what the button does.
+    - **`source` is a STATUS, not a permission.** An `env` / `config` / `custom`
+      row shows where its current credential comes from ("Set by environment",
+      "Set in config file", "Set by a custom loader") and still offers Connect.
+      An earlier pass blocked the write affordance on those rows, reasoning that
+      OpenCode resolves env before its own auth store so a key saved here would
+      be shadowed and the click would appear to work while changing nothing.
+      The precedence is real — observed live, an account holding a stored
+      `openai` OAuth credential still reports `source: "env"` while
+      `OPENAI_API_KEY` is exported — but blocking was the wrong response to it.
+      Setting a provider up and choosing which credential wins are different
+      decisions: a user may want the OAuth sign-in in place for when the
+      variable is not exported, or intend to unset it afterwards. OpenCode's own
+      app configures any provider regardless of its current source, and ours
+      refusing to was a restriction we invented. The connect dialog now leads
+      with a warning naming what outranks it (`credentialPrecedenceNotice`,
+      naming the actual variable) instead.
+      `custom` gets its own wording rather than sharing the config-file line:
+      that loader is frequently fed by the auth store — `xai` signs in through
+      OAuth and still reports `custom` — so pointing at a file would send the
+      user where the credential is not.
+    - **ACCEPTED RESIDUAL: a `custom` row can have nothing to remove.** Upstream
+      assigns `custom` from two different passes, and only one of them requires
+      a stored credential: a plugin auth loader (guarded on an `auth.json` entry
+      existing) and an AUTOLOADING provider loader (guarded on nothing). The
+      wire's `source` cannot tell them apart, so `{api, custom}` shows Remove on
+      the second kind too — the live example being OpenCode's own `opencode` row
+      on a free plan, connected with no `auth.json` entry at all. The failure is
+      the mild direction: `auth.remove` no-ops, the row re-lists as connected,
+      and nothing is misreported. Being exact would mean reading `auth.json` key
+      names, which the plan defers. Special-casing the `opencode` id was
+      considered and rejected — that is the hardcoded-id rule the plan bans, and
+      upstream's own version of that filter turns out to be a PAID-PLAN check
+      (`m.id !== "opencode" || Object.values(m.models).find(v => v.cost?.input)`,
+      the same predicate as their `paid()`), not a credential one, so mirroring
+      it would import their monetisation rule and still not make us exact.
+    - **Every provider gets the same plain masked key field**, unless it
+      advertised a method list saying otherwise. There is no client-side notion
+      of which providers "can" take a pasted key: `connect` sends
+      `{ key, inputs }` where `key` is the SECRET VALUE (upstream's
+      `ApiAuth.key`, which reads like an identifier and is not one) and `inputs`
+      is the prompt answers keyed by prompt key.
+      A `credentialKey` field used to ride the wire, derived host-side from
+      models.dev `env[]`, and the dialog suppressed the key field wherever it
+      came back null — Amazon Bedrock and both Vertex rows. The parity audit
+      called it what it was: a ~130-line heuristic standing in for knowledge we
+      do not have, for a requirement upstream does not have. OpenCode's
+      `auth.set` stores whatever is pasted, and a credential that cannot work is
+      the user's to discover. It is deleted across all three layers.
+    - **The plain path is still suppressed when a provider advertises ANY
+      method** — that rule is genuine upstream parity and stays. A provider with
+      a method list has told us exhaustively how it can be authenticated, and
+      every one that accepts a pasted key advertises that explicitly (`openai`,
+      `xai`, `poe`, `gitlab`, `digitalocean`, `snowflake-cortex` all carry a
+      "Manually enter API Key" arm). `github-copilot` advertises `['oauth']` and
+      nothing else, so synthesizing a key field for it would invent a path
+      upstream does not have. Verified against a live `/provider/auth`.
+      Two consequences worth stating: the env-precedence warning no longer names
+      the variable (that name came from `credentialKey`, and guessing it would
+      be worse than the general statement), and the connect dialog's "this
+      provider offers nothing" body is gone as unreachable — a provider
+      advertising no methods now always has the synthesized key path.
+    - **The prompts DSL is evaluated client-side**
+      (`model-provider-prompts.ts` - pure, so it is tested without a form).
+      Visibility resolves SEQUENTIALLY and only a visible prompt's answer feeds
+      a later `when`: the form is a CLI prompt loop rendered at once, so a
+      question never asked has no answer, and a field predicated on it must stay
+      off screen. An unanswered key fails `neq` as well as `eq`. Hidden fields
+      contribute nothing to the request - the host rejects any key the selected
+      method did not ask for.
+    - **OAuth attempt state lives in `model-provider-pending-auth-store.ts`**
+      (mirrors `mcp-pending-auth-store.ts`), keyed
+      `(hostId, providerId, modelProviderId)` and carrying the host-minted
+      `attemptId`. `hostId` is in the key even though the HOST keys its own
+      registry without it: the host only speaks for itself, while this store is
+      one client-side map spanning every host Settings can point at — without it
+      a sign-in started on host B overwrites host A's record, and A resumes
+      against an `attemptId` that names nothing there. Removal is
+      attempt-guarded for the same class of reason: every teardown resolves
+      asynchronously, so a late cancel must not delete the record of the newer
+      attempt that legitimately replaced it.
+      - **Two lookups, deliberately not one.**
+        `findModelProviderPendingAuth` answers "which row should re-open BY
+        ITSELF" (newest on this host+provider); `getModelProviderPendingAuth`
+        answers "does the row the user just clicked have an attempt" (exact
+        full key). Two upstream providers can each hold a live attempt at once,
+        so collapsing them made the OLDER of the two restart-only: its record
+        sat in the store and the host held its server lease, but the only
+        lookup available could never name it.
+
+      `attemptId` is also what makes a resumed panel honest:
+      attempts are single-flight per `(providerId, modelProviderId)` and a newer
+      one supersedes the pending one, so a panel polling by key alone would be
+      handed the newer attempt's status as its own. The tab adopts a stored
+      attempt during RENDER, guarded on the entry map's identity - the same
+      pattern as the MCP tab's `useResumeOauthPolling`, and what makes the panel
+      re-openable across navigation yet still dismissible.
+
+    - **Two OAuth arms, and neither is faked.** `code` shows the provider's own
+      `instructions` verbatim plus a paste field; `auto` completes on the
+      server's loopback and shows a waiting state with a bounded poll and a
+      **Stop waiting** button - honest wording, because upstream has no
+      OAuth-cancel endpoint.
+      - **Only the START path opens a browser.** The host answers a
+        still-pending poll with the STORED `authorizationUrl` rather than
+        `{kind:"pending"}`, so a client re-attaching after a navigation can
+        still show the provider's page. That is the right wire shape and the
+        wrong thing to open a tab on, so the dialog carries an explicit policy
+        (`applyStartResult` vs `applyPollResult`) instead of inferring one from
+        the arm: a tick refreshes the panel and the resume record, and only a
+        user action reaches `openExternalLink`. Handling both in one place
+        reopened the sign-in page every 1.5s, on a flow the user was already in.
+      - **Polling is single-flight**, scheduled from the previous tick's
+        settlement rather than on a `setInterval`: an interval keeps firing
+        through a slow request, stacking concurrent polls on one attempt — each
+        re-leasing the managed server this whole design exists to stop churning.
+      - **A terminal failure REPORTED BY A POLL ends the attempt.** The same
+        `report` disposition means opposite things depending on who asked: from
+        a submit it is advice against an attempt the host is still holding, so
+        the panel stays put and the user can try again; from a status read it is
+        a post-mortem, because the host only answers that way once the
+        background callback has already failed and released its lease. Applying
+        it identically left the panel saying "Waiting" against a settled row
+        forever, with nothing further to arrive and no live attempt for Stop
+        waiting to cancel. `applyResult` therefore takes the call context, and a
+        polled `report` clears the attempt (attempt-id guarded), stops the poll,
+        and returns to a fresh start with the reason kept on screen.
+      - **Stop waiting keeps the attempt until the host CONFIRMS.** An
+        optimistic teardown left a live host attempt holding a server lease with
+        no surface able to retry when the cancel failed in transport. A
+        confirmed cancel (`{cancelled: true, result: done}`) is LOCAL teardown —
+        `done` describes the cancel, not a credential, so it neither closes the
+        dialog as a success nor invalidates any cache. Only the
+        `cancelled: false` race (the browser callback landing while the click
+        was in flight) actually wrote a credential, and that one does both.
+    - **Typed failures map to four distinct moves**
+      (`modelProviderAuthErrorDisposition` in
+      `lib/providers/model-provider-error-copy.ts`): `attempt_superseded`
+      stands down SILENTLY (a
+      newer attempt owns the surface - reporting it accuses the user of breaking
+      the flow they just restarted), `attempt_expired`/`attempt_not_found` offer
+      a fresh start, `code_rejected` re-prompts and KEEPS the live attempt, and
+      everything else is reported. That mapping is the enum's contract restated
+      as behaviour in one place, instead of a switch per call site that handles
+      half of it.
+    - **A cold list can be a WAIT rather than a failure.** Reaching the catalog
+      needs the managed server, so every reason it would not start arrives as
+      one `server_unavailable` - including a provider pack still downloading.
+      The tab is handed the provider row's `providerPackPreparingForProvider`
+      state and renders that case as loading-with-reason.
+      `capability_unavailable` gets no Retry button: the surface is not offered
+      here at all, and a click that cannot work is the offered-then-failed shape
+      the rest of this panel refuses.
+    - **Mutations invalidate the model catalog, not the harness list.**
+      `agent.gui.listModels` is `staleTime: Infinity` by design, so without the
+      invalidation the model picker would serve the pre-connect list for the
+      rest of the app session - the one place the user looks to confirm the
+      connect worked. `agent.gui.listHarnesses` is left alone: an upstream
+      credential does not change which CLIs are installed, and re-probing every
+      harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
+      user action.
 - `Notifications` Two `SettingsGroup` cards. A design pass
   (`settings-related-panels-core-flows` artifact) replaced the old one-column
   severity×channel matrix with a compact policy card, and gave the hooks
