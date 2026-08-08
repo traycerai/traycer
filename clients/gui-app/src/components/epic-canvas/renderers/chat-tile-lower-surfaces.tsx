@@ -76,6 +76,18 @@ export interface ChatLowerRuntimeState {
 export interface ChatLowerAccessState {
   readonly isViewer: boolean;
   readonly canAct: boolean;
+  /**
+   * Why this surface cannot be typed into, when the reason is not the ordinary
+   * one. Null means the ordinary one - a viewer's permission - and the notice
+   * says so itself.
+   *
+   * A reason rather than a second boolean because the states are not
+   * alternatives to each other: "you may only watch this chat" and "this chat
+   * lives on a machine that is asleep, and you are reading its last backup"
+   * are both read-only, and telling a user the first when the second is true
+   * sends them looking for a permission to ask for.
+   */
+  readonly readOnlyNotice: string | null;
 }
 
 /**
@@ -86,6 +98,7 @@ export interface ChatLowerAccessState {
  */
 function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
+  if (access.readOnlyNotice !== null) return access.readOnlyNotice;
   if (access.isViewer) return "You have view-only access to this chat";
   return "Reconnecting to the host — sending is paused";
 }
@@ -467,7 +480,7 @@ function ComposerSurface(props: {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
         <div className="flex flex-col gap-3">
-          <ReadOnlyComposerNotice />
+          <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
           />
@@ -613,10 +626,11 @@ function ComposerSlotShell(props: {
   );
 }
 
-function ReadOnlyComposerNotice() {
+function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
   return (
     <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      Read-only viewer. The agent owner can send prompts and manage this queue.
+      {props.notice ??
+        "Read-only viewer. The agent owner can send prompts and manage this queue."}
     </div>
   );
 }

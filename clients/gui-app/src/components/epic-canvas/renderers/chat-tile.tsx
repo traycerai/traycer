@@ -191,6 +191,7 @@ import {
   findPendingInterview,
   findUnanswerableInterviews,
 } from "./chat-tile-session-state";
+import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
@@ -223,10 +224,15 @@ interface ChatTileProps {
 
 interface ChatTileSessionViewProps {
   readonly handle: ChatSessionStoreHandle;
-  readonly node: EpicNodeRef;
+  readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
   readonly isActive: boolean;
   readonly currentEpicId: string;
+  /**
+   * Why this surface's composer is locked, when the reason is not a viewer's
+   * permission. `null` on every live tile - the ordinary path is untouched.
+   */
+  readonly readOnlyNotice: string | null;
 }
 
 function buildModelReasoningLabels(
@@ -339,6 +345,7 @@ export function ChatTile(props: ChatTileProps) {
           viewTabId={viewTabId}
           isActive={isActive}
           currentEpicId={epicId}
+          readOnlyNotice={null}
         />
       </TombstonedProfileProvider>
     </div>
@@ -634,7 +641,7 @@ function transcriptJumpCardKind(
   return backgroundItemCardKind(item.kind);
 }
 
-function ChatTileSessionView(props: ChatTileSessionViewProps) {
+export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
   const hostId = useTabHostId();
   const systemOverlayActive = useAnySystemOverlayActive();
@@ -1940,8 +1947,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => ({
       isViewer: accessFlags.isViewer,
       canAct,
+      readOnlyNotice: props.readOnlyNotice,
     }),
-    [accessFlags.isViewer, canAct],
+    [accessFlags.isViewer, canAct, props.readOnlyNotice],
   );
 
   // Steer capability is a stable boolean (flips only when the running turn's
@@ -2149,7 +2157,7 @@ interface ChatSessionMessagesSurfaceProps {
   readonly fatalClose: FatalErrorDetails | null;
   readonly onRetry: () => void;
   readonly restoreContext: ChatRestoreContextValue;
-  readonly node: EpicNodeRef;
+  readonly node: ChatSurfaceNode;
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tabHostId: string | null;

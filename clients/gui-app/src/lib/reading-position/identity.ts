@@ -87,6 +87,22 @@ function identityForTile(
           String(node.prNumber),
         ],
       });
+    // Durable, and keyed WITHOUT the reading host: the content is a published
+    // copy addressed by its cloud identity triple, and which host piped the
+    // bytes down is incidental to it. Keying on `hostId` like the live kinds do
+    // would drop the reader's scroll position every time the app's active host
+    // changed, for a transcript that did not move.
+    case "published-chat":
+      return durableIdentity({
+        node,
+        epicId,
+        contentParts: [
+          node.type,
+          node.taskId,
+          node.ownerUserId,
+          node.chatId,
+        ],
+      });
     case "terminal":
     case "terminal-agent":
     case "managed-command-output":

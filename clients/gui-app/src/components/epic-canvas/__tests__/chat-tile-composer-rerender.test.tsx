@@ -126,7 +126,7 @@ function UsageLeafProbe() {
 const RUNTIME: ChatLowerRuntimeState = {
   snapshotLoaded: true,
 };
-const ACCESS: ChatLowerAccessState = { isViewer: false, canAct: true };
+const ACCESS: ChatLowerAccessState = { isViewer: false, canAct: true, readOnlyNotice: null };
 const TURN_IDLE: ChatLowerTurnState = {
   activeTurnStatus: null,
   stopDisabled: true,

@@ -50,6 +50,7 @@ import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
   isCommGraphTileRef,
+  isPublishedChatTileRef,
   isDiffTileRef,
   isManagedCommandOutputTileRef,
   isPrDetailTileRef,
@@ -498,6 +499,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     isBlankTileRef(activeTab) ||
     isManagedCommandOutputTileRef(activeTab) ||
     isCommGraphTileRef(activeTab) ||
+    isPublishedChatTileRef(activeTab) ||
     activeTab.type === WORKSPACE_FILE_TAB_KIND
       ? false
       : computeIsRemoteDeleted({

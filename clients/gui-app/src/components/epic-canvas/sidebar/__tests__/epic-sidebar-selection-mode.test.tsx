@@ -461,14 +461,15 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 }));
 
 /**
- * The cloud-chat section's LIST, stubbed to "nothing to add".
+ * The two host queries behind the unified list's cloud rows, stubbed to
+ * "nothing to add".
  *
- * The chat panel mounts that section, and its list is an ordinary host query -
- * so leaving it real would need this suite to supply a `QueryClientProvider`
- * and a host-client stub complete enough for `useReactiveHostReadiness`, for a
- * section that renders nothing here either way. The component itself stays
- * real, so its hidden path is still exercised; its rules are asserted in
- * `cloud-chat-section-state.test.ts`.
+ * The chat panel reads both directly now that the "other devices" section is
+ * gone, and both are ordinary host queries - so leaving them real would need
+ * this suite to supply a `QueryClientProvider` and a host-client stub complete
+ * enough for `useReactiveHostReadiness`, for rows that do not render here
+ * either way. The fold and the interleave they feed are asserted without a
+ * renderer in `unified-chat-list.test.ts`.
  */
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({
@@ -478,6 +479,15 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     isFetching: false,
   }),
   useCloudChatPayload: () => ({ data: undefined, isError: false }),
+}));
+
+// The fold's mapping. Stubbed alongside the list rather than left real for the
+// same reason, and to `undefined` deliberately: that is the shape an older host
+// (or an in-flight request) produces, so this suite exercises the degraded
+// path the fold is specified to tolerate.
+vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
+  useChatPublicationTargets: () => ({ data: undefined, isError: false }),
+  publicationTargetMap: () => new Map<string, string>(),
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
