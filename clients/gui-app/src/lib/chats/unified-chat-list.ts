@@ -114,7 +114,31 @@ export function selectUnfoldedCloudChats(input: {
     input.localChatIds,
     input.publicationChatIdByChatId,
   );
-  return input.chats.filter((chat) => !published.has(chat.identity.chatId));
+  return input.chats.filter((chat) => !foldsIntoLocalEntry(chat, published));
+}
+
+/**
+ * Whether this cloud row is one of THIS viewer's local chats' backups.
+ *
+ * The owner check is not a refinement of the id check - it is the other half of
+ * the identity, and without it the fold is unsound. Cloud identity is the
+ * `taskId + ownerUserId + chatId` triple precisely because `chatId` is
+ * host-minted and not unique under a task, and the cloud list deliberately
+ * carries every task-visible chat including OTHER people's. A collaborator's
+ * genuinely different chat that happens to share a host-minted id with one of
+ * mine would be folded away by an id-only rule and vanish from the only agent
+ * list there now is - the failure the one-list restoration makes total.
+ *
+ * A local chat is by construction the viewer's own, so only a row the viewer
+ * owns can be a local chat's publication target. Another owner's row is never
+ * folded, whatever its id.
+ */
+function foldsIntoLocalEntry(
+  chat: CloudChatSummary,
+  publishedByThisViewer: ReadonlySet<string>,
+): boolean {
+  if (!chat.isOwnedByViewer) return false;
+  return publishedByThisViewer.has(chat.identity.chatId);
 }
 
 /**
