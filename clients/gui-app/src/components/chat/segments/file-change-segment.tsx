@@ -8,8 +8,10 @@ import { cn } from "@/lib/utils";
 import { buildSnapshotUnifiedPatch } from "@/lib/diff/snapshot-diff-patch";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
 import {
+  payloadTruncationNotice,
   usePublishedChatSource,
   usePublishedSnapshotDiff,
+  type PayloadExtent,
   type PublishedChatSource,
 } from "@/lib/chats/published-chat-source";
 import {
@@ -164,6 +166,7 @@ function LiveFileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
       segment={props.segment}
       data={query.data}
       isLoading={query.isLoading}
+      truncation={null}
     />
   );
 }
@@ -183,6 +186,7 @@ function PublishedFileChangeInlineDiff(props: {
       segment={props.segment}
       data={query.data}
       isLoading={query.isLoading}
+      truncation={query.truncation}
     />
   );
 }
@@ -198,6 +202,13 @@ function FileChangeDiffView(props: {
       }
     | undefined;
   isLoading: boolean;
+  /**
+   * Set when the content is a PREFIX. Always null on the live path, where the
+   * snapshot store serves whole blobs; a cloud payload above the reader's
+   * preview bound is served truncated, and a diff built from a prefix must not
+   * read as the complete set of changes.
+   */
+  truncation: PayloadExtent | null;
 }) {
   const { segment, data, isLoading } = props;
   const patch = useMemo(() => {
@@ -238,7 +249,19 @@ function FileChangeDiffView(props: {
   return (
     <DiffContentFrame
       sizing="content"
-      banner={null}
+      // A prefix must not read as the whole file. The frame already has a slot
+      // for exactly this kind of statement, so the notice sits with the diff
+      // rather than in a branch that forks the rendering.
+      banner={
+        props.truncation === null ? null : (
+          <p
+            className="px-2 py-1 text-ui-xs italic text-muted-foreground"
+            data-testid="file-change-truncated-notice"
+          >
+            {payloadTruncationNotice(props.truncation)}
+          </p>
+        )
+      }
       scrollContainerRef={null}
       onScroll={null}
     >

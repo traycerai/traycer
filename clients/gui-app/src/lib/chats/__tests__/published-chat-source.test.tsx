@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { FileChangeSegment as FileChangeSegmentModel } from "@/stores/composer/chat-store";
+import { FileChangeSegment } from "@/components/chat/segments/file-change-segment";
+import { ThemeProvider } from "@/providers/theme-provider";
 import {
+  payloadTruncationNotice,
   PublishedChatSourceProvider,
   usePublishedPlanContent,
   usePublishedSnapshotDiff,
@@ -19,13 +23,26 @@ import {
  * Without that, a seam that quietly enabled itself everywhere would look
  * healthy in every test here while doubling every live chat's requests and
  * addressing them at a chat the reading host has no publication for.
+ *
+ * The live assertion drives the REAL segment (`FileChangeSegment`), not a local
+ * stand-in for it. A harness that re-implements the dispatch can only prove the
+ * harness dispatches correctly; the property belongs to the component that
+ * ships, and mounting it with no provider is what pins that the null default
+ * reaches production code.
  */
 
 const readPayload = vi.fn();
 /** What the mocked reader answers; `undefined` models a query still in flight. */
-const payloadAnswer: { current: { readonly kind: string } | undefined } = {
-  current: undefined,
-};
+const payloadAnswer: {
+  current:
+    | {
+        readonly kind: string;
+        readonly text?: string;
+        readonly isTruncated?: boolean;
+        readonly byteLength?: number;
+      }
+    | undefined;
+} = { current: undefined };
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatPayload: (args: {
@@ -35,8 +52,29 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     // Records only what a real query would ACT on. A disabled TanStack query
     // issues nothing, so counting mounts would prove nothing either way.
     if (args.enabled) readPayload(args.ref);
-    return { data: payloadAnswer.current, isError: false };
+    if (payloadAnswer.current === undefined) {
+      return { data: undefined, isError: false };
+    }
+    // Distinct text per side, so a real unified patch can be built and the
+    // segment reaches its diff branch rather than its reason copy.
+    const side = args.ref?.sha256.startsWith("a") === true ? "old\n" : "new\n";
+    return {
+      data: { ...payloadAnswer.current, text: side },
+      isError: false,
+    };
   },
+}));
+
+/**
+ * The LIVE data source, stubbed - not the thing under test here.
+ *
+ * Mounting the real segment on the live path otherwise needs the whole host
+ * runtime, which is itself the point: the live arm depends on the host and the
+ * published arm does not. Stubbing it keeps the REAL dispatcher in the test
+ * while removing a dependency the assertion does not concern.
+ */
+vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
+  useSnapshotDiffQuery: () => ({ data: undefined, isLoading: false }),
 }));
 
 afterEach(() => {
@@ -51,16 +89,44 @@ const IDENTITY = {
   ownerUserId: "user-1",
 };
 
+/** A real `file_change` segment, expanded so its diff body mounts. */
+const FILE_SEGMENT = {
+  id: "file-1",
+  kind: "file_change",
+  filePath: "/repo/src/app.ts",
+  operation: "edit",
+  diffSource: "snapshot",
+  beforeHash: "a".repeat(64),
+  afterHash: "b".repeat(64),
+  additions: 1,
+  deletions: 1,
+  sourceBlockIds: ["file-1"],
+  reason: "snapshot",
+  isStreaming: false,
+  endState: null,
+  parentId: null,
+} satisfies FileChangeSegmentModel;
+
 function Diff(props: { readonly published: boolean }): ReactNode {
-  // Mirrors the segment: both hooks mount, exactly one is enabled.
-  const source = props.published ? { identity: IDENTITY, client: null } : null;
-  usePublishedSnapshotDiff({
-    source,
-    beforeHash: "a".repeat(64),
-    afterHash: "b".repeat(64),
-    enabled: source !== null,
-  });
-  return <div data-testid="diff" />;
+  // The real diff body reads the resolved theme, so the real provider comes
+  // with it. Wrapping is cheaper than mocking the diff primitive, which is the
+  // very component whose banner slot carries the notice under test.
+  const segment = (
+    <ThemeProvider>
+      <FileChangeSegment
+        segment={FILE_SEGMENT}
+        variant="card"
+        headerFindUnitId={null}
+        initiallyOpen={true}
+      />
+    </ThemeProvider>
+  );
+  if (!props.published) return segment;
+  return (
+    <PublishedChatSourceProvider source={{ identity: IDENTITY, client: null }}>
+      {segment}
+    </PublishedChatSourceProvider>
+  );
 }
 
 function Plan(props: { readonly published: boolean }): ReactNode {
@@ -83,13 +149,7 @@ describe("published chat source", () => {
   });
 
   it("reads file-snapshot payloads for a published copy", () => {
-    render(
-      <PublishedChatSourceProvider
-        source={{ identity: IDENTITY, client: null }}
-      >
-        <Diff published={true} />
-      </PublishedChatSourceProvider>,
-    );
+    render(<Diff published={true} />);
     const kinds = readPayload.mock.calls.map((call) => call[0]?.kind);
     expect(kinds).toEqual(["file-snapshot", "file-snapshot"]);
   });
@@ -125,5 +185,103 @@ describe("published chat source", () => {
     }
     render(<Probe />);
     expect(seen).toBe("blob_missing");
+  });
+
+  it("reports a truncated payload as a prefix, with its real byte length", () => {
+    // The reviewer's witness: a 65,547-byte payload served as a 65,536-byte
+    // prefix. Dropping `isTruncated` made the surface present the prefix as the
+    // whole file - worse than the viewer this ticket demolished, which said so.
+    payloadAnswer.current = {
+      kind: "text",
+      text: "x",
+      isTruncated: true,
+      byteLength: 65_547,
+    };
+    let extent: { isTruncated: boolean; byteLength: number } | null = null;
+    function Probe(): ReactNode {
+      extent = usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client: null },
+        beforeHash: "a".repeat(64),
+        afterHash: "b".repeat(64),
+        enabled: true,
+      }).truncation;
+      return null;
+    }
+    render(<Probe />);
+    expect(extent).toEqual({ isTruncated: true, byteLength: 65_547 });
+  });
+
+  it("carries truncation on a published plan too", () => {
+    payloadAnswer.current = {
+      kind: "text",
+      text: "x",
+      isTruncated: true,
+      byteLength: 65_547,
+    };
+    let notice: string | null = null;
+    function Probe(): ReactNode {
+      const result = usePublishedPlanContent({
+        source: { identity: IDENTITY, client: null },
+        contentHash: "c".repeat(64),
+        enabled: true,
+      });
+      notice =
+        result.truncation === null
+          ? null
+          : payloadTruncationNotice(result.truncation);
+      return null;
+    }
+    render(<Probe />);
+    expect(notice).toBe("Showing the first part of 65547 bytes.");
+  });
+
+  it("reports no truncation for a complete payload", () => {
+    // The other half: a whole payload must not acquire a partial-content
+    // marker, or every diff would claim to be a prefix.
+    payloadAnswer.current = {
+      kind: "text",
+      text: "x",
+      isTruncated: false,
+      byteLength: 12,
+    };
+    let extent: unknown = "unset";
+    function Probe(): ReactNode {
+      extent = usePublishedSnapshotDiff({
+        source: { identity: IDENTITY, client: null },
+        beforeHash: "a".repeat(64),
+        afterHash: null,
+        enabled: true,
+      }).truncation;
+      return null;
+    }
+    render(<Probe />);
+    expect(extent).toBeNull();
+  });
+
+  it("renders the truncation notice on the real segment, not just in the hook", () => {
+    // The ablation that caught this: dropping `truncation` at the segment left
+    // every hook assertion green while the surface silently presented a prefix
+    // as a whole file. The finding was about what RENDERS, so this asserts the
+    // rendered marker.
+    payloadAnswer.current = {
+      kind: "text",
+      text: "x",
+      isTruncated: true,
+      byteLength: 65_547,
+    };
+    render(<Diff published={true} />);
+    const notice = screen.getByTestId("file-change-truncated-notice");
+    expect(notice.textContent).toContain("65547");
+  });
+
+  it("renders no truncation notice for a complete payload", () => {
+    payloadAnswer.current = {
+      kind: "text",
+      text: "x",
+      isTruncated: false,
+      byteLength: 12,
+    };
+    render(<Diff published={true} />);
+    expect(screen.queryByTestId("file-change-truncated-notice")).toBeNull();
   });
 });
