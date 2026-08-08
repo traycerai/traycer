@@ -80,7 +80,6 @@ export function EpicSidebarCloudChatRow(
     (s) => s.prepareOpenTileInTabFocusTarget,
   );
 
-
   const publishedTileRef = useCallback(
     () =>
       makePublishedChatTileRef({
@@ -186,9 +185,7 @@ export function EpicSidebarCloudChatRow(
  * Last-publication time on the same compact ladder the local rows use, in its
  * own leaf so the shared 60s clock tick repaints this span and not the row.
  */
-function CloudRowIdleTime(props: {
-  readonly publishedAt: number;
-}): ReactNode {
+function CloudRowIdleTime(props: { readonly publishedAt: number }): ReactNode {
   const relative = useCompactRelativeTime(props.publishedAt);
   return (
     <span

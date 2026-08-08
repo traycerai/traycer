@@ -97,7 +97,9 @@ export function publishedCloudChatIds(
   publicationChatIdByChatId: ReadonlyMap<string, string>,
 ): ReadonlySet<string> {
   return new Set(
-    localChatIds.map((chatId) => publicationChatIdByChatId.get(chatId) ?? chatId),
+    localChatIds.map(
+      (chatId) => publicationChatIdByChatId.get(chatId) ?? chatId,
+    ),
   );
 }
 
@@ -152,7 +154,6 @@ function foldsIntoLocalEntry(
 export function cloudRowIsViewersOwn(chat: CloudChatSummary): boolean {
   return chat.isOwnedByViewer;
 }
-
 
 /**
  * The sort keys a cloud row contributes, in the shape the shared comparator

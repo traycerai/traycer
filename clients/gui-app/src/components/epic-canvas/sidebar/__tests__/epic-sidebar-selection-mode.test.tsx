@@ -2076,9 +2076,7 @@ describe("chat descendant status rollup", () => {
     // it. A click assertion alone would pass against a handler that silently
     // did nothing.
     const span = glyph.parentElement;
-    expect(
-      span?.getAttribute("data-notification-indicator-action"),
-    ).toBeNull();
+    expect(span?.getAttribute("data-notification-indicator-action")).toBeNull();
     expect(span?.className).not.toContain("cursor-pointer");
 
     fireEvent.click(glyph);

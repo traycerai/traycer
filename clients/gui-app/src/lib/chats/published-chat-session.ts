@@ -305,7 +305,7 @@ export function createPublishedChatSessionHandle(
   const state = publishedChatSessionState(input);
   const store = createStore<ChatSessionState>()(() => state);
   const boundStore = Object.assign(
-    <T,>(selector: (value: ChatSessionState) => T): T =>
+    <T>(selector: (value: ChatSessionState) => T): T =>
       useStore(store, selector),
     store,
   ) as UseBoundStore<StoreApi<ChatSessionState>>;

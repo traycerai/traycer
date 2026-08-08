@@ -96,12 +96,7 @@ function identityForTile(
       return durableIdentity({
         node,
         epicId,
-        contentParts: [
-          node.type,
-          node.taskId,
-          node.ownerUserId,
-          node.chatId,
-        ],
+        contentParts: [node.type, node.taskId, node.ownerUserId, node.chatId],
       });
     case "terminal":
     case "terminal-agent":

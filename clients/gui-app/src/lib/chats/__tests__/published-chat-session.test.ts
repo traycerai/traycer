@@ -44,9 +44,7 @@ function futureBlock(blockId: string): JsonObject {
   };
 }
 
-function presentedChatWith(
-  blocks: readonly JsonObject[],
-): PresentedChat {
+function presentedChatWith(blocks: readonly JsonObject[]): PresentedChat {
   const raw = {
     role: "assistant",
     messageId: "m1",

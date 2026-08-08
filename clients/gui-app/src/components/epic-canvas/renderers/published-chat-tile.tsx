@@ -75,7 +75,9 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // case this surface exists for, so the id is a real fallback rather than a
   // defensive one.
   const ownerLabel =
-    node.ownerHostId.length > 0 ? ownerReachability.hostLabel : "another device";
+    node.ownerHostId.length > 0
+      ? ownerReachability.hostLabel
+      : "another device";
 
   // The one transition an on-demand read cannot cover: the owner came back
   // while this copy was open. Same reachability source the sidebar row's lock
@@ -89,7 +91,8 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // the owner's session - but it waits on distinct host identities (ticket 26)
   // and an owner-side presence answer rather than being guessed at from here.
   const conversion = useMemo(
-    () => (state.kind === "ready" ? convertPublishedChat(state.presented) : null),
+    () =>
+      state.kind === "ready" ? convertPublishedChat(state.presented) : null,
     [state],
   );
   const handle = useMemo(() => {
@@ -147,19 +150,19 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           have no business knowing about publication. Absent everywhere else. */}
       <PublishedChatSourceProvider source={publishedSource}>
         <ChatTileSessionView
-        handle={handle}
-        node={{
-          // The CHAT id, not the tile ref's id: inside the surface this is what
-          // per-chat UI state is keyed by, and it should name the same chat the
-          // live tile would. The finer tile key exists to keep the two tiles
-          // apart on the canvas, which is a different question.
-          id: node.chatId,
-          instanceId: node.instanceId,
-          name: node.name,
-        }}
-        viewTabId={props.viewTabId}
-        isActive={props.isActive}
-        currentEpicId={props.epicId}
+          handle={handle}
+          node={{
+            // The CHAT id, not the tile ref's id: inside the surface this is what
+            // per-chat UI state is keyed by, and it should name the same chat the
+            // live tile would. The finer tile key exists to keep the two tiles
+            // apart on the canvas, which is a different question.
+            id: node.chatId,
+            instanceId: node.instanceId,
+            name: node.name,
+          }}
+          viewTabId={props.viewTabId}
+          isActive={props.isActive}
+          currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
             ownerLabel,
