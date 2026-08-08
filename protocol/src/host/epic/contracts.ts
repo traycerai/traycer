@@ -16,6 +16,7 @@ import {
   createEpicRequestSchema,
   createEpicResponseSchema,
   createTuiAgentRequestSchema,
+  createTuiAgentRequestSchemaV10,
   createTuiAgentResponseSchema,
   deleteArtifactRequestSchema,
   deleteArtifactResponseSchema,
@@ -371,6 +372,22 @@ export const epicSetChatArchivedV10 = defineRpcContract({
 export const epicCreateTuiAgentV10 = defineRpcContract({
   method: "epic.createTuiAgent",
   schemaVersion: { major: 1, minor: 0 } as const,
+  // Frozen: `host-v1.1.10` shipped this line. It pointed at the live request
+  // schema until then, which is how `forkSourceHarnessSessionId` grew an
+  // already-released contract.
+  requestSchema: createTuiAgentRequestSchemaV10,
+  responseSchema: createTuiAgentResponseSchema,
+});
+
+// v1.1 adds `forkSourceHarnessSessionId`: the upstream session a forked TUI
+// agent was minted from, persisted verbatim so a provider failure between PTY
+// spawn and destination-transcript establishment still has durable provenance
+// to retry the fork from. Folded onto this method as a minor rather than a new
+// method name, which would fatally fail the equal-set handshake against an
+// already-shipped host. See the RPC backward-compat decision log.
+export const epicCreateTuiAgentV11 = defineRpcContract({
+  method: "epic.createTuiAgent",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: createTuiAgentRequestSchema,
   responseSchema: createTuiAgentResponseSchema,
 });

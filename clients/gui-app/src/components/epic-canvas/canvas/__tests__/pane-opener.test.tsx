@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type {
@@ -203,6 +204,34 @@ describe("PaneOpener", () => {
     );
     const input = container.querySelector('input[data-slot="command-input"]');
     expect(document.activeElement).not.toBe(input);
+  });
+
+  it("wraps arrow-key selection around both ends of the root list", async () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-loop"
+        groupId="group-loop"
+        active
+      />,
+    );
+    const rows = screen.getAllByRole("option");
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+
+    await waitFor(() => {
+      expect(first.getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(searchInput(), { key: "ArrowUp" });
+    await waitFor(() => {
+      expect(last.getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    await waitFor(() => {
+      expect(first.getAttribute("data-selected")).toBe("true");
+    });
   });
 
   it("selecting a leaf opens into THIS pane's group", () => {

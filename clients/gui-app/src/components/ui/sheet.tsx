@@ -2,6 +2,7 @@ import * as React from "react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
 
@@ -53,6 +54,10 @@ function SheetContent({
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
 }) {
+  // Concealed region (see `portal-concealment-context`): un-present the
+  // portal; the root keeps its open state and it re-presents on return.
+  const concealed = usePortalConcealed();
+  if (concealed) return null;
   return (
     <SheetPortal>
       <SheetOverlay />

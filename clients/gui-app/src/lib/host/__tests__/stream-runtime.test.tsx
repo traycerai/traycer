@@ -17,6 +17,7 @@ import {
   remoteSessionRefCountForTest,
   type RemoteSessionIdentity,
 } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import { REMOTE_SESSION_LINGER_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -191,6 +192,8 @@ function fakeRemoteSession(): FakeRemoteSession {
     notifyBearerRotated: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
+    // These provider tests never exercise fatal verdicts.
+    terminalFatal: () => null,
     close: () => {
       closeCalls += 1;
     },
@@ -200,6 +203,7 @@ function fakeRemoteSession(): FakeRemoteSession {
 
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
+const FIXTURE_AUTH_EPOCH = "lease-fixture-1";
 
 function remoteIdentity(publicKey: string): RemoteSessionIdentity {
   return {
@@ -207,6 +211,11 @@ function remoteIdentity(publicKey: string): RemoteSessionIdentity {
     userId: FIXTURE_USER_ID,
     hostPublicKey: publicKey,
     relayAttachUrl: RELAY_URL,
+    // The stream runtime always supplies the app revalidator.
+    authRecovery: "revalidate",
+    // One signed-in context for the whole fixture, so sharing is decided by
+    // the fields under test rather than by an auth-context transition.
+    authEpoch: FIXTURE_AUTH_EPOCH,
   };
 }
 
@@ -254,6 +263,9 @@ describe("HostStreamProvider", () => {
     mocks.createRemoteHostTransport.mockReset();
     streamFactorySpy.build.mockReset();
     vi.restoreAllMocks();
+    // Tests that drive the session cache's keep-warm linger enable fake
+    // timers; restore unconditionally so a mid-test failure cannot leak them.
+    vi.useRealTimers();
   });
 
   it("force-reconnects all stream sessions on a shell system-resume signal", () => {
@@ -361,6 +373,51 @@ describe("HostStreamProvider", () => {
     expect(result.current?.isClosed()).toBe(false);
   });
 
+  it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
+    // A terminal-class close (incompatible protocol, plan restriction) would
+    // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
+    // fatal -> onClosed -> rebuild, one full mint/dial cycle per round trip.
+    // The first quick close still rebuilds immediately (the wedge-recovery
+    // case above); the SECOND consecutive quick close must wait.
+    vi.useFakeTimers();
+    try {
+      const hostClient = buildClient();
+      bindingRef.value = { hostClient };
+      act(() => {
+        hostClient.bind(mockLocalHostEntry);
+      });
+
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      // Quick close #1: immediate rebuild.
+      act(() => {
+        first?.close("test-terminal-close");
+      });
+      const second = result.current;
+      expect(second).not.toBe(first);
+      expect(second?.isClosed()).toBe(false);
+
+      // Quick close #2: the rebuild is DEFERRED. `useWsStreamClient` hides
+      // the dead instance during the handoff, so consumers see null - what
+      // must NOT happen is an instant fresh client (= a fresh mint+dial).
+      act(() => {
+        second?.close("test-terminal-close");
+      });
+      expect(result.current).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      const third = result.current;
+      expect(third).not.toBe(second);
+      expect(third?.isClosed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("nudges a re-dial exactly once under a StrictMode double-invoke", () => {
     const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     const hostClient = buildClient();
@@ -407,6 +464,10 @@ describe("HostStreamProvider", () => {
   // `identityKey`, and the shared `acquireRemoteSession` cache - so a
   // regression in any one of those layers fails this test.
   it("rebuilds and closes the client on a same-host remote public-key rotation, isolated from every other field", () => {
+    // Fake timers so the cache's keep-warm linger can be driven to expiry -
+    // a released stale-key session now closes when the window ends, not
+    // synchronously in the release.
+    vi.useFakeTimers();
     const sessionForKeyA = fakeRemoteSession();
     const sessionForKeyB = fakeRemoteSession();
     mocks.createRemoteHostTransport.mockImplementation(
@@ -422,6 +483,8 @@ describe("HostStreamProvider", () => {
             userId: options.userId,
             hostPublicKey: options.hostPublicKey,
             relayAttachUrl: options.relayAttachUrl,
+            authRecovery: "revalidate",
+            authEpoch: FIXTURE_AUTH_EPOCH,
           },
           options.hostPublicKey === "pubkey-a"
             ? () => sessionForKeyA
@@ -454,13 +517,29 @@ describe("HostStreamProvider", () => {
       hostClient.bind(remoteTarget("pubkey-b"));
     });
 
-    // The old owner closed...
-    expect(sessionForKeyA.closeCalls).toBe(1);
+    // The old owner released its reference...
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-a"))).toBe(0);
     // ...and a FRESH one was acquired for the new key, not a resurrected
     // stale-key session.
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-b"))).toBe(1);
+
+    // The stale-key session is closed AT the rotation, not left to linger.
+    // Keep-warm exists so a prompt re-acquire of the SAME identity is free,
+    // and this identity can never be re-acquired - its cache key embeds the
+    // old public key. Lingering would only hold an obsolete authenticated
+    // relay socket open and, because `hasReadyRemoteSession` matches on
+    // `hostId` alone, report live-session evidence for a host whose real
+    // session is still dialing.
+    expect(sessionForKeyA.closeCalls).toBe(1);
+    expect(sessionForKeyB.closeCalls).toBe(0);
+
+    // ...and nothing is left armed to close the successor when the window
+    // that the old entry would have used elapses.
+    act(() => {
+      vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
+    });
+    expect(sessionForKeyA.closeCalls).toBe(1);
     expect(sessionForKeyB.closeCalls).toBe(0);
   });
 

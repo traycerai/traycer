@@ -27,7 +27,7 @@ import {
   navigateNestedFocus,
   navigateNestedFocusToPrimaryEditor,
 } from "@/lib/epic-nested-focus-navigation";
-import type { SettingsSectionId } from "@/lib/settings-sections";
+import { navigateToSettingsSection as navigateSettingsSection } from "@/lib/settings-navigation";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { routeIntentViaModalBridge } from "@/stores/tabs/system-overlay-registry";
 
@@ -81,20 +81,11 @@ export function routerAdapterFor(
       if (api === null) return;
       api.openHistory();
     },
-    navigateSettingsSection: (sectionId: SettingsSectionId) => {
-      const api = getSystemTabModalApi();
-      // When the modal is open, sub-leader / palette section picks
-      // update the in-modal section without leaving the underlying
-      // tab. Otherwise: focus or open the settings surface (modal or
-      // tab) on the requested section.
-      if (api !== null && api.isOverlayActive("settings")) {
-        api.setSection(sectionId);
-        return;
-      }
-      if (api !== null) {
-        api.openSettings({ section: sectionId, resetToGeneral: false });
-      }
-    },
+    // When the modal is open, sub-leader / palette section picks update the
+    // in-modal section without leaving the underlying tab. Otherwise: focus or
+    // open the settings surface (modal or tab) on the requested section. Shared
+    // with the in-panel call sites so the two cannot drift apart.
+    navigateSettingsSection,
     navigateToTabIntent: (intent) => {
       const api = getSystemTabModalApi();
       if (

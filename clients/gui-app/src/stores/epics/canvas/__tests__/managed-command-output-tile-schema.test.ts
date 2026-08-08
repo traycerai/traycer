@@ -11,7 +11,7 @@ import {
 /**
  * An output window is a POINTER, not a copy. The persisted tile carries the
  * command it points at and the host that owns it - nothing else. Every label,
- * kind and status a viewer reads comes from the live list stream, so a window
+ * kind and status a viewer reads comes from the owning chat's live set, so a window
  * restored days later cannot show a stale description or a status the command
  * left long ago. This test is the fence around that (`UI.md` §4, seam S8).
  */

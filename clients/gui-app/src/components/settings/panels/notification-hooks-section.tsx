@@ -264,6 +264,10 @@ function HooksEditor(props: {
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
 }) {
+  // Plain local state is enough here: `HostScopeGate` holds this section in a
+  // hidden `<Activity>` through transient same-host disconnects, so an open
+  // editor and its typed draft survive without being parked anywhere. A real
+  // host switch remounts through the gate's key and correctly starts closed.
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
   const [pendingDelete, setPendingDelete] = useState<HookEntry | null>(null);
 

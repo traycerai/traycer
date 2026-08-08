@@ -18,6 +18,7 @@ import {
   type AnalyticsSource,
 } from "@/lib/analytics";
 import { lastLocalHostIdKey, lastSelectedHostKey } from "@/lib/persist";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
 const LAST_SELECTED_HOST_STORAGE_KEY = lastSelectedHostKey();
@@ -617,6 +618,14 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.explicitSelection.hostId === previous
     ) {
       this.explicitSelection = { hostId: next };
+    }
+    // The Settings viewing scope is a holder too. A pin of this machine's
+    // OLD id would keep Settings administering the dead registry twin (and
+    // read `vanished` once the twin deregisters). A genuine remote pin never
+    // matches `previous`, so it is left alone.
+    const settingsScope = useSettingsHostScopeStore.getState();
+    if (settingsScope.scopedHostId === previous) {
+      settingsScope.setScopedHostId(next);
     }
     if (loadPersistedHostSelection() === previous) {
       persistHostSelection(next);

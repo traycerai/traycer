@@ -188,34 +188,45 @@ describe("<ChatFilterMenu />", () => {
     ).toBe("tui");
   });
 
-  it('omits "Show archived" entirely when the host lacks archive support (B4)', () => {
+  it("omits archive visibility when the host lacks archive support (B4)", () => {
     open(false);
-    expect(screen.queryByTestId("epic-sidebar-show-archived")).toBeNull();
-    expect(screen.queryByText("Show archived")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-archive-visibility")).toBeNull();
+    expect(screen.queryByText("Show")).toBeNull();
   });
 
-  it('offers "Show archived" and toggles the per-epic store flag when supported (B3/B4)', () => {
+  it("offers every archive visibility and persists the per-epic selection", () => {
     open(true);
     fireEvent.click(screen.getByText("Show"));
 
-    const item = screen.getByTestId("epic-sidebar-show-archived");
-    expect(item).toBeTruthy();
-    expect(screen.getByText("Show archived")).toBeTruthy();
-    // Default off.
     expect(
-      useLeftPanelStore.getState().chatShowArchivedByEpicId[EPIC_ID] ?? false,
-    ).toBe(false);
-
-    fireEvent.click(item);
-    expect(useLeftPanelStore.getState().chatShowArchivedByEpicId[EPIC_ID]).toBe(
-      true,
+      screen.getAllByRole("menuitemradio").map((item) => item.textContent),
+    ).toEqual(
+      expect.arrayContaining(["Unarchived only", "Archived only", "All chats"]),
     );
-
-    fireEvent.click(item);
-    // Toggle off drops the key rather than storing false.
     expect(
-      useLeftPanelStore.getState().chatShowArchivedByEpicId[EPIC_ID] ?? false,
-    ).toBe(false);
+      screen
+        .getByTestId("epic-sidebar-archive-visibility-unarchived")
+        .getAttribute("data-state"),
+    ).toBe("checked");
+
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-archive-visibility-archived"),
+    );
+    expect(
+      useLeftPanelStore.getState().chatArchiveVisibilityByEpicId[EPIC_ID],
+    ).toBe("archived");
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-visibility-all"));
+    expect(
+      useLeftPanelStore.getState().chatArchiveVisibilityByEpicId[EPIC_ID],
+    ).toBe("all");
+
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-archive-visibility-unarchived"),
+    );
+    expect(
+      useLeftPanelStore.getState().chatArchiveVisibilityByEpicId[EPIC_ID],
+    ).toBeUndefined();
   });
 });
 

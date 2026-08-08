@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   act,
   cleanup,
@@ -10,7 +12,6 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -522,9 +523,7 @@ function callbacksFor(path: string): WorktreeDeleteStreamCallbacks {
 }
 
 type ToolbarTestProps = {
-  hosts: readonly HostDirectoryEntry[];
-  value: string | null;
-  onChange: (hostId: string) => void;
+  scope: HostScope;
   onRefresh: () => Promise<unknown>;
   refreshing: boolean;
   canRefresh: boolean;
@@ -533,9 +532,7 @@ type ToolbarTestProps = {
 
 function testToolbarProps(): ToolbarTestProps {
   return {
-    hosts: [],
-    value: null,
-    onChange: vi.fn(),
+    scope: hostScopeFixture({}),
     onRefresh: vi.fn(),
     refreshing: false,
     canRefresh: true,

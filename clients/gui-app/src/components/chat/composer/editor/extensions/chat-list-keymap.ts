@@ -204,15 +204,22 @@ function handlePickerEnter(pickerStore: ComposerPickerStore | null): boolean {
   if (pickerStore === null) return false;
   const state = pickerStore.getState();
   if (!state.open) return false;
-  // An OPEN picker owns Enter outright - whether it can commit (a highlighted,
-  // enabled row) or not (empty results, still loading, or the active row legally
-  // refusing). `commitActiveItem()` commits when it can and no-ops (returns
-  // false) otherwise; either way we absorb the keypress so a half-typed trigger
-  // is never submitted with the picker still on screen. Returning
-  // `commitActiveItem()` directly, or short-circuiting on `items.length === 0`,
-  // would fall through to `onSubmit` in exactly those can't-commit states. This
-  // binding wins over the suggestion plugin's own key handling, so the absorb has
-  // to happen here rather than there.
+  // A mention menu the user never engaged (no arrow-key navigation this
+  // session) does not own Enter: the keypress is prose punctuation and falls
+  // through to the ordinary submit, with the un-inserted `@query` staying as
+  // typed text. Only the mention picker - a slash picker owns Enter as soon
+  // as it is open, a typed /command being deliberate.
+  if (state.kind === "mention" && !state.engaged) return false;
+  // An open ENGAGED picker owns Enter outright - whether it can commit (a
+  // highlighted, enabled row) or not (empty results, still loading, or the
+  // active row legally refusing). `commitActiveItem()` commits when it can and
+  // no-ops (returns false) otherwise; either way we absorb the keypress so a
+  // half-typed trigger is never submitted with the picker still on screen.
+  // Returning `commitActiveItem()` directly, or short-circuiting on
+  // `items.length === 0`, would fall through to `onSubmit` in exactly those
+  // can't-commit states. This binding wins over the suggestion plugin's own
+  // key handling, so both the absorb and the engaged gate have to happen here
+  // as well as there.
   state.commitActiveItem();
   return true;
 }
@@ -229,6 +236,10 @@ function commitPickerRefused(pickerStore: ComposerPickerStore | null): boolean {
   if (pickerStore === null) return false;
   const state = pickerStore.getState();
   if (!state.open) return false;
+  // Same engaged gate as `handlePickerEnter`: an un-engaged mention menu owns
+  // no Enter-family key, so the chord commits nothing and proceeds straight
+  // to submit-as-steer.
+  if (state.kind === "mention" && !state.engaged) return false;
   return !state.commitActiveItem();
 }
 

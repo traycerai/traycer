@@ -65,6 +65,90 @@ function providerState(providerId: string) {
   };
 }
 
+describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
+  it("total-decodes a genuinely missing key to undefined, never throwing", () => {
+    // An old host omits the key; the client reads undefined as "true" (no
+    // notice) via `?? true` / the field's quiet default. A throw here would
+    // drop every provider on an old host.
+    const parsed = providerCliStateSchema.parse(providerState("claude-code"));
+    expect(parsed.cliBinaryResolved).toBeUndefined();
+  });
+
+  it("catches a garbage value to true rather than throwing", () => {
+    // `.catch(true)` is the backward-safety half: a mid-rollout host sending
+    // a non-boolean must not break providers.list for every client.
+    for (const garbage of ["yes", null, 1, {}] as const) {
+      const parsed = providerCliStateSchema.parse({
+        ...providerState("cursor"),
+        cliBinaryResolved: garbage,
+      });
+      expect(parsed.cliBinaryResolved).toBe(true);
+    }
+  });
+
+  it("parses an explicit false and true", () => {
+    expect(
+      providerCliStateSchema.parse({
+        ...providerState("cursor"),
+        cliBinaryResolved: false,
+      }).cliBinaryResolved,
+    ).toBe(false);
+    expect(
+      providerCliStateSchema.parse({
+        ...providerState("cursor"),
+        cliBinaryResolved: true,
+      }).cliBinaryResolved,
+    ).toBe(true);
+  });
+
+  it("downgradeProviderCliStateToV10 strips the key so the strict v1.0 parse still returns a state", () => {
+    // providerCliStateSchemaV10 is a strictObject. A missed strip silently
+    // drops EVERY provider for v1.0 clients - the key is unknown and the
+    // whole row fails the parse. Use a pre-v2.0 provider id so the frozen
+    // v1.0 providerId enum accepts the row after the strip.
+    const state = providerCliStateSchema.parse({
+      ...providerState("cursor"),
+      cliBinaryResolved: false,
+    });
+    const downgraded = downgradeProviderCliStateToV10(state);
+    expect(downgraded).not.toBeNull();
+    expect(providerCliStateSchemaV10.safeParse(downgraded).success).toBe(true);
+    expect(downgraded).not.toHaveProperty("cliBinaryResolved");
+  });
+
+  it("v2.0 and v3.0 frozen shapes drop the unmodeled key on parse", () => {
+    // cursor is on every frozen providerId enum; amp is not (post-v2.0).
+    const state = providerCliStateSchema.parse({
+      ...providerState("cursor"),
+      cliBinaryResolved: false,
+    });
+    const v20 = providerCliStateSchemaV20.parse(state);
+    const v30 = providerCliStateSchemaV30.parse(state);
+    expect(v20).not.toHaveProperty("cliBinaryResolved");
+    expect(v30).not.toHaveProperty("cliBinaryResolved");
+  });
+
+  it("latest -> v2.0/v3.0 list downgrades never leak cliBinaryResolved", () => {
+    const state = providerCliStateSchema.parse({
+      ...providerState("codex"),
+      cliBinaryResolved: false,
+    });
+    for (const target of [2, 3] as const) {
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        7,
+        target,
+        { providers: [state], native: null },
+      );
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) continue;
+      expect(downgraded.value.providers[0]).not.toHaveProperty(
+        "cliBinaryResolved",
+      );
+    }
+  });
+});
+
 describe("provider-pack-registry fields default for old (pre-registry) hosts", () => {
   it("providerCliStateSchema total-decodes a genuinely missing key to undefined, never throwing", () => {
     // `.optional()` keeps the key itself omittable in a TS object literal (so
@@ -240,14 +324,14 @@ describe("old-client behavior on the error arm", () => {
     },
   });
 
-  it.each([1, 2, 3, 4, 5] as const)(
-    "v6.0 -> v%i.0 strips the error arm instead of failing the downgrade",
+  it.each([1, 2, 3, 4, 5, 6] as const)(
+    "v7.0 -> v%i.0 strips the error arm instead of failing the downgrade",
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        6,
+        7,
         targetMajor,
-        { providers: [erroredState] },
+        { providers: [erroredState], native: null },
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) return;
@@ -437,9 +521,9 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v2.0 downgrade never leaks the new fields to a v2.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       2,
-      { providers: [stateWithRegistryFields] },
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -453,9 +537,9 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v3.0 downgrade never leaks the new fields to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       3,
-      { providers: [stateWithRegistryFields] },
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -589,16 +673,16 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
 });
 
 describe("providers.list v5.0 is frozen against the registry fields", () => {
-  it("v5.0 does not model them, so a v6.0 -> v5.0 downgrade strips them", () => {
+  it("v5.0 does not model them, so a v7.0 -> v5.0 downgrade strips them", () => {
     // `cli-v1.1.8` shipped v5.0. Growing it is the same defect class as the
     // original mutation-echo break, on the carrier line itself. v5.0 pins the
     // frozen v4.0 base shape precisely so a field added to the LIVE base shape
     // cannot reach it.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       5,
-      { providers: [stateWithRegistryFields] },
+      { providers: [stateWithRegistryFields], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;

@@ -11,7 +11,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   LEGACY_HOST_RESOLVED_AT,
-  type WorktreeWorkspaceSummaryV13,
+  type WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -431,7 +431,7 @@ function summariesFor(
   branch: string,
   resolvedAt: number | null,
 ): {
-  readonly workspaces: WorktreeWorkspaceSummaryV13[];
+  readonly workspaces: WorktreeWorkspaceSummaryV14[];
   readonly scriptsAtRefs: never[];
 } {
   return {
@@ -449,7 +449,7 @@ function workspaceSummary(args: {
   readonly workspacePath: string;
   readonly branch: string;
   readonly resolvedAt: number | null;
-}): WorktreeWorkspaceSummaryV13 {
+}): WorktreeWorkspaceSummaryV14 {
   return {
     workspacePath: args.workspacePath,
     isGitRepo: true,
@@ -467,6 +467,7 @@ function workspaceSummary(args: {
       },
     ],
     scripts: null,
+    repoBranchPrefix: { status: "absent" },
     resolvedAt: args.resolvedAt,
   };
 }
@@ -617,7 +618,7 @@ function createFixture(): {
             );
           }
           const settle = (): {
-            readonly workspaces: WorktreeWorkspaceSummaryV13[];
+            readonly workspaces: WorktreeWorkspaceSummaryV14[];
             readonly scriptsAtRefs: never[];
           } => {
             cachedBranch = branch;
@@ -705,7 +706,7 @@ function createFixture(): {
       // Built with the hook's own key builders, so the assertion cannot drift
       // from the entry the rows actually render out of.
       const data = queryClient.getQueryData<{
-        readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV13>;
+        readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
       }>(
         queryKeys.hostMethod<HostRpcRegistry, "worktree.listByWorkspacePaths">(
           client.getActiveHostId(),

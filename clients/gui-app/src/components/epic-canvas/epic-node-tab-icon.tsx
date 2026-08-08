@@ -14,6 +14,7 @@ import {
 import {
   useMaybeEpicTuiAgentHarnessId,
   useRegisteredEpicActiveAgentIds,
+  useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -43,6 +44,47 @@ export function EpicNodeTabIcon(props: {
    * Idle-slot override for live chat icons (e.g. title-generation spinner).
    * Ignored for non-chat / static paths. Semantic chat status still wins.
    */
+  readonly defaultIcon: ReactNode | undefined;
+}) {
+  if (
+    props.variant === "live" &&
+    (props.node.type === "chat" || props.node.type === "terminal-agent")
+  ) {
+    return <ArchiveAwareEpicNodeTabIcon {...props} />;
+  }
+  return <EpicNodeTabIconContent {...props} />;
+}
+
+/**
+ * Live chat/TUI tab icon decoration. Kept in a leaf so non-archivable node
+ * kinds do not subscribe to the epic projection, and provider-less drag
+ * previews keep rendering through the registry-backed selector.
+ */
+function ArchiveAwareEpicNodeTabIcon(props: {
+  readonly node: EpicNodeRef;
+  readonly epicId: string;
+  readonly variant: "live" | "static";
+  readonly className: string;
+  readonly defaultIcon: ReactNode | undefined;
+}) {
+  const isArchived = useRegisteredEpicNodeArchived(props.epicId, props.node.id);
+  const icon = <EpicNodeTabIconContent {...props} />;
+  if (!isArchived) return icon;
+  return (
+    <span
+      className="inline-flex size-3.5 shrink-0 opacity-50"
+      data-testid="archived-tab-icon"
+    >
+      {icon}
+    </span>
+  );
+}
+
+function EpicNodeTabIconContent(props: {
+  readonly node: EpicNodeRef;
+  readonly epicId: string;
+  readonly variant: "live" | "static";
+  readonly className: string;
   readonly defaultIcon: ReactNode | undefined;
 }) {
   if (props.node.type === "chat" && props.variant === "live") {

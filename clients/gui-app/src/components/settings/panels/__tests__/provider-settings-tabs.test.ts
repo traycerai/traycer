@@ -31,7 +31,6 @@ describe("supportedTabsFor", () => {
     // `apiKeySupported` alone, which is false here.
     expect(
       supportedTabsFor({
-        providerId: "codex",
         apiKeySupported: false,
         advertised: ALL_TABS,
       }),
@@ -41,27 +40,27 @@ describe("supportedTabsFor", () => {
   it("honors the host's advertisement rather than showing every tab", () => {
     expect(
       supportedTabsFor({
-        providerId: "codex",
         apiKeySupported: false,
         advertised: ["env", "mcp"],
       }),
     ).toEqual(["env", "mcp"]);
   });
 
-  it.each(["cursor", "amp"] as const)(
-    "drops the CLI tab for %s, whose body would render nothing",
-    (providerId) => {
-      // The host DOES advertise `general` here - the point is that the client
-      // refuses to list a tab it knows is empty.
-      const tabs = supportedTabsFor({
-        providerId,
-        apiKeySupported: false,
+  it("keeps the CLI tab for every provider that advertises it", () => {
+    // This used to be the opposite assertion: cursor and amp were dropped by a
+    // `hidesCliCandidates` id check, on the premise that their CLI tab body
+    // would render nothing. Both of them spawn the Traycer-resolved binary for
+    // their MCP write verbs, so that tab is where a user points Traycer at a
+    // binary - the one thing an amp user with nothing on PATH needs and could
+    // not reach. The rule is now purely the host's advertisement, with no
+    // provider identity in it at all.
+    expect(
+      supportedTabsFor({
+        apiKeySupported: true,
         advertised: ALL_TABS,
-      });
-      expect(tabs).not.toContain("general");
-      expect(tabs).toContain("env");
-    },
-  );
+      }),
+    ).toContain("general");
+  });
 
   it("shows Account for an API-key provider even when nothing account-ish was advertised", () => {
     // amp is exactly this: it takes a key but advertises no `usage` tab,
@@ -69,7 +68,6 @@ describe("supportedTabsFor", () => {
     // field is the only way to authenticate it, so its tab cannot depend on
     // that advertisement.
     const tabs = supportedTabsFor({
-      providerId: "amp",
       apiKeySupported: true,
       advertised: ["general", "env", "mcp", "plugins", "skills"],
     });
@@ -80,7 +78,6 @@ describe("supportedTabsFor", () => {
   it("does not show Account for a provider without an API key", () => {
     expect(
       supportedTabsFor({
-        providerId: "codex",
         apiKeySupported: false,
         advertised: ["env", "mcp", "usage"],
       }),
@@ -91,7 +88,6 @@ describe("supportedTabsFor", () => {
     // The two answer different questions and one tab could only ever show the
     // half a given provider happened to have.
     const tabs = supportedTabsFor({
-      providerId: "droid",
       apiKeySupported: true,
       advertised: ALL_TABS,
     });
@@ -100,14 +96,45 @@ describe("supportedTabsFor", () => {
     expect(tabs.indexOf("account")).toBeLessThan(tabs.indexOf("usage"));
   });
 
+  it("places Account and Profiles & Limits ahead of CLI & Args", () => {
+    // People open Providers to sign in / switch profile / check quota; CLI
+    // setup is rarer. The first supported tab is also the default selection.
+    const tabs = supportedTabsFor({
+      apiKeySupported: true,
+      advertised: ALL_TABS,
+    });
+    expect(tabs[0]).toBe("account");
+    expect(tabs[1]).toBe("usage");
+    expect(tabs.indexOf("account")).toBeLessThan(tabs.indexOf("general"));
+    expect(tabs.indexOf("usage")).toBeLessThan(tabs.indexOf("general"));
+  });
+
+  it("opens on Profiles & Limits when Account is unsupported", () => {
+    const tabs = supportedTabsFor({
+      apiKeySupported: false,
+      advertised: ALL_TABS,
+    });
+    expect(tabs[0]).toBe("usage");
+    expect(tabs).not.toContain("account");
+  });
+
+  it("falls through to the first supported non-account tab when neither account nor usage apply", () => {
+    const tabs = supportedTabsFor({
+      apiKeySupported: false,
+      advertised: ["env", "mcp"],
+    });
+    expect(tabs[0]).toBe("env");
+    expect(tabs).not.toContain("account");
+    expect(tabs).not.toContain("usage");
+  });
+
   it("leaves an API-key provider with at least one reachable tab", () => {
-    // cursor loses `general` and is advertised nothing else: the derived
-    // Account tab is what stops the pane rendering a bare tab rail.
+    // A provider advertising nothing at all: the derived Account tab is what
+    // stops the pane rendering a bare tab rail.
     expect(
       supportedTabsFor({
-        providerId: "cursor",
         apiKeySupported: true,
-        advertised: ["general"],
+        advertised: [],
       }),
     ).toEqual(["account"]);
   });

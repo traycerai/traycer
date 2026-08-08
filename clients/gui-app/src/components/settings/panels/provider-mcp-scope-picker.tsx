@@ -89,6 +89,12 @@ export function McpScopePicker(props: {
   readonly browsePending: boolean;
   readonly onSelectGlobal: () => void;
   readonly onSelectProject: (path: string) => void;
+  /**
+   * Accessible name prefix for the trigger (the destination is appended).
+   * Defaults to MCP wording so existing call sites stay correct; Plugins and
+   * Skills pass their own labels so the control does not pretend to be MCP.
+   */
+  readonly locationLabel: string;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const {
@@ -99,6 +105,7 @@ export function McpScopePicker(props: {
     loading,
     onBrowse,
     browsePending,
+    locationLabel,
   } = props;
 
   const active =
@@ -124,12 +131,12 @@ export function McpScopePicker(props: {
       >
         <PopoverTrigger
           // The DESTINATION is in the accessible name, not only the static
-          // role. `aria-label` replaces the visible text outright, so the bare
-          // "MCP config location" told a screen-reader user what the control
-          // is for while withholding the one thing it displays - which of
-          // Global or a specific project it currently points at. That is the
-          // whole content of the trigger for a sighted user.
-          aria-label={`MCP config location: ${triggerTitle}`}
+          // role. `aria-label` replaces the visible text outright, so a bare
+          // role label told a screen-reader user what the control is for while
+          // withholding the one thing it displays - which of Global or a
+          // specific project it currently points at. That is the whole content
+          // of the trigger for a sighted user.
+          aria-label={`${locationLabel}: ${triggerTitle}`}
           className={cn(
             "flex h-7 w-[min(100%,22rem)] min-w-0 items-center gap-2 rounded-sm border border-border bg-background px-2.5 text-left text-ui-sm transition-colors",
             "hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",

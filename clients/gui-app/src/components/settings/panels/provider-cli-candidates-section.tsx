@@ -1,10 +1,11 @@
 import { use, useCallback, useId, useState, type ReactNode } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import type {
-  ProviderCliCandidate,
-  ProviderCliState,
-  ProviderManagedInstallState,
-  ProviderSelection,
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderCliCandidate,
+  type ProviderCliState,
+  type ProviderManagedInstallState,
+  type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -28,15 +29,94 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
-import { hidesCliCandidates } from "./provider-cli-candidates-visibility";
+
+type ProviderId = ProviderCliState["providerId"];
 
 // Grid keeps the columns aligned across header + rows; `minmax(0,1fr)` on
 // the Path column guarantees it shrinks/truncates instead of pushing the
 // table past the panel width.
 const TABLE_GRID =
   "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(5.5rem,auto)_2.25rem] items-center";
-const HERMES_INSTALLATION_URL =
-  "https://hermes-agent.nousresearch.com/docs/getting-started/installation";
+
+/**
+ * Which OTHER provider's CLI candidates this one falls back to when its own
+ * list is empty, because the two resolve to the same binary on disk (host:
+ * `baseBinaryName`/`providerSubdir` map traycer and openrouter onto opencode).
+ * `null` for a provider that owns its binary.
+ *
+ * Exhaustive rather than the `traycer || openrouter` id test it replaces:
+ * the pair was correct, but a provider added without an entry here silently
+ * inherited "owns its own binary", which for the next opencode-family member
+ * is an empty CLI table with a working binary sitting one row away. The
+ * compiler now asks.
+ *
+ * A borrowed row is only ever a shortcut to the same absolute path - selecting
+ * one writes a `custom` selection into THIS provider's own overrides, so
+ * nothing here is shared state.
+ */
+const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
+  "claude-code": null,
+  codex: null,
+  opencode: null,
+  cursor: null,
+  traycer: "opencode",
+  openrouter: "opencode",
+  huggingface: "opencode",
+  grok: null,
+  qwen: null,
+  kiro: null,
+  droid: null,
+  kimi: null,
+  copilot: null,
+  kilocode: null,
+  amp: null,
+  devin: null,
+  pi: null,
+  hermes: null,
+  omp: null,
+};
+
+/**
+ * Where to send a user whose provider ships no Traycer-managed binary and has
+ * none on this machine. `null` means "no install page we can point at" - the
+ * empty state still explains itself, it just has no link.
+ *
+ * Exhaustive rather than the `providerId === "hermes"` test it replaces. That
+ * test was the second of the two registration points `adding-a-harness.md`
+ * warns about (the first being the host's `PROVIDERS_WITHOUT_BUNDLED_BINARY`):
+ * they happened to agree while hermes was the only member, and the moment amp
+ * and cursor joined the host set they stopped agreeing. The empty state is now
+ * driven by the CANDIDATE LIST itself - the host omits the bundled row for
+ * exactly the providers in that set - and this map only supplies the link.
+ */
+const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
+  "claude-code": null,
+  codex: null,
+  opencode: null,
+  // No entry: no cursor-agent install page is referenced anywhere in this repo
+  // and one has not been verified, so this stays null rather than shipping a
+  // guessed URL that 404s from a screen a stuck user was sent to.
+  cursor: null,
+  traycer: null,
+  openrouter: null,
+  // Borrows OpenCode's binary (see `SHARED_CLI_CANDIDATE_SOURCE`), so there is
+  // no Hugging-Face-specific install page to send anyone to.
+  huggingface: null,
+  grok: null,
+  qwen: null,
+  kiro: null,
+  droid: null,
+  kimi: null,
+  copilot: null,
+  kilocode: null,
+  // The one URL `@ampcode/cli`'s own README publishes.
+  amp: "https://ampcode.com/manual",
+  devin: null,
+  pi: null,
+  hermes:
+    "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+  omp: null,
+};
 
 interface ProviderCandidateConfig {
   readonly selected: ProviderSelection;
@@ -47,18 +127,15 @@ function candidateConfigForProvider(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
 ): ProviderCandidateConfig {
-  const usesOpenCodeCandidates =
-    state.providerId === "traycer" || state.providerId === "openrouter";
-  if (!usesOpenCodeCandidates || state.candidates.length > 0) {
+  const sourceId = SHARED_CLI_CANDIDATE_SOURCE[state.providerId];
+  if (sourceId === null || state.candidates.length > 0) {
     return { selected: state.selected, candidates: state.candidates };
   }
 
-  const opencode = providers.find(
-    (provider) => provider.providerId === "opencode",
-  );
+  const source = providers.find((provider) => provider.providerId === sourceId);
   return {
     selected: state.selected,
-    candidates: opencode?.candidates ?? state.candidates,
+    candidates: source?.candidates ?? state.candidates,
   };
 }
 
@@ -163,39 +240,123 @@ function CandidateNotices({
 }
 
 /**
- * Hermes ships PATH-only (no bundled binary), so an empty candidate list means
- * "not installed on this machine" rather than "nothing detected yet" - point
- * the user at the install guide instead of an empty table. Extracted for the
- * same reason as `CandidateNotices`: it keeps the section below orchestration,
- * and keeps this anchor's RunnerHost branch out of that component's complexity
- * budget.
+ * An empty candidate list means "nothing runnable was found on this machine",
+ * not "nothing detected yet": the host only omits the bundled row for the
+ * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
+ * for everyone else the row is always present even when unavailable. So an
+ * empty table is a terminal state that owes the user a sentence and, where one
+ * exists, a link - not a bare header with no rows under it.
+ *
+ * This used to be hermes-only, by id. Amp and cursor joined the host's set
+ * (their SDKs spawn their own copies, so Traycer vendors neither) and would
+ * otherwise have rendered that bare table - which for amp is exactly the dead
+ * end this whole change is about: MCP add/remove/auth silently gone, and the
+ * one screen that could explain it saying nothing.
+ *
+ * Extracted for the same reason as `CandidateNotices`: it keeps the section
+ * below orchestration, and keeps this anchor's RunnerHost branch out of that
+ * component's complexity budget.
  */
-function HermesInstallNotice(): ReactNode {
+/**
+ * What the candidate area shows: the table, or one of the two empty states.
+ *
+ * A plain function rather than nested ternaries in the JSX — the three-way
+ * choice reads as a rule here, and the table branch is long enough that a
+ * reader arriving at its `)` should not have to reconstruct which of two
+ * conditions got them there.
+ *
+ * `adding` forces the table because that is where the custom-path input lives:
+ * a user who opened it must still be able to type, whatever the probe says.
+ */
+type CandidateArea = "probing" | "missing" | "table";
+
+function candidateAreaFor(args: {
+  readonly adding: boolean;
+  readonly probePending: boolean;
+  readonly candidateCount: number;
+}): CandidateArea {
+  if (args.adding || args.candidateCount > 0) return "table";
+  return args.probePending ? "probing" : "missing";
+}
+
+function CandidateEmptyArea({
+  area,
+  providerId,
+}: {
+  readonly area: Exclude<CandidateArea, "table">;
+  readonly providerId: ProviderId;
+}): ReactNode {
+  if (area === "probing") {
+    return (
+      <CliBinaryProbePendingNotice
+        providerLabel={PROVIDER_DISPLAY_NAMES[providerId]}
+      />
+    );
+  }
+  return (
+    <CliBinaryMissingNotice
+      providerLabel={PROVIDER_DISPLAY_NAMES[providerId]}
+      installGuideUrl={PROVIDER_INSTALL_GUIDE_URL[providerId]}
+    />
+  );
+}
+
+/**
+ * Shown INSTEAD of the missing-binary notice while the host's PATH probe is
+ * still in flight and has turned up nothing yet.
+ *
+ * Deliberately says nothing about installing: at this point we do not know
+ * whether a binary exists, and the missing notice's advice ("install it, or
+ * add its path below") is wrong often enough — every PATH-only provider on a
+ * cold open — that showing it early is worse than showing nothing.
+ */
+function CliBinaryProbePendingNotice({
+  providerLabel,
+}: {
+  readonly providerLabel: string;
+}): ReactNode {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+      <MutedAgentSpinner />
+      Looking for the {providerLabel} CLI…
+    </div>
+  );
+}
+
+function CliBinaryMissingNotice({
+  providerLabel,
+  installGuideUrl,
+}: {
+  readonly providerLabel: string;
+  readonly installGuideUrl: string | null;
+}): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
   const runnerHost = use(RunnerHostContext);
   return (
     <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
       <p>
-        Hermes must be installed on this machine. It ships without a bundled
-        binary.
+        No {providerLabel} CLI was found on this machine, and Traycer ships no
+        bundled copy of it. Install it, or add its path below.
       </p>
-      <a
-        href={HERMES_INSTALLATION_URL}
-        target="_blank"
-        rel="noreferrer"
-        onClick={(event) => {
-          // No RunnerHost bound (e.g. web): let the browser open the anchor
-          // natively; the desktop shell routes it through `openExternalLink`
-          // instead (mirrors PrChip in worktrees-settings-panel).
-          if (runnerHost === null) return;
-          // oxlint-disable-next-line react-doctor/no-prevent-default -- desktop shell opens external links via the Electron `openExternalLink` bridge, not renderer navigation; the null-guard above preserves native anchor nav in web builds.
-          event.preventDefault();
-          openExternalLink.mutate(HERMES_INSTALLATION_URL);
-        }}
-        className="mt-1 inline-flex text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
-      >
-        Hermes installation guide
-      </a>
+      {installGuideUrl === null ? null : (
+        <a
+          href={installGuideUrl}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(event) => {
+            // No RunnerHost bound (e.g. web): let the browser open the anchor
+            // natively; the desktop shell routes it through `openExternalLink`
+            // instead (mirrors PrChip in worktrees-settings-panel).
+            if (runnerHost === null) return;
+            // oxlint-disable-next-line react-doctor/no-prevent-default -- desktop shell opens external links via the Electron `openExternalLink` bridge, not renderer navigation; the null-guard above preserves native anchor nav in web builds.
+            event.preventDefault();
+            openExternalLink.mutate(installGuideUrl);
+          }}
+          className="mt-1 inline-flex text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
+        >
+          {providerLabel} installation guide
+        </a>
+      )}
     </div>
   );
 }
@@ -203,9 +364,14 @@ function HermesInstallNotice(): ReactNode {
 /**
  * S14: the CLI-path-management subsection of `ProviderDetail` (binary
  * selection table + "Add custom path" flow), extracted so the panel stays
- * orchestration. Renders nothing for providers with no CLI-candidate concept
- * (Cursor, Amp - API-key-only). Every hook here still runs unconditionally
- * regardless of that gate, matching the original inline placement.
+ * orchestration.
+ *
+ * Renders for EVERY provider. It used to bail out for cursor and amp via
+ * `hidesCliCandidates`, on the premise that an SDK-driven provider has no CLI
+ * binary the user could pick. Both of them spawn the Traycer-resolved binary
+ * for their MCP write verbs (`runAmpCliCapture`, `runCursorMcpCli`), so this
+ * table was never decorative for them - it is the only control over the binary
+ * those verbs use, and the only way to supply one when none is on PATH.
  */
 export function ProviderCliCandidatesSection({
   state,
@@ -215,7 +381,6 @@ export function ProviderCliCandidatesSection({
   readonly providers: readonly ProviderCliState[];
 }): ReactNode {
   const providerId = state.providerId;
-  const showCliCandidates = !hidesCliCandidates(providerId);
   const cliConfig = candidateConfigForProvider(state, providers);
   const radioName = useId();
   const [adding, setAdding] = useState(false);
@@ -254,8 +419,6 @@ export function ProviderCliCandidatesSection({
     );
   };
 
-  if (!showCliCandidates) return null;
-
   // Normalize once: an old host's payload leaves the key genuinely absent
   // (`undefined`), which reads identically to an explicit `null` everywhere
   // below.
@@ -277,8 +440,18 @@ export function ProviderCliCandidatesSection({
     managedInstallState,
     cliConfig.candidates,
   );
-  const isEmptyHermesState =
-    providerId === "hermes" && cliConfig.candidates.length === 0;
+  // `availabilityPending` means the host's shell/PATH probe is still running,
+  // and the protocol is explicit that `candidates` must not be trusted until
+  // it settles ("A pending row always carries `available: false` semantically"
+  // — provider-schemas). An empty interim list is therefore not evidence of
+  // absence: for the PATH-only providers (amp, cursor) this pane would tell
+  // people to install a binary the in-flight probe is about to find, and offer
+  // an install guide for a CLI they already have.
+  const candidateArea = candidateAreaFor({
+    adding,
+    probePending: state.availabilityPending,
+    candidateCount: cliConfig.candidates.length,
+  });
 
   return (
     <>
@@ -288,9 +461,7 @@ export function ProviderCliCandidatesSection({
         advisory={state.advisory ?? null}
         packPreparing={packPreparing}
       />
-      {isEmptyHermesState && !adding ? (
-        <HermesInstallNotice />
-      ) : (
+      {candidateArea === "table" ? (
         <div className="overflow-hidden rounded-lg border border-border/60">
           <div
             className={cn(
@@ -367,6 +538,8 @@ export function ProviderCliCandidatesSection({
             </div>
           ) : null}
         </div>
+      ) : (
+        <CandidateEmptyArea area={candidateArea} providerId={providerId} />
       )}
 
       {adding ? null : (

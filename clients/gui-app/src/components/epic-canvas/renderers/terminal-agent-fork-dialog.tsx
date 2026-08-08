@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
@@ -61,6 +62,8 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 // `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
 // tile in an epic shares one staging slot. Two dialog bodies can therefore be
@@ -199,6 +202,7 @@ export function TerminalAgentForkDialog(props: TerminalAgentForkDialogProps) {
 function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   const { hostClient, hostId, epicId, onOpenChange, open, tabId, target } =
     props;
+  const activityEnabled = useSurfaceActivity();
   const intent: TerminalAgentForkIntent = target?.intent ?? "fork";
   const titleInputId = useId();
   const argsInputId = useId();
@@ -613,6 +617,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     toolbarStore,
     trimmedTitle,
   ]);
+  usePrimaryActionShortcut(activityEnabled, submit);
 
   const crossProfileClaudeHint =
     intent === "continue" &&
@@ -785,7 +790,13 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
           >
             Cancel
           </Button>
-          <Button type="button" disabled={!canSubmit} onClick={submit}>
+          <Button
+            type="button"
+            aria-label={terminalForkButtonLabel(intent)}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            disabled={!canSubmit}
+            onClick={submit}
+          >
             {busy ? (
               <AgentSpinningDots
                 className="text-current"
@@ -794,6 +805,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
               />
             ) : null}
             {terminalForkButtonLabel(intent)}
+            <PrimaryActionShortcutHint />
           </Button>
         </DialogFooter>
       </DialogContent>

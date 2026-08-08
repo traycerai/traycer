@@ -2200,11 +2200,24 @@ export class AuthService {
   }
 
   /**
-   * Mints a fresh `RequestContext` for the validated identity AND projects
-   * the corresponding signed-in state into the store + persistence
-   * snapshot. The provider's `setSignedIn` aborts any previously-active
-   * context (cross-user transition or same-user re-sign-in), so host /
-   * runtime consumers see a single emit for the new identity.
+   * Projects the validated identity into the request context, store and
+   * persistence snapshot. Which context operation that means depends on who
+   * is already live:
+   *
+   *  - SAME user already signed in -> rotate the live credential lease in
+   *    place. "Same user => same context object" is a load-bearing invariant:
+   *    the remote-session cache keys its auth epoch on the lease SOURCE
+   *    object, and stream owners do not rebuild their transports on a
+   *    same-user event - so minting a fresh context here would retire the
+   *    epoch under every live session while its holders keep using it, then
+   *    duplicate the physical connection on the next acquire. The rotate
+   *    paths (locked rotate, reconcile, session restore) already hold this
+   *    invariant; this branch closes the last two ways around it (the
+   *    cross-window snapshot projection and a same-user device-flow
+   *    re-sign-in).
+   *  - Signed out, or a DIFFERENT user -> mint a fresh context. The
+   *    provider's `setSignedIn` aborts any previously-active context, so
+   *    host / runtime consumers see a single emit for the new identity.
    */
   private applySignedIn(
     bearerToken: string,
@@ -2215,12 +2228,34 @@ export class AuthService {
       return;
     }
     this.setDeviceProgress(null);
-    this.contextProvider.setSignedIn({
-      user,
-      bearerToken,
-      operationId: undefined,
-      externalAbortSignal: undefined,
-    });
+    const liveUserId = this.contextProvider.current()?.identity.userId;
+    let rotatedInPlace = false;
+    if (liveUserId !== undefined && liveUserId === user.user.id) {
+      try {
+        this.contextProvider.rotateCurrentBearer({
+          userId: liveUserId,
+          bearerToken,
+        });
+        rotatedInPlace = true;
+      } catch {
+        // The provider's own contract: rotation refusals (no current context,
+        // a released lease, an identity mismatch) are translated by
+        // auth-boundary callers into a clean sign-out + re-sign-in
+        // transition. Falling through to `setSignedIn` IS that transition -
+        // without it, a refused rotation would abort the whole sign-in
+        // projection mid-way (device progress already cleared, store never
+        // updated).
+        rotatedInPlace = false;
+      }
+    }
+    if (!rotatedInPlace) {
+      this.contextProvider.setSignedIn({
+        user,
+        bearerToken,
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+    }
     const profile = profileOverride ?? this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
     this.currentBearer = bearerToken;
