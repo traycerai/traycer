@@ -57,13 +57,21 @@ describe("<ManagedCommandNotifyIcon />", () => {
     );
   });
 
-  it("is decorative: the shell is always named by neighbouring words", () => {
-    const { container } = render(
+  it('speaks the notify state: the glyph is its only carrier now that every label says just "Shell"', () => {
+    const { container, rerender } = render(
       <ManagedCommandNotifyIcon notifying className={undefined} />,
     );
     const svg = container.querySelector("svg");
-    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    expect(svg?.getAttribute("role")).toBe("img");
+    expect(svg?.getAttribute("aria-label")).toBe("Notifying");
     // Colour on this surface means status; this icon must not compete.
     expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+
+    rerender(
+      <ManagedCommandNotifyIcon notifying={false} className={undefined} />,
+    );
+    expect(container.querySelector("svg")?.getAttribute("aria-label")).toBe(
+      "Not notifying",
+    );
   });
 });

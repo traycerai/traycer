@@ -14,9 +14,12 @@ import { cn } from "@/lib/utils";
  * The flag is live-tunable, so the glyph swaps under a row that stays put. That
  * is the point: the swap is what depicts "this stopped being a watcher".
  *
- * The icon SUPPLEMENTS text and never replaces it: it is `aria-hidden` because
- * the row always says "Shell" in words, and it stays neutral-toned because
- * colour on this surface means status and nothing else.
+ * Under the old model the icon supplemented kind-explicit text and hid from
+ * assistive tech. Post-unification every label is the constant "Shell", so
+ * this glyph is the ONLY carrier of the notify state - it must speak, or a
+ * screen-reader user cannot tell a watching shell from a silent one anywhere
+ * in the product. It stays neutral-toned because colour on this surface means
+ * status and nothing else.
  */
 export function ManagedCommandNotifyIcon(props: {
   readonly notifying: boolean;
@@ -25,7 +28,8 @@ export function ManagedCommandNotifyIcon(props: {
   const Glyph = props.notifying ? Radar : CirclePlay;
   return (
     <Glyph
-      aria-hidden
+      role="img"
+      aria-label={props.notifying ? "Notifying" : "Not notifying"}
       data-notify-icon={props.notifying ? "on" : "off"}
       className={cn(
         "size-3 shrink-0 text-muted-foreground/70",
