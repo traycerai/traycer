@@ -247,6 +247,33 @@ describe("CommGraphThreadPanel", () => {
     );
 
     expect(eventList.scrollTop).toBe(720);
+    eventList.scrollTop = 240;
+    const [edgeWithLiveEvent] = aggregateCommGraphEdges(
+      [...events, event({ id: 3, timestamp: 300, messageText: "live" })],
+      new Set(["a", "b"]),
+    );
+
+    rerender(
+      <TooltipProvider>
+        <CommGraphThreadPanel
+          edge={edgeWithLiveEvent}
+          epicId="epic-1"
+          agentNames={AGENT_NAMES}
+          initialHistoryCaughtUp
+          canOpenAgentForEvent={() => true}
+          canJump={() => false}
+          onJump={() => undefined}
+          canJumpToSender={() => false}
+          onJumpToSender={() => undefined}
+          canJumpToCreated={() => false}
+          onJumpToCreated={() => undefined}
+          onOpenAgentId={() => undefined}
+          onClose={() => undefined}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(eventList.scrollTop).toBe(240);
   });
 
   it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
