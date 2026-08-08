@@ -2,7 +2,7 @@ import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
   WorktreePrState,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 
 export type WorktreeDisplayedPrState = "open" | "closed" | "merged";
@@ -128,7 +128,7 @@ function displayedPrState(
 export function ownerWorkspaceMetadataItems(
   binding: WorktreeBinding | null,
   worktrees: readonly WorktreeHostEntryV12[],
-  workspaces: readonly WorktreeWorkspaceSummaryV13[],
+  workspaces: readonly WorktreeWorkspaceSummaryV14[],
 ): readonly OwnerWorkspaceMetadataItem[] {
   if (binding === null) return [];
   const worktreesByPath = new Map(
@@ -170,7 +170,7 @@ export function ownerWorkspaceMetadataItems(
  * `isMain` names a different directory on a different branch.
  */
 function workspaceBranch(
-  workspaces: readonly WorktreeWorkspaceSummaryV13[],
+  workspaces: readonly WorktreeWorkspaceSummaryV14[],
   runPath: string,
 ): string | null {
   const summary = workspaces.find(

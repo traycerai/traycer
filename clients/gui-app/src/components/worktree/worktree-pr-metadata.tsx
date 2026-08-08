@@ -2,7 +2,7 @@ import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { ExternalLink, FolderGit2, GitBranch } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -247,7 +247,7 @@ function WorktreePrHoverDetail(props: {
 export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
-  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly pending: boolean;
   readonly error: boolean;
 }): ReactNode {

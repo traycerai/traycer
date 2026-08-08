@@ -796,6 +796,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Setting the repo branch-prefix override persists worktree naming config.
+  "worktree.setRepoBranchPrefix": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "worktree.getBinding": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("worktree.getBinding", {

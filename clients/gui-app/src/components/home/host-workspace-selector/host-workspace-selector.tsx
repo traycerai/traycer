@@ -14,13 +14,14 @@ import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { HostSection } from "./host-section";
 import { activeRunNoticeFor } from "./active-run-notice";
 import type {
+  RepoBranchPrefixState,
   WorktreeBinding,
   WorktreeBindingEntry,
   WorktreeBindingOwnerKind,
   WorktreeBranch,
   WorktreeIntent,
   WorktreeFolderIntent,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -78,7 +79,12 @@ import {
   type SeedIntentOverride,
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
-import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
+import {
+  buildDefaultBranchByPath,
+  regenerateSingleWorkspaceBranchName,
+  EMPTY_DEFAULT_BRANCH,
+  type DefaultBranchDescriptor,
+} from "@/lib/worktree/default-branch-name";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { bindingEntryToFolderIntent } from "@/lib/worktree/binding-to-intent";
 import {
@@ -172,11 +178,11 @@ const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
 // Stable identity for "the query has not answered yet", so the summaries array
 // can be threaded straight into memos and the refresh hook without a fresh
 // `[]` per render invalidating every one of them.
-const EMPTY_WORKSPACE_SUMMARIES: ReadonlyArray<WorktreeWorkspaceSummaryV13> =
+const EMPTY_WORKSPACE_SUMMARIES: ReadonlyArray<WorktreeWorkspaceSummaryV14> =
   [];
 
 /**
- * Binding-entry → `WorktreeWorkspaceSummaryV13` fallback, rendered for a row until
+ * Binding-entry → `WorktreeWorkspaceSummaryV14` fallback, rendered for a row until
  * `worktree.listByWorkspacePaths` returns the authoritative disk metadata. Git
  * details are inferred from the entry; the row shows a loading affordance
  * (`metadataPending`) while the real query is in flight, so this guess is never
@@ -185,7 +191,7 @@ const EMPTY_WORKSPACE_SUMMARIES: ReadonlyArray<WorktreeWorkspaceSummaryV13> =
  */
 function workspaceSummaryFromBindingEntry(
   entry: WorktreeBindingEntry,
-): WorktreeWorkspaceSummaryV13 {
+): WorktreeWorkspaceSummaryV14 {
   const worktrees =
     entry.worktreePath === null
       ? []
@@ -205,6 +211,7 @@ function workspaceSummaryFromBindingEntry(
     mainBranch: entry.mode === "local" ? entry.branch : null,
     worktrees,
     scripts: null,
+    repoBranchPrefix: { status: "absent" },
     resolvedAt: null,
   };
 }
@@ -605,9 +612,9 @@ function HomeWorkspaceRows(props: {
     });
   }, [canRefreshSummaries, refreshSummaries, rowsIntentKey, rowsResting]);
   const summariesByPath = useMemo<
-    ReadonlyMap<string, WorktreeWorkspaceSummaryV13>
+    ReadonlyMap<string, WorktreeWorkspaceSummaryV14>
   >(() => {
-    const map = new Map<string, WorktreeWorkspaceSummaryV13>();
+    const map = new Map<string, WorktreeWorkspaceSummaryV14>();
     for (const ws of summaries) {
       map.set(ws.workspacePath, ws);
     }
@@ -633,7 +640,7 @@ function HomeWorkspaceRows(props: {
     stagingKey,
     unresolvedMetadataPaths,
   ]);
-  const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
+  const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV14>>(
     () =>
       resolvedFolders.flatMap((entry) => {
         const summary = summaryForResolvedFolder(entry, summariesByPath);
@@ -768,7 +775,9 @@ function HomeWorkspaceRows(props: {
         isPrimary: summary.workspacePath === resolvedPrimaryPath,
         isGitRepo: summary.isGitRepo,
         currentBranch,
-        defaultNewBranchName: defaultBranchByPath[summary.workspacePath] ?? "",
+        defaultNewBranchName: (
+          defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
+        ).name,
         summary,
       };
       // A fork surface may override the seed's per-folder disposition (Cross
@@ -879,6 +888,21 @@ function HomeWorkspaceRows(props: {
     if (summary === undefined) return null;
     return { workspacePath: scriptsTargetPath, summary };
   }, [scriptsTargetPath, summariesByPath]);
+  const regenerateBranchNameForWorkspace = useCallback(
+    (
+      path: string,
+      freshRepoBranchPrefix: RepoBranchPrefixState,
+      suffix: string,
+    ): string | null =>
+      regenerateSingleWorkspaceBranchName({
+        workspaces: gitSummaries,
+        globalBranchPrefix: worktreeBranchPrefix,
+        workspacePath: path,
+        freshRepoBranchPrefix,
+        suffix,
+      }),
+    [gitSummaries, worktreeBranchPrefix],
+  );
   const scriptsContext = useMemo<WorktreeScriptsContext>(
     () => ({
       epicId: "",
@@ -887,8 +911,9 @@ function HomeWorkspaceRows(props: {
       binding: null,
       stagingKey,
       hostClient: activeHostClient,
+      regenerateBranchNameForWorkspace,
     }),
-    [stagingKey, activeHostClient],
+    [stagingKey, activeHostClient, regenerateBranchNameForWorkspace],
   );
 
   return (
@@ -1131,7 +1156,9 @@ function workspaceRunItemForResolvedFolder(input: {
   readonly entry: ResolvedFolder;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
   readonly announcePrimaryChange: (folderName: string) => void;
-  readonly defaultBranchByPath: Readonly<Record<string, string>>;
+  readonly defaultBranchByPath: Readonly<
+    Record<string, DefaultBranchDescriptor>
+  >;
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
@@ -1139,7 +1166,7 @@ function workspaceRunItemForResolvedFolder(input: {
     intent: WorktreeFolderIntent,
     timestamp: number,
   ) => void;
-  readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV13>;
+  readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV14>;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem {
   const summary = summaryForResolvedFolder(input.entry, input.summariesByPath);
@@ -1168,8 +1195,9 @@ function workspaceRunItemForResolvedFolder(input: {
     isGitRepo,
   );
   const mode = deriveHomeRowMode(capturedEntry, isGitRepo);
-  const defaultNewBranchName =
-    input.defaultBranchByPath[input.entry.path] ?? "";
+  const branchDefault =
+    input.defaultBranchByPath[input.entry.path] ?? EMPTY_DEFAULT_BRANCH;
+  const defaultNewBranchName = branchDefault.name;
   const currentBranch = branchForSummary(summary);
   const branchLabel = workspaceRunBranchLabel({
     mode,
@@ -1202,6 +1230,7 @@ function workspaceRunItemForResolvedFolder(input: {
     summary,
     currentIntent: capturedEntry,
     defaultNewBranchName,
+    branchPrefixWarning: branchDefault.warning,
     repoIdentifier:
       summary?.repoIdentifier ?? repoIdentifierForResolvedFolder(input.entry),
     isPrimary,
@@ -1218,15 +1247,16 @@ function workspaceRunItemForResolvedFolder(input: {
     removePending: false,
     onEmit: emit,
     onSelectMode: (nextMode) => {
-      emitHomeRowMode({
+      emitRowMode({
         currentBranch,
         currentIntent: capturedEntry,
         defaultNewBranchName,
         emit,
+        isGitRepo,
         isPrimary,
         mode,
         nextMode,
-        summary,
+        repoIdentifier: summary?.repoIdentifier ?? null,
         workspacePath: input.entry.path,
       });
     },
@@ -1251,7 +1281,7 @@ function workspaceRunItemForUnresolvedFolder(input: {
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
-  readonly summary: WorktreeWorkspaceSummaryV13 | null;
+  readonly summary: WorktreeWorkspaceSummaryV14 | null;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem | null {
   if (input.summary !== null) return null;
@@ -1305,15 +1335,25 @@ function supportedCapturedEntryForSummary(
   return capturedEntry?.kind === "local" ? capturedEntry : null;
 }
 
-function emitHomeRowMode(input: {
+/**
+ * `onSelectMode` body shared by the home and in-Epic rows, extracted so the
+ * surrounding `workspaceRunItems`/item-building callbacks stay under the
+ * ESLint complexity cap - this branching (no-op-reselect guard, local vs
+ * worktree) is local to one row's mode switch, not the item-building loop
+ * around it. Callers derive their own `repoIdentifier`/`isGitRepo` (and any
+ * unresolved guard, like the in-Epic caller's `resolvedAt === null` check)
+ * since the two surfaces source those facts differently.
+ */
+function emitRowMode(input: {
   readonly currentBranch: string | null;
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
   readonly emit: (intent: WorktreeFolderIntent) => void;
+  readonly isGitRepo: boolean;
   readonly isPrimary: boolean;
   readonly mode: WorkspaceRunMode;
   readonly nextMode: WorkspaceRunMode;
-  readonly summary: WorktreeWorkspaceSummaryV13 | null;
+  readonly repoIdentifier: WorktreeWorkspaceSummaryV14["repoIdentifier"];
   readonly workspacePath: string;
 }): void {
   if (
@@ -1325,7 +1365,7 @@ function emitHomeRowMode(input: {
     input.emit({
       kind: "local",
       workspacePath: input.workspacePath,
-      repoIdentifier: input.summary?.repoIdentifier ?? null,
+      repoIdentifier: input.repoIdentifier,
       isPrimary: input.isPrimary,
     });
     return;
@@ -1333,12 +1373,9 @@ function emitHomeRowMode(input: {
   input.emit(
     defaultFolderIntent({
       workspacePath: input.workspacePath,
-      repoIdentifier: input.summary?.repoIdentifier ?? null,
+      repoIdentifier: input.repoIdentifier,
       isPrimary: input.isPrimary,
-      isGitRepo:
-        input.summary !== null &&
-        input.summary.resolvedAt !== null &&
-        input.summary.isGitRepo,
+      isGitRepo: input.isGitRepo,
       currentBranch: input.currentBranch,
       defaultNewBranchName: input.defaultNewBranchName,
     }),
@@ -1390,7 +1427,7 @@ function modeDisabledReasonFor(
 function unresolvedWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
-  readonly repoIdentifier: WorktreeWorkspaceSummaryV13["repoIdentifier"];
+  readonly repoIdentifier: WorktreeWorkspaceSummaryV14["repoIdentifier"];
   readonly isPrimary: boolean;
   readonly onLocate: () => void;
   readonly onMakePrimary: () => void;
@@ -1411,6 +1448,7 @@ function unresolvedWorkspaceRunItem(input: {
     summary: null,
     currentIntent: null,
     defaultNewBranchName: "",
+    branchPrefixWarning: null,
     repoIdentifier: input.repoIdentifier,
     isPrimary: input.isPrimary,
     canChangePrimary: true,
@@ -1433,7 +1471,7 @@ function unresolvedWorkspaceRunItem(input: {
 function pendingWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
-  readonly repoIdentifier: WorktreeWorkspaceSummaryV13["repoIdentifier"];
+  readonly repoIdentifier: WorktreeWorkspaceSummaryV14["repoIdentifier"];
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly isPrimary: boolean;
   readonly onRemove: () => void;
@@ -1451,6 +1489,7 @@ function pendingWorkspaceRunItem(input: {
     summary: null,
     currentIntent: null,
     defaultNewBranchName: "",
+    branchPrefixWarning: null,
     repoIdentifier: input.repoIdentifier,
     isPrimary: input.isPrimary,
     canChangePrimary: true,
@@ -1472,8 +1511,8 @@ function pendingWorkspaceRunItem(input: {
 
 function summaryForResolvedFolder(
   entry: ResolvedFolder,
-  summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV13>,
-): WorktreeWorkspaceSummaryV13 | null {
+  summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV14>,
+): WorktreeWorkspaceSummaryV14 | null {
   const summary = summariesByPath.get(entry.path) ?? null;
   if (summary === null) return null;
   const repoIdentifier = repoIdentifierForResolvedFolder(entry);
@@ -1483,12 +1522,12 @@ function summaryForResolvedFolder(
 
 function repoIdentifierForResolvedFolder(
   entry: ResolvedFolder,
-): WorktreeWorkspaceSummaryV13["repoIdentifier"] {
+): WorktreeWorkspaceSummaryV14["repoIdentifier"] {
   return entry.kind === "local-only" ? null : entry.repoIdentifier;
 }
 
 function branchForSummary(
-  summary: WorktreeWorkspaceSummaryV13 | null,
+  summary: WorktreeWorkspaceSummaryV14 | null,
 ): string | null {
   if (summary === null) return null;
   const mainEntry = summary.worktrees.find((w) => w.isMain) ?? null;
@@ -1621,7 +1660,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // to fetch — is `isPending` in v5 but never actually loading, so guard on the
   // active first fetch only.
   const metadataPending = props.hostClient !== null && metadataQuery.isLoading;
-  const workspaces = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
+  const workspaces = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV14>>(
     () =>
       bindingEntries.map(
         (entry) =>
@@ -1874,7 +1913,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         isPrimary: bindingEntry?.isPrimary ?? false,
         isGitRepo: true,
         currentBranch: branchForSummary(summary),
-        defaultNewBranchName: defaultBranchByPath[path] ?? "",
+        defaultNewBranchName: (
+          defaultBranchByPath[path] ?? EMPTY_DEFAULT_BRANCH
+        ).name,
       });
       if (intent.kind === "worktree") {
         // Stage the new git folder's default worktree for BOTH owner kinds.
@@ -1998,7 +2039,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // applied together on the explicit "Update" — no edit resumes the PTY on its
   // own.
   const emitForFolder = useCallback(
-    (ws: WorktreeWorkspaceSummaryV13) =>
+    (ws: WorktreeWorkspaceSummaryV14) =>
       (intent: WorktreeFolderIntent): void => {
         if (ws.resolvedAt === null) return;
         if (intent.kind !== "local") {
@@ -2084,41 +2125,87 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
+  // Everything a row needs BEFORE the `WorkspaceRunItem` is assembled,
+  // pulled out of the `.map()` callback below so that callback's own
+  // ESLint complexity count only has to cover assembling the item, not also
+  // deriving mode/intent/branch facts (the pattern the landing surface's
+  // standalone `workspaceRunItemForResolvedFolder` already follows).
+  const deriveInEpicRowState = useCallback(
+    (ws: WorktreeWorkspaceSummaryV14) => {
+      const entry = findBindingEntry(surface.binding, ws.workspacePath);
+      const pendingNewBranch =
+        pendingBranchByPath.get(ws.workspacePath) ?? null;
+      const { mode: currentMode, label: modeLabel } = computeInEpicFolderMode({
+        boundMode: entry?.mode ?? null,
+        boundBranch: entry?.branch ?? null,
+        pendingNewBranch,
+      });
+      const removePending = pendingRemovePaths.has(ws.workspacePath);
+      const isPrimary = entry?.isPrimary ?? true;
+      const stagedEntry = stagedEntryByPath.get(ws.workspacePath) ?? null;
+      const currentIntent =
+        stagedEntry ??
+        bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
+      const branchDefault =
+        defaultBranchByPath[ws.workspacePath] ?? EMPTY_DEFAULT_BRANCH;
+      const defaultNewBranchName = branchDefault.name;
+      const branchPrefixWarning = branchDefault.warning;
+      const currentBranch = branchForSummary(ws);
+      const otherWorktrees = ws.worktrees.filter((w) => !w.isMain);
+      const rowMetadataPending = isRowMetadataPending(
+        metadataPending,
+        ws.resolvedAt,
+      );
+      const rowIsGitRepo = ws.resolvedAt !== null && ws.isGitRepo;
+      const branchLabel = workspaceRunBranchLabel({
+        mode: currentMode,
+        currentBranch,
+        currentIntent,
+        diskWorktrees: otherWorktrees,
+      });
+      return {
+        currentMode,
+        modeLabel,
+        removePending,
+        isPrimary,
+        currentIntent,
+        defaultNewBranchName,
+        branchPrefixWarning,
+        currentBranch,
+        rowMetadataPending,
+        rowIsGitRepo,
+        branchLabel,
+        emit: emitForFolder(ws),
+      };
+    },
+    [
+      defaultBranchByPath,
+      emitForFolder,
+      metadataPending,
+      pendingBranchByPath,
+      pendingRemovePaths,
+      stagedEntryByPath,
+      surface.binding,
+    ],
+  );
+
   const workspaceRunItems = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
       workspaces.map((ws) => {
-        const entry = findBindingEntry(surface.binding, ws.workspacePath);
-        const pendingNewBranch =
-          pendingBranchByPath.get(ws.workspacePath) ?? null;
-        const { mode: currentMode, label: modeLabel } = computeInEpicFolderMode(
-          {
-            boundMode: entry?.mode ?? null,
-            boundBranch: entry?.branch ?? null,
-            pendingNewBranch,
-          },
-        );
-        const removePending = pendingRemovePaths.has(ws.workspacePath);
-        const isPrimary = entry?.isPrimary ?? true;
-        const stagedEntry = stagedEntryByPath.get(ws.workspacePath) ?? null;
-        const currentIntent =
-          stagedEntry ??
-          bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
-        const defaultNewBranchName =
-          defaultBranchByPath[ws.workspacePath] ?? "";
-        const currentBranch = branchForSummary(ws);
-        const otherWorktrees = ws.worktrees.filter((w) => !w.isMain);
-        const rowMetadataPending = isRowMetadataPending(
-          metadataPending,
-          ws.resolvedAt,
-        );
-        const rowIsGitRepo = ws.resolvedAt !== null && ws.isGitRepo;
-        const branchLabel = workspaceRunBranchLabel({
-          mode: currentMode,
-          currentBranch,
+        const {
+          currentMode,
+          modeLabel,
+          removePending,
+          isPrimary,
           currentIntent,
-          diskWorktrees: otherWorktrees,
-        });
-        const emit = emitForFolder(ws);
+          defaultNewBranchName,
+          branchPrefixWarning,
+          currentBranch,
+          rowMetadataPending,
+          rowIsGitRepo,
+          branchLabel,
+          emit,
+        } = deriveInEpicRowState(ws);
         return {
           key: ws.workspacePath,
           displayName: workspaceFolderName(ws.workspacePath),
@@ -2135,6 +2222,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           summary: ws,
           currentIntent,
           defaultNewBranchName,
+          branchPrefixWarning,
           repoIdentifier: ws.repoIdentifier,
           isPrimary,
           // Bound owner rows (chat / terminal-agent) have no atomic
@@ -2160,28 +2248,23 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           onEmit: emit,
           onMakePrimary: () => undefined,
           onSelectMode: (nextMode) => {
+            // Unresolved rows (`resolvedAt === null`) have no verified git
+            // facts yet - the mode switch itself is disabled for them
+            // (`modeDisabled` above), but guard here too since this closure
+            // outlives that render.
             if (ws.resolvedAt === null) return;
-            if (!locationSelectionChanges(nextMode, currentIntent, currentMode))
-              return;
-            if (nextMode === "local") {
-              emit({
-                kind: "local",
-                workspacePath: ws.workspacePath,
-                repoIdentifier: ws.repoIdentifier,
-                isPrimary,
-              });
-              return;
-            }
-            emit(
-              defaultFolderIntent({
-                workspacePath: ws.workspacePath,
-                repoIdentifier: ws.repoIdentifier,
-                isPrimary,
-                isGitRepo: true,
-                currentBranch,
-                defaultNewBranchName,
-              }),
-            );
+            emitRowMode({
+              currentBranch,
+              currentIntent,
+              defaultNewBranchName,
+              emit,
+              isGitRepo: rowIsGitRepo,
+              isPrimary,
+              mode: currentMode,
+              nextMode,
+              repoIdentifier: ws.repoIdentifier,
+              workspacePath: ws.workspacePath,
+            });
           },
           onLocate: null,
           onRemove: () => {
@@ -2221,19 +2304,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     [
       activeRunNotice,
       activeRunLocksBinding,
-      defaultBranchByPath,
-      emitForFolder,
+      deriveInEpicRowState,
       handleBindingCommitted,
       markBindingDirtyWithoutResume,
-      pendingBranchByPath,
-      pendingRemovePaths,
       stagedKey,
       unstageWorktreeEntry,
       props.hostClient,
       removeBindingEntryMutation,
-      stagedEntryByPath,
-      metadataPending,
-      surface.binding,
       surface.epicId,
       surface.kind,
       surface.ownerId,
@@ -2262,6 +2339,21 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     if (summary === undefined) return null;
     return { workspacePath: scriptsTargetPath, summary };
   }, [scriptsTargetPath, summariesByPath]);
+  const regenerateBranchNameForWorkspace = useCallback(
+    (
+      path: string,
+      freshRepoBranchPrefix: RepoBranchPrefixState,
+      suffix: string,
+    ): string | null =>
+      regenerateSingleWorkspaceBranchName({
+        workspaces: gitWorkspaces,
+        globalBranchPrefix: worktreeBranchPrefix,
+        workspacePath: path,
+        freshRepoBranchPrefix,
+        suffix,
+      }),
+    [gitWorkspaces, worktreeBranchPrefix],
+  );
   const scriptsContext = useMemo<WorktreeScriptsContext>(
     () => ({
       epicId: surface.epicId,
@@ -2270,6 +2362,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       binding: surface.binding,
       stagingKey: stagedKey,
       hostClient: props.hostClient,
+      regenerateBranchNameForWorkspace,
     }),
     [
       surface.epicId,
@@ -2278,6 +2371,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       ownerKind,
       stagedKey,
       props.hostClient,
+      regenerateBranchNameForWorkspace,
     ],
   );
 
