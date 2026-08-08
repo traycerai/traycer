@@ -50,7 +50,6 @@ function cloudChat(overrides: {
     publishedAt: overrides.publishedAt,
     throughRecordSeq: null,
     isOwnedByViewer: true,
-    ownerLastSeenAt: null,
   };
 }
 

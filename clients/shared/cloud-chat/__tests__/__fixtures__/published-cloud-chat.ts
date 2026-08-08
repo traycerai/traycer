@@ -408,7 +408,6 @@ function summaryFor(headSha256: string | null): CloudChatSummary {
     publishedAt: headSha256 === null ? null : 1_700_000_000_000,
     throughRecordSeq: headSha256 === null ? null : 42,
     isOwnedByViewer: true,
-    ownerLastSeenAt: null,
   };
 }
 
