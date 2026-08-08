@@ -73,7 +73,6 @@ const CHAT: CloudChatSummary = {
   publishedAt: 300,
   throughRecordSeq: null,
   isOwnedByViewer: true,
-  ownerLastSeenAt: null,
 };
 
 /**
