@@ -89,6 +89,8 @@ export interface CommGraphCanvasProps {
   /** The merged event array up to the cursor. */
   readonly events: ReadonlyArray<CommGraphEvent>;
   readonly hosts: ReadonlyArray<CommGraphHostState>;
+  /** Every source has delivered its initial bounded history. */
+  readonly initialHistoryCaughtUp: boolean;
   /** What the cursor event lights up, or null when it lights up nothing. */
   readonly pulse: CommGraphPulse | null;
   readonly view: CommGraphTileViewState;
@@ -130,26 +132,6 @@ function nodeHostStatus(
   return byHost.get(hostId) ?? "connecting";
 }
 
-/**
- * A panel only needs to wait for the hosts that contribute rows to it. A host
- * snapshot is bounded; its cursor reaches the snapshot head only after any
- * overflow has arrived as event frames. Empty snapshots are caught up at once.
- */
-function isPanelInitialHistoryCaughtUp(
-  events: ReadonlyArray<CommGraphEvent>,
-  hosts: ReadonlyArray<CommGraphHostState>,
-): boolean {
-  const hostIds = new Set(events.map((event) => event.hostId));
-  if (hostIds.size === 0) return false;
-  const hostsById = new Map(hosts.map((host) => [host.hostId, host]));
-  return Array.from(hostIds).every((hostId) => {
-    const host = hostsById.get(hostId);
-    if (host?.snapshotBoundary === null || host === undefined) return false;
-    const headId = host.snapshotBoundary.highestId;
-    return headId === null || (host.cursor !== null && host.cursor >= headId);
-  });
-}
-
 export function CommGraphCanvas(props: CommGraphCanvasProps) {
   // ReactFlow must create its own provider from the computed nodes below. An
   // empty outer provider would make it reuse a store initialized before those
@@ -176,6 +158,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     epicId,
     events,
     hosts,
+    initialHistoryCaughtUp,
     onJump,
     onJumpToCreated,
     onJumpToSender,
@@ -344,12 +327,8 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     );
   }, [events, selectedAgent]);
   const selectedEdgeHistoryCaughtUp =
-    selectedEdge !== null &&
-    isPanelInitialHistoryCaughtUp(selectedEdge.events, hosts);
-  const selectedAgentHistoryCaughtUp = isPanelInitialHistoryCaughtUp(
-    selectedAgentEvents,
-    hosts,
-  );
+    selectedEdge !== null && initialHistoryCaughtUp;
+  const selectedAgentHistoryCaughtUp = initialHistoryCaughtUp;
 
   const handleMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
