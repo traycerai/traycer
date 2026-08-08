@@ -35,6 +35,7 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { useAgentPlanQuery } from "@/hooks/agent/use-agent-plan-query";
 import {
+  payloadTruncationNotice,
   usePublishedChatSource,
   usePublishedPlanContent,
   type PublishedChatSource,
@@ -251,6 +252,7 @@ function LivePlanModal(props: PlanModalProps) {
       modalMarkdown={resolved.markdown}
       unavailable={resolved.unavailable}
       isFetching={planQuery.isFetching}
+      truncationNotice={null}
     />
   );
 }
@@ -272,6 +274,11 @@ function PublishedPlanModal(
       modalMarkdown={publishedPlan.markdown ?? markdownFallback}
       unavailable={!publishedPlan.isLoading && publishedPlan.markdown === null}
       isFetching={publishedPlan.isLoading}
+      truncationNotice={
+        publishedPlan.truncation === null
+          ? null
+          : payloadTruncationNotice(publishedPlan.truncation)
+      }
     />
   );
 }
@@ -283,6 +290,12 @@ function PlanModalView(
     readonly unavailable: boolean;
     /** Whether the full markdown is still on its way, from either source. */
     readonly isFetching: boolean;
+    /**
+     * Set when the markdown is a PREFIX of the real plan. Null on the live
+     * path; a cloud payload past the reader's preview bound arrives truncated,
+     * and a plan cut mid-step must not read as the whole plan.
+     */
+    readonly truncationNotice: string | null;
   },
 ) {
   const { segment, open, modalMarkdown, unavailable } = props;
@@ -314,6 +327,14 @@ function PlanModalView(
           </div>
         </DialogHeader>
         <div className="min-h-0 overflow-y-auto px-5 py-4">
+          {props.truncationNotice === null ? null : (
+            <p
+              className="mb-3 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm italic text-muted-foreground"
+              data-testid="plan-truncated-notice"
+            >
+              {props.truncationNotice}
+            </p>
+          )}
           {props.isFetching ? (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground">
               <AgentSpinningDots

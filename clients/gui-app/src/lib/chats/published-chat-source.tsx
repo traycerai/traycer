@@ -32,9 +32,14 @@ import { useCloudChatPayload } from "@/hooks/chats/use-cloud-chat-queries";
  * That is the property `published-chat-source.test.tsx` pins - not "the live
  * path still works", but "the cloud reader is never consulted".
  *
- * Both consumers call both hooks unconditionally and pick between the results.
- * Hook order stays stable, there are no conditional imports, and there is no
- * third data path: exactly one of the two is enabled at a time.
+ * Each consumer DISPATCHES on the context without hooks, into a live sibling
+ * and a published one - the shape `ChatNodeShell` already uses. Two arms inside
+ * one component was the first design and it failed its own purpose: a
+ * mounted-but-disabled cloud query still creates an observer and still demands
+ * a `QueryClientProvider`, which three untouched segment suites proved by going
+ * red. A component boundary means the live arm is the code that shipped, mounts
+ * nothing extra, and a transcript holding dozens of file-change blocks pays for
+ * none of them.
  */
 
 export interface PublishedChatSource {
@@ -92,6 +97,8 @@ export function usePublishedSnapshotDiff(args: {
       }
     | undefined;
   readonly isLoading: boolean;
+  /** Set when either side was served as a prefix. See {@link PayloadExtent}. */
+  readonly truncation: PayloadExtent | null;
 } {
   const identity = args.source?.identity ?? null;
   const client = args.source?.client ?? null;
@@ -113,11 +120,13 @@ export function usePublishedSnapshotDiff(args: {
         : { kind: "file-snapshot", sha256: args.afterHash },
     enabled: args.enabled && args.afterHash !== null,
   });
-  if (!args.enabled) return { data: undefined, isLoading: false };
+  if (!args.enabled) {
+    return { data: undefined, isLoading: false, truncation: null };
+  }
   const beforePending = args.beforeHash !== null && before.data === undefined;
   const afterPending = args.afterHash !== null && after.data === undefined;
   if ((beforePending && !before.isError) || (afterPending && !after.isError)) {
-    return { data: undefined, isLoading: true };
+    return { data: undefined, isLoading: true, truncation: null };
   }
   const beforeText = payloadText(before.data);
   const afterText = payloadText(after.data);
@@ -133,6 +142,9 @@ export function usePublishedSnapshotDiff(args: {
       reason: missing ? "blob_missing" : "snapshot",
     },
     isLoading: false,
+    // Either side being a prefix makes the DIFF partial - a complete "after"
+    // against a truncated "before" invents changes at the cut.
+    truncation: payloadExtent(after.data) ?? payloadExtent(before.data),
   };
 }
 
@@ -141,7 +153,11 @@ export function usePublishedPlanContent(args: {
   readonly source: PublishedChatSource | null;
   readonly contentHash: string | null;
   readonly enabled: boolean;
-}): { readonly markdown: string | null; readonly isLoading: boolean } {
+}): {
+  readonly markdown: string | null;
+  readonly isLoading: boolean;
+  readonly truncation: PayloadExtent | null;
+} {
   const query = useCloudChatPayload({
     client: args.source?.client ?? null,
     identity: args.source?.identity ?? null,
@@ -152,12 +168,57 @@ export function usePublishedPlanContent(args: {
     enabled: args.enabled && args.contentHash !== null,
   });
   if (!args.enabled || args.contentHash === null) {
-    return { markdown: null, isLoading: false };
+    return { markdown: null, isLoading: false, truncation: null };
   }
   if (query.data === undefined && !query.isError) {
-    return { markdown: null, isLoading: true };
+    return { markdown: null, isLoading: true, truncation: null };
   }
-  return { markdown: payloadText(query.data), isLoading: false };
+  return {
+    markdown: payloadText(query.data),
+    isLoading: false,
+    truncation: payloadExtent(query.data),
+  };
+}
+
+/**
+ * How much of a payload this actually is.
+ *
+ * The cloud reader deliberately serves a bounded PREFIX of a large payload and
+ * says so on the response. Dropping that flag was a restoration regression in
+ * the strictest sense: the viewer this ticket demolished rendered a truncation
+ * notice, so a surface that silently presents 64 KiB of a 65,547-byte file as
+ * the whole thing is worse than the thing it replaced. Every consumer of these
+ * hooks must be able to say "this is a prefix", so it travels beside the text
+ * rather than being folded into it.
+ */
+export interface PayloadExtent {
+  readonly isTruncated: boolean;
+  readonly byteLength: number;
+}
+
+function payloadExtent(
+  payload:
+    | {
+        readonly kind: string;
+        readonly isTruncated?: boolean;
+        readonly byteLength?: number;
+      }
+    | undefined,
+): PayloadExtent | null {
+  if (payload === undefined) return null;
+  if (payload.kind !== "text") return null;
+  if (payload.isTruncated !== true) return null;
+  return { isTruncated: true, byteLength: payload.byteLength ?? 0 };
+}
+
+/**
+ * The notice a partial payload earns, in the words the demolished viewer used.
+ *
+ * Kept as one function so the diff and the plan cannot drift into describing
+ * the same limit two ways.
+ */
+export function payloadTruncationNotice(extent: PayloadExtent): string {
+  return `Showing the first part of ${extent.byteLength} bytes.`;
 }
 
 /**
