@@ -12,7 +12,7 @@
  * must not be labelled as either - an agent's turn is full of work that never
  * reaches this record.
  */
-import { useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -77,6 +77,27 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
     title,
   } = props;
   const panelWidthPx = useCommGraphPanelWidthPx();
+  const eventListRef = useRef<HTMLDivElement | null>(null);
+  const hasPositionedInitialEventsRef = useRef(false);
+
+  // Chronology reads down the panel (oldest first), but the useful opening
+  // position is its newest row. Wait for the first non-empty render so an agent
+  // panel opened while history is loading still lands correctly. This is
+  // deliberately a one-time position: later arrivals must not pull a reader
+  // away from older rows they intentionally scrolled back to.
+  useLayoutEffect(() => {
+    const eventList = eventListRef.current;
+    if (
+      eventList === null ||
+      events.length === 0 ||
+      hasPositionedInitialEventsRef.current
+    ) {
+      return;
+    }
+    eventList.scrollTop = eventList.scrollHeight;
+    hasPositionedInitialEventsRef.current = true;
+  }, [events.length]);
+
   return (
     <aside
       aria-label={ariaLabel}
@@ -124,7 +145,11 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
           {emptyLabel}
         </p>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          ref={eventListRef}
+          data-testid={`${testId}-events`}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
           {events.map((event) => (
             <CommGraphEventRow
               key={commGraphEventKey(event)}

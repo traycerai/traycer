@@ -409,6 +409,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       </div>
       {selectedEdge === null ? null : (
         <CommGraphThreadPanel
+          key={selectedEdge.id}
           edge={selectedEdge}
           epicId={epicId}
           agentNames={nameById}
@@ -425,6 +426,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       )}
       {selectedAgent === null ? null : (
         <CommGraphAgentDetailPanel
+          key={selectedAgent.id}
           agent={selectedAgent}
           epicId={epicId}
           agentNames={nameById}

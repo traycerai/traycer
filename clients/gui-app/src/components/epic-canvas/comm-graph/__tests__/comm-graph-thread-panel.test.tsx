@@ -178,6 +178,22 @@ describe("CommGraphThreadPanel", () => {
     expect(rows[1].textContent).toContain("second");
   });
 
+  it("opens at the newest row while keeping oldest-to-newest DOM order", () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(720);
+
+    renderPanel([
+      event({ id: 1, timestamp: 100, messageText: "oldest" }),
+      event({ id: 2, timestamp: 200, messageText: "newest" }),
+    ]);
+
+    const eventList = screen.getByTestId("comm-graph-thread-panel-events");
+    expect(eventList.scrollTop).toBe(720);
+    expect(messageRows().map((row) => row.textContent)).toEqual([
+      expect.stringContaining("oldest"),
+      expect.stringContaining("newest"),
+    ]);
+  });
+
   it("keeps reused cloud origin sequences as distinct rows and open state", async () => {
     renderPanel([
       event({
