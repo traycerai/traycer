@@ -205,6 +205,8 @@ export function publishedChatSessionState(
       updatedAt: input.updatedAt,
       isTitleEditedByUser: false,
       settings: null,
+      pinnedUserProviderHandle: null,
+      lastDeliveredRolesDigest: null,
       activeSessionChain: null,
       claudePendingWakes: [],
       // Copied into mutable arrays: `Chat` is the persisted record shape and
@@ -222,6 +224,8 @@ export function publishedChatSessionState(
     messages: input.conversion.messages,
     events: input.conversion.events,
     queue: { status: "idle", items: [] },
+    // A copy has no live host stream, so no managed commands can ever arrive.
+    managedCommands: [],
     runStatus: "idle",
     activeTurn: null,
     steerProtocolSupported: false,
