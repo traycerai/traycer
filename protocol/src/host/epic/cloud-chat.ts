@@ -130,6 +130,27 @@ export const cloudChatSummarySchema = z.object({
   throughRecordSeq: z.number().int().nonnegative().nullable(),
   /** True when the signed-in user owns this chat (their private rows list too). */
   isOwnedByViewer: z.boolean(),
+  /**
+   * When the OWNING host was last seen publishing, server-side, or `null` when
+   * the server has no presence answer for it.
+   *
+   * Added ahead of its consumer, deliberately. This surface is unreleased, so a
+   * field costs nothing now and a new key on a released unary response is
+   * breaking even nullable - the choice is "now" or "a major later", and the
+   * reader that wants it is already specified.
+   *
+   * It exists because the client's own reachability answer cannot be trusted
+   * for a host it is not bound to: that check is local DIRECTORY MEMBERSHIP, so
+   * two hosts sharing an id make one answer for the other, and a device holding
+   * no connection to the owner has no answer at all. Presence belongs to the
+   * party that receives the heartbeats.
+   *
+   * Scope, so it is not mistaken for more than it is: presence drives whether a
+   * row reads as LOCKED and how that is worded. It never licenses a live open -
+   * that stays with publication-identity match, because "the owner is alive"
+   * and "this row is a chat I can steer from here" are different claims.
+   */
+  ownerLastSeenAt: z.number().nullable(),
 });
 export type CloudChatSummary = z.infer<typeof cloudChatSummarySchema>;
 
