@@ -11,6 +11,7 @@ import {
 import { ChatTileSessionView } from "./chat-tile";
 import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
+import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source";
 import { PublishedChatOwnerBackBanner } from "./dead-tile-banner";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -69,6 +70,10 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     [node.taskId, node.chatId, node.ownerUserId],
   );
   const state = useCloudChatTranscript({ client, identity, enabled: true });
+  const publishedSource = useMemo(
+    () => ({ identity, client }),
+    [identity, client],
+  );
   // The owning host's own name when the directory knows it, the raw id when it
   // does not. A host that has never been seen from this device is exactly the
   // case this surface exists for, so the id is a real fallback rather than a
@@ -169,7 +174,14 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {ownerBackBanner}
-      <ChatTileSessionView
+      {/* The heavy content this transcript NAMES - file diffs, full plans -
+          is not in the published document; it is content-addressed in the
+          cloud. The blocks that expand it decide their own fetch several
+          layers down and are shared with every live chat, so this is the seam
+          that redirects them without threading a source through renderers that
+          have no business knowing about publication. Absent everywhere else. */}
+      <PublishedChatSourceProvider source={publishedSource}>
+        <ChatTileSessionView
         handle={handle}
         node={{
           // The CHAT id, not the tile ref's id: inside the surface this is what
@@ -183,13 +195,14 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         viewTabId={props.viewTabId}
         isActive={props.isActive}
         currentEpicId={props.epicId}
-        readOnlyNotice={publishedChatLockReason({
-          ownerIsBack,
-          ownerLabel,
-          unreadableCount: conversion.unreadableCount,
-          fidelityNotice: state.fidelityNotice,
-        })}
-      />
+          readOnlyNotice={publishedChatLockReason({
+            ownerIsBack,
+            ownerLabel,
+            unreadableCount: conversion.unreadableCount,
+            fidelityNotice: state.fidelityNotice,
+          })}
+        />
+      </PublishedChatSourceProvider>
     </div>
   );
 }
