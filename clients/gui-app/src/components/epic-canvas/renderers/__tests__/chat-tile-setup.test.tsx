@@ -164,6 +164,8 @@ function emitSnapshot(
         messages: [...messages],
         events: [...events],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

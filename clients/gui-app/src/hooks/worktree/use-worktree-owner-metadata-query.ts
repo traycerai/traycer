@@ -10,7 +10,7 @@ import type {
   WorktreeBinding,
   WorktreeBindingOwnerKind,
   WorktreeHostEntryV14,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
@@ -24,7 +24,7 @@ import { queryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
 
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV14[] = [];
-const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV13[] = [];
+const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV14[] = [];
 
 type WorktreeListAllForHostResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -143,7 +143,7 @@ export interface WorktreeOwnerMetadata {
    * the owner runs in directly never appears there and has no branch without
    * this.
    */
-  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly isPending: boolean;
   readonly error: HostRpcError | null;
   /**

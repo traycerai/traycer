@@ -10,7 +10,7 @@ import {
   LEGACY_HOST_RESOLVED_AT,
   type WorktreeBinding,
   type WorktreeHostEntryV14,
-  type WorktreeWorkspaceSummaryV13,
+  type WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -297,7 +297,7 @@ function workspaceSummary(args: {
   readonly workspacePath: string;
   readonly branch: string;
   readonly resolvedAt: number | null;
-}): WorktreeWorkspaceSummaryV13 {
+}): WorktreeWorkspaceSummaryV14 {
   return {
     workspacePath: args.workspacePath,
     isGitRepo: true,
@@ -315,6 +315,7 @@ function workspaceSummary(args: {
       },
     ],
     scripts: null,
+    repoBranchPrefix: { status: "absent" },
     resolvedAt: args.resolvedAt,
   };
 }

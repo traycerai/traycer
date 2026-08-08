@@ -36,6 +36,11 @@ import {
   worktreeListByWorkspacePathsResponseSchemaV12,
   worktreeListByWorkspacePathsRequestSchemaV13,
   worktreeListByWorkspacePathsResponseSchemaV13,
+  worktreeListByWorkspacePathsRequestSchemaV14,
+  worktreeListByWorkspacePathsResponseSchemaV14,
+  repoBranchPrefixStateSchema,
+  worktreeSetRepoBranchPrefixRequestSchema,
+  worktreeSetRepoBranchPrefixResponseSchema,
   worktreeSubmoduleMergeFactSchema,
   worktreeSubmoduleMergeFactSchemaV12,
 } from "@traycer/protocol/host/worktree-schemas";
@@ -883,11 +888,152 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  it("exposes v1.3 as the latest installed minor of major 1", () => {
-    expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(3);
+  it("exposes v1.4 as the latest installed minor of major 1", () => {
+    expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(4);
     expect(
       Object.keys(listByWorkspacePathsRegistry[1].versions).sort(),
-    ).toEqual(["0", "1", "2", "3"]);
+    ).toEqual(["0", "1", "2", "3", "4"]);
+  });
+
+  it("upgrades v1.3 to v1.4 stamping repoBranchPrefix absent for every workspace", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web", "/Users/dev/acme/api"],
+      scriptRefs: [],
+      forceRefresh: false,
+    };
+    // Request shape is unchanged from v1.3 - pass-through both ways.
+    expect(
+      upgradeRequestToVersion(listByWorkspacePathsRegistry, V13, V14, request),
+    ).toEqual(request);
+    expect(
+      worktreeListByWorkspacePathsRequestSchemaV14.parse(request),
+    ).toEqual(request);
+
+    const response = {
+      workspaces: [
+        {
+          workspacePath: "/Users/dev/acme/web",
+          isGitRepo: true,
+          repoIdentifier: { owner: "acme", repo: "web" },
+          mainBranch: "main",
+          worktrees: [],
+          scripts: null,
+          resolvedAt: 1_700_000_000_000,
+        },
+        {
+          workspacePath: "/Users/dev/acme/api",
+          isGitRepo: false,
+          repoIdentifier: null,
+          mainBranch: null,
+          worktrees: [],
+          scripts: null,
+          resolvedAt: null,
+        },
+      ],
+      scriptsAtRefs: [],
+    };
+    const upgraded = upgradeResponseToVersion(
+      listByWorkspacePathsRegistry,
+      V13,
+      V14,
+      response,
+    );
+    // NEW CLIENT + OLD HOST: a v1.3 host never sends `repoBranchPrefix`; the
+    // bridge stamps `{status:"absent"}` so the client inherits the global
+    // default rather than warning about a missing field.
+    expect(upgraded.workspaces[0].repoBranchPrefix).toEqual({
+      status: "absent",
+    });
+    expect(upgraded.workspaces[1].repoBranchPrefix).toEqual({
+      status: "absent",
+    });
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV14.parse(upgraded),
+    ).toEqual(upgraded);
+    // OLD CLIENT + NEW HOST: a v1.3 caller strips the field it never knew.
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded)
+        .workspaces[0],
+    ).not.toHaveProperty("repoBranchPrefix");
+  });
+});
+
+describe("repoBranchPrefixStateSchema", () => {
+  it("parses the three status variants", () => {
+    expect(repoBranchPrefixStateSchema.parse({ status: "absent" })).toEqual({
+      status: "absent",
+    });
+    expect(
+      repoBranchPrefixStateSchema.parse({ status: "present", value: "feat/" }),
+    ).toEqual({ status: "present", value: "feat/" });
+    // Empty string is a deliberate override, not absent.
+    expect(
+      repoBranchPrefixStateSchema.parse({ status: "present", value: "" }),
+    ).toEqual({ status: "present", value: "" });
+    // Host does not judge git-ref legality - invalid strings stay "present".
+    expect(
+      repoBranchPrefixStateSchema.parse({
+        status: "present",
+        value: "has spaces",
+      }),
+    ).toEqual({ status: "present", value: "has spaces" });
+    expect(
+      repoBranchPrefixStateSchema.parse({ status: "malformed" }),
+    ).toEqual({ status: "malformed" });
+  });
+
+  it("rejects incomplete or unknown status shapes", () => {
+    expect(() =>
+      repoBranchPrefixStateSchema.parse({ status: "present" }),
+    ).toThrow();
+    expect(() =>
+      repoBranchPrefixStateSchema.parse({ status: "unknown" }),
+    ).toThrow();
+  });
+});
+
+describe("worktree.setRepoBranchPrefix schemas", () => {
+  const setRepoBranchPrefixRegistry =
+    hostRpcRegistry["worktree.setRepoBranchPrefix"];
+
+  it("round-trips null, empty-string, and a real override", () => {
+    const clear = {
+      epicId: "epic-1",
+      workspacePath: "/Users/dev/acme/web",
+      branchPrefix: null,
+    };
+    const empty = {
+      epicId: "",
+      workspacePath: "/Users/dev/acme/web",
+      branchPrefix: "",
+    };
+    const present = {
+      epicId: "epic-1",
+      workspacePath: "/Users/dev/acme/web",
+      branchPrefix: "team/",
+    };
+    expect(worktreeSetRepoBranchPrefixRequestSchema.parse(clear)).toEqual(
+      clear,
+    );
+    expect(worktreeSetRepoBranchPrefixRequestSchema.parse(empty)).toEqual(
+      empty,
+    );
+    expect(worktreeSetRepoBranchPrefixRequestSchema.parse(present)).toEqual(
+      present,
+    );
+    expect(
+      worktreeSetRepoBranchPrefixResponseSchema.parse({ updated: true }),
+    ).toEqual({ updated: true });
+    expect(
+      worktreeSetRepoBranchPrefixResponseSchema.parse({ updated: false }),
+    ).toEqual({ updated: false });
+  });
+
+  it("is registered off the released floor as a v1.0 method", () => {
+    expect(setRepoBranchPrefixRegistry[1].latestMinor).toBe(0);
+    expect(
+      Object.keys(setRepoBranchPrefixRegistry[1].versions).sort(),
+    ).toEqual(["0"]);
   });
 });
 
