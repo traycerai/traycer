@@ -280,7 +280,24 @@ export function ChatTile(props: ChatTileProps) {
   // ahead of the create - closing the local-first subscribe-first race.
   const chatRecord = useChatById(node.id);
   const tabHostId = useTabHostId();
-  const handle = useChatSessionHandle(node.id, tabHostId, chatRecord !== null);
+  // A CROSS-HOST live open (a connected peer host's chat, opened from the
+  // unified sidebar) may never get a local projection record at all - the
+  // chat lives in the owner host's registry, not this device's. The record
+  // gate exists only to close the local-first subscribe-first race, and that
+  // race is a same-host phenomenon: the chat was just created on the host
+  // that was active here. So the gate applies exactly when this tab bound
+  // the then-active host. Decided ONCE at mount (a `useState` initializer,
+  // never a reactive active-host read - tabs are bound to a host for life
+  // and must not change behavior when the active host swaps).
+  const hostBinding = useHostBinding();
+  const [isCrossHostOpen] = useState(
+    () => (hostBinding?.hostClient?.getActiveHostId() ?? null) !== tabHostId,
+  );
+  const handle = useChatSessionHandle(
+    node.id,
+    tabHostId,
+    chatRecord !== null || isCrossHostOpen,
+  );
   const reachability = useHostReachability(tabHostId);
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same

@@ -23,9 +23,10 @@ import {
  *
  * It sits in the SAME list as the local rows, in recency order, because a chat's
  * host is a property of the chat and not a place chats live. What marks it out
- * is its state, not its section: a lock glyph, and the owning host named beside
- * the title. Clicking it opens the ordinary chat surface, rendered from the last
- * copy that host published, with the composer locked.
+ * is its state, not its section: a REACHABLE owner's chat opens live, bound to
+ * the host that owns it, exactly as a tree row would; an unreachable owner's
+ * chat gets a lock glyph and opens the ordinary chat surface rendered from the
+ * last copy that host published, with the composer locked.
  *
  * It is a LEAF. The cloud row carries a `parentChatId`, but the parent it names
  * is a chat on another machine that this device may not be able to see at all,
@@ -63,15 +64,16 @@ export function EpicSidebarCloudChatRow(
   // as a tree row would. Only an unreachable owner produces a locked row and
   // the published-copy surface behind it.
   const ownerReachable = ownerReachability.status === "reachable";
-  // Reachable is NECESSARY but not SUFFICIENT. A host that answers may still
-  // not hold this chat - most visibly when two dev slots share one host id, but
-  // equally for a chat that host lost or a row that outlived it. The live tile
-  // is record-backed, so opening one for a chat absent from this device's tree
-  // produced nothing at all: the click was received and the canvas never
-  // changed. Openable-live therefore means the chat is HERE and its owner
-  // answers; everything else opens the published copy, which is the honest
-  // surface for "this exists but not on this machine" and, unlike a no-op,
-  // always renders something.
+  // Openable-live = the owner answers. Host ids are unique (2026-08-07
+  // ruling), so a reachable owner IS the machine that holds this chat, and
+  // the click opens the ordinary live surface bound to it - the tile
+  // subscribes against the owner host directly and no longer needs the chat
+  // in this device's projection (its record gate admits cross-host opens).
+  // The one residual: a fork-redirected row publishes under a clone id the
+  // owner has no local chat for, so its live open surfaces the host's
+  // refusal in the tile rather than a transcript - rare, visible, and
+  // strictly better than routing every reachable-owner chat to a stale
+  // read-only copy. An unreachable owner keeps the locked published copy.
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTilePreviewInTabFocusTarget,
@@ -93,8 +95,26 @@ export function EpicSidebarCloudChatRow(
     [chat, title, readingHostId],
   );
 
+  // The ordinary live chat ref, bound to the OWNER host - byte-identical to
+  // what a tree row opens for its own chats, which is the point: a reachable
+  // host's chat is an ordinary chat, wherever the click came from.
+  const liveTileRef = useCallback(
+    () => ({
+      id: chat.identity.chatId,
+      type: "chat" as const,
+      name: title,
+      hostId: chat.ownerHostId,
+    }),
+    [chat, title],
+  );
+
+  const openRef = useCallback(
+    () => (ownerReachable ? liveTileRef() : publishedTileRef()),
+    [ownerReachable, liveTileRef, publishedTileRef],
+  );
+
   const open = useCallback(() => {
-    const ref = publishedTileRef();
+    const ref = openRef();
     navigateNested(props.epicId, props.tabId, () =>
       prepareOpenTilePreviewInTabFocusTarget(props.tabId, {
         ...ref,
@@ -102,7 +122,7 @@ export function EpicSidebarCloudChatRow(
       }),
     );
   }, [
-    publishedTileRef,
+    openRef,
     navigateNested,
     props.epicId,
     props.tabId,
@@ -110,7 +130,7 @@ export function EpicSidebarCloudChatRow(
   ]);
 
   const openPermanent = useCallback(() => {
-    const ref = publishedTileRef();
+    const ref = openRef();
     navigateNested(props.epicId, props.tabId, () =>
       prepareOpenTileInTabFocusTarget(props.tabId, {
         ...ref,
@@ -118,7 +138,7 @@ export function EpicSidebarCloudChatRow(
       }),
     );
   }, [
-    publishedTileRef,
+    openRef,
     navigateNested,
     props.epicId,
     props.tabId,

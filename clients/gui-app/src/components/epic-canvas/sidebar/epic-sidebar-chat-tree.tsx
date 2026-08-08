@@ -1023,6 +1023,14 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   );
 
   const activeHostId = useReactiveActiveHostId() ?? "unknown-host";
+  // The tab must bind to the chat's OWNER host, not whichever host happens to
+  // be active: a connected peer host's chat reaches this tree through the
+  // shared projection, and binding it to the active host would open a tab
+  // that asks the wrong machine for the transcript. Downstream already
+  // honors the ref's hostId (`renderTile` wraps each ref in its own
+  // `TabHostProvider`), so the owner id is all that was missing.
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const openHostId = ownerHostId ?? activeHostId;
 
   const selectChatNode = useCallback(() => {
     if (isRenaming) return;
@@ -1033,11 +1041,11 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         instanceId: uuidv4(),
         type: openableType,
         name: nodeName,
-        hostId: activeHostId,
+        hostId: openHostId,
       }),
     );
   }, [
-    activeHostId,
+    openHostId,
     epicId,
     isRenaming,
     navigateNested,
@@ -1067,12 +1075,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
           instanceId: uuidv4(),
           type: openableType,
           name: nodeName,
-          hostId: activeHostId,
+          hostId: openHostId,
         }),
       );
     }
   }, [
-    activeHostId,
+    openHostId,
     epicId,
     isRenaming,
     navigateNested,

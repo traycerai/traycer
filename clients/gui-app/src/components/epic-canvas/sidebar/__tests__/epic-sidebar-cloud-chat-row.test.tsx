@@ -38,13 +38,14 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
  * The canvas open actions, captured. The row's whole job on click is to hand a
  * tile ref to one of these, so what it hands over IS the behaviour under test.
  */
-const openedRefs: { type: string; id: string }[] = [];
+const openedRefs: { type: string; id: string; hostId: string }[] = [];
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   // The canvas actions take `(tabId, ref)`; the ref is the second argument.
   useEpicCanvasStore:
-    () => (_tabId: string, ref: { type: string; id: string }) => {
-      openedRefs.push({ type: ref.type, id: ref.id });
+    () =>
+    (_tabId: string, ref: { type: string; id: string; hostId: string }) => {
+      openedRefs.push({ type: ref.type, id: ref.id, hostId: ref.hostId });
     },
 }));
 
@@ -174,16 +175,18 @@ describe("EpicSidebarCloudChatRow", () => {
       );
     }
 
-    it("opens the published copy when the chat is not on this device", () => {
-      // The user-visible defect: the owner's host id answered (two dev slots
-      // share one id), so the row routed to a LIVE record-backed tile for a
-      // chat absent from this device's tree - and the canvas silently opened
-      // nothing at all. Reachable is necessary, not sufficient.
+    it("opens LIVE, bound to the owner host, when the owner is reachable", () => {
+      // Host ids are unique (2026-08-07 ruling): a reachable owner IS the
+      // machine that holds this chat, so the click opens the ordinary live
+      // chat ref against it - the same ref shape a tree row opens - and the
+      // tile subscribes cross-host without needing a local projection record.
       reachability.status = "reachable";
       renderRow();
       clickRow();
       expect(openedRefs).toHaveLength(1);
-      expect(openedRefs[0].type).toBe("published-chat");
+      expect(openedRefs[0].type).toBe("chat");
+      expect(openedRefs[0].id).toBe(CHAT.identity.chatId);
+      expect(openedRefs[0].hostId).toBe(CHAT.ownerHostId);
     });
 
     it("opens the published copy when the owner is unreachable", () => {
