@@ -209,6 +209,7 @@ import {
   epicEditCommentV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
+  epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
@@ -5089,6 +5090,25 @@ export const EPIC_RPC_METHODS = {
       versions: {
         0: {
           contract: epicReadCloudChatPayloadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor), and deliberately NOT part of the byte-pipe set above:
+  // this one reads the host's OWN fork-redirect rows, so it exists only where a
+  // chat-sync publisher is installed and has to degrade on its own. A client
+  // without it folds a task's cloud list on `chatId` equality, which is exactly
+  // right until a chat forks and exactly wrong afterwards - see
+  // `epic/chat-publication-identity.ts`.
+  "epic.listChatPublicationTargets": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListChatPublicationTargetsV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -102,6 +102,10 @@ import {
   resolveCloudChatHeadRequestSchema,
   resolveCloudChatHeadResponseSchema,
 } from "@traycer/protocol/host/epic/cloud-chat";
+import {
+  listChatPublicationTargetsRequestSchema,
+  listChatPublicationTargetsResponseSchema,
+} from "@traycer/protocol/host/epic/chat-publication-identity";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -561,6 +565,21 @@ export const epicReadCloudChatPayloadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: readCloudChatPayloadRequestSchema,
   responseSchema: readCloudChatPayloadResponseSchema,
+});
+
+// ---- Publication identity (a host-LOCAL read, not a cloud read) -------- //
+//
+// Deliberately not one of the five above. Those forward cloud bytes the host
+// may not interpret and are registered unconditionally; this answers from the
+// host's own fork-redirect rows and exists only where a chat-sync publisher is
+// installed, so it degrades independently. See `chat-publication-identity.ts`
+// for what the mapping is and why folding a cloud list on `chatId` equality is
+// wrong exactly once - at a fork - in both directions at the same time.
+export const epicListChatPublicationTargetsV10 = defineRpcContract({
+  method: "epic.listChatPublicationTargets",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listChatPublicationTargetsRequestSchema,
+  responseSchema: listChatPublicationTargetsResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };
