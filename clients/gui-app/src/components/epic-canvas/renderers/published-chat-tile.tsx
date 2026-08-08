@@ -12,6 +12,7 @@ import { ChatTileSessionView } from "./chat-tile";
 import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source";
+import { useChatById } from "@/lib/epic-selectors";
 import { PublishedChatOwnerBackBanner } from "./dead-tile-banner";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -84,8 +85,16 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // The one transition an on-demand read cannot cover: the owner came back
   // while this copy was open. Same reachability source the sidebar row's lock
   // reads - a second source could disagree with the row that opened this tile.
+  // "Back" has to mean the chat can actually be opened live, not merely that
+  // something answers to the owner's host id. Two dev slots share one id, so
+  // reachability alone offered an "Open live" button that routed to a
+  // record-backed tile for a chat this device does not hold - and opened
+  // nothing at all. Same signal the row routes on, for the same reason.
+  const localRecord = useChatById(node.chatId);
   const ownerIsBack =
-    node.ownerHostId.length > 0 && ownerReachability.status === "reachable";
+    node.ownerHostId.length > 0 &&
+    ownerReachability.status === "reachable" &&
+    localRecord !== null;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -197,6 +206,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsBack,
+            ownerIsReachable: ownerReachability.status === "reachable",
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,
@@ -222,8 +232,10 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
  * that is not an error.
  */
 export function publishedChatLockReason(input: {
-  /** True once the owner is reachable again while this copy is still open. */
+  /** True once this chat could actually be opened live from here. */
   readonly ownerIsBack: boolean;
+  /** Whether something answers to the owning host id at all. */
+  readonly ownerIsReachable: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -233,9 +245,15 @@ export function publishedChatLockReason(input: {
   // that same host is back reads as a bug in whichever line the user believes
   // second - and the useful instruction changes too: there is nothing to wait
   // for once the host is back, only a live tab to open.
+  // Three states, because the middle one is real and neither of the others
+  // describes it: a host that answers but does not hold this chat. Telling
+  // someone it is offline would be false, and telling them to open it live
+  // would send them at a button that can do nothing.
   const base = input.ownerIsBack
     ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. That host is back — open it live to continue.`
-    : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
+    : input.ownerIsReachable
+      ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
+      : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
   if (input.unreadableCount > 0) {
     return `${base} ${input.unreadableCount} item${input.unreadableCount === 1 ? "" : "s"} need a newer version of Traycer to render.`;
   }
