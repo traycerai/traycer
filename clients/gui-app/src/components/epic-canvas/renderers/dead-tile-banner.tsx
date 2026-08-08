@@ -369,3 +369,48 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
     </div>
   );
 }
+
+export interface PublishedChatOwnerBackBannerProps {
+  readonly hostLabel: string;
+  readonly onOpenLive: () => void;
+  readonly testId: string;
+}
+
+/**
+ * `ChatDeadTileBanner` in the opposite direction: that one appears when a live
+ * tile's host DIES, this one when a read-only tile's host COMES BACK.
+ *
+ * It exists because of a transition, not a steady state. A published copy needs
+ * no refresh channel while its owner is unreachable - an unreachable host's last
+ * published copy is the latest state anywhere - so the read is on-demand. The
+ * one moment that reasoning stops holding is the moment the owner returns: the
+ * open tile is now a stale snapshot of a chat that is live again, and the honest
+ * answer is not to start polling but to say so and offer the live tab.
+ *
+ * Informational, not automatic: replacing the surface under a reader mid-scroll
+ * would be a worse answer than a banner they can act on when ready.
+ */
+export function PublishedChatOwnerBackBanner(
+  props: PublishedChatOwnerBackBannerProps,
+): ReactNode {
+  return (
+    <div
+      role="status"
+      data-testid={props.testId}
+      className="flex items-center gap-3 border-b border-border bg-muted/40 px-4 py-2 text-ui-sm text-muted-foreground"
+    >
+      <span className="min-w-0 flex-1">
+        &quot;{props.hostLabel}&quot; is back online. This is still the last
+        published copy.
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={props.onOpenLive}
+      >
+        Open live
+      </Button>
+    </div>
+  );
+}

@@ -53,6 +53,12 @@ export function EpicSidebarCloudChatRow(
   // its own tab's host for life regardless. The OWNING host below is metadata.
   const readingHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const ownerReachability = useHostReachability(chat.ownerHostId);
+  // The lock is the CHAT's state, not the row's category. A cloud row whose
+  // owning host is reachable is an ordinary chat that simply is not on this
+  // device's tree yet - it opens live, against the host that owns it, exactly
+  // as a tree row would. Only an unreachable owner produces a locked row and
+  // the published-copy surface behind it.
+  const ownerReachable = ownerReachability.status === "reachable";
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTilePreviewInTabFocusTarget,
@@ -61,7 +67,19 @@ export function EpicSidebarCloudChatRow(
     (s) => s.prepareOpenTileInTabFocusTarget,
   );
 
-  const tileRef = useCallback(
+  const liveTileRef = useCallback(
+    () => ({
+      id: chat.identity.chatId,
+      instanceId: uuidv4(),
+      type: "chat" as const,
+      name: title,
+      // Binds the OWNING host, which is the one that can answer for this chat.
+      hostId: chat.ownerHostId,
+    }),
+    [chat.identity.chatId, chat.ownerHostId, title],
+  );
+
+  const publishedTileRef = useCallback(
     () =>
       makePublishedChatTileRef({
         taskId: chat.identity.taskId,
@@ -75,7 +93,7 @@ export function EpicSidebarCloudChatRow(
   );
 
   const open = useCallback(() => {
-    const ref = tileRef();
+    const ref = ownerReachable ? liveTileRef() : publishedTileRef();
     navigateNested(props.epicId, props.tabId, () =>
       prepareOpenTilePreviewInTabFocusTarget(props.tabId, {
         ...ref,
@@ -83,7 +101,9 @@ export function EpicSidebarCloudChatRow(
       }),
     );
   }, [
-    tileRef,
+    ownerReachable,
+    liveTileRef,
+    publishedTileRef,
     navigateNested,
     props.epicId,
     props.tabId,
@@ -91,7 +111,7 @@ export function EpicSidebarCloudChatRow(
   ]);
 
   const openPermanent = useCallback(() => {
-    const ref = tileRef();
+    const ref = ownerReachable ? liveTileRef() : publishedTileRef();
     navigateNested(props.epicId, props.tabId, () =>
       prepareOpenTileInTabFocusTarget(props.tabId, {
         ...ref,
@@ -99,7 +119,9 @@ export function EpicSidebarCloudChatRow(
       }),
     );
   }, [
-    tileRef,
+    ownerReachable,
+    liveTileRef,
+    publishedTileRef,
     navigateNested,
     props.epicId,
     props.tabId,
@@ -131,19 +153,22 @@ export function EpicSidebarCloudChatRow(
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate">{title}</span>
           {/* The lock states what is true of the CHAT - its owner is out of
-              reach - so it travels with the row rather than with a section. */}
-          <TooltipWrapper
-            label={`Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`}
-            side="right"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Lock
-              className="size-3 shrink-0 text-muted-foreground"
-              data-testid={`epic-sidebar-cloud-lock-${chat.identity.chatId}`}
-              aria-label={`On ${ownerLabel}, offline`}
-            />
-          </TooltipWrapper>
+              reach - so it travels with the row rather than with a section, and
+              it is absent when that is not true of this chat. */}
+          {ownerReachable ? null : (
+            <TooltipWrapper
+              label={`Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`}
+              side="right"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Lock
+                className="size-3 shrink-0 text-muted-foreground"
+                data-testid={`epic-sidebar-cloud-lock-${chat.identity.chatId}`}
+                aria-label={`On ${ownerLabel}, offline`}
+              />
+            </TooltipWrapper>
+          )}
           <CloudRowIdleTime
             publishedAt={chat.publishedAt ?? chat.metadataUpdatedAt}
           />

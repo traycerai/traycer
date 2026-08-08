@@ -22,11 +22,10 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-a",
 }));
 
+const reachability = { status: "unreachable", hostLabel: "Tanveer's laptop" };
+
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: "unreachable",
-    hostLabel: "Tanveer's laptop",
-  }),
+  useHostReachability: () => reachability,
 }));
 
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
@@ -39,6 +38,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 
 afterEach(() => {
   cleanup();
+  reachability.status = "unreachable";
 });
 
 const CHAT: CloudChatSummary = {
@@ -109,6 +109,41 @@ describe("EpicSidebarCloudChatRow", () => {
     );
     expect(
       screen.getByRole("button", { name: "Walkthrough" }),
+    ).toBeTruthy();
+  });
+
+  it("drops the lock when the owning host is reachable", () => {
+    // The lock is the chat's STATE, not a category the row belongs to. A cloud
+    // row whose owner is reachable is an ordinary chat that simply is not on
+    // this device's tree yet - it opens live, so presenting it as locked would
+    // be a false statement about a chat that can be steered right now.
+    reachability.status = "reachable";
+    render(
+      <EpicSidebarCloudChatRow
+        chat={CHAT}
+        epicId={CHAT.identity.taskId}
+        tabId="tab-1"
+        depth={0}
+      />,
+    );
+    expect(
+      screen.queryByTestId(
+        `epic-sidebar-cloud-lock-${CHAT.identity.chatId}`,
+      ),
+    ).toBeNull();
+  });
+
+  it("locks the row while the owning host is unreachable", () => {
+    render(
+      <EpicSidebarCloudChatRow
+        chat={CHAT}
+        epicId={CHAT.identity.taskId}
+        tabId="tab-1"
+        depth={0}
+      />,
+    );
+    expect(
+      screen.getByTestId(`epic-sidebar-cloud-lock-${CHAT.identity.chatId}`),
     ).toBeTruthy();
   });
 });
