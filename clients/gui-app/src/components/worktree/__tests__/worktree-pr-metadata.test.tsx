@@ -10,7 +10,7 @@ import type {
   DiskWorktreeEntry,
   WorktreeBinding,
   WorktreeHostEntryV12,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -114,7 +114,7 @@ function diskEntry(
 function workspaceSummary(
   workspacePath: string,
   worktrees: readonly DiskWorktreeEntry[],
-): WorktreeWorkspaceSummaryV13 {
+): WorktreeWorkspaceSummaryV14 {
   return {
     workspacePath,
     isGitRepo: true,
@@ -122,6 +122,7 @@ function workspaceSummary(
     mainBranch: "main",
     worktrees: [...worktrees],
     scripts: null,
+    repoBranchPrefix: { status: "absent" },
     resolvedAt: 1_000,
   };
 }

@@ -975,6 +975,13 @@ export interface IHostPicker {
 }
 
 export interface IWorkspaceFoldersHost {
+  /**
+   * Whether THIS shell can open a native OS folder dialog (desktop shells).
+   * Shells without one (mobile/browser) install a no-op pickFolders and set
+   * this false - gui-app then routes remote-host folder adds through the
+   * RPC-backed remote folder picker instead.
+   */
+  readonly canPickNatively: boolean;
   pickFolders(): Promise<readonly string[]>;
 }
 

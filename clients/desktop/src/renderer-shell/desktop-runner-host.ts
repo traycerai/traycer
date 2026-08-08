@@ -676,6 +676,7 @@ export class DesktopRunnerHost implements IRunnerHost {
 
     this.hostPicker = this.buildHostPicker();
     this.workspaceFolders = {
+      canPickNatively: true,
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
