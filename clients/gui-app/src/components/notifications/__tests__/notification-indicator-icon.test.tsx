@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";

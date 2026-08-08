@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -208,6 +207,15 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
+});
+
+// Panels depend on the host SCOPE, not on the hooks it composes.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: null }),
+  };
 });
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";

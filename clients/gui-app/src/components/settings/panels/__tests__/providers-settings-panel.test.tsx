@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
@@ -12,6 +11,13 @@ import {
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
 import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
   act,
   cleanup,
   fireEvent,
@@ -20,7 +26,16 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
 
 // Radix Tabs activates on mouseDown (not click). Helper keeps assertions short.
 function selectTab(name: string): void {
@@ -115,7 +130,8 @@ const providerMocks = vi.hoisted(() => ({
     isPending: false,
     isError: false,
     isFetching: false,
-    error: undefined as { message: string; code: string } | undefined,
+    error: undefined as
+      HostRpcError | { message: string; code: string } | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -587,6 +603,37 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+const hostScopeMocks: {
+  client: null;
+  setHostId: Mock<(hostId: string) => void>;
+  hostId: string;
+  host: HostScopeOption | undefined;
+} = vi.hoisted(() => ({
+  client: null,
+  setHostId: vi.fn<(hostId: string) => void>(),
+  hostId: "host-a",
+  host: undefined,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        setHostId: hostScopeMocks.setHostId,
+        hostId: hostScopeMocks.hostId,
+        // `host: undefined` must be OMITTED, not passed: the fixture's final
+        // spread would clobber its default host with the explicit undefined.
+        ...(hostScopeMocks.host === undefined
+          ? {}
+          : { host: hostScopeMocks.host }),
+      }),
+  };
+});
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
@@ -709,21 +756,23 @@ const FULL_TABS: ProviderNativeCapabilities = {
   plugins: {
     addModes: ["cli-source"],
     marketplaceBrowse: false,
+    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // plain "every workspace" line instead of a trigger with locationLabel).
     actionScopes: {
-      list: ["global"],
-      add: ["global"],
-      remove: ["global"],
-      setEnabled: ["global"],
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      remove: [...BOTH_SCOPES],
+      setEnabled: [...BOTH_SCOPES],
     },
     traycerSessionToolsNotice: false,
   },
   skills: {
     actionScopes: {
-      list: ["global"],
-      add: ["global"],
-      create: ["global"],
+      list: [...BOTH_SCOPES],
+      add: [...BOTH_SCOPES],
+      create: [...BOTH_SCOPES],
       import: [],
-      remove: ["global"],
+      remove: [...BOTH_SCOPES],
     },
   },
 };
@@ -1118,6 +1167,9 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    hostScopeMocks.setHostId.mockClear();
+    hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.host = undefined;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1140,6 +1192,181 @@ describe("<ProvidersSettingsPanel />", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+  });
+
+  it("applies a re-auth deep link's host even though the rail clears the intent on mount", () => {
+    // The rail is a DESCENDANT of the panel and clears the whole focus intent
+    // — host half included — in its own mount effect. React runs child passive
+    // effects before the parent's, so a parent that read the store in an
+    // effect saw an already-emptied store whenever the rail mounted in the
+    // same commit, which is exactly what cached provider data produces. The
+    // deep link then silently consumed its provider/profile intent against
+    // whichever host was already on screen.
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).toHaveBeenCalledWith(
+      "host-that-needs-reauth",
+    );
+    // Consumed exactly once: the host half is cleared at the point of use, so
+    // a later visit does not yank the scope back to a host the user has since
+    // navigated away from.
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
+  it("refuses a profile intent whose target host is not the one on screen", () => {
+    // The target was unreachable or plan-gated, so its rail never mounted and
+    // the harness/profile/sign-in halves stayed armed. Splitting the host half
+    // off (so an unreachable target could not re-yank the scope forever) threw
+    // away WHICH host they belonged to — and the next reachable host the user
+    // picked consumed them, in the worst case starting an automatic sign-in
+    // there. The retained target is what makes the remainder refusable.
+    useProvidersFocusStore.setState({
+      focusHarnessId: "cursor",
+      focusHostId: null,
+      focusTargetHostId: "host-that-needs-reauth",
+      focusProfileId: "profile-1",
+      startSignIn: true,
+    });
+    hostScopeMocks.hostId = "some-other-host";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Not consumed here: the pane stays on the rail's first provider rather
+    // than opening the deep link's target on the wrong machine. The probe is
+    // that provider's DEFAULT tab, which is the first entry of
+    // PROVIDER_TAB_ORDER it supports - "Profiles & Limits" here, since
+    // FULL_TABS advertises `usage` and `providerState` leaves the API key
+    // unsupported so no Account tab precedes it.
+    expect(
+      screen
+        .getByRole("tab", { name: "Profiles & Limits" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
+    // ...and it is cancelled rather than left armed for the next host.
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusProfileId).toBeNull();
+    expect(useProvidersFocusStore.getState().startSignIn).toBe(false);
+  });
+
+  it("leaves the scope alone when no deep link armed a host", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+  });
+
+  it("switches the scope BEFORE any child can consume the rest of the intent", () => {
+    // Capturing the host half before children mount was necessary but not
+    // sufficient: the rail consumes (and clears) the provider/profile half in
+    // its own mount effect, and child passive effects run before the parent's.
+    // So when the rail mounted in the same commit — cached data — it consumed
+    // the intent against the OLD host, in the worst case starting a re-auth
+    // sign-in there, one commit before the scope moved. The panel now holds
+    // its subtree until the switch has landed, so the rail's first mount is
+    // already scoped to the deep-linked host. This asserts the ORDER, which is
+    // the actual contract the two narrower fixes missed.
+    const order: string[] = [];
+    hostScopeMocks.setHostId.mockImplementation(() => {
+      order.push("scope-switched");
+    });
+    // The suite's beforeEach only mockClear()s this spy, which keeps the
+    // implementation — drop it here so it cannot leak into later tests.
+    onTestFinished(() => {
+      hostScopeMocks.setHostId.mockReset();
+    });
+    const unsubscribe = useProvidersFocusStore.subscribe((state, prev) => {
+      if (prev.focusProfileId !== null && state.focusProfileId === null) {
+        order.push("intent-consumed");
+      }
+    });
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "opencode",
+      hostId: "host-that-needs-reauth",
+      profileId: "profile-1",
+      startSignIn: false,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    unsubscribe();
+
+    const switched = order.indexOf("scope-switched");
+    expect(switched).not.toBe(-1);
+    // Whether or not the rail consumed the intent during this render, nothing
+    // may have consumed it BEFORE the switch.
+    const consumed = order.indexOf("intent-consumed");
+    if (consumed !== -1) {
+      expect(switched).toBeLessThan(consumed);
+    }
+  });
+
+  it("applies a deep link armed AFTER mount — the keep-alive case", async () => {
+    // The top-level keep-alive host retains this panel while its tab is
+    // hidden, so a re-auth banner click arms the intent against an
+    // already-mounted panel: there is no fresh mount to capture it. A
+    // mount-time snapshot stayed stale, pending never rose, and Sign in
+    // appeared to do nothing while the intent waited to fire against
+    // whichever host a later remount happened to select.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+
+    act(() => {
+      useProvidersFocusStore.getState().setProfileFocus({
+        harnessId: "opencode",
+        hostId: "host-armed-late",
+        profileId: "profile-1",
+        startSignIn: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(hostScopeMocks.setHostId).toHaveBeenCalledWith("host-armed-late");
+    });
+    expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
   });
 
   it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {
@@ -1174,6 +1401,88 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("shows connecting copy, not the failure card, while a remote host's transport is still dialing", () => {
+    hostScopeMocks.host = hostScopeOptionFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+    });
+    providerMocks.listResult.isError = true;
+    // The pre-send "session not ready" rejection every host-scoped query gets
+    // while the remote session's first dial is still in flight.
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "req-1",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Connecting to the remote host…")).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+  });
+
+  it("keeps an actionable failure card for an EXHAUSTED local transport failure", () => {
+    // A spinner is a promise that something will refetch, and on a local host
+    // nothing can keep it. The remote path has the messenger's own binding,
+    // whose ready boundary invalidates this query; a local host has no such
+    // binding, `useHostQuery` pins `retry: false`, and by the time this error
+    // surfaces the retry wrapper has already spent its budget - its final
+    // attempt rethrows unchanged, so the class says what the failure WAS, not
+    // that anything is still retrying. Showing "Reconnecting…" here parked the
+    // panel on a permanent spinner with no way to report the fault.
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Local host connection is not ready",
+      requestId: "req-2",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
+  it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
+    providerMocks.listResult.isError = true;
+    // The base class, not the retryable subclass: the request frame WAS on the
+    // wire when the socket died, so nothing may assume it resolves itself.
+    // `useHostQuery` pins `retry: false` and no recovery event is owed, so
+    // showing this as "connecting" parks the panel on a spinner forever and
+    // hides the report-issue affordance.
+    providerMocks.listResult.error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "The connection dropped before a response arrived",
+      requestId: "req-3",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
     render(
       <TooltipProvider>
@@ -1182,6 +1491,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -1197,14 +1508,95 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("hides the CLI-candidates picker for Amp - a selected path is never consulted", () => {
+  it("shows the CLI & Args tab and empty-state notice for amp (no longer id-hidden)", () => {
+    // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
+    // premise that those two have no user-selectable binary. Both spawn the
+    // Traycer-resolved binary for MCP write verbs, so the table is the only
+    // route out of the F2 dead end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
           providerId: "amp",
-          selected: { kind: "bundled" },
+          selected: { kind: "path" },
           candidates: [],
           envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: ["general", "env", "mcp", "plugins", "skills"],
+            mcp: SAMPLE_MCP,
+            plugins: null,
+            skills: null,
+          },
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
+    expect(
+      screen.getByText(
+        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("link", { name: "Amp installation guide" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+  });
+
+  it("shows the CLI & Args tab and candidates table for cursor when a path is available", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/cursor-agent",
+              version: "0.50.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+          nativeCapabilities: {
+            supportedTabs: [
+              "general",
+              "env",
+              "usage",
+              "mcp",
+              "plugins",
+              "skills",
+            ],
+            mcp: {
+              ...SAMPLE_MCP,
+              perToolBacking: "degraded-server-level",
+              instructionsSource: "none",
+            },
+            plugins: {
+              addModes: ["read-only"],
+              marketplaceBrowse: false,
+              actionScopes: {
+                list: ["global"],
+                add: [],
+                remove: [],
+                setEnabled: [],
+              },
+              traycerSessionToolsNotice: true,
+            },
+            skills: null,
+          },
         }),
       ],
     };
@@ -1215,8 +1607,15 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
+    selectTab("CLI & Args");
     expect(
-      screen.queryByRole("button", { name: "Add custom path" }),
+      screen.getByRole("radio", {
+        name: "Select /usr/local/bin/cursor-agent",
+      }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/No Cursor CLI was found on this machine/),
     ).toBeNull();
   });
 
@@ -1245,6 +1644,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    selectTab("CLI & Args");
 
     const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
       name: "Select /usr/local/bin/hermes",
@@ -1275,13 +1676,15 @@ describe("<ProvidersSettingsPanel />", () => {
       </RunnerHostContext.Provider>,
     );
 
+    selectTab("CLI & Args");
+
     expect(
       screen.getByText(
-        "Hermes must be installed on this machine. It ships without a bundled binary.",
+        "No Hermes Agent CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
     const guide = screen.getByRole("link", {
-      name: "Hermes installation guide",
+      name: "Hermes Agent installation guide",
     });
     expect(guide.getAttribute("href")).toBe(
       "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
@@ -1580,6 +1983,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+    selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
 
@@ -1630,14 +2034,29 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("renders the host picker in the header (like Worktrees)", () => {
+  // The panel used to carry its own host `Select` in the header - one of four
+  // near-identical dropdowns doing one job - and then, briefly, an inert
+  // readout of the scoped host. Both are gone: the sidebar owns the scope.
+  //
+  // Asserting on the host NAME, not on a testid. An earlier version of this
+  // test checked that `host-scope-line` was absent, which is unfalsifiable -
+  // that testid exists nowhere in the codebase, so the assertion passes no
+  // matter what the panel renders. The name is the thing that must not
+  // reappear, and the fixture puts it on screen the moment anything prints it.
+  it("names no host and offers no host picker, leaving both to the sidebar", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
 
-    expect(screen.getByRole("combobox", { name: "Host" })).toBeDefined();
+    expect(screen.queryByText("host-a")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Host" })).toBeNull();
+    // The controls the header DOES own still render - so this test fails if
+    // the fix that moved them inside the gate ever drops them entirely.
+    expect(
+      screen.getByRole("button", { name: "Refresh providers" }),
+    ).toBeDefined();
   });
 
   it("blocks disabling the last enabled provider", () => {
@@ -1871,6 +2290,57 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(useProvidersFocusStore.getState().focusTab).toBeNull();
   });
 
+  it("opens the FOCUSED provider's own first tab when no focusTab is given", () => {
+    // The "Add API key" CTA sets `focusHarnessId` and no `focusTab`, so the
+    // initial tab falls out of the default rule. That default is now
+    // provider-dependent (account -> usage -> ...), which makes deriving it
+    // from the RAIL'S FIRST provider actively wrong: opencode has no API key
+    // and defaults to `usage`, and because amp also advertises `usage` the
+    // stale value survives `resolveTabForProvider` and the pane settles on
+    // "Profiles & Limits" - never showing the key field the CTA exists to
+    // reach.
+    useProvidersFocusStore.getState().setFocusHarnessId("amp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "amp",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          apiKey: { supported: true, configured: false, source: null },
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
+    ).toBe("active");
+    // Discriminating: "Profiles & Limits" is rendered and selectable for amp,
+    // so this is the deep link picking the right one of two live tabs rather
+    // than the wrong one being absent.
+    expect(
+      screen
+        .getByRole("tab", { name: "Profiles & Limits" })
+        .getAttribute("data-state"),
+    ).toBe("inactive");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+  });
+
   it("ignores focusTab when the target provider does not support it", () => {
     useProvidersFocusStore.getState().setFocusHarnessId("cursor");
     useProvidersFocusStore.getState().setFocusTab("general");
@@ -1907,11 +2377,20 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     selectTab("Plugins");
-    expect(screen.getByText("Installed plugins")).toBeDefined();
+    // F5 replaced the "Installed plugins" heading with the shared scope
+    // picker. Match the MCP suite's aria-label idiom so this both identifies
+    // the Plugins tab body and covers the control the heading used to stand
+    // in for.
+    expect(
+      screen.getByRole("button", { name: /^Plugins location/ }),
+    ).toBeDefined();
 
     selectTab("Skills");
     expect(
       screen.getByText(/Invoked by the agent when relevant/),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /^Skills location/ }),
     ).toBeDefined();
   });
 
@@ -3429,7 +3908,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // Exactly one login child for the whole switch - re-polling never
     // restarts the OAuth flow.
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
-  }, 10_000);
+  });
 
   it("ignores an in-flight ambient re-poll that resolves after the sign-in was cancelled", async () => {
     providerMocks.listResult.data = {
@@ -4492,6 +4971,10 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "work-profile",
       startSignIn: true,
     });
+    // The scope mock's `setHostId` is inert, so model the applied switch: the
+    // rail consumes a profile intent only when the host on screen IS the
+    // intent's target (the foreign-host case is covered separately).
+    hostScopeMocks.hostId = "local";
 
     render(
       <TooltipProvider>
@@ -4499,8 +4982,10 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
-
+    // Profiles & Limits is now the default first tab for providers without an
+    // API-key Account tab, so startSignIn opens the dialog immediately. That
+    // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
+    // fail getByRole("tab") without { hidden: true }.
     expect(
       screen
         .getByRole("button", { name: "Claude Code", hidden: true })
@@ -4783,7 +5268,13 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText("Opening the sign-in page…")).toBeDefined();
   });
 
-  it("does not offer the share-skills-and-plugins checkbox for a provider without the overlay mechanism (codex)", () => {
+  it("does not offer the share-skills-and-plugins checkbox for codex (overlay layout, not a bug)", () => {
+    // Codex's exclusion is CORRECT: seedManagedProfileDir honours
+    // shareSkillsAndPlugins only on the partial-overlay layout branch
+    // (profile-seeding.ts), and codex takes the overlay branch whose seeding
+    // never reads the flag. Offering the checkbox here would send a request
+    // the host silently discards. Do not "fix" this by adding codex to
+    // PROVIDER_SHARES_SKILLS_AND_PLUGINS without changing the host layout.
     providerMocks.listResult.data = {
       providers: [
         {

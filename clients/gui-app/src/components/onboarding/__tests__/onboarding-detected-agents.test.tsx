@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
@@ -30,6 +29,7 @@ describe("OnboardingDetectedAgents", () => {
       "OpenCode",
       "Traycer Inference",
       "OpenRouter",
+      "Hugging Face",
       "Droid",
       "Cursor",
       "Copilot",

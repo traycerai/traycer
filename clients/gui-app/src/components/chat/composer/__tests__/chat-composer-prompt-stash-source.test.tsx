@@ -6,7 +6,6 @@
  * newer queue edit) and Ticket 2 exact-destination races without mounting
  * the full ChatComposer tree.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";

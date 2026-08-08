@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -342,6 +341,7 @@ function createBaseRunnerHost(): IRunnerHost {
       onChange: () => ({ dispose: () => undefined }),
     },
     workspaceFolders: {
+      canPickNatively: true,
       pickFolders: () => Promise.resolve([]),
     },
     fileDrops: {

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";

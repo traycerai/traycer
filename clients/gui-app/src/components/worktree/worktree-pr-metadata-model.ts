@@ -2,7 +2,7 @@ import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
   WorktreePrState,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 
 export type WorktreeDisplayedPrState = "open" | "closed" | "merged";
@@ -18,6 +18,9 @@ export interface WorktreePrReference {
   // rather than parsing it back out of `label`.
   readonly prNumber: number;
   readonly url: string;
+  readonly githubHost: string | null;
+  readonly owner: string | null;
+  readonly repo: string | null;
   readonly branch: string | null;
   readonly worktreePath: string;
 }
@@ -99,6 +102,7 @@ function prReference(args: {
   if (state === null || args.prNumber === null || args.prUrl === null)
     return [];
   const prefix = args.repoLabel === null ? "" : `${args.repoLabel} `;
+  const coordinates = prCoordinatesFromUrl(args.prUrl, args.prNumber);
   return [
     {
       key: `${args.keyPrefix}:${args.prNumber}:${args.prUrl}`,
@@ -111,10 +115,43 @@ function prReference(args: {
       state,
       prNumber: args.prNumber,
       url: args.prUrl,
+      githubHost: coordinates?.githubHost ?? null,
+      owner: coordinates?.owner ?? null,
+      repo: coordinates?.repo ?? null,
       branch: args.branch,
       worktreePath: args.worktreePath,
     },
   ];
+}
+
+function prCoordinatesFromUrl(
+  url: string,
+  prNumber: number,
+): {
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+} | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+      return null;
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (
+      segments.length < 4 ||
+      segments[2] !== "pull" ||
+      segments[3] !== String(prNumber)
+    ) {
+      return null;
+    }
+    return {
+      githubHost: parsed.host,
+      owner: decodeURIComponent(segments[0]),
+      repo: decodeURIComponent(segments[1]),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function displayedPrState(
@@ -128,7 +165,7 @@ function displayedPrState(
 export function ownerWorkspaceMetadataItems(
   binding: WorktreeBinding | null,
   worktrees: readonly WorktreeHostEntryV12[],
-  workspaces: readonly WorktreeWorkspaceSummaryV13[],
+  workspaces: readonly WorktreeWorkspaceSummaryV14[],
 ): readonly OwnerWorkspaceMetadataItem[] {
   if (binding === null) return [];
   const worktreesByPath = new Map(
@@ -170,7 +207,7 @@ export function ownerWorkspaceMetadataItems(
  * `isMain` names a different directory on a different branch.
  */
 function workspaceBranch(
-  workspaces: readonly WorktreeWorkspaceSummaryV13[],
+  workspaces: readonly WorktreeWorkspaceSummaryV14[],
   runPath: string,
 ): string | null {
   const summary = workspaces.find(

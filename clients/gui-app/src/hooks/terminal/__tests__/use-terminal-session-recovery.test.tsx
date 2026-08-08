@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";

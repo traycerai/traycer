@@ -65,6 +65,29 @@ export function managedCommandStatusLabel(
   }
 }
 
+/**
+ * Whether this command's ending is news - the one thing that turns the chat's
+ * badge from quiet to attention.
+ *
+ * A stop is something a human or an agent asked for, so it is never news no
+ * matter how it reads afterwards. An exit is the command deciding on its own,
+ * and what that means depends on the kind: a shell is supposed to finish, so
+ * only a failure counts, while a monitor is supposed to still be watching, so
+ * ANY exit is the thing you wanted to be told about - including a clean one,
+ * which is a watcher that quietly stopped watching. `interrupted` is the host
+ * dying underneath the command rather than the command doing anything, so it
+ * stays quiet too.
+ */
+export function managedCommandNeedsAttention(
+  command: Pick<ManagedCommand, "kind" | "status">,
+): boolean {
+  const status = command.status;
+  if (status.state !== "exited") return false;
+  if (command.kind === "monitor") return true;
+  if (status.signal !== null) return true;
+  return status.exitCode !== 0;
+}
+
 export type ManagedCommandStatusTone = "running" | "failed" | "idle";
 
 /**

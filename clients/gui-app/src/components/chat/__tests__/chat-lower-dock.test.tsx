@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -14,6 +12,7 @@ import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import type { AccumulatedFileChange } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { SegmentTodoItem } from "@/stores/composer/chat-store";
@@ -61,6 +60,20 @@ vi.mock("@/components/chat/agent-stop-button", () => ({
     <button type="button">{props.label}</button>
   ),
 }));
+
+// The background panel reaches for the managed half's RPCs whether or not any
+// managed command is on screen; this suite is about the dock's layout and
+// dispatch, so the host boundary behind them is the one thing faked.
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
+  }),
+);
 
 const SETTINGS: ChatRunSettings = {
   harnessId: "codex",
@@ -206,39 +219,43 @@ interface DockInput {
 
 function renderDock(input: DockInput) {
   return render(
-    <TooltipProvider delayDuration={0}>
-      <ChatLowerDock
-        snapshotLoaded
-        epicId="epic-1"
-        chatId="chat-1"
-        viewTabId="tab-1"
-        selfAgent={input.selfAgent}
-        activeAgents={input.activeAgents}
-        todo={input.todo}
-        restore={baseRestore(input.changes)}
-        queue={input.queue}
-        backgroundItems={input.backgroundItems}
-        runningManagedCommandCount={0}
-        backgroundStopPendingTaskIds={new Set()}
-        backgroundStopAllPending={false}
-        activeTurnStatus="running"
-        canAct
-        readOnly={false}
-        editingQueueItemId={null}
-        topSpacing="normal"
-        scrollRegionMaxHeightClass="max-h-96"
-        onQueuePause={() => null}
-        onQueueResume={() => null}
-        onQueueEdit={vi.fn()}
-        onQueueCancel={vi.fn()}
-        onQueueAbortSteer={vi.fn()}
-        onQueueReorder={vi.fn()}
-        onQueueSteerNow={vi.fn()}
-        onBackgroundItemClick={input.onBackgroundItemClick}
-        onBackgroundItemStop={input.onBackgroundItemStop}
-        onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
-      />
-    </TooltipProvider>,
+    // The dock's background panel reads the tile's bound host to open a
+    // managed command's output window, the same as it does inside a real tile.
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <ChatLowerDock
+          snapshotLoaded
+          epicId="epic-1"
+          chatId="chat-1"
+          viewTabId="tab-1"
+          selfAgent={input.selfAgent}
+          activeAgents={input.activeAgents}
+          todo={input.todo}
+          restore={baseRestore(input.changes)}
+          queue={input.queue}
+          backgroundItems={input.backgroundItems}
+          runningManagedCommandCount={0}
+          backgroundStopPendingTaskIds={new Set()}
+          backgroundStopAllPending={false}
+          activeTurnStatus="running"
+          canAct
+          readOnly={false}
+          editingQueueItemId={null}
+          topSpacing="normal"
+          scrollRegionMaxHeightClass="max-h-96"
+          onQueuePause={() => null}
+          onQueueResume={() => null}
+          onQueueEdit={vi.fn()}
+          onQueueCancel={vi.fn()}
+          onQueueAbortSteer={vi.fn()}
+          onQueueReorder={vi.fn()}
+          onQueueSteerNow={vi.fn()}
+          onBackgroundItemClick={input.onBackgroundItemClick}
+          onBackgroundItemStop={input.onBackgroundItemStop}
+          onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
+        />
+      </TooltipProvider>
+    </TabHostProvider>,
   );
 }
 

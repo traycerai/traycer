@@ -64,6 +64,7 @@ import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   draftRuntimeRegistry,
   EMPTY_DRAFT_RUNTIME_CONTENT,
@@ -85,7 +86,7 @@ import {
   nextComposerMode,
   type ComposerMode,
 } from "@/components/home/data/landing-options";
-import { ArrowLeftRight } from "lucide-react";
+import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useHostBinding, useHostClient } from "@/lib/host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
@@ -593,6 +594,19 @@ export function LandingComposer(props: LandingComposerProps) {
           useComposerRunSettingsStore.getState().globalLastRunSettings,
         );
       createdUnboundDraftIdRef.current = createdDraftId;
+      // The workspace picker's staging key is keyed by this draft id
+      // (`{surface:"landing", draftId}`), so minting it here flips that key
+      // from `landing:` to `landing:<id>` the instant this commits. Carry any
+      // staged worktree intent over synchronously, before React re-renders
+      // the picker on the new key - otherwise it briefly reads as unstaged
+      // and the Environment dialog (keyed off the resolved target's kind)
+      // remounts and drops an in-progress edit.
+      useWorktreeIntentStagingStore
+        .getState()
+        .migrateKey(
+          { surface: "landing", draftId: null },
+          { surface: "landing", draftId: createdDraftId },
+        );
       useLandingDraftStore
         .getState()
         .setDraftContent(createdDraftId, content, selection);
@@ -659,26 +673,17 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   const switcher = (
-    <button
-      type="button"
-      aria-label={
-        composerMode === "chat"
-          ? "Switch to the Terminal interface"
-          : "Switch to the Chat interface"
-      }
-      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <ComposerModeSwitcher
+      composerMode={composerMode}
       disabled={isSubmitting}
-      onClick={() => {
+      onSwitch={() => {
         const next = nextComposerMode(composerMode);
         setGlobalComposerMode(next);
         if (draftId !== null) {
           setDraftComposerMode(draftId, next);
         }
       }}
-    >
-      <ArrowLeftRight className="size-3 shrink-0" />
-      {composerMode === "chat" ? "Switch to Terminal" : "Switch to Chat"}
-    </button>
+    />
   );
 
   return (

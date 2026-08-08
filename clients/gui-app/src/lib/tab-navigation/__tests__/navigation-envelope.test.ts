@@ -5,7 +5,6 @@
  * `tabNavigationController.observeLocation` — no production edits, no
  * full AppShell. Fakes only the navigate promise boundary.
  */
-import "../../../../__tests__/test-browser-apis";
 import type {
   HistoryState,
   NavigateOptions,

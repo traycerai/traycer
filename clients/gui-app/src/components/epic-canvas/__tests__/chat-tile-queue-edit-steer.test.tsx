@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -121,6 +120,10 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  // No stream client means nothing has been negotiated yet, which is what
+  // `null` says - the tile's monitors menu reads this and stays quiet.
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -273,6 +276,8 @@ function emitChatSnapshot(
         createdAt: 0,
         updatedAt: 0,
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
         isTitleEditedByUser: false,
         settings: QUEUED_SETTINGS,
         activeSessionChain: null,
@@ -345,6 +350,7 @@ function emitChatSnapshot(
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -165,6 +164,8 @@ function emitSnapshot(
         messages: [...messages],
         events: [...events],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -174,6 +175,7 @@ function emitSnapshot(
       pendingInterviews: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
       worktreeBinding: null,
       missingWorktreePaths: [],
     },

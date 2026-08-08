@@ -31,6 +31,7 @@ export const KNOWN_STASH_NODE_TYPES: ReadonlySet<string> = new Set([
   "codeBlock",
   "hardBreak",
   "blockquote",
+  "sourcedQuote",
   "mention",
   "slashCommand",
   "attachmentGroup",

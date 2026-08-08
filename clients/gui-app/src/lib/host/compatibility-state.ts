@@ -1,4 +1,4 @@
-import { createContext, use } from "react";
+import { createContext, use, type Context } from "react";
 import {
   HostTransportFailureError,
   RetryableTransportError,
@@ -60,9 +60,36 @@ export type HostCompatibility =
       readonly error: HostRpcError;
     };
 
-export const HostCompatibilityContext = createContext<HostCompatibility | null>(
-  null,
-);
+type HostCompatibilityContextValue = Context<HostCompatibility | null>;
+
+interface HostCompatibilityDevGlobals {
+  __TRAYCER_HOST_COMPATIBILITY_CONTEXT__:
+    HostCompatibilityContextValue | undefined;
+}
+
+function createStableHostCompatibilityContext(): HostCompatibilityContextValue {
+  // Fast Refresh can retain a provider from the previous module generation
+  // while consumers have already switched to the next one. Reuse the context
+  // object only in Vite's hot runtime so both generations keep addressing the
+  // same provider. A production build has no import.meta.hot and gets a normal
+  // page-local context.
+  if (import.meta.hot === undefined) {
+    return createContext<HostCompatibility | null>(null);
+  }
+
+  const devGlobals = globalThis as typeof globalThis &
+    HostCompatibilityDevGlobals;
+  const existing = devGlobals.__TRAYCER_HOST_COMPATIBILITY_CONTEXT__;
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const context = createContext<HostCompatibility | null>(null);
+  devGlobals.__TRAYCER_HOST_COMPATIBILITY_CONTEXT__ = context;
+  return context;
+}
+
+export const HostCompatibilityContext = createStableHostCompatibilityContext();
 
 export function useHostCompatibility(): HostCompatibility {
   const compatibility = use(HostCompatibilityContext);

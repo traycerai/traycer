@@ -235,6 +235,7 @@ function LandingTerminalTileLive(props: {
             // already consumed). The registry follower disposes the engine
             // when the lingering handle is finally evicted.
             keepAlive={status !== "exited"}
+            onTerminalReady={null}
           />
         </Suspense>
       </div>

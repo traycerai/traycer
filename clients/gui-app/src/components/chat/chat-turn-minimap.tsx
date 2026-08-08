@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -493,6 +494,41 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
     onToggleExpanded,
     side,
   } = props;
+  const activeListItemRef = useRef<HTMLButtonElement | null>(null);
+  const listScrollerRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!expanded) return;
+    const activeListItem = activeListItemRef.current;
+    const listScroller = listScrollerRef.current;
+    if (activeListItem === null || listScroller === null) return;
+
+    // Rail hover can advance once per animation frame. Reveal before paint and
+    // adjust only this overflow container: native scrollIntoView may also move
+    // the transcript ancestor, which hover must never navigate.
+    const activeRect = activeListItem.getBoundingClientRect();
+    const scrollerRect = listScroller.getBoundingClientRect();
+    const distanceAbove = activeRect.top - scrollerRect.top;
+    const distanceBelow = activeRect.bottom - scrollerRect.bottom;
+    let scrollDelta = 0;
+    if (distanceAbove < 0 && distanceBelow > 0) {
+      scrollDelta =
+        Math.abs(distanceAbove) <= Math.abs(distanceBelow)
+          ? distanceAbove
+          : distanceBelow;
+    } else if (distanceAbove < 0) {
+      scrollDelta = distanceAbove;
+    } else if (distanceBelow > 0) {
+      scrollDelta = distanceBelow;
+    }
+    if (scrollDelta !== 0) {
+      listScroller.scrollTop = Math.max(
+        0,
+        listScroller.scrollTop + scrollDelta,
+      );
+    }
+  }, [activeItemIndex, expanded]);
+
   return (
     <div
       className="pointer-events-auto absolute w-[min(20rem,calc(100vw-3rem))] select-none text-left text-popover-foreground"
@@ -512,6 +548,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
           <div
             className="min-h-0 overflow-y-auto p-2"
             data-chat-turn-minimap-list-scroll=""
+            ref={listScrollerRef}
           >
             <div className="flex flex-col gap-0.5">
               {items.map((item, index) => (
@@ -531,6 +568,7 @@ function ChatTurnMinimapPreview(props: ChatTurnMinimapPreviewProps) {
                   onClick={() => {
                     onSelect(item.id);
                   }}
+                  ref={index === activeItemIndex ? activeListItemRef : null}
                   type="button"
                 >
                   <ChatTurnMinimapItemText item={item} mode="list" />

@@ -3,6 +3,8 @@ import type {
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamClient } from "./i-stream-client";
+import type { IStreamSession } from "./i-stream-session";
+import type { ParamsOf } from "./ws-stream-client";
 import type { StreamMethodSupport } from "./ws-stream-client";
 
 /**
@@ -21,6 +23,15 @@ import type { StreamMethodSupport } from "./ws-stream-client";
 export interface IHostStreamClient<
   Registry extends VersionedStreamRpcRegistry,
 > extends IStreamClient<Registry> {
+  /**
+   * Opens a stream whose params are read immediately before every wire
+   * subscribe, including reconnects. Dynamic resume cursors use this instead
+   * of freezing the cursor that happened to be current at session creation.
+   */
+  subscribeWithParamsProvider<Method extends keyof Registry & string>(
+    method: Method,
+    paramsProvider: () => ParamsOf<Registry, Method>,
+  ): IStreamSession;
   close(reason: string): void;
   isClosed(): boolean;
   /** The reason recorded at close, or `null` while still open. */
@@ -74,9 +85,11 @@ export interface IHostStreamClient<
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
    * points. Consumers drive `HostClient.notifyAvailabilityRecovered()` off it
-   * so stranded unary queries refetch. `RemoteStreamClient` never fires it
-   * today: remote availability is owned by the registry's presence lease and
-   * the relay resume machinery, not socket-level evidence.
+   * so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
+   * ready boundary - including the clean first open, because a remote
+   * session's first dial races (and strands) the very queries that created
+   * it.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
 }

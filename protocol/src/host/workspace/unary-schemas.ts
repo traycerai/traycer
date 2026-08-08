@@ -340,6 +340,69 @@ export type WorkspaceListDirectoryResponse = z.infer<
   typeof workspaceListDirectoryResponseSchema
 >;
 
+/**
+ * Absolute in HOST-native terms, which is not the same thing on every host:
+ * POSIX `/srv/app`, a Windows drive `C:\Users\alice` (or `C:/Users/alice`,
+ * which Windows accepts too), or a UNC share `\\server\share`.
+ *
+ * Enforced on the wire rather than left to the endpoints because both
+ * directions can do damage with a relative path: the host resolves a request
+ * against its own working directory, and the picker can submit a response
+ * path straight to `workspace.prepareFolders` without it passing through the
+ * typed-path validation that would otherwise have caught it.
+ */
+const ABSOLUTE_HOST_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
+const absoluteHostPathSchema = z
+  .string()
+  .min(1)
+  .regex(ABSOLUTE_HOST_PATH, "must be an absolute host path");
+
+export const workspaceBrowseFolderEntrySchema = z.object({
+  /** Absolute host-native path of the folder. */
+  path: absoluteHostPathSchema,
+  /** Display basename, computed by the host. */
+  name: z.string().min(1),
+});
+export type WorkspaceBrowseFolderEntry = z.infer<
+  typeof workspaceBrowseFolderEntrySchema
+>;
+
+/**
+ * Pre-workspace folder browsing for the remote folder picker: unlike
+ * `workspace.listDirectory` (scoped to an already-added workspace), this
+ * lists the host filesystem so a remote client can choose a folder to add.
+ * One level per request; `directoryPath: null` starts at the host user's
+ * home directory (the response reveals the resolved path).
+ *
+ * A folder the OS refuses to list fails the request with a classified error
+ * instead of a fake-empty listing: permission denial, a nonexistent path,
+ * and a listing timeout are each distinct. The host bounds every read with
+ * a timeout, so the RPC always answers; a timeout does not PROVE a consent
+ * prompt (a huge or slow directory can exceed it too), but on a macOS host
+ * one may be waiting on screen (Files & Folders TCC can prompt a
+ * GUI-session host on first touch) - approving it there and retrying here
+ * is the remote consent flow.
+ */
+export const workspaceBrowseFoldersRequestSchema = z.object({
+  directoryPath: absoluteHostPathSchema.nullable(),
+});
+export type WorkspaceBrowseFoldersRequest = z.infer<
+  typeof workspaceBrowseFoldersRequestSchema
+>;
+
+export const workspaceBrowseFoldersResponseSchema = z.object({
+  /** Absolute path that was listed (resolved from a null request). */
+  directoryPath: absoluteHostPathSchema,
+  /** Null only at the filesystem root; even the home directory walks up. */
+  parentPath: absoluteHostPathSchema.nullable(),
+  /** Direct child DIRECTORIES only; files never cross the wire. */
+  entries: z.array(workspaceBrowseFolderEntrySchema),
+});
+export type WorkspaceBrowseFoldersResponse = z.infer<
+  typeof workspaceBrowseFoldersResponseSchema
+>;
+
 export const workspaceReadFileRequestSchema = z.object({
   workspacePath: z.string(),
   filePath: z.string(),
@@ -358,6 +421,52 @@ export const workspaceReadFileResponseSchema = z.object({
 });
 export type WorkspaceReadFileResponse = z.infer<
   typeof workspaceReadFileResponseSchema
+>;
+
+export const WORKSPACE_WRITE_FILE_MAX_CHARS = 1_000_000;
+
+const workspaceFileRevisionSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 revision");
+
+/**
+ * Conflict-safe text-file write. `expectedRevision` is the SHA-256 of the
+ * exact UTF-8 text returned by the read that started the edit session. The
+ * host only saves when the live file still matches it (or already equals the
+ * submitted content, making a lost-ack retry idempotent).
+ */
+export const workspaceWriteFileRequestSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+  expectedRevision: workspaceFileRevisionSchema,
+  content: z.string().max(WORKSPACE_WRITE_FILE_MAX_CHARS),
+});
+export type WorkspaceWriteFileRequest = z.infer<
+  typeof workspaceWriteFileRequestSchema
+>;
+
+const workspaceWriteFileResponseBaseSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+
+export const workspaceWriteFileResponseSchema = z.discriminatedUnion("status", [
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("saved"),
+    revision: workspaceFileRevisionSchema,
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("conflict"),
+    currentRevision: workspaceFileRevisionSchema,
+    error: z.string(),
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("error"),
+    error: z.string(),
+  }),
+]);
+export type WorkspaceWriteFileResponse = z.infer<
+  typeof workspaceWriteFileResponseSchema
 >;
 
 // -----------------------------------------------------------------------------

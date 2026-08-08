@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPruneScheduler } from "@/lib/history-navigation/prune-scheduler";
 import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";

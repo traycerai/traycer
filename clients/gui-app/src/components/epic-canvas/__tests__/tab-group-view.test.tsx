@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,
@@ -127,6 +126,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicSnapshotLoaded: () => true,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useRegisteredEpicActiveAgentIds: () => new Set<string>(),
+  useRegisteredEpicNodeArchived: () => false,
   // Chat tab strip icons (ChatProgressIcon) need activity tiers when a chat
   // tile is the active tab - not exercised by the older spec/terminal-only
   // fixtures in this file.

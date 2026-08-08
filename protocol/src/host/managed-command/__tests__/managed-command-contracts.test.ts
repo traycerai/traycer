@@ -3,8 +3,6 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   MANAGED_COMMAND_MAX_WINDOW_LINES,
-  managedCommandSubscribeListServerFrameSchema,
-  managedCommandSubscribeListV10,
   managedCommandSubscribeOutputClientFrameSchema,
   managedCommandSubscribeOutputServerFrameSchema,
 } from "@traycer/protocol/host/managed-command/subscribe";
@@ -12,97 +10,23 @@ import {
 /**
  * `managedCommand.*@1.0` contract fixtures + registry membership.
  *
- * The behaviour under test is `UI.md`'s: the list is epic-level (every command
- * in the epic, whichever chat made it), rows are kind-explicit, and each row
- * carries the backlink to its creating chat.
+ * Only the output window is a stream of its own. The SET of a chat's commands
+ * rides `chat.subscribe` and is covered by that contract's suite.
  */
 
 const RUNNING_COMMAND = {
   id: "cmd-deploy",
   kind: "monitor" as const,
   description: "deploy watcher",
-  status: { state: "running" as const, pid: 4410, startedAtMs: 1_700_000_000_000 },
+  status: {
+    state: "running" as const,
+    pid: 4410,
+    startedAtMs: 1_700_000_000_000,
+  },
   chatId: "chat-a",
   createdAtMs: 1_699_999_000_000,
   updatedAtMs: 1_700_000_000_000,
 };
-
-describe("managedCommand.subscribeList@1.0 open request", () => {
-  it("is scoped to one epic and nothing narrower", () => {
-    expect(
-      managedCommandSubscribeListV10.openRequestSchema.parse({
-        epicId: "epic-1",
-        chatId: "chat-a",
-      }),
-    ).toEqual({ epicId: "epic-1" });
-    expect(() =>
-      managedCommandSubscribeListV10.openRequestSchema.parse({}),
-    ).toThrow();
-  });
-});
-
-describe("managedCommand.subscribeList@1.0 server frames", () => {
-  it("carries the epic's commands regardless of which chat created them", () => {
-    const parsed = managedCommandSubscribeListServerFrameSchema.parse({
-      kind: "snapshot",
-      commands: [
-        RUNNING_COMMAND,
-        {
-          id: "cmd-migrate",
-          kind: "shell",
-          description: "db migration",
-          status: {
-            state: "exited",
-            exitCode: 1,
-            signal: null,
-            exitedAtMs: 1_700_000_500_000,
-          },
-          chatId: "chat-b",
-          createdAtMs: 1_699_999_500_000,
-          updatedAtMs: 1_700_000_500_000,
-        },
-      ],
-      hasBinaryPayload: false,
-    });
-    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    expect(parsed.commands.map((command) => command.chatId)).toEqual([
-      "chat-a",
-      "chat-b",
-    ]);
-    expect(parsed.commands.map((command) => command.kind)).toEqual([
-      "monitor",
-      "shell",
-    ]);
-  });
-
-  it("pushes a whole command on change and only an id on removal", () => {
-    const changed = managedCommandSubscribeListServerFrameSchema.parse({
-      kind: "changed",
-      command: RUNNING_COMMAND,
-      hasBinaryPayload: false,
-    });
-    if (changed.kind !== "changed") throw new Error("expected changed");
-    expect(changed.command.status.state).toBe("running");
-
-    const removed = managedCommandSubscribeListServerFrameSchema.parse({
-      kind: "removed",
-      commandId: "cmd-deploy",
-      hasBinaryPayload: false,
-    });
-    if (removed.kind !== "removed") throw new Error("expected removed");
-    expect(removed.commandId).toBe("cmd-deploy");
-  });
-
-  it("rejects a status state outside the supervisor's lifecycle", () => {
-    expect(() =>
-      managedCommandSubscribeListServerFrameSchema.parse({
-        kind: "changed",
-        command: { ...RUNNING_COMMAND, status: { state: "queued" } },
-        hasBinaryPayload: false,
-      }),
-    ).toThrow();
-  });
-});
 
 describe("managedCommand.subscribeOutput@1.0 frames", () => {
   const POSITION = { segmentId: "66310:12:1710000000123", byteOffset: 4_096 };
@@ -117,8 +41,16 @@ describe("managedCommand.subscribeOutput@1.0 frames", () => {
           text: "started (pid 4410, manual, shell: /bin/sh)",
           atMs: 1_700_000_000_000,
         },
-        { channel: "stdout", text: "listening on 3000", atMs: 1_700_000_001_000 },
-        { channel: "stderr", text: "deprecation warning", atMs: 1_700_000_002_000 },
+        {
+          channel: "stdout",
+          text: "listening on 3000",
+          atMs: 1_700_000_001_000,
+        },
+        {
+          channel: "stderr",
+          text: "deprecation warning",
+          atMs: 1_700_000_002_000,
+        },
       ],
       start: POSITION,
       reachedStart: false,
@@ -164,10 +96,18 @@ describe("managedCommand.subscribeOutput@1.0 frames", () => {
 });
 
 describe("managedCommand stream registry membership", () => {
-  it("installs the list stream at 1.0", () => {
-    const line = hostStreamRpcRegistry["managedCommand.subscribeList"];
+  it("installs the output stream at 1.0", () => {
+    const line = hostStreamRpcRegistry["managedCommand.subscribeOutput"];
     expect(line[1].latestMinor).toBe(0);
     expect(line[1].versions[0].contract.method).toBe(
+      "managedCommand.subscribeOutput",
+    );
+  });
+
+  it("has no epic-wide list stream", () => {
+    // The set of a chat's commands rides `chat.subscribe`. A future global
+    // panel would re-add a list method here; nothing depends on its absence.
+    expect(hostStreamRpcRegistry).not.toHaveProperty(
       "managedCommand.subscribeList",
     );
   });
@@ -177,7 +117,7 @@ describe("managedCommand stream registry membership", () => {
     // absence rather than a handshake failure. Adding one to the floor would
     // claim every shipped host serves it.
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
-      "managedCommand.subscribeList",
+      "managedCommand.subscribeOutput",
     );
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("managedCommand.start");
   });

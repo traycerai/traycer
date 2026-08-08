@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -11,6 +10,8 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -19,6 +20,21 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+} = vi.hoisted(() => ({
+  client: null,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+  };
+});
 
 interface ManagementMock {
   readonly management: IHostManagement;

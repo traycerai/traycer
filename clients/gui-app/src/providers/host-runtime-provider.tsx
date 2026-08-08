@@ -16,6 +16,7 @@ import type {
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -38,6 +39,7 @@ import {
   type RuntimeHostMessengerBinding,
 } from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createSessionRetirementSweep } from "@/lib/host/session-retirement";
 import { appLogger } from "@/lib/logger";
 import {
   runnerHostQueryScopeId,
@@ -50,6 +52,22 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
   readonly hostClient: HostClient<Registry>;
   readonly directory: HostDirectoryService;
   readonly auth: AuthService;
+}
+
+export interface HostRuntimeState<Registry extends VersionedRpcRegistry> {
+  readonly context: Context<HostRuntimeBinding<Registry> | null>;
+  readonly bindingSnapshot: {
+    value: HostRuntimeBinding<Registry> | null;
+  };
+}
+
+export function createHostRuntimeState<
+  Registry extends VersionedRpcRegistry,
+>(): HostRuntimeState<Registry> {
+  return {
+    context: createContext<HostRuntimeBinding<Registry> | null>(null),
+    bindingSnapshot: { value: null },
+  };
 }
 
 export type MessengerFactory<Registry extends VersionedRpcRegistry> = (args: {
@@ -115,12 +133,9 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
  */
 export function createHostRuntime<Registry extends VersionedRpcRegistry>(
   schedulingPolicy: RpcSchedulingPolicy<Registry>,
+  runtimeState: HostRuntimeState<Registry>,
 ): TypedHostRuntime<Registry> {
-  const context: Context<HostRuntimeBinding<Registry> | null> =
-    createContext<HostRuntimeBinding<Registry> | null>(null);
-  const latestBindingSnapshot: {
-    value: HostRuntimeBinding<Registry> | null;
-  } = { value: null };
+  const { context, bindingSnapshot: latestBindingSnapshot } = runtimeState;
   const setLatestBindingSnapshot = (
     binding: HostRuntimeBinding<Registry> | null,
   ): void => {
@@ -217,6 +232,35 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
               auth: createStreamAuthRevalidator(auth),
               authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
+              // Un-strands queries that errored while this binding's remote
+              // session was still dialing (a Settings host-picker selection
+              // has no other session holder). A non-active host takes the
+              // announcing notify; an active one is invalidated directly,
+              // because the active variant emits a host-change event - which
+              // the `onChange` subscription below answers with
+              // `runtimeMessenger.reset()`, tearing this very binding down as
+              // a side effect of its own good news. Steady state for an active
+              // host is still owned by the stream-runtime wiring over the SAME
+              // shared session; this path only covers the promoted-mid-dial
+              // window, before that wiring exists to hear anything.
+              onRemoteAvailabilityRecovered: (hostId) => {
+                if (runtime === null) {
+                  return;
+                }
+                const active = runtime.hostClient.getActiveHost();
+                if (active !== null && active.hostId === hostId) {
+                  // Promoted to active while this dial was still in flight, so
+                  // the active stream-runtime wiring may not have attached yet
+                  // - and it never replays, so waiting for it to own this
+                  // boundary can strand the queries forever. Deliver the
+                  // invalidation directly instead: same un-stranding, minus the
+                  // active-change announcement that would reset this binding as
+                  // a side effect of its own good news.
+                  runtime.hostClient.invalidateHostScopeForAvailability(hostId);
+                  return;
+                }
+                runtime.hostClient.notifyHostAvailabilityRecovered(hostId);
+              },
             })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as
@@ -254,12 +298,28 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       });
 
       const activeRuntime = runtime;
-      const runtimeTransportUnsubscribe =
-        runtimeMessenger === null
-          ? null
-          : activeRuntime.hostClient.onChange(() => {
-              runtimeMessenger.reset();
-            });
+      const requestContextProvider = auth.getRequestContextProvider();
+      // Retires the previous auth context's cached remote sessions on ANY
+      // context transition - which transitions sweep (and why the key is the
+      // context REFERENCE, not the userId) is `createSessionRetirementSweep`'s
+      // pinned contract.
+      //
+      // Two ordering invariants this wiring provides:
+      // `runtimeMessenger.reset()` runs FIRST in this callback, so the
+      // messenger holds no binding over an entry the sweep is about to close;
+      // and this listener is registered before `runtime.start()` and before
+      // any child mounts, so no consumer can have acquired a NEW-context
+      // session earlier in the same emit for the indiscriminate sweep to kill.
+      const sweepRetiredContextSessions = createSessionRetirementSweep({
+        currentContext: () => requestContextProvider.current(),
+        retire: retireAllRemoteSessions,
+      });
+      const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
+        () => {
+          runtimeMessenger?.reset();
+          sweepRetiredContextSessions();
+        },
+      );
       void (async () => {
         let phase = "auth.start";
         try {
@@ -299,10 +359,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         } catch (error) {
           appLogger.error("[host-runtime] startup failed", { phase }, error);
           runtimeMessenger?.dispose();
-          runtimeTransportUnsubscribe?.();
+          runtimeTransportUnsubscribe();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
+          // The messenger's availability callback guards on `runtime === null`;
+          // without this reset that guard could never fire.
+          runtime = null;
           if (!isDisposed()) {
             setLatestBindingSnapshot(null);
             setBinding(null);
@@ -314,10 +377,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       return () => {
         lifecycle.disposed = true;
         runtimeMessenger?.dispose();
-        runtimeTransportUnsubscribe?.();
+        runtimeTransportUnsubscribe();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();
+        // The messenger's availability callback guards on `runtime === null`;
+        // without this reset that guard could never fire.
+        runtime = null;
         setLatestBindingSnapshot(null);
         setBinding(null);
       };

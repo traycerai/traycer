@@ -333,7 +333,7 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(3);
   });
 
-  it("bounds a correction that never reaches measurable strict end", () => {
+  it("ends a bounded correction burst without inventing reader departure", () => {
     const node = shim.makeNode({
       scrollTop: 1200,
       scrollHeight: 1700,
@@ -359,10 +359,17 @@ describe("useChatTimelineFollowLatch", () => {
       CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
     );
     expect(animationFrameCallbacks.size).toBe(0);
-    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    // A later layout/stream maintain trigger can start a fresh bounded burst;
+    // exhausting the previous CPU-safety window did not revoke follow.
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(
+      CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS + 1,
+    );
   });
 
-  it("treats opposed motion during an active correction as a reader departure without a gesture token", () => {
+  it("keeps layout-owned opposed motion inside the active correction", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
@@ -388,13 +395,27 @@ describe("useChatTimelineFollowLatch", () => {
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
 
+    // A disclosure pointerdown is a non-publishing preflight. It cancels the
+    // in-flight correction but does not authorize the resulting layout
+    // movement to publish a reader departure.
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: false,
+    });
     shim.setGeometry(node, { scrollTop: 900 });
     fireNativeScroll(node);
-    flushAnimationFrame();
-    flushAnimationFrame();
 
-    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
-    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    // The layout-owned native report itself starts correction immediately;
+    // it does not wait for a second size/inset callback.
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(2);
+
+    // The deferred shrink finally settles at the new strict end. A maintain
+    // callback reconciles that passive landing without issuing navigation.
+    shim.setGeometry(node, { scrollTop: 900, scrollHeight: 1400 });
+    result.current.followEndIfPermitted();
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
   });
 
   it("wires wheel intent before native scroll so growth cannot swallow a departure", () => {
@@ -484,7 +505,7 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
   });
 
-  it("yields an owned go-live operation to an opposed scrollbar move", () => {
+  it("yields an owned go-live operation to recognized reader input", () => {
     const node = shim.makeNode({
       scrollTop: 500,
       scrollHeight: 1500,
@@ -504,10 +525,62 @@ describe("useChatTimelineFollowLatch", () => {
     result.current.beginOwnedEndNavigation();
     shim.setGeometry(node, { scrollTop: 800 });
     fireNativeScroll(node);
+    result.current.noteReaderGesture({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
     shim.setGeometry(node, { scrollTop: 700 });
     fireNativeScroll(node);
 
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("maintenance heals stale false permission at strict bottom without navigation", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    // Reacquired permission is live: subsequent growth follows normally.
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    fireResizeObservers();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("maintenance heals stale false permission when content no longer overflows", () => {
+    const node = shim.makeNode({
+      scrollTop: 0,
+      scrollHeight: 320,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
   it("keeps a suppressed hydration edge visibly detached", () => {
@@ -549,6 +622,7 @@ describe("useChatTimelineFollowLatch", () => {
     fireNativeScroll(node); // confirm at edge
 
     // Detach far above.
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
     shim.setGeometry(node, { scrollTop: 200 });
     fireNativeScroll(node);
     result.current.followEndIfPermitted();
@@ -593,6 +667,7 @@ describe("useChatTimelineFollowLatch", () => {
     // Reader detaches upward to 1100 - ABOVE the very first observed 1000,
     // but 400px from the true end. A numeric "hasn't decreased since 1000"
     // baseline would wrongly grant follow here; the latch must not.
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
     shim.setGeometry(node, { scrollTop: 1100 });
     fireNativeScroll(node);
     result.current.followEndIfPermitted();
@@ -622,14 +697,14 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
-  it("review regression: programmatic non-bottom navigation and MVCP/virtualization remap do not grant permission", () => {
+  it("review regression: MVCP/virtualization remap without reader input retains permission", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
       scrollHeight: 1500,
       clientHeight: 500,
     });
     const listRef = makeFakeListRef(node);
-    const { result } = renderHook(() =>
+    renderHook(() =>
       useChatTimelineFollowLatch(
         listRef,
         true,
@@ -639,12 +714,12 @@ describe("useChatTimelineFollowLatch", () => {
     );
     fireNativeScroll(node);
 
-    // Explicit navigation to a mid-transcript, non-bottom coordinate - a
-    // real DOM scrollTop write, exactly like MVCP's own coordinate remap.
+    // A real DOM scrollTop write matching MVCP's own coordinate remap. With
+    // no publishing reader input, this layout-owned report cannot revoke the
+    // existing follow intent and immediately starts correction.
     shim.setGeometry(node, { scrollTop: 300, scrollHeight: 1500 });
     fireNativeScroll(node);
-    result.current.followEndIfPermitted();
-    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
   it("review regression: hidden 0x0 reveal does not overwrite a restored free-reading permission", () => {
@@ -704,7 +779,9 @@ describe("useChatTimelineFollowLatch", () => {
     );
     fireNativeScroll(node);
 
-    // Silent DOM-only detach - no React render anywhere in this sequence.
+    // Recognized reader intent plus DOM-only detach - no React render
+    // anywhere in this sequence.
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
     shim.setGeometry(node, { scrollTop: 200 });
     fireNativeScroll(node);
 
@@ -832,6 +909,7 @@ describe("useChatTimelineFollowLatch", () => {
     );
     fireNativeScroll(node);
 
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
     shim.setGeometry(node, { scrollTop: 200 });
     fireNativeScroll(node);
     result.current.followEndIfPermitted();
@@ -855,5 +933,52 @@ describe("useChatTimelineFollowLatch", () => {
     shim.setGeometry(node, { scrollHeight: 1700 });
     result.current.followEndIfPermitted();
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("regression: a sub-epsilon bottom report cannot disarm an owned free navigation", () => {
+    // Minimap/find/deep-link jump issued while latched at the strict bottom.
+    // An ANIMATED jump's first smooth-scroll frame moves <1px, so its scroll
+    // event still reads as strict-bottom geometry; that report must not
+    // consume the armed departure, or every later (genuinely departing)
+    // report is classified layout-owned and a correction burst yanks the
+    // jump straight back to the tail.
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    // navigateToMessage's exact sequence for a minimap click:
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: false,
+      publishesReaderPosition: false,
+    });
+    result.current.beginOwnedFreeNavigation();
+
+    // First animated frame: still inside the 1px strict-bottom epsilon.
+    shim.setGeometry(node, { scrollTop: 999.5 });
+    fireNativeScroll(node);
+
+    // Subsequent frames genuinely leave the bottom.
+    shim.setGeometry(node, { scrollTop: 900 });
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollTop: 400 });
+    fireNativeScroll(node);
+    for (let i = 0; i < 12; i++) flushAnimationFrame();
+
+    // Follow releases to the navigation; no corrective snap-back is issued.
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
   });
 });

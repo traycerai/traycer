@@ -72,6 +72,8 @@ function hostStatus(
 }
 
 afterEach(() => {
+  // Always restore real timers so a fake-timer test cannot leak into neighbors.
+  vi.useRealTimers();
   __resetCommGraphRegistryForTests();
 });
 
@@ -420,6 +422,15 @@ describe("comm-graph registry redial containment", () => {
   });
 
   it("caps the retries and leaves the host failed, then reconciles on a later acquire", async () => {
+    // Production schedule in comm-graph-subscription.ts (not exported):
+    // REDIAL_RETRY_BASE_MS=200, REDIAL_MAX_ATTEMPTS=3 → delays 200ms, 400ms.
+    const redialRetryBaseMs = 200;
+    const redialMaxAttempts = 3;
+
+    // Install fake timers before the release that schedules the retry chain so
+    // we never wait on the real 200+400ms backoff window.
+    vi.useFakeTimers();
+
     const a = recordedOpener();
     let dialAttempts = 0;
     const alwaysBroken = () => {
@@ -432,15 +443,26 @@ describe("comm-graph registry redial containment", () => {
     const manager = getCommGraphSubscriptionManager("epic-1");
     acquireCommGraphSubscription("epic-1", claimA, a.opener, ["host-a"]);
     acquireCommGraphSubscription("epic-1", claimB, alwaysBroken, ["host-a"]);
+    // Orphaned host-a redials through alwaysBroken (budget reset) and fails
+    // synchronously on attempt 1; attempt 2 is scheduled for baseMs.
     releaseCommGraphSubscription("epic-1", claimA);
+    expect(dialAttempts).toBe(1);
+    expect(hostStatus(manager, "host-a")).toBe("failed");
 
-    await vi.waitFor(() => {
-      expect(dialAttempts).toBeGreaterThan(1);
-    });
-    // Bounded: a transport that cannot be built does not become buildable by
-    // trying harder, and a redial loop is worse than an honest failed state.
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    expect(dialAttempts).toBeLessThanOrEqual(3);
+    // Attempt 2 after the first backoff window.
+    await vi.advanceTimersByTimeAsync(redialRetryBaseMs);
+    expect(dialAttempts).toBe(2);
+    expect(hostStatus(manager, "host-a")).toBe("failed");
+
+    // Attempt 3 after the doubled backoff; that hits the configured cap.
+    await vi.advanceTimersByTimeAsync(redialRetryBaseMs * 2);
+    expect(dialAttempts).toBe(redialMaxAttempts);
+    expect(hostStatus(manager, "host-a")).toBe("failed");
+
+    // Bounded: past the cap, further time does not schedule another dial.
+    // A redial loop is worse than an honest failed state.
+    await vi.advanceTimersByTimeAsync(redialRetryBaseMs * 8);
+    expect(dialAttempts).toBe(redialMaxAttempts);
     expect(hostStatus(manager, "host-a")).toBe("failed");
 
     // Exhausting the cap is not the end: the next surface to mount reconciles

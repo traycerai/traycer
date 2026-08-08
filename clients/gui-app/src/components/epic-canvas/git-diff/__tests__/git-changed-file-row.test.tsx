@@ -47,6 +47,7 @@ function renderRow(args: {
       active={args.active}
       leading={null}
       trailing={null}
+      showStats
       pathRanges={args.pathRanges}
       onClick={() => {}}
       onDoubleClick={undefined}
@@ -65,6 +66,7 @@ function renderNestedPanelRow(file: GitChangedFile) {
       active={false}
       leading={null}
       trailing={null}
+      showStats
       pathRanges={NO_HIGHLIGHT}
       onClick={() => {}}
       onDoubleClick={undefined}

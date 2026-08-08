@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import {
   act,

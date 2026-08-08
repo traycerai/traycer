@@ -16,7 +16,10 @@
  * range (one row, or several sharing a millisecond) collapses to a single point
  * and every marker sits at the right edge - see `commGraphFractionForTimestamp`.
  */
-import { commGraphUpperBoundIndex } from "@/lib/comm-graph/comm-graph-timeline";
+import {
+  commGraphEventKey,
+  commGraphUpperBoundIndex,
+} from "@/lib/comm-graph/comm-graph-timeline";
 import {
   compareCommGraphSortKeys,
   type CommGraphEvent,
@@ -87,7 +90,7 @@ export function commGraphTransportMarkers(
   range: CommGraphTimeRange,
 ): ReadonlyArray<CommGraphTransportMarker> {
   return events.map((event) => ({
-    key: `${event.hostId}:${event.id}`,
+    key: commGraphEventKey(event),
     fraction: commGraphFractionForTimestamp(event.timestamp, range),
     event,
   }));

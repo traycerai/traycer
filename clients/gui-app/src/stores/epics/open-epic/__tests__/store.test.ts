@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";

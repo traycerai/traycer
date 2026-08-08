@@ -1,14 +1,12 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
-import {
-  DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-  type GitChangedFile,
-  type GitGetFileDiffResponse,
+import type {
+  GitChangedFile,
+  GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
 import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
-import { useGitGetFileDiffQuery } from "@/hooks/git/use-git-get-file-diff-query";
 import { useGitRefreshWorktreeStatus } from "@/hooks/git/use-git-refresh-worktree-status";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
@@ -25,7 +23,10 @@ import { gitChangedFileBelongsToBundleGroup } from "@/lib/git/panel-file-renderi
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import { DiffBundleLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-bundle-loading-skeleton";
 import { DiffContentLoadingSkeleton } from "@/components/epic-canvas/git-diff/diff-content-loading-skeleton";
-import { DiffTabShell } from "@/components/epic-canvas/git-diff/diff-tab-shell";
+import {
+  DiffTabHeaderPortal,
+  DiffTabShell,
+} from "@/components/epic-canvas/git-diff/diff-tab-shell";
 import {
   DiffTabToolbar,
   type DiffTabToolbarView,
@@ -47,6 +48,9 @@ import { GitWatcherStatusNotice } from "@/components/epic-canvas/git-diff/git-wa
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useEditableGitDiffSurface } from "@/components/epic-canvas/git-diff/git-diff-editing";
+import { GitDiffEditStatusContent } from "@/components/epic-canvas/git-diff/git-diff-edit-status";
 import {
   createLoadedDiffTileFindSource,
   createLoadingDiffTileFindSource,
@@ -56,7 +60,6 @@ import {
   type DiffTileFindSource,
 } from "@/stores/tile-find";
 import {
-  fileDiffLoadFullIdentity,
   GIT_DIFF_BINARY_FIND_MESSAGE,
   GIT_DIFF_ERROR_FIND_MESSAGE,
   GIT_DIFF_LOADING_FIND_MESSAGE,
@@ -65,7 +68,10 @@ import {
   type GitBundleDiffTileRef,
   type GitFileDiffTileRef,
 } from "@/components/epic-canvas/git-diff/git-diff-tile-shared";
-import { useGitBundleDiffFind } from "@/components/epic-canvas/git-diff/git-bundle-diff-find";
+import {
+  gitBundleDiffFindFileId,
+  useGitBundleDiffFind,
+} from "@/components/epic-canvas/git-diff/git-bundle-diff-find";
 import { BundleFileSection } from "@/components/epic-canvas/git-diff/git-bundle-file-section";
 import { GitDiffDeadTileBanner } from "./dead-tile-banner";
 
@@ -198,13 +204,18 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
       }
     >
       {isGitFileDiffTileRef(props.node) ? (
-        <GitFileDiffTileBody node={props.node} subscription={subscription} />
+        <GitFileDiffTileBody
+          node={props.node}
+          subscription={subscription}
+          isActive={props.isActive}
+        />
       ) : null}
       {isGitBundleDiffTileRef(props.node) ? (
         <GitBundleDiffTileBody
           node={props.node}
           viewTabId={props.viewTabId}
           subscription={subscription}
+          isActive={props.isActive}
         />
       ) : null}
     </DiffTabShell>
@@ -343,6 +354,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
 interface GitFileDiffTileBodyProps {
   readonly node: GitFileDiffTileRef;
   readonly subscription: GitListChangedFilesSubscriptionResult;
+  readonly isActive: boolean;
 }
 
 function GitFileDiffTileBody(props: GitFileDiffTileBodyProps): ReactNode {
@@ -414,6 +426,7 @@ function GitFileDiffTileBody(props: GitFileDiffTileBodyProps): ReactNode {
       file={file}
       headSha={props.subscription.data?.headSha ?? ""}
       diffViewerPreferences={diffViewerPreferences}
+      isActive={props.isActive}
     />
   );
 }
@@ -423,9 +436,11 @@ interface GitFileDiffPanelProps {
   readonly file: GitChangedFile;
   readonly headSha: string;
   readonly diffViewerPreferences: DiffViewerPreferences;
+  readonly isActive: boolean;
 }
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
+  const tabHostClient = useTabHostClient();
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const editorOpen = useEditorOpen("file");
   const {
@@ -434,43 +449,30 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   } = useEditorOpenFeedback();
   const openExternallyOpening =
     editorOpen.isPending || openExternallyFeedbackActive;
-  const diffIdentity = fileDiffLoadFullIdentity({
-    runningDir: props.node.diff.runningDir,
-    filePath: props.file.path,
-    previousPath: props.file.previousPath,
-    stage: props.file.stage,
-    headSha: props.headSha,
-    stagedOid: props.file.stagedOid,
-    worktreeOid: props.file.worktreeOid,
-    ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-  });
-  const [fullDiffIdentity, setFullDiffIdentity] = useState<string | null>(null);
-  const byteBudget =
-    fullDiffIdentity === diffIdentity
-      ? null
-      : DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET;
-
-  const diffQuery = useGitGetFileDiffQuery({
+  const {
+    displayedDiff,
+    displayedDiffError,
+    displayedDiffPending,
+    editing,
+    loadFull,
+  } = useEditableGitDiffSurface({
+    client: tabHostClient,
     hostId: props.node.hostId,
     runningDir: props.node.diff.runningDir,
-    filePath: props.file.path,
-    previousPath: props.file.previousPath,
-    stage: props.file.stage,
+    file: props.file,
     headSha: props.headSha,
-    stagedOid: props.file.stagedOid,
-    worktreeOid: props.file.worktreeOid,
     ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-    byteBudget,
-    enabled: !props.file.isBinary,
+    surfaceId: `git-diff:${props.node.instanceId}`,
+    isActive: props.isActive,
+    queryEnabled: !props.file.isBinary,
+    resumeDetachedDraft: false,
   });
 
   // Preserve scroll (both axes) across epic switches and remount, once the diff
   // has loaded for a non-binary file.
   const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
     props.node.instanceId,
-    !props.file.isBinary &&
-      diffQuery.data !== undefined &&
-      diffQuery.error === null,
+    isLoadedGitDiff(props.file.isBinary, displayedDiff, displayedDiffError),
   );
   const findNavigation = useDiffFindNavigation();
   const findSource = useMemo(
@@ -478,16 +480,16 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       gitFileDiffFindSource({
         node: props.node,
         file: props.file,
-        diff: diffQuery.data ?? null,
-        loading: diffQuery.isPending,
-        errored: diffQuery.error !== null,
+        diff: displayedDiff ?? null,
+        loading: displayedDiffPending,
+        errored: displayedDiffError !== null,
         headSha: props.headSha,
         ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
       }),
     [
-      diffQuery.data,
-      diffQuery.error,
-      diffQuery.isPending,
+      displayedDiff,
+      displayedDiffError,
+      displayedDiffPending,
       props.diffViewerPreferences.ignoreWhitespace,
       props.file,
       props.headSha,
@@ -498,13 +500,13 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     tileInstanceId: props.node.instanceId,
     tileKind: "git-diff",
     source: findSource,
-    renderer:
-      props.file.isBinary ||
-      diffQuery.isPending ||
-      diffQuery.error !== null ||
-      diffQuery.data.isBinary
-        ? null
-        : findNavigation,
+    renderer: gitDiffFindRenderer({
+      fileIsBinary: props.file.isBinary,
+      isPending: displayedDiffPending,
+      hasError: displayedDiffError !== null,
+      diffIsBinary: displayedDiff?.isBinary ?? true,
+      findNavigation,
+    }),
   });
   const findScrollContainerRef = useCallback(
     (element: HTMLDivElement | null): void => {
@@ -541,7 +543,10 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
     );
   }
 
-  if (diffQuery.isPending) {
+  if (displayedDiff === undefined && displayedDiffError !== null) {
+    return <GitErrorBlock error={displayedDiffError} />;
+  }
+  if (displayedDiff === undefined) {
     return (
       <DiffContentLoadingSkeleton
         mode={props.diffViewerPreferences.mode}
@@ -551,10 +556,8 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       />
     );
   }
-  if (diffQuery.error !== null)
-    return <GitErrorBlock error={diffQuery.error} />;
 
-  if (diffQuery.data.isBinary) {
+  if (displayedDiff.isBinary) {
     return (
       <BinaryPlaceholder
         fileName={props.file.path}
@@ -567,7 +570,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
 
   return (
     <FileDiffContent
-      diff={diffQuery.data}
+      diff={displayedDiff}
       mode={props.diffViewerPreferences.mode}
       wordWrap={props.diffViewerPreferences.wordWrap}
       backgrounds={props.diffViewerPreferences.backgrounds}
@@ -576,11 +579,47 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       sizing="fill"
       scrollContainerRef={findScrollContainerRef}
       onScroll={onScroll}
-      onLoadFull={() => {
-        setFullDiffIdentity(diffIdentity);
+      onLoadFull={loadFull}
+      fileIdentity={{
+        findFilePath: props.file.path,
+        bundleFindFileId: gitBundleDiffFindFileId(props.file),
       }}
+      isEmptyFile={editing.canOfferEdit ? props.file.sizeBytes === 0 : false}
+      editStatus={
+        <DiffTabHeaderPortal>
+          <GitDiffEditStatusContent editing={editing} appearance="pill" />
+        </DiffTabHeaderPortal>
+      }
+      editAdapter={editing.editAdapter}
+      editSession={editing.editSession}
     />
   );
+}
+
+function isLoadedGitDiff(
+  fileIsBinary: boolean,
+  diff: GitGetFileDiffResponse | undefined,
+  error: unknown,
+): boolean {
+  return !fileIsBinary && diff !== undefined && error === null;
+}
+
+function gitDiffFindRenderer<T>(args: {
+  readonly fileIsBinary: boolean;
+  readonly isPending: boolean;
+  readonly hasError: boolean;
+  readonly diffIsBinary: boolean;
+  readonly findNavigation: T;
+}): T | null {
+  if (
+    args.fileIsBinary ||
+    args.isPending ||
+    args.hasError ||
+    args.diffIsBinary
+  ) {
+    return null;
+  }
+  return args.findNavigation;
 }
 
 function GitFileDiffFindRegistration(props: {
@@ -683,6 +722,7 @@ interface GitBundleDiffTileBodyProps {
   readonly node: GitBundleDiffTileRef;
   readonly viewTabId: string;
   readonly subscription: GitListChangedFilesSubscriptionResult;
+  readonly isActive: boolean;
 }
 
 function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
@@ -751,6 +791,7 @@ function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
               file={file}
               headSha={data.headSha}
               diffViewerPreferences={diffViewerPreferences}
+              isActive={props.isActive}
             />
           )}
         />

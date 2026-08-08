@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act, StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
@@ -285,6 +284,7 @@ function ScopedTerminalHost(props: ScopedTerminalHostProps) {
         findTargetId={findTargetId}
         keepAlive={props.keepAlive}
         chrome="padded"
+        onTerminalReady={null}
       />
     </TileFindScope>
   );
@@ -388,6 +388,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive
         chrome="flush"
+        onTerminalReady={null}
       />,
     );
 
@@ -417,6 +418,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />
       </StrictMode>,
     );
@@ -454,6 +456,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
     const entry = __getXtermHostEntryForTests("test-instance");
@@ -484,6 +487,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       findTargetId: "terminal:test",
       keepAlive: false,
       chrome: "padded",
+      onTerminalReady: null,
     } as const;
 
     const rendered = render(
@@ -536,6 +540,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
               findTargetId="terminal:split-left"
               keepAlive={false}
               chrome="padded"
+              onTerminalReady={null}
             />
           </PaneVisibilityContext>
         </PaneSurfaceActivityContext.Provider>
@@ -557,6 +562,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
               findTargetId="terminal:split-right"
               keepAlive={false}
               chrome="padded"
+              onTerminalReady={null}
             />
           </PaneVisibilityContext>
         </PaneSurfaceActivityContext.Provider>
@@ -595,6 +601,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -633,6 +640,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1054,6 +1062,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1083,6 +1092,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1140,6 +1150,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1208,6 +1219,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1267,6 +1279,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />
       </PaneVisibilityContext.Provider>,
     );
@@ -1292,6 +1305,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />
       </PaneVisibilityContext.Provider>,
     );
@@ -1317,6 +1331,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1342,6 +1357,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1365,6 +1381,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1406,6 +1423,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
             findTargetId={active ? "terminal:test" : null}
             keepAlive={false}
             chrome="padded"
+            onTerminalReady={null}
           />
         </>
       );
@@ -1461,6 +1479,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
             findTargetId={active ? "terminal:test" : null}
             keepAlive={false}
             chrome="padded"
+            onTerminalReady={null}
           />
         </PaneActivationFocusIntentContext.Provider>
       );
@@ -1503,6 +1522,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1560,6 +1580,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           findTargetId={null}
           keepAlive={false}
           chrome="padded"
+          onTerminalReady={null}
         />,
       );
 
@@ -1609,6 +1630,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 
@@ -1655,6 +1677,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
+        onTerminalReady={null}
       />,
     );
 

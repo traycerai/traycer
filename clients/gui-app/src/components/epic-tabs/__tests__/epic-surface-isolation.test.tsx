@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

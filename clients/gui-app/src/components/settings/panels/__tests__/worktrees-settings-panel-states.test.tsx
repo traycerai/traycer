@@ -42,6 +42,9 @@ const state = vi.hoisted(() => ({
     hostLabel: "Host A",
   },
   client: null as HostClient<HostRpcRegistry> | null,
+  // `null` uses the fixture default (follows the host); set to drive the
+  // gate's non-usable states.
+  scopeStatus: null as "unreachable" | null,
   enrichment: {
     enrichedByPath: new Map<string, WorktreeHostEntryV14>(),
     erroredPaths: new Set<string>(),
@@ -63,6 +66,28 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => state.reachability,
 }));
 
+// The panel now takes its host from the ONE sidebar picker rather than its own
+// dropdown, so the scope hook is what drives these states. Derived from the
+// same `state` the other host mocks use, so each test still sets one field.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        host:
+          state.activeHostId === null
+            ? null
+            : hostScopeOptionFixture({
+                hostId: state.activeHostId,
+                name: state.reachability.hostLabel,
+              }),
+        client: state.client,
+        ...(state.scopeStatus === null ? {} : { status: state.scopeStatus }),
+      }),
+  };
+});
+
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => state.client,
 }));
@@ -83,6 +108,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
 }));
 
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import {
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   useSettingsStore,
@@ -129,7 +155,7 @@ function clientWithHandler(
   return client;
 }
 
-function renderPanel(): void {
+function renderPanel(): { readonly rerender: () => void } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -138,11 +164,19 @@ function renderPanel(): void {
       <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
-  render(
+  // A FRESH element per (re)render — a referentially identical element lets
+  // React bail out of the subtree without re-reading the mutated mocks.
+  const makeUi = () => (
     <Wrapper>
       <WorktreesSettingsPanel />
-    </Wrapper>,
+    </Wrapper>
   );
+  const view = render(makeUi());
+  return {
+    rerender: () => {
+      view.rerender(makeUi());
+    },
+  };
 }
 
 beforeEach(() => {
@@ -151,6 +185,7 @@ beforeEach(() => {
   state.hosts = [];
   state.reachability = { status: "reachable", hostLabel: "Host A" };
   state.client = null;
+  state.scopeStatus = null;
   state.enrichment = {
     enrichedByPath: new Map(),
     erroredPaths: new Set(),
@@ -181,46 +216,39 @@ afterEach(() => {
   });
 });
 
-function documentPosition(
-  earlier: HTMLElement,
-  later: HTMLElement,
-): "before" | "after" | "unrelated" {
-  const relation = earlier.compareDocumentPosition(later);
-  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
-  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
-  return "unrelated";
-}
-
 /**
- * Client-wide branch-prefix strip - must render regardless of host state.
- * Section headings ("New worktrees" / "Existing worktrees" / "Applies on every
- * host") were removed in the presentation redesign; the strip itself remains.
+ * The panel is inventory-only: no branch-prefix strip, in any host state.
+ * The global default moved to General settings; a per-repository override
+ * lives in that repo's Environment dialog.
  */
-function assertBranchPrefixStripPresent(): void {
+function assertBranchPrefixStripAbsent(): void {
   expect(screen.queryByText("New worktrees")).toBeNull();
   expect(screen.queryByText("Existing worktrees")).toBeNull();
   expect(screen.queryByText("Applies on every host")).toBeNull();
-
-  const label = screen.getByText("Branch prefix");
-  const scope = screen.getByText("All hosts");
-  const prefixInput = screen.getByRole("textbox", { name: "Branch prefix" });
-  const example = screen.getByText(/New branches start like/);
-
-  expect(documentPosition(label, scope)).toBe("before");
-  expect(documentPosition(label, prefixInput)).toBe("before");
-  expect(documentPosition(label, example)).toBe("before");
+  expect(screen.queryByText("All hosts")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Branch prefix" })).toBeNull();
+  expect(screen.queryByText(/New branches start like/)).toBeNull();
 }
 
 describe("WorktreesSettingsPanel host-scoped states", () => {
-  it("prompts to select a host when none is selected", () => {
+  it("defers to the scope gate when no host is resolved", () => {
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = null;
 
     renderPanel();
 
-    screen.getByText("Select a host to manage its worktrees.");
-    // Branch prefix defaults are client-wide - not gated on host selection.
-    assertBranchPrefixStripPresent();
+    // Was "Select a host to manage its worktrees." — a flattened non-answer
+    // this panel produced for every unresolved scope, including a host that
+    // had just been deregistered out from under the user, and which offered
+    // nothing to act on. `HostScopeGate` owns those states now: it names the
+    // host, distinguishes deregistered from unroutable, and carries the way
+    // back to the active host.
+    expect(
+      screen.queryByText("Select a host to manage its worktrees."),
+    ).toBeNull();
+    screen.getByTestId("host-scope-empty");
+    // Inventory-only: no branch-prefix strip regardless of host selection.
+    assertBranchPrefixStripAbsent();
   });
 
   it("shows a reachability check while the host is being probed", () => {
@@ -365,6 +393,65 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     });
   });
 
+  it("never leaves the partial-listing Retry actionable over the outage notice", async () => {
+    // Pins the user-visible claim, not the mechanism. Today the banner
+    // cannot outlive the disconnect at all (no client ⇒ the listing data and
+    // `isPartial` drop with it), so this passes via absence; if the listing
+    // cache ever learns to survive a client loss, the banner's place inside
+    // the gate makes this pass via concealment instead. Either way no host
+    // RPC Retry stays clickable above the unreachable notice.
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    const cleanWorktree = {
+      repoLabel: "acme/app",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+      scripts: null,
+      owners: [],
+      lastActivityAt: null,
+      branchStatus: null,
+      createdAt: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      submodules: [],
+      atBaseCommit: false,
+      resolvedAt: 1,
+    } satisfies WorktreeHostEntryV14;
+    let call = 0;
+    state.client = clientWithHandler(() => {
+      call += 1;
+      if (call === 1) {
+        return { worktrees: [cleanWorktree], nextCursor: "cursor-2" };
+      }
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "later page failed",
+        requestId: "req-partial-conceal",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
+
+    const view = renderPanel();
+    await waitFor(() => {
+      screen.getByText(/Some worktrees could not be loaded/);
+    });
+
+    state.scopeStatus = "unreachable";
+    state.client = null;
+    view.rerender();
+
+    screen.getByTestId("host-scope-unreachable");
+    const banner = screen.queryByText(/Some worktrees could not be loaded/);
+    expect(banner === null || isConcealed(banner)).toBe(true);
+  });
+
   it("says nothing was created when the host's list is empty", async () => {
     state.hosts = [host({ hostId: "host-a" })];
     state.activeHostId = "host-a";
@@ -380,7 +467,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     });
   });
 
-  it("renders the host select alongside the full toolbar once the list is populated", async () => {
+  it("renders the full toolbar without any host selector or host readout once the list is populated", async () => {
     state.hosts = [
       host({ hostId: "host-a", label: "Host A" }),
       host({ hostId: "host-b", label: "Host B" }),
@@ -424,39 +511,22 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     await waitFor(() => {
       screen.getByText("feat-clean");
     });
-    screen.getByTestId("worktrees-host-select");
+    // The toolbar neither picks the host nor names it: both belong to the
+    // sidebar. Asserted on the host LABEL rather than on a testid - checking
+    // that a testid which exists nowhere is absent proves nothing, while the
+    // label is what actually reappears if a readout is ever restored here.
+    expect(screen.queryByTestId("worktrees-host-select")).toBeNull();
+    expect(
+      screen.queryByText(state.reachability.hostLabel, {
+        selector: "[data-testid='worktrees-toolbar-actions'] *",
+      }),
+    ).toBeNull();
     screen.getByPlaceholderText("Search repo, branch, path, PR, or Task");
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
     screen.getByRole("button", { name: "Refresh worktrees" });
-    // Same branch-prefix strip as the no-host empty state - host-scoped UI
-    // does not own or gate creation defaults.
-    assertBranchPrefixStripPresent();
-    // Prefix strip still precedes the host-scoped inventory toolbar.
-    expect(
-      documentPosition(
-        screen.getByRole("textbox", { name: "Branch prefix" }),
-        screen.getByTestId("worktrees-host-select"),
-      ),
-    ).toBe("before");
-  });
-
-  it("wires the store's worktreeBranchPrefix into the branch prefix input and live example", () => {
-    useSettingsStore.setState({ worktreeBranchPrefix: "anurag/" });
-    state.hosts = [host({ hostId: "host-a" })];
-    state.activeHostId = null;
-
-    renderPanel();
-
-    assertBranchPrefixStripPresent();
-    expect(
-      screen.getByRole<HTMLInputElement>("textbox", {
-        name: "Branch prefix",
-      }).value,
-    ).toBe("anurag/");
-    // Live example uses the current draft (seeded from the store) + a stable
-    // per-mount suffix - don't hardcode the random slug, only the prefix.
-    const example = screen.getByText(/New branches start like/);
-    expect(example.textContent).toMatch(/anurag\/\S+/);
+    // Same as the no-host empty state - host-scoped UI carries no
+    // branch-prefix strip; that control lives in General settings now.
+    assertBranchPrefixStripAbsent();
   });
 });

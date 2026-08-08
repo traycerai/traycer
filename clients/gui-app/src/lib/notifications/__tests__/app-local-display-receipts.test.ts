@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   APP_LOCAL_DISPLAY_RECEIPT_NOTIFICATION_CAP,

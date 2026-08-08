@@ -4,6 +4,8 @@ import {
   prepareWorkspaceFoldersResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  workspaceBrowseFoldersRequestSchema,
+  workspaceBrowseFoldersResponseSchema,
   workspaceFileMentionSuggestionsResponseSchema,
   workspaceFolderMentionSuggestionsResponseSchema,
   workspaceGitBranchMentionSuggestionsResponseSchema,
@@ -19,6 +21,8 @@ import {
   workspacePrepareFoldersResponseSchemaV11,
   workspaceReadFileRequestSchema,
   workspaceReadFileResponseSchema,
+  workspaceWriteFileRequestSchema,
+  workspaceWriteFileResponseSchema,
   workspaceResolvePathsByRepoIdentifiersRequestSchema,
   workspaceResolvePathsByRepoIdentifiersResponseSchema,
   workspaceSearchPathsRequestSchema,
@@ -118,11 +122,29 @@ export const workspaceListDirectoryV10 = defineRpcContract({
   responseSchema: workspaceListDirectoryResponseSchema,
 });
 
+export const workspaceBrowseFoldersV10 = defineRpcContract({
+  method: "workspace.browseFolders",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceBrowseFoldersRequestSchema,
+  responseSchema: workspaceBrowseFoldersResponseSchema,
+});
+
 export const workspaceReadFileV10 = defineRpcContract({
   method: "workspace.readFile",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceReadFileRequestSchema,
   responseSchema: workspaceReadFileResponseSchema,
+});
+
+/**
+ * Optional post-v1 file-edit capability. Older hosts omit it from their
+ * manifest and the GUI keeps file surfaces read-only.
+ */
+export const workspaceWriteFileV10 = defineRpcContract({
+  method: "workspace.writeFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceWriteFileRequestSchema,
+  responseSchema: workspaceWriteFileResponseSchema,
 });
 
 export const workspaceSearchPathsV10 = defineRpcContract({

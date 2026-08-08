@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -133,6 +132,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
           artifactType: "spec",
           chatId: null,
           terminalAgentId: null,
+          terminalId: null,
           status: null,
         }) ?? false;
     });

@@ -180,6 +180,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   pi: "Pi",
   hermes: "Hermes Agent",
   omp: "Oh My Pi",
+  huggingface: "Hugging Face",
 };
 
 /**
@@ -885,6 +886,26 @@ const providerCliStateBaseShape = {
   // now as a dormant field: no Phase-1 host ever populates it, always
   // null/undefined. See `managedInstallState` above for why it's `.optional()`.
   advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  // Whether the host resolved a runnable CLI binary for this provider - the
+  // SAME `resolveEffectiveCliIdentity(...).path !== null` that decides whether
+  // `applyBinaryAbsentGate` strips this provider's CLI-routed write verbs from
+  // `nativeCapabilities`. False means those verbs were subtracted, and the UI
+  // owes the user a reason: without it a binary-less amp shows an MCP tab with
+  // no Add button, no Delete and no auth actions, and nothing anywhere saying
+  // why.
+  //
+  // Deliberately NOT derived client-side from `candidates`. The resolver's
+  // fallback order (selected custom -> bundled -> PATH, each only if
+  // `available`) is not the same question as "is any candidate available" - an
+  // available-but-unselected custom path satisfies the second and not the
+  // first - and re-deriving host resolution rules in the renderer is precisely
+  // the drift this field exists to stop.
+  //
+  // `.catch(true).optional()` for the reason `managedInstallState` is optional,
+  // with `true` as the quiet default: an old host omits the key, and assuming
+  // "resolved" reproduces today's exact behavior (no notice) rather than
+  // accusing every provider on an old host of a missing binary.
+  cliBinaryResolved: z.boolean().catch(true).optional(),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -943,9 +964,18 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
- * `providers.list@3.1` request. Optional `native` list/discover query folds
- * the unreleased mcp/plugins/skills list verbs onto this carrier. Classic
- * callers omit it (upgrade defaults to null).
+ * Live `providers.list@7.0` request. Optional `native` list/discover query
+ * folds the mcp/plugins/skills list verbs onto this carrier. Callers on any
+ * earlier line predate it, so the v6.0 -> v7.0 upgrade fills `native: null`
+ * ("classic caller, no native query").
+ *
+ * `native` rides v7.0 ALONE. It was authored against the live request object
+ * while v6.0 was still unreleased, which silently grew the already-shipped
+ * v4.0/v5.0/v6.0 request lines too; `host-v1.1.10` then froze those three
+ * lines without it, because the commit that added it was not in the release
+ * cherry-pick. Every line below v7.0 is pinned to
+ * `providersListRequestSchemaBeforeV70` for that reason - do not point a
+ * released line back at this schema.
  */
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -953,12 +983,17 @@ export const providersListRequestSchema = z.object({
 });
 export type ProvidersListRequest = z.infer<typeof providersListRequestSchema>;
 
-/** Frozen `providers.list@3.0` request (no native field). */
-export const providersListRequestSchemaV30 = z.object({
+/**
+ * Frozen request shape for every released `providers.list` line before v7.0
+ * (v1.0 through v6.0 all shipped exactly this). Hand-pinned rather than
+ * derived from the live schema via `.omit()` so a future request field cannot
+ * leak into a shipped line the way `native` did.
+ */
+export const providersListRequestSchemaBeforeV70 = z.object({
   forceAuthRefresh: z.boolean().optional(),
 });
-export type ProvidersListRequestV30 = z.infer<
-  typeof providersListRequestSchemaV30
+export type ProvidersListRequestBeforeV70 = z.infer<
+  typeof providersListRequestSchemaBeforeV70
 >;
 
 /**
@@ -2087,6 +2122,7 @@ export type DowngradableToV10ProviderState = (
   managedInstallState?: ProviderCliState["managedInstallState"];
   versionVisibility?: ProviderCliState["versionVisibility"];
   advisory?: ProviderCliState["advisory"];
+  cliBinaryResolved?: ProviderCliState["cliBinaryResolved"];
   loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
 };
 
@@ -2104,6 +2140,7 @@ export function downgradeProviderCliStateToV10(
   // - `nativeCapabilities` (v3.1 / v2.1+) — CRITICAL silent-data-loss trap
   // - `managedInstallState` / `versionVisibility` / `advisory` — the
   //   provider-pack-registry fields.
+  // - `cliBinaryResolved` — the binary-absent explanation field.
   const {
     availabilityPending: _availabilityPending,
     profiles: _profiles,
@@ -2111,6 +2148,7 @@ export function downgradeProviderCliStateToV10(
     managedInstallState: _managedInstallState,
     versionVisibility: _versionVisibility,
     advisory: _advisory,
+    cliBinaryResolved: _cliBinaryResolved,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
@@ -2195,6 +2233,22 @@ export function downgradeProviderCliStateListToV50(
 ): ProviderCliStateV50[] {
   return states.flatMap((state) => {
     const parsed = providerCliStateSchemaV50.safeParse(state);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Drop post-v6.0 providers (currently `huggingface`) for an already-shipped
+ * v6.0 client, and strip the provider-pack-registry fields the frozen v6.0
+ * state does not model. Same filter-by-reparse shape as the older bridges: an
+ * entry whose id is not in the frozen v6.0 enum simply does not survive the
+ * parse.
+ */
+export function downgradeProviderCliStateListToV60(
+  states: readonly unknown[],
+): ProviderCliStateV60[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV60.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

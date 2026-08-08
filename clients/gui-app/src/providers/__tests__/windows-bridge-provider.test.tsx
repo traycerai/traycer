@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -6,6 +5,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import {
   useWindowsBridge,
   useWindowsBridgeHydrated,
@@ -570,6 +570,36 @@ describe("<WindowsBridgeProvider />", () => {
       .setStripOrder([{ kind: "epic", id: "browser-tab" }]);
     expect(getTabSplitCompatibility().supported).toBe(true);
     expect(window.localStorage.getItem(storageKey)).not.toBeNull();
+  });
+
+  it("flushes file-edit recovery on pagehide/beforeunload without a desktop bridge (web path)", async () => {
+    const flushRecoverySpy = vi
+      .spyOn(fileEditRuntimeRegistry, "flushRecovery")
+      .mockResolvedValue(undefined);
+
+    render(
+      <RunnerHostProvider runnerHost={createBaseRunnerHost()}>
+        <WindowsBridgeProvider>
+          <BridgeProbe onBridge={() => undefined} />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    expect((await screen.findByTestId("bridge-state")).textContent).toBe(
+      "none",
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(flushRecoverySpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event("beforeunload"));
+    });
+    expect(flushRecoverySpy).toHaveBeenCalledTimes(2);
+
+    flushRecoverySpy.mockRestore();
   });
 
   it("coalesces bursty desktop per-window projections into one bridge write", async () => {

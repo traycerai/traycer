@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { actionsSource } from "@/lib/commands/sources/actions.source";

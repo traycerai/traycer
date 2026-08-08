@@ -19,6 +19,8 @@ import {
   listTerminalsResponseSchemaV20,
   listTerminalsResponseSchemaV21,
   listTerminalsResponseSchemaV22,
+  readTerminalOutputRequestSchema,
+  readTerminalOutputResponseSchema,
   renameTerminalRequestSchema,
   renameTerminalResponseSchema,
   type TerminalScope,
@@ -304,6 +306,16 @@ export const terminalListDowngradeV22ToV10 = defineDowngradePath<
       },
     };
   },
+});
+
+// Brand-new method - an older host simply lacks it, so the registry puts it
+// on the `degrade: unsupported` channel rather than the released floor. No
+// downgrade path exists or is needed: there is no earlier line to bridge to.
+export const terminalReadOutputV10 = defineRpcContract({
+  method: "terminal.readOutput",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readTerminalOutputRequestSchema,
+  responseSchema: readTerminalOutputResponseSchema,
 });
 
 export const terminalRenameV10 = defineRpcContract({

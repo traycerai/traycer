@@ -18,7 +18,6 @@
  *     the legacy root `content` fragment because body edits now live on
  *     the artifact-room doc - the root doc carries metadata only.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";

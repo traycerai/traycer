@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -95,13 +94,17 @@ vi.mock("@/lib/perf/terminal-load-perf", () => ({
   beginTerminalLoad: vi.fn(),
 }));
 
-// An exited sign-in tile renders the restart button, which instantiates the
-// terminal-login mutation and therefore reaches for the tab's host client.
-// These cases never press it, so a stub that can answer `getActiveHostId` is
-// enough - the full host runtime is not what is under test here.
+// The tab's host client is reached twice here: an exited sign-in tile renders
+// the restart button (which instantiates the terminal-login mutation), and the
+// live tile resolves its terminal title through `terminal.list`. Neither is
+// under test, so a stub answering the identity reads and readiness
+// subscription every host query makes is enough - the full host runtime is not
+// what these cases exercise.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({
     getActiveHostId: () => HOST_ID,
+    getRequestContextUserId: () => null,
+    onChange: () => () => undefined,
     request: vi.fn(),
   }),
 }));

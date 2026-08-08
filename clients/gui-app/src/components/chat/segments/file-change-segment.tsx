@@ -264,6 +264,7 @@ function FileChangeDiffView(props: {
       }
       scrollContainerRef={null}
       onScroll={null}
+      fileIdentity={null}
     >
       <DiffContentPrimitive
         patch={patch}
@@ -274,6 +275,7 @@ function FileChangeDiffView(props: {
         lineNumbers={false}
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );

@@ -22,6 +22,7 @@ export interface CommGraphThreadPanelProps {
   readonly edge: CommGraphAggregatedEdge;
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
   /** Sender-side jump to the "Sent message" card - see `CommGraphJump`. */
@@ -38,6 +39,7 @@ export interface CommGraphThreadPanelProps {
 export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
   const {
     agentNames,
+    canOpenAgentForEvent,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -65,6 +67,7 @@ export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
       epicId={epicId}
       agentNames={agentNames}
       emptyLabel="No messages on this pair yet."
+      canOpenAgentForEvent={canOpenAgentForEvent}
       canJump={canJump}
       onJump={onJump}
       canJumpToSender={canJumpToSender}

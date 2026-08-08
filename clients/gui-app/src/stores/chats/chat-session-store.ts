@@ -50,6 +50,7 @@ import {
   reopenStreamingSubagentBlocks,
   type FinalizedActionStatus,
 } from "@traycer/protocol/host/agent/gui/agent-runtime-accumulator";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
   BackgroundItem,
   ChatAccess,
@@ -345,6 +346,18 @@ export interface ChatSessionState {
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  /**
+   * The Monitors and shells this chat created, whatever state they are in - not
+   * a subset of {@link backgroundItems}, since a Monitor outlives the turn that
+   * started it. Carried whole by every snapshot and every
+   * `managedCommandsChanged` frame, so keeping it current is one assignment.
+   *
+   * Always an array, never `undefined`: a host too old to send the field has no
+   * managed-command subsystem, so it owns no commands and `[]` is the truth
+   * rather than a fallback. The surfaces are presence-based and render "old
+   * host" and "none yet" identically.
+   */
+  readonly managedCommands: ReadonlyArray<ManagedCommand>;
   /**
    * In-flight per-item background stops, keyed by `taskId` → the
    * `clientActionId` of the stop frame that was sent. An entry exists from the
@@ -998,6 +1011,7 @@ export function createChatSessionStore(
             pendingInterviews: frame.snapshot.pendingInterviews,
             accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
             backgroundItems: frame.snapshot.backgroundItems,
+            managedCommands: frame.snapshot.managedCommands,
             // Drop per-item stops whose task has left the running-only list
             // (its terminal landed) and clear the stop-all flag once nothing
             // is left running, so settled rows never stay disabled. A stop
@@ -1076,6 +1090,14 @@ export function createChatSessionStore(
           worktreeBinding: frame.worktreeBinding,
           missingWorktreePaths: frame.missingWorktreePaths,
         });
+      },
+      onManagedCommandsChanged: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // The frame carries the whole set, so a dropped one can never strand a
+        // stale row - the next frame replaces everything either way.
+        set({ managedCommands: frame.managedCommands });
       },
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -1566,6 +1588,10 @@ export function createChatSessionStore(
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onWorktreeStateChanged(frame);
       },
+      onManagedCommandsChanged: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onManagedCommandsChanged(frame);
+      },
       onActionAck: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onActionAck(frame);
@@ -1682,6 +1708,7 @@ export function createChatSessionStore(
       pendingInterviews: [],
       accumulatedFileChanges: [],
       backgroundItems: undefined,
+      managedCommands: [],
       pendingBackgroundStops: {},
       pendingBackgroundStopAll: null,
       restore: null,

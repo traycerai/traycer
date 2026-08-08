@@ -13,7 +13,7 @@ import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
-import { RemoteWorkspacePathPickerHost } from "@/components/home/host-workspace-selector/remote-workspace-path-picker-host";
+import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
@@ -70,7 +70,7 @@ export function AppShell(props: AppShellProps) {
               <TileSelectAllBridge />
             </main>
             <OpenFolderDialog />
-            <RemoteWorkspacePathPickerHost />
+            <RemoteFolderPickerDialog />
             <QuitInterceptBridge />
             <MigrationRunController />
             <MigrationBlockingModalHost />

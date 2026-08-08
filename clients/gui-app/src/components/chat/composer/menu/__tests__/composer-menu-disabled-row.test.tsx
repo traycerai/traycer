@@ -1,4 +1,3 @@
-import "../../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -65,6 +64,7 @@ function openTriggered(
     range: { from: 1, to: 2 },
     query: "",
     commit: () => undefined,
+    dismiss: null,
     clientRect: null,
   });
   store.getState().setItems({

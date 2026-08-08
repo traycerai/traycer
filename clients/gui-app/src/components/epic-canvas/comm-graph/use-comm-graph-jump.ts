@@ -20,10 +20,13 @@
  * project at all (a half-edge to an agent outside the epic): there is no tile
  * to open, so the row simply carries no jump affordance.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useHostDirectory } from "@/lib/host";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import { isCommGraphOriginAvailable } from "@/lib/comm-graph/comm-graph-origin-availability";
 import {
   makeOpenableNodeRef,
   type EpicArtifactRef,
@@ -37,6 +40,8 @@ import {
 } from "@/lib/comm-graph/comm-graph-jump";
 
 export interface CommGraphJump {
+  /** Whether this event's owning host is currently reachable. */
+  readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly jump: (event: CommGraphEvent) => void;
   /**
@@ -89,26 +94,62 @@ function openableRefForAgent(agent: CommGraphAgentNode): EpicArtifactRef {
 export function useCommGraphJump(
   epicId: string,
   agents: ReadonlyArray<CommGraphAgentNode>,
+  events: ReadonlyArray<CommGraphEvent>,
 ): CommGraphJump {
   const tileNavigation = useEpicTileNavigation();
+  const directory = useHostDirectory();
   const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
 
   const agentById = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent])),
     [agents],
   );
+  const subscribeToDirectory = useCallback(
+    (listener: () => void) => {
+      const subscription = directory.onChange(listener);
+      return () => subscription.dispose();
+    },
+    [directory],
+  );
+  const getDirectorySnapshot = useCallback(() => {
+    const hostIds = new Set(events.map((event) => event.hostId));
+    for (const agent of agents) {
+      if (agent.hostId !== null) hostIds.add(agent.hostId);
+    }
+    return Array.from(hostIds)
+      .sort()
+      .map((hostId) => {
+        const endpoint = dialableHostEndpoint(directory.findById(hostId));
+        return `${hostId}:${endpoint?.websocketUrl ?? "offline"}`;
+      })
+      .join("|");
+  }, [agents, directory, events]);
+  const directorySnapshot = useSyncExternalStore(
+    subscribeToDirectory,
+    getDirectorySnapshot,
+    () => "",
+  );
+  const isOriginAvailable = useCallback(
+    (event: CommGraphEvent): boolean => {
+      void directorySnapshot;
+      return isCommGraphOriginAvailable(directory, event);
+    },
+    [directory, directorySnapshot],
+  );
 
   const canJump = useCallback(
     (event: CommGraphEvent): boolean => {
+      if (!isOriginAvailable(event)) return false;
       const target = commGraphJumpTarget(event);
       if (target === null) return false;
       return agentById.has(commGraphJumpAgentId(target));
     },
-    [agentById],
+    [agentById, isOriginAvailable],
   );
 
   const jump = useCallback(
     (event: CommGraphEvent): void => {
+      if (!isOriginAvailable(event)) return;
       const target = commGraphJumpTarget(event);
       if (target === null) return;
       const agent = agentById.get(commGraphJumpAgentId(target));
@@ -125,11 +166,12 @@ export function useCommGraphJump(
         });
       }
     },
-    [agentById, epicId, requestJump, tileNavigation],
+    [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
   );
 
   const canJumpToSender = useCallback(
     (event: CommGraphEvent): boolean => {
+      if (!isOriginAvailable(event)) return false;
       if (event.kind !== "a2a_message") return false;
       if (event.senderAgentId === null || event.receiverAgentId === null) {
         return false;
@@ -137,11 +179,12 @@ export function useCommGraphJump(
       if (event.messageText === null) return false;
       return agentById.get(event.senderAgentId)?.kind === "chat";
     },
-    [agentById],
+    [agentById, isOriginAvailable],
   );
 
   const jumpToSender = useCallback(
     (event: CommGraphEvent): void => {
+      if (!isOriginAvailable(event)) return;
       if (
         event.kind !== "a2a_message" ||
         event.senderAgentId === null ||
@@ -160,20 +203,22 @@ export function useCommGraphJump(
         timestamp: event.timestamp,
       });
     },
-    [agentById, epicId, requestJump, tileNavigation],
+    [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
   );
 
   const canJumpToCreated = useCallback(
     (event: CommGraphEvent): boolean => {
+      if (!isOriginAvailable(event)) return false;
       if (event.kind !== "agent_created") return false;
       if (event.receiverAgentId === null) return false;
       return agentById.get(event.receiverAgentId)?.kind === "chat";
     },
-    [agentById],
+    [agentById, isOriginAvailable],
   );
 
   const jumpToCreated = useCallback(
     (event: CommGraphEvent): void => {
+      if (!isOriginAvailable(event)) return;
       if (event.kind !== "agent_created" || event.receiverAgentId === null) {
         return;
       }
@@ -182,7 +227,7 @@ export function useCommGraphJump(
       tileNavigation.openTileInEpic(epicId, openableRefForAgent(created));
       requestJump(event.receiverAgentId, { kind: "first-message" });
     },
-    [agentById, epicId, requestJump, tileNavigation],
+    [agentById, epicId, isOriginAvailable, requestJump, tileNavigation],
   );
 
   const openAgent = useCallback(
@@ -193,6 +238,7 @@ export function useCommGraphJump(
   );
 
   return {
+    canOpenAgentForEvent: isOriginAvailable,
     canJump,
     jump,
     canJumpToSender,

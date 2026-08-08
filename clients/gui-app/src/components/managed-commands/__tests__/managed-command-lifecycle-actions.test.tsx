@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
@@ -20,6 +19,7 @@ vi.mock(
     useManagedCommandStart: () => ({ mutate: startMutate, isPending: false }),
     useManagedCommandStop: () => ({ mutate: stopMutate, isPending: false }),
     useManagedCommandDelete: () => ({ mutate: deleteMutate, isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
   }),
 );
 

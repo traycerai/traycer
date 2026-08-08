@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -96,6 +95,14 @@ vi.mock("react-virtuoso", async () => {
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({

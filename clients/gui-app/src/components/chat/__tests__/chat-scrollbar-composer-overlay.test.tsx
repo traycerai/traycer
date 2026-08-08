@@ -17,7 +17,6 @@
  * is also source-pinned: it only mounts for approval queues stacked above a
  * dock, which needs a heavier approvals fixture than this focused suite.
  */
-import "../../../../__tests__/test-browser-apis";
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -28,6 +27,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
@@ -46,6 +46,19 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
   useAgentStop: () => ({ mutate: () => undefined }),
 }));
+// The background panel reaches for the managed half's RPCs whether or not any
+// managed command is on screen; this suite is about paint and pointer regions,
+// so the host boundary behind them is faked away.
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
+  }),
+);
 
 import {
   ChatLowerInteractionSurfaces,
@@ -155,48 +168,52 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
   describe("ChatLowerDock (render)", () => {
     it("keeps full-width chrome as edge-lane only; centered column owns paint and vertical spacing", () => {
       render(
-        <TooltipProvider delayDuration={0}>
-          <ChatLowerDock
-            snapshotLoaded
-            epicId="epic-1"
-            chatId="chat-1"
-            runningManagedCommandCount={0}
-            viewTabId="tab-1"
-            selfAgent={null}
-            activeAgents={[]}
-            todo={null}
-            restore={emptyRestore()}
-            queue={emptyQueue()}
-            backgroundItems={[
-              {
-                taskId: "task-1",
-                kind: "command",
-                title: "bun test",
-                blockId: "tool-1",
-                parentTaskId: null,
-                scheduledFor: null,
-              },
-            ]}
-            backgroundStopPendingTaskIds={new Set()}
-            backgroundStopAllPending={false}
-            activeTurnStatus="running"
-            canAct
-            readOnly={false}
-            editingQueueItemId={null}
-            topSpacing="normal"
-            scrollRegionMaxHeightClass="max-h-96"
-            onQueuePause={() => null}
-            onQueueResume={() => null}
-            onQueueEdit={vi.fn()}
-            onQueueCancel={vi.fn()}
-            onQueueAbortSteer={vi.fn()}
-            onQueueReorder={vi.fn()}
-            onQueueSteerNow={vi.fn()}
-            onBackgroundItemClick={() => undefined}
-            onBackgroundItemStop={() => null}
-            onBackgroundItemsStopAll={() => null}
-          />
-        </TooltipProvider>,
+        // The dock's background panel reads the tile's bound host to open a
+        // managed command's output window, as it does inside a real tile.
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <ChatLowerDock
+              snapshotLoaded
+              epicId="epic-1"
+              chatId="chat-1"
+              runningManagedCommandCount={0}
+              viewTabId="tab-1"
+              selfAgent={null}
+              activeAgents={[]}
+              todo={null}
+              restore={emptyRestore()}
+              queue={emptyQueue()}
+              backgroundItems={[
+                {
+                  taskId: "task-1",
+                  kind: "command",
+                  title: "bun test",
+                  blockId: "tool-1",
+                  parentTaskId: null,
+                  scheduledFor: null,
+                },
+              ]}
+              backgroundStopPendingTaskIds={new Set()}
+              backgroundStopAllPending={false}
+              activeTurnStatus="running"
+              canAct
+              readOnly={false}
+              editingQueueItemId={null}
+              topSpacing="normal"
+              scrollRegionMaxHeightClass="max-h-96"
+              onQueuePause={() => null}
+              onQueueResume={() => null}
+              onQueueEdit={vi.fn()}
+              onQueueCancel={vi.fn()}
+              onQueueAbortSteer={vi.fn()}
+              onQueueReorder={vi.fn()}
+              onQueueSteerNow={vi.fn()}
+              onBackgroundItemClick={() => undefined}
+              onBackgroundItemStop={() => null}
+              onBackgroundItemsStopAll={() => null}
+            />
+          </TooltipProvider>
+        </TabHostProvider>,
       );
 
       const dock = screen.getByTestId("chat-lower-dock");
@@ -214,48 +231,52 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
 
     it("moves compact top spacing onto the centered column only", () => {
       render(
-        <TooltipProvider delayDuration={0}>
-          <ChatLowerDock
-            snapshotLoaded
-            epicId="epic-1"
-            chatId="chat-1"
-            runningManagedCommandCount={0}
-            viewTabId="tab-1"
-            selfAgent={null}
-            activeAgents={[]}
-            todo={null}
-            restore={emptyRestore()}
-            queue={emptyQueue()}
-            backgroundItems={[
-              {
-                taskId: "task-1",
-                kind: "command",
-                title: "bun test",
-                blockId: "tool-1",
-                parentTaskId: null,
-                scheduledFor: null,
-              },
-            ]}
-            backgroundStopPendingTaskIds={new Set()}
-            backgroundStopAllPending={false}
-            activeTurnStatus="running"
-            canAct
-            readOnly={false}
-            editingQueueItemId={null}
-            topSpacing="compact"
-            scrollRegionMaxHeightClass="max-h-96"
-            onQueuePause={() => null}
-            onQueueResume={() => null}
-            onQueueEdit={vi.fn()}
-            onQueueCancel={vi.fn()}
-            onQueueAbortSteer={vi.fn()}
-            onQueueReorder={vi.fn()}
-            onQueueSteerNow={vi.fn()}
-            onBackgroundItemClick={() => undefined}
-            onBackgroundItemStop={() => null}
-            onBackgroundItemsStopAll={() => null}
-          />
-        </TooltipProvider>,
+        // The dock's background panel reads the tile's bound host to open a
+        // managed command's output window, as it does inside a real tile.
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <ChatLowerDock
+              snapshotLoaded
+              epicId="epic-1"
+              chatId="chat-1"
+              runningManagedCommandCount={0}
+              viewTabId="tab-1"
+              selfAgent={null}
+              activeAgents={[]}
+              todo={null}
+              restore={emptyRestore()}
+              queue={emptyQueue()}
+              backgroundItems={[
+                {
+                  taskId: "task-1",
+                  kind: "command",
+                  title: "bun test",
+                  blockId: "tool-1",
+                  parentTaskId: null,
+                  scheduledFor: null,
+                },
+              ]}
+              backgroundStopPendingTaskIds={new Set()}
+              backgroundStopAllPending={false}
+              activeTurnStatus="running"
+              canAct
+              readOnly={false}
+              editingQueueItemId={null}
+              topSpacing="compact"
+              scrollRegionMaxHeightClass="max-h-96"
+              onQueuePause={() => null}
+              onQueueResume={() => null}
+              onQueueEdit={vi.fn()}
+              onQueueCancel={vi.fn()}
+              onQueueAbortSteer={vi.fn()}
+              onQueueReorder={vi.fn()}
+              onQueueSteerNow={vi.fn()}
+              onBackgroundItemClick={() => undefined}
+              onBackgroundItemStop={() => null}
+              onBackgroundItemsStopAll={() => null}
+            />
+          </TooltipProvider>
+        </TabHostProvider>,
       );
 
       const dock = screen.getByTestId("chat-lower-dock");

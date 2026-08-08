@@ -53,6 +53,15 @@ vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   }),
 }));
 
+// CliBinaryMissingNotice opens install URLs through this mutation; the empty
+// notice tests need the hook mocked so they do not require a QueryClient.
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 /**
  * T3 renderer coverage: install-progress rendering, the "Bundled"/"Managed"
  * candidate label swap, the D6 PATH-unblock composite notice, and the
@@ -88,6 +97,7 @@ function pathCandidate(
 }
 
 function providerState(args: {
+  readonly providerId?: ProviderCliState["providerId"];
   readonly selected: ProviderSelection;
   readonly candidates: readonly ProviderCliCandidate[];
   readonly managedInstallState?: ProviderManagedInstallState | null;
@@ -95,7 +105,7 @@ function providerState(args: {
   readonly advisory?: ProviderAdvisory | null;
 }): ProviderCliState {
   const state: ProviderCliState = {
-    providerId: "claude-code",
+    providerId: args.providerId === undefined ? "claude-code" : args.providerId,
     enabled: true,
     disabledBy: null,
     nativeCapabilities: {
@@ -135,17 +145,144 @@ function providerState(args: {
   };
 }
 
-function renderSection(state: ProviderCliState) {
-  return render(
+// Second helper rather than a default/optional param - the monorepo forbids
+// `fn(x?: T)` and `fn(x = …)`. Existing call sites use `renderSection`; the
+// multi-provider case (traycer borrowing opencode) uses `renderSectionWith`.
+function renderSection(state: ProviderCliState): void {
+  renderSectionWith(state, [state]);
+}
+
+function renderSectionWith(
+  state: ProviderCliState,
+  providers: readonly ProviderCliState[],
+): void {
+  render(
     <TooltipProvider>
-      <ProviderCliCandidatesSection state={state} providers={[state]} />
+      <ProviderCliCandidatesSection state={state} providers={providers} />
     </TooltipProvider>,
   );
 }
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)", () => {
+  it("shows amp's install notice with the ampcode.com/manual link when candidates are empty", () => {
+    // Amp joined PROVIDERS_WITHOUT_BUNDLED_BINARY: with nothing on PATH the
+    // host sends an empty candidate list. The notice is the only on-screen
+    // route back from the silent MCP binary-absent dead end.
+    const state = providerState({
+      providerId: "amp",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Amp CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", { name: "Amp installation guide" });
+    expect(guide.getAttribute("href")).toBe("https://ampcode.com/manual");
+  });
+
+  it("waits for the PATH probe instead of declaring the binary missing", () => {
+    // `availabilityPending` means the host's shell/PATH probe has not settled,
+    // and the protocol is explicit that `candidates` must not be trusted until
+    // it does. The empty list here is interim, not a verdict — for the
+    // PATH-only providers this is the ordinary cold-open state, so treating it
+    // as final tells people to install a CLI the probe is about to find.
+    const state: ProviderCliState = {
+      ...providerState({
+        providerId: "amp",
+        selected: { kind: "path" },
+        candidates: [],
+      }),
+      availabilityPending: true,
+    };
+    renderSection(state);
+
+    expect(screen.getByText("Looking for the Amp CLI…")).toBeDefined();
+    expect(
+      screen.queryByText(/No Amp CLI was found on this machine/),
+    ).toBeNull();
+    // The install guide is the actionable half of the wrong advice; it must
+    // not be reachable while the answer is still unknown.
+    expect(
+      screen.queryByRole("link", { name: "Amp installation guide" }),
+    ).toBeNull();
+  });
+
+  it("renders the empty sentence with no link when the install URL is null (cursor)", () => {
+    // Cursor has no verified install page in this repo; null means omit the
+    // anchor rather than shipping a guessed URL that 404s.
+    const state = providerState({
+      providerId: "cursor",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Cursor CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("borrows opencode's candidates when traycer's own list is empty", () => {
+    // traycer and openrouter share the opencode pack; an empty own list with a
+    // populated source must still surface those rows so the user can pick one.
+    const traycer = providerState({
+      providerId: "traycer",
+      selected: { kind: "bundled" },
+      candidates: [],
+    });
+    const opencode = providerState({
+      providerId: "opencode",
+      selected: { kind: "bundled" },
+      candidates: [
+        pathCandidate({
+          path: "/usr/local/bin/opencode",
+          version: "1.0.0",
+          available: true,
+        }),
+      ],
+    });
+    renderSectionWith(traycer, [traycer, opencode]);
+
+    expect(
+      screen.getByRole("radio", { name: "Select /usr/local/bin/opencode" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/No Traycer CLI was found on this machine/),
+    ).toBeNull();
+  });
+
+  it("renders the candidates table, not the empty notice, when candidates exist", () => {
+    const state = providerState({
+      providerId: "amp",
+      selected: { kind: "path" },
+      candidates: [
+        pathCandidate({
+          path: "/usr/local/bin/amp",
+          version: "1.2.3",
+          available: true,
+        }),
+      ],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByRole("radio", { name: "Select /usr/local/bin/amp" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByText(/No Amp CLI was found on this machine/),
+    ).toBeNull();
+  });
 });
 
 describe("ProviderCliCandidatesSection: old-host tolerance (managedInstallState/versionVisibility absent)", () => {

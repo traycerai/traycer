@@ -55,6 +55,7 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
           tabId: ctx.activeTabId,
           placement: { kind: "target-group", groupId: ctx.targetGroupId },
           parentId: null,
+          hostId: null,
         });
       },
     });

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -17,6 +16,7 @@ import {
   restoreLegendListTestClock,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
+import { modLabel } from "@/lib/keybindings/platform";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -156,6 +156,10 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  // No stream client means nothing has been negotiated yet, which is what
+  // `null` says - the tile's monitors menu reads this and stays quiet.
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -454,6 +458,8 @@ function emitChatSnapshotWithMessages(input: {
         messages: [...input.messages],
         events: [],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: {
         role: input.access,
@@ -469,6 +475,7 @@ function emitChatSnapshotWithMessages(input: {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }
@@ -1570,7 +1577,11 @@ describe("<ChatTile />", () => {
     }
     expect(titleInput.value).toBe("Cross Question - Chat 1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    const forkButton = screen.getByRole("button", { name: "Fork" });
+    expect(within(forkButton).getByText(modLabel())).not.toBeNull();
+    expect(within(forkButton).getByText("↵")).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
     const [forkCall] = forkCreateTestState.mutate.mock.calls;
     expect(forkCall[0].forkSource.interviewBlockId).toBe("question-1");

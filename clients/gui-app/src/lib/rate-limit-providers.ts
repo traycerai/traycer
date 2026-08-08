@@ -26,7 +26,8 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  * the polling scheduler branches on:
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
- *   plain GET (openrouter, kilocode). Cheap and safe to run concurrently, so
+ *   plain GET (openrouter, kilocode, huggingface). Cheap and safe to run
+ *   concurrently, so
  *   their observers opt into the table-owned fixed cadence and never enter the
  *   serial queue.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
@@ -81,6 +82,7 @@ export function rateLimitFetchLane(
   switch (providerId) {
     case "openrouter":
     case "kilocode":
+    case "huggingface":
       return "httpFetch";
     case "codex":
     case "claude-code":
@@ -103,7 +105,8 @@ export function rateLimitFetchLane(
  *   aggregate bit once profiles exist, and must not suppress a settled sibling.
  * - `"authenticated"`: verified good credentials.
  * - `"configured"`: credentials are present but unverified (e.g. an API key set
- *   for openrouter/kilocode before the first probe) - included because the pull
+ *   for openrouter/kilocode/huggingface before the first probe) - included
+ *   because the pull
  *   itself is what verifies them, and it degrades gracefully if they are bad.
  * - `"unauthenticated"` / `"unavailable"` / `"unknown"`: no usable credential
  *   to authenticate a usage call, so the provider is not polled.

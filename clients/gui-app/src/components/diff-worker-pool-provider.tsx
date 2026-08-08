@@ -20,6 +20,9 @@ export function DiffWorkerPoolProvider(
   props: DiffWorkerPoolProviderProps,
 ): ReactNode {
   const poolSize = useMemo(() => computePoolSize(), []);
+  const themeContext = use(ResolvedThemeContext);
+  const initialTheme =
+    themeContext?.resolvedTheme === "light" ? "pierre-light" : "pierre-dark";
 
   return (
     <WorkerPoolContextProvider
@@ -27,7 +30,10 @@ export function DiffWorkerPoolProvider(
         workerFactory: () => new DiffsWorker(),
         poolSize,
       }}
-      highlighterOptions={{}}
+      highlighterOptions={{
+        theme: initialTheme,
+        useTokenTransformer: true,
+      }}
     >
       <ThemeSync />
       {props.children}
@@ -47,6 +53,7 @@ function ThemeSync(): ReactNode {
     if (resolvedTheme === undefined || pool === undefined) return;
     void pool.setRenderOptions({
       theme: resolvedTheme === "dark" ? "pierre-dark" : "pierre-light",
+      useTokenTransformer: true,
     });
   }, [pool, resolvedTheme]);
 

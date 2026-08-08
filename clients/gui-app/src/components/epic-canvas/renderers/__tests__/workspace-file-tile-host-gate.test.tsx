@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
@@ -50,13 +49,26 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@tailmark/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tailmark/react")>();
-  return {
-    ...actual,
-    useThrottledHighlight: () => null,
-  };
-});
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
+  useWorkspaceWriteFile: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark" }),
+}));
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";
@@ -131,18 +143,18 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     expect(screen.getByText(/currently unreachable/)).toBeTruthy();
   });
 
-  it("shows the inactive banner when the bound host is not the active host", () => {
+  it("keeps the tile bound to its own host when another host is active", () => {
     state.activeHostId = "host-B";
     renderTile("host-A", NODE);
-    expect(
-      screen.getByText(/Switch your active host to "Host A"/),
-    ).toBeTruthy();
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
   });
 
-  it("shows the inactive banner when there is no active host", () => {
+  it("keeps the tile bound when there is no app-wide active host", () => {
     state.activeHostId = null;
     renderTile("host-A", NODE);
-    expect(screen.getByText(/Switch your active host/)).toBeTruthy();
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
   });
 
   it("renders the live preview when the bound host is the active, reachable host", () => {
@@ -278,13 +290,8 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     expect(markdownButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewButton.getAttribute("aria-pressed")).toBe("false");
     expect(
-      screen.getByText((_content, element) => {
-        return (
-          element?.tagName === "CODE" &&
-          element.textContent === "# Contact Information\n\nReach us any time."
-        );
-      }),
-    ).toBeTruthy();
+      document.querySelector("diffs-container")?.shadowRoot,
+    ).not.toBeNull();
     expect(
       screen.queryByRole("heading", { name: "Contact Information" }),
     ).toBeNull();

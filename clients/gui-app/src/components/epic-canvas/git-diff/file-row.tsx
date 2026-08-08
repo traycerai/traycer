@@ -103,6 +103,7 @@ export function FileRow(props: FileRowProps): ReactNode {
           active={props.active}
           leading={null}
           trailing={null}
+          showStats
           pathRanges={props.pathRanges}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
