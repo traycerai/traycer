@@ -6,9 +6,12 @@ import { EpicBackupStatusIndicator } from "../epic-backup-status-indicator";
 const mocks = vi.hoisted(() => ({
   data: undefined as ChatBackupStatusResponse | undefined,
   ready: true,
+  bound: true,
 }));
 
-vi.mock("@/lib/host", () => ({ useHostClient: () => ({}) }));
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () => (mocks.bound ? { hostClient: {} } : null),
+}));
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: mocks.data }),
 }));
@@ -23,13 +26,14 @@ describe("<EpicBackupStatusIndicator />", () => {
   beforeEach(() => {
     mocks.data = undefined;
     mocks.ready = true;
+    mocks.bound = true;
   });
 
   afterEach(cleanup);
 
   it("stays silent when every chat is backed up", () => {
     mocks.data = {
-      chats: [statusRow({ upToDate: true })],
+      chats: [statusRow({ status: "current" })],
     };
     render(<EpicBackupStatusIndicator epicId="epic-a" />);
     expect(screen.queryByRole("status")).toBeNull();
@@ -74,7 +78,7 @@ describe("<EpicBackupStatusIndicator />", () => {
     mocks.data = {
       chats: [
         statusRow({
-          upToDate: true,
+          status: "current",
           halted: { cause: "plan-ineligible", since: 3_000 },
         }),
       ],
@@ -86,7 +90,69 @@ describe("<EpicBackupStatusIndicator />", () => {
     );
   });
 
+  it("stays silent when local evidence cannot prove publication lag", () => {
+    mocks.data = {
+      chats: [
+        statusRow({
+          durableSeq: 3,
+          publishedSeq: null,
+          status: "unknown",
+          lastPublishedAt: null,
+        }),
+      ],
+    };
+    render(<EpicBackupStatusIndicator epicId="epic-a" />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("shows an unknown halted cause without claiming the chat is behind", () => {
+    mocks.data = {
+      chats: [
+        statusRow({
+          durableSeq: null,
+          publishedSeq: null,
+          status: "unknown",
+          halted: { cause: "forked-lineage", since: 3_000 },
+          lastPublishedAt: null,
+        }),
+      ],
+    };
+    render(<EpicBackupStatusIndicator epicId="epic-a" />);
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "Backup paused on a fork decision",
+    );
+  });
+
+  it("prioritizes a failing backup over a simultaneous fork pause", () => {
+    mocks.data = {
+      chats: [
+        statusRow({
+          chatId: "chat-fork",
+          status: "unknown",
+          halted: { cause: "forked-lineage", since: 3_000 },
+        }),
+        statusRow({
+          chatId: "chat-conflict",
+          status: "unknown",
+          halted: { cause: "conflict", since: 4_000 },
+        }),
+      ],
+    };
+    render(<EpicBackupStatusIndicator epicId="epic-a" />);
+
+    expect(screen.getByRole("status").textContent).toBe("Backup failing");
+  });
+
   it("does not duplicate the app's offline state", () => {
+    mocks.ready = false;
+    mocks.data = { chats: [statusRow({})] };
+    render(<EpicBackupStatusIndicator epicId="epic-a" />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("stays silent when mounted before the host runtime is bound", () => {
+    mocks.bound = false;
     mocks.ready = false;
     mocks.data = { chats: [statusRow({})] };
     render(<EpicBackupStatusIndicator epicId="epic-a" />);
@@ -101,7 +167,7 @@ function statusRow(
     chatId: "chat-a",
     durableSeq: 3,
     publishedSeq: 2,
-    upToDate: false,
+    status: "behind",
     halted: null,
     lastPublishedAt: 1_000,
     ...overrides,

@@ -26,13 +26,23 @@ export const chatBackupHaltCauseSchema = z.enum([
 ]);
 export type ChatBackupHaltCause = z.infer<typeof chatBackupHaltCauseSchema>;
 
+export const chatBackupPublicationStatusSchema = z.enum([
+  "current",
+  "behind",
+  "unknown",
+]);
+export type ChatBackupPublicationStatus = z.infer<
+  typeof chatBackupPublicationStatusSchema
+>;
+
 export const chatBackupStatusRowSchema = z.object({
   chatId: z.string().min(1),
   /** Null only for a halted chat whose local projection cannot be read. */
   durableSeq: z.number().int().nonnegative().nullable(),
   /** Null when this host has no acknowledged publication witness. */
   publishedSeq: z.number().int().nonnegative().nullable(),
-  upToDate: z.boolean(),
+  /** Unknown means the local-only evidence cannot prove current or behind. */
+  status: chatBackupPublicationStatusSchema,
   halted: z
     .object({
       cause: chatBackupHaltCauseSchema,

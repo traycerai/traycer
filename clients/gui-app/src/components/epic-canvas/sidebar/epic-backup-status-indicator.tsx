@@ -3,7 +3,9 @@ import type {
   ChatBackupHaltCause,
   ChatBackupStatusRow,
 } from "@traycer/protocol/host/epic/chat-backup-status";
-import { useHostClient } from "@/lib/host";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -16,7 +18,17 @@ export interface EpicBackupStatusIndicatorProps {
 export function EpicBackupStatusIndicator(
   props: EpicBackupStatusIndicatorProps,
 ) {
-  const client = useHostClient();
+  const client = useHostBinding()?.hostClient ?? null;
+  if (client === null) return null;
+  return <BoundEpicBackupStatusIndicator {...props} client={client} />;
+}
+
+function BoundEpicBackupStatusIndicator(
+  props: EpicBackupStatusIndicatorProps & {
+    readonly client: HostRequester<HostRpcRegistry>;
+  },
+) {
+  const { client } = props;
   const readiness = useReactiveHostReadiness(client);
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
@@ -72,7 +84,7 @@ function backupStatusView(
   chats: readonly ChatBackupStatusRow[],
 ): BackupStatusView | null {
   const halted = chats.filter((chat) => chat.halted !== null);
-  const behind = chats.filter((chat) => !chat.upToDate);
+  const behind = chats.filter((chat) => chat.status === "behind");
   if (halted.length === 0 && behind.length === 0) return null;
 
   const lastPublished = behind
@@ -102,22 +114,22 @@ function labelForHaltCauses(causes: readonly ChatBackupHaltCause[]): string {
   if (
     causes.some(
       (cause) =>
-        cause === "quarantined" ||
-        cause === "repair-pending" ||
-        cause === "forked-lineage",
-    )
-  ) {
-    return "Backup paused on a fork decision";
-  }
-  if (
-    causes.some(
-      (cause) =>
         cause === "conflict" ||
         cause === "too-large" ||
         cause === "escalation",
     )
   ) {
     return "Backup failing";
+  }
+  if (
+    causes.some(
+      (cause) =>
+        cause === "quarantined" ||
+        cause === "repair-pending" ||
+        cause === "forked-lineage",
+    )
+  ) {
+    return "Backup paused on a fork decision";
   }
   return "Backup paused by plan";
 }
