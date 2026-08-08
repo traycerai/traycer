@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
-import { useChatById } from "@/lib/epic-selectors";
+import { rowIsLiveLineageOfLocalChat } from "@/lib/chats/unified-chat-list";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -39,6 +39,12 @@ const ChatIcon = EPIC_NODE_ICONS.chat;
 
 export interface EpicSidebarCloudChatRowProps {
   readonly chat: CloudChatSummary;
+  /**
+   * Publication identities of this device's own chats - the fold's own set.
+   * A row opens live only if it IS one of them; see
+   * `rowIsLiveLineageOfLocalChat`.
+   */
+  readonly publishedChatIds: ReadonlySet<string>;
   readonly epicId: string;
   readonly tabId: string;
   readonly depth: number;
@@ -73,8 +79,12 @@ export function EpicSidebarCloudChatRow(
   // answers; everything else opens the published copy, which is the honest
   // surface for "this exists but not on this machine" and, unlike a no-op,
   // always renders something.
-  const localRecord = useChatById(chat.identity.chatId);
-  const opensLive = ownerReachable && localRecord !== null;
+  // Live requires PROOF of same lineage, not a matching id: the same
+  // host-minted id can name a collaborator's chat, and in the ticket's own fork
+  // geometry both lineages share the id AND the user. The fold already computes
+  // publication identity, so this asks it rather than re-deriving it.
+  const opensLive =
+    ownerReachable && rowIsLiveLineageOfLocalChat(chat, props.publishedChatIds);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTilePreviewInTabFocusTarget,
@@ -145,6 +155,7 @@ export function EpicSidebarCloudChatRow(
   ]);
 
   const ownerLabel = ownerReachability.hostLabel;
+  const lockCopy = lockedRowCopy(ownerLabel, ownerReachable);
   return (
     <li role="treeitem" aria-selected={false}>
       <button
@@ -178,7 +189,7 @@ export function EpicSidebarCloudChatRow(
               it is absent when that is not true of this chat. */}
           {opensLive ? null : (
             <TooltipWrapper
-              label={`Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`}
+              label={lockCopy.tooltip}
               side="right"
               sideOffset={undefined}
               align={undefined}
@@ -186,7 +197,7 @@ export function EpicSidebarCloudChatRow(
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"
                 data-testid={`epic-sidebar-cloud-lock-${chat.identity.chatId}`}
-                aria-label={`On ${ownerLabel}, offline`}
+                aria-label={lockCopy.ariaLabel}
               />
             </TooltipWrapper>
           )}
@@ -215,4 +226,32 @@ function CloudRowIdleTime(props: {
       {relative}
     </span>
   );
+}
+
+/**
+ * What a locked row says about ITS state, in the two shapes a row can say it.
+ *
+ * Three-state like the tile's composer notice and derived from the same pair of
+ * facts, because rendered copy is a consumer of that state exactly as the
+ * routing is. Hardcoding "offline" here told a user a reachable host was down
+ * and pointed them at a remedy - wake the machine - that would change nothing,
+ * while the click beside it correctly opened the published copy.
+ *
+ * Shorter than the composer's wording on purpose: a tooltip states the fact, and
+ * the surface the row opens explains it at length.
+ */
+function lockedRowCopy(
+  ownerLabel: string,
+  ownerIsReachable: boolean,
+): { readonly tooltip: string; readonly ariaLabel: string } {
+  if (ownerIsReachable) {
+    return {
+      tooltip: `Lives on ${ownerLabel}. Not available live from this device - opens read-only from the last published copy.`,
+      ariaLabel: `On ${ownerLabel}, read-only`,
+    };
+  }
+  return {
+    tooltip: `Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`,
+    ariaLabel: `On ${ownerLabel}, offline`,
+  };
 }

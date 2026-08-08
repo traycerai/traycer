@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -12,11 +12,6 @@ import { ChatTileSessionView } from "./chat-tile";
 import { ChatTileLoading } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source";
-import { useChatById } from "@/lib/epic-selectors";
-import { PublishedChatOwnerBackBanner } from "./dead-tile-banner";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { v4 as uuidv4 } from "uuid";
 
 /**
  * A chat whose owning host is out of reach, rendered through the ORDINARY chat
@@ -85,50 +80,14 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // The one transition an on-demand read cannot cover: the owner came back
   // while this copy was open. Same reachability source the sidebar row's lock
   // reads - a second source could disagree with the row that opened this tile.
-  // "Back" has to mean the chat can actually be opened live, not merely that
-  // something answers to the owner's host id. Two dev slots share one id, so
-  // reachability alone offered an "Open live" button that routed to a
-  // record-backed tile for a chat this device does not hold - and opened
-  // nothing at all. Same signal the row routes on, for the same reason.
-  const localRecord = useChatById(node.chatId);
-  const ownerIsBack =
-    node.ownerHostId.length > 0 &&
-    ownerReachability.status === "reachable" &&
-    localRecord !== null;
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const openLive = useCallback(() => {
-    // The ordinary open path, and the ordinary binding rule with it: the live
-    // tab binds the OWNING host at open, because that is the host that can
-    // actually answer for this chat.
-    navigateNested(props.epicId, props.viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(props.viewTabId, {
-        id: node.chatId,
-        instanceId: uuidv4(),
-        type: "chat",
-        name: node.name,
-        hostId: node.ownerHostId,
-      }),
-    );
-  }, [
-    navigateNested,
-    prepareOpenTileInTabFocusTarget,
-    props.epicId,
-    props.viewTabId,
-    node.chatId,
-    node.name,
-    node.ownerHostId,
-  ]);
-  const ownerBackBanner = ownerIsBack ? (
-    <PublishedChatOwnerBackBanner
-      hostLabel={ownerLabel}
-      onOpenLive={openLive}
-      testId={`published-chat-owner-back-${node.chatId}`}
-    />
-  ) : null;
-
+  // No "open it live" affordance, and no claim that the owner is back.
+  // Licensing a live open needs PROOF that this copy is a local chat's live
+  // lineage, and a published tile is only ever opened for a row that had no
+  // such proof. Reachability alone was the approximation that produced a button
+  // routing to a record-backed tile which opened nothing at all. Cross-host live
+  // open is a real future capability - a tab bound to the OWNER host rendering
+  // the owner's session - but it waits on distinct host identities (ticket 26)
+  // and an owner-side presence answer rather than being guessed at from here.
   const conversion = useMemo(
     () => (state.kind === "ready" ? convertPublishedChat(state.presented) : null),
     [state],
@@ -157,7 +116,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (state.kind === "loading") {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-        {ownerBackBanner}
         <ChatTileLoading />
       </div>
     );
@@ -166,7 +124,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   if (state.kind !== "ready" || handle === null || conversion === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-        {ownerBackBanner}
         <PublishedChatNotice
           state={state}
           ownerLabel={ownerLabel}
@@ -182,7 +139,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
-      {ownerBackBanner}
       {/* The heavy content this transcript NAMES - file diffs, full plans -
           is not in the published document; it is content-addressed in the
           cloud. The blocks that expand it decide their own fetch several
@@ -205,7 +161,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         isActive={props.isActive}
         currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
-            ownerIsBack,
             ownerIsReachable: ownerReachability.status === "reachable",
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
@@ -232,8 +187,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
  * that is not an error.
  */
 export function publishedChatLockReason(input: {
-  /** True once this chat could actually be opened live from here. */
-  readonly ownerIsBack: boolean;
   /** Whether something answers to the owning host id at all. */
   readonly ownerIsReachable: boolean;
   readonly ownerLabel: string;
@@ -249,11 +202,9 @@ export function publishedChatLockReason(input: {
   // describes it: a host that answers but does not hold this chat. Telling
   // someone it is offline would be false, and telling them to open it live
   // would send them at a button that can do nothing.
-  const base = input.ownerIsBack
-    ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. That host is back — open it live to continue.`
-    : input.ownerIsReachable
-      ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
-      : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
+  const base = input.ownerIsReachable
+    ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
+    : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
   if (input.unreadableCount > 0) {
     return `${base} ${input.unreadableCount} item${input.unreadableCount === 1 ? "" : "s"} need a newer version of Traycer to render.`;
   }

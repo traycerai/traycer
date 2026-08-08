@@ -137,8 +137,49 @@ function foldsIntoLocalEntry(
   chat: CloudChatSummary,
   publishedByThisViewer: ReadonlySet<string>,
 ): boolean {
-  if (!chat.isOwnedByViewer) return false;
+  if (!cloudRowIsViewersOwn(chat)) return false;
   return publishedByThisViewer.has(chat.identity.chatId);
+}
+
+/**
+ * Whether this cloud row is one of the VIEWER's own chats.
+ *
+ * The single owner test, shared by everything that has to decide whether a
+ * local record and a cloud row are the same chat. A local chat is by
+ * construction the viewer's, so a row the viewer does not own can never be one
+ * - not for folding, and not for judging presence.
+ */
+export function cloudRowIsViewersOwn(chat: CloudChatSummary): boolean {
+  return chat.isOwnedByViewer;
+}
+
+/**
+ * Whether this row IS some local chat's live lineage - the only thing that
+ * licenses opening it live.
+ *
+ * Deliberately the FOLD's own answer rather than a comparison of fields beside
+ * it. Every approximation tried here has been wrong in the same way: bare
+ * `chatId` calls a collaborator's same-id chat "already here", and adding
+ * `ownerUserId` still passes the ticket's own fork geometry, where both
+ * lineages share one id AND one user and differ only in which host kept the
+ * row. Publication identity is what "same lineage" actually means, and the fold
+ * already computes it - so this asks that, instead of re-deriving it badly.
+ *
+ * The consequence is worth stating plainly: a RENDERED cloud row is by
+ * definition one that did not fold, so today this is essentially always false
+ * and such rows open the published copy. That is correct-conservative rather
+ * than a regression - live is never routed without proof of same lineage. True
+ * cross-host live open (a tab bound to the OWNER host, rendering the owner's
+ * session) is a real future capability, but proving a distinct owner holds the
+ * chat is unanswerable under shared host identity (ticket 26) and unproven
+ * without an owner-side presence answer. It waits for those rather than being
+ * approximated from local projection reads.
+ */
+export function rowIsLiveLineageOfLocalChat(
+  chat: CloudChatSummary,
+  publishedByThisViewer: ReadonlySet<string>,
+): boolean {
+  return foldsIntoLocalEntry(chat, publishedByThisViewer);
 }
 
 /**
