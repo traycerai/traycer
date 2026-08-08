@@ -631,6 +631,7 @@ export class CommGraphSubscriptionManager {
       initialHistoryCaughtUp:
         hosts.length > 0 &&
         hosts.every((host) => {
+          if (host.status === "unsupported") return true;
           const boundary = host.snapshotBoundary;
           return (
             boundary !== null &&

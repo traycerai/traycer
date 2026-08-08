@@ -417,6 +417,7 @@ describe("CommGraphSubscriptionManager", () => {
       ["host-b", "live"],
     ]);
     expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.initialHistoryCaughtUp).toBe(true);
     manager.dispose();
   });
 
