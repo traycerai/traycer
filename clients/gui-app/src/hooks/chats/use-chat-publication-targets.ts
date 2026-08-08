@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -7,6 +7,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Which cloud row each of this task's local chats publishes into.
@@ -42,6 +43,46 @@ export interface UseChatPublicationTargetsArgs {
 }
 
 export function useChatPublicationTargets(
+  args: UseChatPublicationTargetsArgs,
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "epic.listChatPublicationTargets">,
+  HostRpcError
+> {
+  const query = useChatPublicationTargetsQuery(args);
+  useLogUnsupportedDegrade(args.epicId, query.error);
+  return query;
+}
+
+/**
+ * States the degrade ONCE per epic, at `info`.
+ *
+ * A degrade that is correct and invisible is still a trap: the fold silently
+ * falls back to `chatId` equality, and the symptom - a forked chat rendering
+ * its own backup as a phantom second row - looks like a de-duplication bug in
+ * the sidebar rather than a missing host capability. Whoever chases that
+ * deserves to find the reason in the log instead of deriving it.
+ *
+ * `info`, not `warn`: an older host is an expected, designed state, not a
+ * fault. Once per epic rather than per render, and never a toast - there is
+ * nothing for a user to do about it.
+ */
+function useLogUnsupportedDegrade(
+  epicId: string,
+  error: HostRpcError | null,
+): void {
+  const loggedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (error === null || error.code !== "E_HOST_UNSUPPORTED") return;
+    if (loggedFor.current === epicId) return;
+    loggedFor.current = epicId;
+    appLogger.info(
+      "chat publication targets unsupported; folding the cloud list on chatId equality (a forked chat may render its backup as a second row)",
+      { epicId },
+    );
+  }, [epicId, error]);
+}
+
+function useChatPublicationTargetsQuery(
   args: UseChatPublicationTargetsArgs,
 ): UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "epic.listChatPublicationTargets">,

@@ -177,6 +177,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         isActive={props.isActive}
         currentEpicId={props.epicId}
         readOnlyNotice={publishedChatLockReason({
+          ownerIsBack,
           ownerLabel,
           unreadableCount: conversion.unreadableCount,
           fidelityNotice: state.fidelityNotice,
@@ -201,11 +202,20 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
  * that is not an error.
  */
 export function publishedChatLockReason(input: {
+  /** True once the owner is reachable again while this copy is still open. */
+  readonly ownerIsBack: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
 }): string {
-  const base = `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
+  // Two sentences for two different situations, because one of them stops
+  // being true mid-session. Saying "which is offline" under a banner announcing
+  // that same host is back reads as a bug in whichever line the user believes
+  // second - and the useful instruction changes too: there is nothing to wait
+  // for once the host is back, only a live tab to open.
+  const base = input.ownerIsBack
+    ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. That host is back — open it live to continue.`
+    : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
   if (input.unreadableCount > 0) {
     return `${base} ${input.unreadableCount} item${input.unreadableCount === 1 ? "" : "s"} need a newer version of Traycer to render.`;
   }
