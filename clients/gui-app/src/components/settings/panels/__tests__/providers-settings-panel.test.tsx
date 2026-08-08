@@ -11,6 +11,13 @@ import {
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
 import {
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
   act,
   cleanup,
   fireEvent,
@@ -123,7 +130,8 @@ const providerMocks = vi.hoisted(() => ({
     isPending: false,
     isError: false,
     isFetching: false,
-    error: undefined as { message: string; code: string } | undefined,
+    error: undefined as
+      HostRpcError | { message: string; code: string } | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -599,10 +607,12 @@ const hostScopeMocks: {
   client: null;
   setHostId: Mock<(hostId: string) => void>;
   hostId: string;
+  host: HostScopeOption | undefined;
 } = vi.hoisted(() => ({
   client: null,
   setHostId: vi.fn<(hostId: string) => void>(),
   hostId: "host-a",
+  host: undefined,
 }));
 
 // Panels depend on the host SCOPE, not on the six hooks it composes, so this
@@ -616,6 +626,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
         client: hostScopeMocks.client,
         setHostId: hostScopeMocks.setHostId,
         hostId: hostScopeMocks.hostId,
+        // `host: undefined` must be OMITTED, not passed: the fixture's final
+        // spread would clobber its default host with the explicit undefined.
+        ...(hostScopeMocks.host === undefined
+          ? {}
+          : { host: hostScopeMocks.host }),
       }),
   };
 });
@@ -1154,6 +1169,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.refreshUsageLimits.mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.host = undefined;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1383,6 +1399,88 @@ describe("<ProvidersSettingsPanel />", () => {
         source: "Providers",
       },
     });
+  });
+
+  it("shows connecting copy, not the failure card, while a remote host's transport is still dialing", () => {
+    hostScopeMocks.host = hostScopeOptionFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+    });
+    providerMocks.listResult.isError = true;
+    // The pre-send "session not ready" rejection every host-scoped query gets
+    // while the remote session's first dial is still in flight.
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "req-1",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Connecting to the remote host…")).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    expect(screen.queryByText(/Couldn't load provider state/)).toBeNull();
+  });
+
+  it("keeps an actionable failure card for an EXHAUSTED local transport failure", () => {
+    // A spinner is a promise that something will refetch, and on a local host
+    // nothing can keep it. The remote path has the messenger's own binding,
+    // whose ready boundary invalidates this query; a local host has no such
+    // binding, `useHostQuery` pins `retry: false`, and by the time this error
+    // surfaces the retry wrapper has already spent its budget - its final
+    // attempt rethrows unchanged, so the class says what the failure WAS, not
+    // that anything is still retrying. Showing "Reconnecting…" here parked the
+    // panel on a permanent spinner with no way to report the fault.
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Local host connection is not ready",
+      requestId: "req-2",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
+  it("keeps an actionable failure card for an AMBIGUOUS post-send transport drop", () => {
+    providerMocks.listResult.isError = true;
+    // The base class, not the retryable subclass: the request frame WAS on the
+    // wire when the socket died, so nothing may assume it resolves itself.
+    // `useHostQuery` pins `retry: false` and no recovery event is owed, so
+    // showing this as "connecting" parks the panel on a spinner forever and
+    // hides the report-issue affordance.
+    providerMocks.listResult.error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "The connection dropped before a response arrived",
+      requestId: "req-3",
+      method: "providers.list",
+      fatalDetails: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
+    expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {

@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CHAT_ARCHIVE_VISIBILITY,
   DEFAULT_LEFT_PANEL_GROUPS,
   DEFAULT_LEFT_PANEL_ID,
   DEFAULT_SIDEBAR_WIDTH_PX,
@@ -14,6 +15,7 @@ import {
   moveLeftPanelToPanelPosition,
   useLeftPanelGroups,
   useLeftPanelStore,
+  useChatArchiveVisibility,
   type ArtifactFilter,
   type ChatFilter,
   type LeftPanelGroup,
@@ -52,6 +54,7 @@ interface PersistedLeftPanelState {
     readonly panelSectionWeightsByPanelId: Readonly<Record<string, number>>;
     readonly panelVisibilityOverrideById: Readonly<Record<string, boolean>>;
     readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
+    readonly chatArchiveVisibilityByEpicId: Readonly<Record<string, string>>;
     readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   };
   readonly version: number;
@@ -76,7 +79,7 @@ function resetStore(): void {
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
     chatFilterByEpicId: {},
-    chatShowArchivedByEpicId: {},
+    chatArchiveVisibilityByEpicId: {},
     artifactFilterByEpicId: {},
   });
 }
@@ -321,12 +324,12 @@ describe("useLeftPanelStore", () => {
         panelSectionWeightsByPanelId: {},
         panelVisibilityOverrideById: {},
         chatFilterByEpicId: {},
-        chatShowArchivedByEpicId: {},
+        chatArchiveVisibilityByEpicId: {},
         artifactFilterByEpicId: {},
         chatSortByEpicId: {},
         artifactSortByEpicId: {},
       },
-      version: 1,
+      version: 2,
     });
   });
 
@@ -411,6 +414,61 @@ describe("useLeftPanelStore", () => {
     const persisted = readPersistedLeftPanelState();
     expect(persisted.state.chatFilterByEpicId).toEqual({});
     expect(persisted.state.artifactFilterByEpicId).toEqual({});
+  });
+
+  it("defaults archive visibility to unarchived only", () => {
+    const { result } = renderHook(() => useChatArchiveVisibility("epic-a"));
+    expect(result.current).toBe(CHAT_ARCHIVE_VISIBILITY.Unarchived);
+  });
+
+  it("persists non-default archive visibility and drops the default", () => {
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .setChatArchiveVisibility("epic-a", CHAT_ARCHIVE_VISIBILITY.Archived);
+    });
+    expect(
+      readPersistedLeftPanelState().state.chatArchiveVisibilityByEpicId,
+    ).toEqual({ "epic-a": "archived" });
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .setChatArchiveVisibility("epic-a", CHAT_ARCHIVE_VISIBILITY.All);
+    });
+    expect(
+      readPersistedLeftPanelState().state.chatArchiveVisibilityByEpicId,
+    ).toEqual({ "epic-a": "all" });
+
+    act(() => {
+      useLeftPanelStore
+        .getState()
+        .setChatArchiveVisibility("epic-a", CHAT_ARCHIVE_VISIBILITY.Unarchived);
+    });
+    expect(
+      readPersistedLeftPanelState().state.chatArchiveVisibilityByEpicId,
+    ).toEqual({});
+  });
+
+  it('migrates legacy "Show archived" preferences to All chats', async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          chatShowArchivedByEpicId: {
+            "epic-all": true,
+            "epic-default": false,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().chatArchiveVisibilityByEpicId).toEqual({
+      "epic-all": "all",
+    });
   });
 
   it("reorders panel groups before or after another group", () => {

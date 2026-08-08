@@ -7,7 +7,6 @@
  * root drills into a detail page with Back instead of flipping left.
  */
 import {
-  Archive,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   ChevronLeft,
@@ -55,18 +54,21 @@ import {
   ARTIFACT_READ,
   ARTIFACT_STATUS,
   artifactFilterCount,
+  CHAT_ARCHIVE_VISIBILITY,
   CHAT_ORIGIN,
+  DEFAULT_CHAT_ARCHIVE_VISIBILITY,
   isArtifactFilterActive,
   isChatFilterActive,
   isSortModeActive,
   useArtifactFilter,
   useArtifactSort,
+  useChatArchiveVisibility,
   useChatFilter,
-  useChatShowArchived,
   useChatSort,
   useLeftPanelStore,
   type ArtifactReadFilter,
   type ArtifactStatusFilter,
+  type ChatArchiveVisibility,
   type ChatOriginFilter,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
@@ -104,6 +106,26 @@ const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
   { value: CHAT_ORIGIN.Gui, label: "Chat" },
   { value: CHAT_ORIGIN.Tui, label: "Terminal" },
 ];
+
+const CHAT_ARCHIVE_VISIBILITY_OPTIONS: ReadonlyArray<{
+  readonly value: ChatArchiveVisibility;
+  readonly label: string;
+}> = [
+  {
+    value: CHAT_ARCHIVE_VISIBILITY.Unarchived,
+    label: "Unarchived only",
+  },
+  { value: CHAT_ARCHIVE_VISIBILITY.Archived, label: "Archived only" },
+  { value: CHAT_ARCHIVE_VISIBILITY.All, label: "All chats" },
+];
+
+function archiveVisibilityLabel(visibility: ChatArchiveVisibility): string {
+  return (
+    CHAT_ARCHIVE_VISIBILITY_OPTIONS.find(
+      (option) => option.value === visibility,
+    )?.label ?? "Unarchived only"
+  );
+}
 
 const ARTIFACT_STATUS_OPTIONS: ReadonlyArray<ArtifactStatusFilter> = [
   ARTIFACT_STATUS.Todo,
@@ -415,9 +437,9 @@ function ChatDetailContent(props: {
   readonly detail: ChatViewDetail;
   readonly filterOrigin: ChatOriginFilter;
   readonly sort: SortMode;
-  readonly showArchived: boolean;
+  readonly archiveVisibility: ChatArchiveVisibility;
   readonly setChatOrigin: (origin: ChatOriginFilter) => void;
-  readonly toggleShowArchived: () => void;
+  readonly setArchiveVisibility: (visibility: ChatArchiveVisibility) => void;
   readonly setSortField: (field: SortField) => void;
   readonly toggleSortDirection: () => void;
 }) {
@@ -433,15 +455,29 @@ function ChatDetailContent(props: {
       );
     case "show":
       return (
-        <DropdownMenuCheckboxItem
-          checked={props.showArchived}
-          onCheckedChange={props.toggleShowArchived}
-          onSelect={(event) => event.preventDefault()}
-          data-testid="epic-sidebar-show-archived"
+        <DropdownMenuRadioGroup
+          value={props.archiveVisibility}
+          onValueChange={(next) => {
+            const match = CHAT_ARCHIVE_VISIBILITY_OPTIONS.find(
+              (option) => option.value === next,
+            );
+            if (match !== undefined) {
+              props.setArchiveVisibility(match.value);
+            }
+          }}
+          data-testid="epic-sidebar-archive-visibility"
         >
-          <Archive className="size-4" />
-          Show archived
-        </DropdownMenuCheckboxItem>
+          {CHAT_ARCHIVE_VISIBILITY_OPTIONS.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              onSelect={(event) => event.preventDefault()}
+              data-testid={`epic-sidebar-archive-visibility-${option.value}`}
+            >
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
       );
     case "interface":
       return (
@@ -478,10 +514,10 @@ export function ChatFilterMenu(props: {
   const { epicId } = props;
   const filter = useChatFilter(epicId);
   const sort = useChatSort(epicId);
-  const showArchived = useChatShowArchived(epicId);
+  const archiveVisibility = useChatArchiveVisibility(epicId);
   const setChatOrigin = useLeftPanelStore((state) => state.setChatOrigin);
-  const toggleChatShowArchived = useLeftPanelStore(
-    (state) => state.toggleChatShowArchived,
+  const setChatArchiveVisibility = useLeftPanelStore(
+    (state) => state.setChatArchiveVisibility,
   );
   const setChatSortField = useLeftPanelStore((state) => state.setChatSortField);
   const toggleChatSortDirection = useLeftPanelStore(
@@ -490,7 +526,10 @@ export function ChatFilterMenu(props: {
   const resetChatView = useLeftPanelStore((state) => state.resetChatView);
   const filterActive = isChatFilterActive(filter);
   const filterCount = filterActive ? 1 : 0;
-  const active = filterActive || showArchived || isSortModeActive(sort);
+  const archiveVisibilityChanged =
+    archiveVisibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+  const active =
+    filterActive || archiveVisibilityChanged || isSortModeActive(sort);
   const menu = useViewMenuState<ChatViewDetail>(
     props.tabId,
     "chats",
@@ -500,9 +539,10 @@ export function ChatFilterMenu(props: {
   const detailProps = {
     filterOrigin: filter.origin,
     sort,
-    showArchived,
+    archiveVisibility,
     setChatOrigin: (origin: ChatOriginFilter) => setChatOrigin(epicId, origin),
-    toggleShowArchived: () => toggleChatShowArchived(epicId),
+    setArchiveVisibility: (visibility: ChatArchiveVisibility) =>
+      setChatArchiveVisibility(epicId, visibility),
     setSortField: (field: SortField) => setChatSortField(epicId, field),
     toggleSortDirection: () => toggleChatSortDirection(epicId),
   };
@@ -513,7 +553,7 @@ export function ChatFilterMenu(props: {
     base: "Filter agents",
     filterCount,
     sort,
-    showChanged: showArchived,
+    showChanged: archiveVisibilityChanged,
   });
 
   return (
@@ -556,7 +596,7 @@ export function ChatFilterMenu(props: {
                 detail="show"
                 drillIn={menu.drillIn}
                 label="Show"
-                summary={showArchived ? "Archived shown" : "Archived hidden"}
+                summary={archiveVisibilityLabel(archiveVisibility)}
                 onOpenDetail={menu.openDetail}
               >
                 <ChatDetailContent detail="show" {...detailProps} />

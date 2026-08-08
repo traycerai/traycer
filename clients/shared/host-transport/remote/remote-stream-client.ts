@@ -63,7 +63,8 @@ export class RemoteStreamClient<
   /**
    * Fires when the shared session reaches terminal close - a session-level
    * fatal (e.g. `INCOMPATIBLE`, or a bounded/rejected `UNAUTHORIZED`
-   * recovery), or the last consumer's release closing it for real. This is
+   * recovery), or the keep-warm linger expiring after the last consumer's
+   * release closing it for real. This is
    * what lets the owner-side liveness guard rebuild the transport instead of
    * serving a permanently-dead client (`start()` no-ops once the session is
    * closed). NOT retro-fired for an already-closed session - callers pair
@@ -86,15 +87,16 @@ export class RemoteStreamClient<
   reconnectAll(_reason: string): void {}
 
   /**
-   * Bridges the session's ready-boundary-after-a-drop transition (full
-   * re-attach + every live stream restored; see
+   * Bridges the session's ready-boundary transition (full attach + every
+   * live stream restored; see
    * `RemoteSession.subscribeAvailabilityRecovered`) to availability-recovered
    * listeners - the same "endpoint recovered" evidence `WsStreamClient`
-   * surfaces when a session re-opens after a drop. A clean first open never
-   * fires. This is what un-strands errored host-scoped queries for a tab
-   * bound to a NON-active remote host, whose only recovery evidence is its
-   * own transport (the presence lease + relay-resume path only covers the
-   * active host).
+   * surfaces when a session re-opens after a drop, PLUS the clean first open
+   * (a remote session's first dial races the queries that created it; see
+   * the session contract for why). This is what un-strands errored
+   * host-scoped queries for a tab bound to a NON-active remote host, whose
+   * only recovery evidence is its own transport (the presence lease +
+   * relay-resume path only covers the active host).
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void {
     return this.session.subscribeAvailabilityRecovered(listener);

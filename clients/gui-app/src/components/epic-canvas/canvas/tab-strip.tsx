@@ -35,6 +35,7 @@ import {
 import {
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
+  useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
 import {
   useInlineRename,
@@ -492,6 +493,7 @@ function TabItem(props: TabItemProps) {
     epicId,
     terminalHostClient,
   );
+  const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
   );
@@ -642,6 +644,7 @@ function TabItem(props: TabItemProps) {
             />
             <TabItemLabelSlot
               displayTitle={displayTitle}
+              isArchived={isArchived}
               tooltipContent={tooltipContent}
               inputProps={rename.inputProps}
               isActive={isActive}
@@ -672,6 +675,7 @@ interface CanvasLeaderBadge {
 
 interface TabItemLabelSlotProps {
   readonly displayTitle: string;
+  readonly isArchived: boolean;
   readonly tooltipContent: ReactNode;
   readonly inputProps: InlineRenameInputProps;
   readonly isActive: boolean;
@@ -686,6 +690,7 @@ interface TabItemLabelSlotProps {
 function TabItemLabelSlot(props: TabItemLabelSlotProps) {
   const {
     displayTitle,
+    isArchived,
     tooltipContent,
     inputProps,
     isActive,
@@ -716,12 +721,15 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
             <span
               data-testid={`tab-title-${tabInstanceId}`}
               className={cn(
-                "inline-block max-w-full truncate pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
+                "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
                 isPreview && "italic",
                 isActive ? "font-medium" : "font-normal",
               )}
             >
-              {displayTitle}
+              <TabDisplayTitle
+                displayTitle={displayTitle}
+                isArchived={isArchived}
+              />
             </span>
           </TooltipTrigger>
           <TooltipContent>{tooltipContent}</TooltipContent>
@@ -729,13 +737,16 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
         <span
           aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden truncate pr-1 group-focus-within:block group-hover:block",
+            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden min-w-0 items-center gap-1 pr-1 group-focus-within:flex group-hover:flex",
             leaderBadge !== null && "right-7",
             isPreview && "italic",
             isActive ? "font-medium" : "font-normal",
           )}
         >
-          {displayTitle}
+          <TabDisplayTitle
+            displayTitle={displayTitle}
+            isArchived={isArchived}
+          />
         </span>
       </span>
       <AnimatePresence initial={false}>
@@ -765,6 +776,27 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           <X className="size-3" />
         </button>
       ) : null}
+    </>
+  );
+}
+
+function TabDisplayTitle(props: {
+  readonly displayTitle: string;
+  readonly isArchived: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.isArchived ? (
+        <>
+          <span className="shrink-0 font-semibold text-muted-foreground">
+            Archived
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-muted-foreground">
+            ·
+          </span>
+        </>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">{props.displayTitle}</span>
     </>
   );
 }

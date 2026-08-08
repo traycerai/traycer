@@ -15,7 +15,9 @@ import {
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
+  rateLimitUsageResponseSchemaV40,
   mapGrokAvailableToUnavailable,
+  mapHuggingFaceAvailableToUnavailable,
   type ProviderRateLimits,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
@@ -247,6 +249,100 @@ export const hostGetRateLimitUsageDowngradeV3ToV1 = defineDowngradePath<
       ...response,
       providerRateLimits: mapUsageFetchFailedToNotAvailable(
         mapGrokAvailableToUnavailable(response.providerRateLimits),
+      ),
+    }),
+  }),
+});
+
+// v4.0 adds the Hugging Face available arm to the provider-account snapshot.
+// Shipped as a major for the same reason v3.0 was: a new available union arm is
+// not strippable by the within-major skew handler, so it needs explicit bridges
+// that degrade it. The request shape is unchanged from v1.2/v2.x/v3.0, so this
+// reuses `rateLimitUsageRequestSchemaV12` directly.
+export const hostGetRateLimitUsageV40 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV12,
+  responseSchema: rateLimitUsageResponseSchemaV40,
+});
+
+// A v3.0 request and a v4.0 request are identical shapes, and every frozen v3.0
+// arm is a valid v4.0 arm (the v4.0 union is a strict superset), so both
+// upgrades are the identity.
+export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV30,
+  typeof hostGetRateLimitUsageV40
+>({
+  from: hostGetRateLimitUsageV30.schemaVersion,
+  to: hostGetRateLimitUsageV40.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Downgrade bridge 4.0 -> 3.0: request is identity. A Hugging-Face-available
+// snapshot degrades to the unavailable `unsupported_provider` shape (Hugging
+// Face has no arm in the frozen v3.0 union); every other arm - grok included,
+// since v3.0 is where grok landed - is already valid v3.0 and passes through
+// the re-parse unchanged.
+export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV30
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV30.parse({
+      ...response,
+      providerRateLimits: mapHuggingFaceAvailableToUnavailable(
+        response.providerRateLimits,
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 4.0 -> 2.1: composes both available-arm maps before the v2.1
+// re-parse, because the frozen v2.1 union has neither the Hugging Face arm nor
+// the grok one.
+export const hostGetRateLimitUsageDowngradeV4ToV2 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV21.parse({
+      ...response,
+      providerRateLimits: mapGrokAvailableToUnavailable(
+        mapHuggingFaceAvailableToUnavailable(response.providerRateLimits),
+      ),
+    }),
+  }),
+});
+
+// Downgrade bridge 4.0 -> 1.2: composes all three frozen-line maps. The two
+// available-arm degrades run before the reason degrade, so a genuinely
+// Hugging-Face- or grok-available snapshot never lands on the
+// usage-fetch-failed branch. The v1.2 parse also strips v2.1 reset-credit
+// detail.
+export const hostGetRateLimitUsageDowngradeV4ToV1 = defineDowngradePath<
+  typeof hostGetRateLimitUsageV40,
+  typeof hostGetRateLimitUsageV12
+>({
+  from: hostGetRateLimitUsageV40.schemaVersion,
+  to: hostGetRateLimitUsageV12.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: rateLimitUsageResponseSchemaV12.parse({
+      ...response,
+      providerRateLimits: mapUsageFetchFailedToNotAvailable(
+        mapGrokAvailableToUnavailable(
+          mapHuggingFaceAvailableToUnavailable(response.providerRateLimits),
+        ),
       ),
     }),
   }),

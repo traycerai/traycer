@@ -22,7 +22,8 @@ import {
 import { withMemberToggled } from "@/lib/immutable-set";
 import { useChatArchiveSupportState } from "@/hooks/epic/use-chat-archive-support";
 import {
-  useChatShowArchived,
+  CHAT_ARCHIVE_VISIBILITY,
+  useChatArchiveVisibility,
   useChatSort,
 } from "@/stores/epics/left-panel-store";
 
@@ -317,13 +318,42 @@ function collectArchiveHiddenIds(
 }
 
 /**
+ * Archived-only is a tree projection rather than a flat list: unarchived
+ * ancestors remain as navigational context for archived descendants, while
+ * unrelated branches and unarchived descendants are hidden.
+ */
+function collectArchivedOnlyHiddenIds(
+  archivedIds: ReadonlyArray<string>,
+  tree: EpicTreeIndex,
+): ReadonlySet<string> {
+  const visible = new Set<string>();
+  for (const archivedId of archivedIds) {
+    const visited = new Set<string>();
+    let currentId: string | null = archivedId;
+    while (currentId !== null && !visited.has(currentId)) {
+      visited.add(currentId);
+      if (!Object.hasOwn(tree.nodeById, currentId)) break;
+      visible.add(currentId);
+      currentId = tree.nodeById[currentId].parentId;
+    }
+  }
+  const hidden = new Set<string>();
+  for (const id of Object.keys(tree.nodeById)) {
+    if (!visible.has(id)) hidden.add(id);
+  }
+  return hidden.size === 0 ? EMPTY_ARCHIVE_HIDDEN_IDS : hidden;
+}
+
+/**
  * The archive-hidden set for this epic, or empty when nothing should be hidden.
  *
+ * The selected visibility mode determines which archive partition is hidden.
+ * `Archived only` retains unarchived ancestors solely as tree context.
  * Nothing is hidden in two cases, and the second is load-bearing:
  *
- * 1. "Show archived" is on - archived rows render dimmed instead.
+ * 1. "All chats" is selected - archived rows render dimmed alongside active.
  * 2. The host is KNOWN to lack `epic.setChatArchived`. Every way back to an
- *    archived row is capability-gated (the "Show archived" toggle, the
+ *    archived row is capability-gated (the archive visibility filter, the
  *    Unarchive entry, the empty-state hint), so continuing to hide on such a
  *    host would leave rows invisible with nothing left to recover them - a real
  *    path, since a host can be rolled back under a live session or the default
@@ -338,16 +368,52 @@ function collectArchiveHiddenIds(
 export function useSidebarArchiveHiddenIds(
   epicId: string,
 ): ReadonlySet<string> {
-  const showArchived = useChatShowArchived(epicId);
+  const archiveVisibility = useChatArchiveVisibility(epicId);
   const archiveSupport = useChatArchiveSupportState();
   const archivedIds = useEpicArchivedNodeIds();
   const tree = useEpicTreeIndex();
   return useMemo(() => {
-    if (showArchived || archiveSupport === false) {
+    if (
+      archiveVisibility === CHAT_ARCHIVE_VISIBILITY.All ||
+      archiveSupport === false
+    ) {
       return EMPTY_ARCHIVE_HIDDEN_IDS;
     }
+    if (archiveVisibility === CHAT_ARCHIVE_VISIBILITY.Archived) {
+      return collectArchivedOnlyHiddenIds(archivedIds, tree);
+    }
     return collectArchiveHiddenIds(archivedIds, tree);
-  }, [showArchived, archiveSupport, archivedIds, tree]);
+  }, [archiveVisibility, archiveSupport, archivedIds, tree]);
+}
+
+/**
+ * In the default unarchived view, reveals exceptional archived rows without
+ * changing the mode to "All chats". An open, working, or unread row needs its
+ * ancestor path to remain navigable, but siblings and descendants that have no
+ * such signal stay hidden. Walking parent links also handles an active
+ * unarchived descendant whose archived ancestor would otherwise prune the
+ * whole branch.
+ */
+export function revealArchiveHiddenIds(
+  archiveHiddenIds: ReadonlySet<string>,
+  alwaysVisibleIds: readonly string[],
+  tree: EpicTreeIndex,
+): ReadonlySet<string> {
+  if (archiveHiddenIds.size === 0 || alwaysVisibleIds.length === 0) {
+    return archiveHiddenIds;
+  }
+  const hidden = new Set(archiveHiddenIds);
+  for (const id of alwaysVisibleIds) {
+    const visited = new Set<string>();
+    let currentId: string | null = id;
+    while (currentId !== null && !visited.has(currentId)) {
+      visited.add(currentId);
+      hidden.delete(currentId);
+      if (!Object.hasOwn(tree.nodeById, currentId)) break;
+      currentId = tree.nodeById[currentId].parentId;
+    }
+  }
+  return hidden.size === 0 ? EMPTY_ARCHIVE_HIDDEN_IDS : hidden;
 }
 
 /**

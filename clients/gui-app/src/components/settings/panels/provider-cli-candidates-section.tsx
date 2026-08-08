@@ -61,6 +61,7 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   cursor: null,
   traycer: "opencode",
   openrouter: "opencode",
+  huggingface: "opencode",
   grok: null,
   qwen: null,
   kiro: null,
@@ -98,6 +99,9 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   cursor: null,
   traycer: null,
   openrouter: null,
+  // Borrows OpenCode's binary (see `SHARED_CLI_CANDIDATE_SOURCE`), so there is
+  // no Hugging-Face-specific install page to send anyone to.
+  huggingface: null,
   grok: null,
   qwen: null,
   kiro: null,

@@ -19,42 +19,66 @@ describe("ScrollToEndPill", () => {
   it("keeps aria-label 'Scroll to end' across plain, streaming, new-reply, and hidden", () => {
     const states: ReadonlyArray<ScrollToEndPillState> = [
       { kind: "plain" },
-      { kind: "streaming", workingVerb: "Cogitating" },
+      { kind: "streaming" },
       { kind: "new-reply" },
       { kind: "hidden" },
     ];
 
     for (const state of states) {
-      const { container, unmount } = renderPill(state);
-      expect(
-        container.querySelector("button")?.getAttribute("aria-label"),
-      ).toBe("Scroll to end");
+      const { unmount } = renderPill(state);
+      const pill =
+        state.kind === "hidden"
+          ? screen.getByRole<HTMLButtonElement>("button", { hidden: true })
+          : screen.getByRole<HTMLButtonElement>("button", {
+              name: "Scroll to end",
+            });
+      expect(pill.getAttribute("aria-label")).toBe("Scroll to end");
       unmount();
     }
   });
 
-  it("renders AgentSpinningDots + working-verb text in the streaming state", () => {
-    renderPill({ kind: "streaming", workingVerb: "Noodling" });
+  it("renders only the three-dot wave in the streaming state", () => {
+    renderPill({ kind: "streaming" });
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Scroll to end",
+    });
 
-    expect(screen.getByTestId("scroll-to-end-pill-spinner")).toBeTruthy();
-    expect(screen.getByTestId("scroll-to-end-pill-chevron")).toBeTruthy();
-    expect(screen.getByText("Noodling…")).toBeTruthy();
+    expect(
+      screen.getByTestId("scroll-to-end-pill-streaming-dots"),
+    ).toBeTruthy();
+    expect(pill.textContent).toBe("");
   });
 
-  it("renders 'New reply' text in the new-reply state (no spinner)", () => {
+  it("renders only the down arrow for new replies", () => {
     renderPill({ kind: "new-reply" });
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Scroll to end",
+    });
 
-    expect(screen.getByText("New reply")).toBeTruthy();
-    expect(screen.queryByTestId("scroll-to-end-pill-spinner")).toBeNull();
+    expect(pill.querySelector("svg.lucide-arrow-down")).toBeTruthy();
+    expect(pill.textContent).toBe("");
+    expect(
+      screen.queryByTestId("scroll-to-end-pill-streaming-dots"),
+    ).toBeNull();
+  });
+
+  it("uses a compact circle and animates its presence", () => {
+    renderPill({ kind: "plain" });
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Scroll to end",
+    });
+
+    expect(pill.classList.contains("size-8")).toBe(true);
+    expect(pill.classList.contains("scale-100")).toBe(true);
+    expect(pill.classList.contains("opacity-100")).toBe(true);
   });
 
   it("hides interaction when hidden (tabIndex -1, opacity-0, pointer-events-none)", () => {
     const { onClick } = renderPill({ kind: "hidden" });
 
-    const pill = screen.getByText("Scroll to end").closest("button");
-    if (!(pill instanceof HTMLButtonElement)) {
-      throw new Error("Expected hidden scroll-to-end button");
-    }
+    const pill = screen.getByRole<HTMLButtonElement>("button", {
+      hidden: true,
+    });
     expect(pill.getAttribute("aria-hidden")).toBe("true");
     expect(screen.queryByRole("button", { name: "Scroll to end" })).toBeNull();
     expect(pill.tabIndex).toBe(-1);

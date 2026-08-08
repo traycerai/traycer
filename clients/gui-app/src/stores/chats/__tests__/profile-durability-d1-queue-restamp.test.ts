@@ -115,6 +115,8 @@ function emitSnapshot(harness: Harness): void {
         messages: [],
         events: [],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

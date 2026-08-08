@@ -85,9 +85,11 @@ export interface IHostStreamClient<
    * drop or a stall-length silent gap - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
    * points. Consumers drive `HostClient.notifyAvailabilityRecovered()` off it
-   * so stranded unary queries refetch. `RemoteStreamClient` never fires it
-   * today: remote availability is owned by the registry's presence lease and
-   * the relay resume machinery, not socket-level evidence.
+   * so stranded unary queries refetch. `RemoteStreamClient` delegates to
+   * `RemoteSession.subscribeAvailabilityRecovered`, which fires at EVERY
+   * ready boundary - including the clean first open, because a remote
+   * session's first dial races (and strands) the very queries that created
+   * it.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
 }

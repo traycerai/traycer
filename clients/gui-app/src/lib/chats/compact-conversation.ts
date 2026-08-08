@@ -11,7 +11,8 @@ import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
  * harness only ever compacting on its own.
  *
  * `providerKind: "compaction"` is the marker every adapter stamps on its native
- * compaction command - hardcoded for codex/opencode/traycer/openrouter/omp/pi,
+ * compaction command - hardcoded for codex/opencode/traycer/openrouter/
+ * huggingface/omp/pi,
  * derived from the ACP handshake list for grok/kimi/kiro/qwen/kilocode/hermes/
  * devin, and from the SDK command catalog for claude.
  *
