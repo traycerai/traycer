@@ -41,6 +41,8 @@ import {
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
+  forkAgentRequestSchema,
+  forkAgentResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 
 // ─── Agent-to-agent unary surface ─────────────────────────────────────────
@@ -859,4 +861,16 @@ export const agentStopV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: stopAgentRequestSchema,
   responseSchema: stopAgentResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method - an old host simply lacks it, so a caller gets
+ * per-call "host too old, upgrade" guidance instead of a fatal handshake
+ * mismatch (see `degrade: { kind: "unsupported" }` in `registry.ts`).
+ */
+export const agentForkV10 = defineRpcContract({
+  method: "agent.fork",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: forkAgentRequestSchema,
+  responseSchema: forkAgentResponseSchema,
 });
