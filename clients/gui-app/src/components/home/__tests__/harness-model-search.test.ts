@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAllHarnessModelRows,
   buildHarnessModelRows,
+  buildSubproviderEntries,
   createModelRowSearchIndex,
   filterModelRows,
   flattenModelRowSections,
@@ -584,5 +585,96 @@ describe("harness model search", () => {
 
     expect(rows[0]?.deprecationNotice).toBe("Switch to Claude Sonnet 5.");
     expect(rows[1]?.deprecationNotice).toBeNull();
+  });
+
+  describe("buildSubproviderEntries", () => {
+    it("groups by first-seen providerGroupId with counts and labels", () => {
+      const rows = buildHarnessModelRows(OPENCODE_HARNESS, [
+        model({
+          harnessId: "opencode",
+          slug: "clinepass:kimi",
+          label: "ClinePass: Kimi K3",
+          contextWindow: 128_000,
+          metadata: {
+            openCodeProviderId: "clinepass",
+            openCodeProviderLabel: "ClinePass",
+          },
+        }),
+        model({
+          harnessId: "opencode",
+          slug: "command-code:gpt",
+          label: "Command Code: GPT",
+          metadata: {
+            openCodeProviderId: "command-code",
+            openCodeProviderLabel: "Command Code",
+          },
+        }),
+        model({
+          harnessId: "opencode",
+          slug: "clinepass:sonnet",
+          label: "ClinePass: Sonnet",
+          contextWindow: 200_000,
+          metadata: {
+            openCodeProviderId: "clinepass",
+            openCodeProviderLabel: "ClinePass",
+          },
+        }),
+      ]);
+
+      // First-seen order (after builder's group sort: ClinePass then Command Code).
+      expect(buildSubproviderEntries(rows)).toEqual([
+        {
+          providerGroupId: "clinepass",
+          providerGroupLabel: "ClinePass",
+          modelCount: 2,
+          capacityLabel: "128k ctx",
+        },
+        {
+          providerGroupId: "command-code",
+          providerGroupLabel: "Command Code",
+          modelCount: 1,
+          capacityLabel: null,
+        },
+      ]);
+    });
+
+    it("returns empty when rows have no provider groups", () => {
+      const rows = buildHarnessModelRows(CODEX_HARNESS, [
+        model({ slug: "gpt-5.5", label: "GPT-5.5" }),
+        model({ slug: "gpt-4.1", label: "GPT-4.1" }),
+      ]);
+      expect(buildSubproviderEntries(rows)).toEqual([]);
+    });
+
+    it("returns a single entry when all rows share one group", () => {
+      const rows = buildHarnessModelRows(OPENCODE_HARNESS, [
+        model({
+          harnessId: "opencode",
+          slug: "anthropic:claude",
+          label: "Anthropic: Claude",
+          metadata: {
+            openCodeProviderId: "anthropic",
+            openCodeProviderLabel: "Anthropic",
+          },
+        }),
+        model({
+          harnessId: "opencode",
+          slug: "anthropic:opus",
+          label: "Anthropic: Opus",
+          metadata: {
+            openCodeProviderId: "anthropic",
+            openCodeProviderLabel: "Anthropic",
+          },
+        }),
+      ]);
+      expect(buildSubproviderEntries(rows)).toEqual([
+        {
+          providerGroupId: "anthropic",
+          providerGroupLabel: "Anthropic",
+          modelCount: 2,
+          capacityLabel: null,
+        },
+      ]);
+    });
   });
 });

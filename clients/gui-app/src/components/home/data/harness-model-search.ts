@@ -68,6 +68,14 @@ export interface HarnessModelRowSection {
   readonly rows: ReadonlyArray<HarnessModelRow>;
 }
 
+/** One subprovider (OpenCode/OpenRouter group) for the model-picker cascade. */
+export interface HarnessSubproviderEntry {
+  readonly providerGroupId: string;
+  readonly providerGroupLabel: string;
+  readonly modelCount: number;
+  readonly capacityLabel: string | null;
+}
+
 const MODEL_ROW_FUSE_OPTIONS: IFuseOptions<HarnessModelRow> = {
   includeScore: false,
   ignoreLocation: true,
@@ -167,6 +175,55 @@ export function flattenModelRowSections(
   sections: ReadonlyArray<HarnessModelRowSection>,
 ): ReadonlyArray<HarnessModelRow> {
   return sections.flatMap((section) => section.rows);
+}
+
+/**
+ * Derives cascade level-1 entries from provider rows. Order is first-seen group
+ * order (the builder already rank-orders grouped catalogs). Rows without a
+ * `providerGroupId` are ignored. Each entry's `capacityLabel` is the first
+ * non-null capacity among its models.
+ */
+export function buildSubproviderEntries(
+  rows: ReadonlyArray<HarnessModelRow>,
+): ReadonlyArray<HarnessSubproviderEntry> {
+  const order: string[] = [];
+  const groups = new Map<
+    string,
+    {
+      providerGroupLabel: string;
+      modelCount: number;
+      capacityLabel: string | null;
+    }
+  >();
+  for (const row of rows) {
+    if (row.providerGroupId === null) continue;
+    const existing = groups.get(row.providerGroupId);
+    if (existing === undefined) {
+      groups.set(row.providerGroupId, {
+        providerGroupLabel: row.providerGroupLabel ?? row.providerGroupId,
+        modelCount: 1,
+        capacityLabel: row.capacityLabel,
+      });
+      order.push(row.providerGroupId);
+    } else {
+      existing.modelCount += 1;
+      if (existing.capacityLabel === null && row.capacityLabel !== null) {
+        existing.capacityLabel = row.capacityLabel;
+      }
+    }
+  }
+  return order.flatMap((providerGroupId) => {
+    const entry = groups.get(providerGroupId);
+    if (entry === undefined) return [];
+    return [
+      {
+        providerGroupId,
+        providerGroupLabel: entry.providerGroupLabel,
+        modelCount: entry.modelCount,
+        capacityLabel: entry.capacityLabel,
+      },
+    ];
+  });
 }
 
 export function selectedModelRowId(
