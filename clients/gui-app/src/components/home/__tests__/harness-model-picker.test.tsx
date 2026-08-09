@@ -3578,6 +3578,232 @@ describe("<HarnessModelPicker />", () => {
       profileId: null,
     });
   });
+
+  describe("cascade Provider → Subprovider → Model → Effort", () => {
+    function installGroupedOpenCodeCatalog(): void {
+      const availableOpenCode: HarnessOption = {
+        ...OPENCODE_HARNESS,
+        available: true,
+        error: null,
+      };
+      const models: ReadonlyArray<ModelOption> = [
+        model({
+          harnessId: "opencode",
+          slug: "clinepass:kimi",
+          label: "ClinePass: Kimi K3",
+          metadata: {
+            openCodeProviderId: "clinepass",
+            openCodeProviderLabel: "ClinePass",
+          },
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: "Faster" },
+            { id: "high", label: "High", description: "Deeper" },
+          ],
+        }),
+        model({
+          harnessId: "opencode",
+          slug: "clinepass:sonnet",
+          label: "ClinePass: Sonnet",
+          metadata: {
+            openCodeProviderId: "clinepass",
+            openCodeProviderLabel: "ClinePass",
+          },
+        }),
+        model({
+          harnessId: "opencode",
+          slug: "command-code:gpt",
+          label: "Command Code: GPT",
+          metadata: {
+            openCodeProviderId: "command-code",
+            openCodeProviderLabel: "Command Code",
+          },
+        }),
+      ];
+      queryMock.harnesses = [
+        CODEX_HARNESS,
+        CLAUDE_HARNESS,
+        availableOpenCode,
+        OPENROUTER_HARNESS,
+      ];
+      queryMock.catalogHarnesses = [
+        catalogHarness(CODEX_HARNESS, codexModels()),
+        catalogHarness(CLAUDE_HARNESS, claudeModels()),
+        catalogHarness(availableOpenCode, models),
+        catalogHarness(OPENROUTER_HARNESS, []),
+      ];
+      queryMock.selectedModelsByHarness = new Map([
+        ["codex", codexModels()],
+        ["claude", claudeModels()],
+        ["opencode", models],
+        ["openrouter", []],
+      ]);
+    }
+
+    it("drills rail → subprovider → model → effort and commits both", async () => {
+      installGroupedOpenCodeCatalog();
+      const { selections, reasoningChanges } = renderPicker(undefined);
+
+      await openPicker();
+      fireEvent.click(screen.getByRole("tab", { name: "OpenCode" }));
+
+      // Level 1: subproviders
+      expect(
+        screen.getByRole("listbox", { name: "Subproviders" }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("option", { name: /ClinePass/ }),
+      ).not.toBeNull();
+      expect(
+        screen.getByRole("option", { name: /Command Code/ }),
+      ).not.toBeNull();
+      // Group headers replaced by cascade — model rows not yet visible.
+      expect(screen.queryByRole("option", { name: /^Kimi/ })).toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /ClinePass/ }));
+
+      // Level 2: models in group (browse labels strip the provider prefix)
+      expect(screen.getByRole("option", { name: /Kimi K3/ })).not.toBeNull();
+      expect(screen.getByRole("option", { name: /Sonnet/ })).not.toBeNull();
+      expect(
+        screen.queryByRole("option", { name: /Command Code/ }),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /Kimi K3/ }));
+
+      // Level 3: efforts — no model commit for the kimi pick yet (rail switch
+      // may have already recorded an opencode selection).
+      expect(
+        selections.filter((s) => s.modelSlug === "clinepass:kimi"),
+      ).toEqual([]);
+      expect(
+        screen.getByRole("listbox", { name: "Thinking effort" }),
+      ).not.toBeNull();
+      expect(screen.getByRole("option", { name: /Low/ })).not.toBeNull();
+      expect(screen.getByRole("option", { name: /High/ })).not.toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /High/ }));
+
+      expect(selections.at(-1)).toEqual({
+        harnessId: "opencode",
+        modelSlug: "clinepass:kimi",
+        profileId: null,
+      });
+      expect(reasoningChanges.at(-1)).toBe("high");
+      // Effort selection closes the picker.
+      await waitFor(() => {
+        expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
+      });
+    });
+
+    it("completes a model without efforts at the models level", async () => {
+      installGroupedOpenCodeCatalog();
+      const { selections } = renderPicker(undefined);
+
+      await openPicker();
+      fireEvent.click(screen.getByRole("tab", { name: "OpenCode" }));
+      fireEvent.click(screen.getByRole("option", { name: /ClinePass/ }));
+      fireEvent.click(screen.getByRole("option", { name: /Sonnet/ }));
+
+      expect(selections.at(-1)).toEqual({
+        harnessId: "opencode",
+        modelSlug: "clinepass:sonnet",
+        profileId: null,
+      });
+      // Picker stays open (today's behavior for models without efforts).
+      expect(
+        screen.getByRole("textbox", { name: /^Search/ }),
+      ).not.toBeNull();
+      expect(
+        screen.queryByRole("listbox", { name: "Thinking effort" }),
+      ).toBeNull();
+    });
+
+    it("search-select of a model with efforts drills to the effort level", async () => {
+      installGroupedOpenCodeCatalog();
+      const { selections } = renderPicker(undefined);
+
+      await openPicker();
+      fireEvent.click(screen.getByRole("tab", { name: "OpenCode" }));
+      const input = screen.getByRole("textbox", { name: /^Search/ });
+      fireEvent.change(input, { target: { value: "kimi" } });
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("option", { name: /Kimi K3/ }),
+        ).not.toBeNull();
+      });
+      fireEvent.click(screen.getByRole("option", { name: /Kimi K3/ }));
+
+      // No model commit yet — drilled to efforts.
+      expect(
+        selections.filter((s) => s.modelSlug === "clinepass:kimi"),
+      ).toEqual([]);
+      expect(
+        screen.getByRole("listbox", { name: "Thinking effort" }),
+      ).not.toBeNull();
+    });
+
+    it("ArrowLeft and Escape with empty query step up the cascade", async () => {
+      installGroupedOpenCodeCatalog();
+      renderPicker(undefined);
+
+      const input = await openPicker();
+      fireEvent.click(screen.getByRole("tab", { name: "OpenCode" }));
+      fireEvent.click(screen.getByRole("option", { name: /ClinePass/ }));
+      expect(screen.getByRole("option", { name: /Kimi K3/ })).not.toBeNull();
+
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(
+        screen.getByRole("listbox", { name: "Subproviders" }),
+      ).not.toBeNull();
+
+      fireEvent.click(screen.getByRole("option", { name: /ClinePass/ }));
+      fireEvent.click(screen.getByRole("option", { name: /Kimi K3/ }));
+      expect(
+        screen.getByRole("listbox", { name: "Thinking effort" }),
+      ).not.toBeNull();
+
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(screen.getByRole("option", { name: /Kimi K3/ })).not.toBeNull();
+      expect(
+        screen.queryByRole("listbox", { name: "Thinking effort" }),
+      ).toBeNull();
+
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(
+        screen.getByRole("listbox", { name: "Subproviders" }),
+      ).not.toBeNull();
+    });
+
+    it("reopens on the models level inside the selected model's subprovider", async () => {
+      installGroupedOpenCodeCatalog();
+      renderPicker({
+        selection: {
+          harnessId: "opencode",
+          modelSlug: "clinepass:sonnet",
+          profileId: null,
+        },
+      });
+
+      // Trigger shows the browse label (prefix stripped).
+      fireEvent.click(screen.getByRole("button", { name: /Sonnet/ }));
+      await screen.findByRole("textbox", { name: /^Search/ });
+
+      // Landed on models inside ClinePass, not the subprovider list. Catalog
+      // rows arrive after open, so wait for the cascade re-resolve.
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Back to subproviders" }),
+        ).not.toBeNull();
+      });
+      expect(screen.getByRole("option", { name: /Kimi K3/ })).not.toBeNull();
+      expect(screen.getByRole("option", { name: /Sonnet/ })).not.toBeNull();
+      expect(
+        screen.queryByRole("listbox", { name: "Subproviders" }),
+      ).toBeNull();
+    });
+  });
 });
 
 // Fire a leader digit straight through the scope stack (the picker registers

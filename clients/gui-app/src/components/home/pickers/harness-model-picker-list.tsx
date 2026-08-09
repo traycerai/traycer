@@ -19,6 +19,8 @@ interface HarnessModelPickerListProps {
   readonly activeRowId: string;
   readonly hoveredRowId: string;
   readonly hasQuery: boolean;
+  /** When true, omit provider-group section headers (cascade models level). */
+  readonly suppressSectionHeaders: boolean;
   readonly initialTopMostItemIndex: IndexLocationWithAlign;
   readonly catalogLoading: boolean;
   readonly catalogError: boolean;
@@ -42,6 +44,7 @@ export function HarnessModelPickerList(
     activeRowId,
     hoveredRowId,
     hasQuery,
+    suppressSectionHeaders,
     initialTopMostItemIndex,
     catalogLoading,
     catalogError,
@@ -93,7 +96,9 @@ export function HarnessModelPickerList(
         const row = rows.at(index);
         if (row === undefined) return null;
         const previous = index > 0 ? rows.at(index - 1) : null;
-        const groupHeader = providerGroupHeader(row, previous ?? null);
+        const groupHeader = suppressSectionHeaders
+          ? null
+          : providerGroupHeader(row, previous ?? null);
         return (
           <div className="px-1 py-0.5">
             {groupHeader === null ? null : (

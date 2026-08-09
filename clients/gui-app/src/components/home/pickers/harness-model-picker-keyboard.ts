@@ -1,16 +1,22 @@
-import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { KeyboardEvent, RefObject } from "react";
 
+/** Navigable row shape shared by models, subproviders, and efforts. */
+export interface CascadeNavItem {
+  readonly id: string;
+}
+
 interface HarnessModelPickerKeyboardInput {
-  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  readonly visibleItems: ReadonlyArray<CascadeNavItem>;
   readonly effectiveActiveRowId: string;
-  readonly activeRow: HarnessModelRow | null;
+  readonly activeItemId: string | null;
   readonly trimmedQuery: string;
   readonly listRef: RefObject<VirtuosoHandle | null>;
+  readonly canNavigateCascade: boolean;
   readonly onActiveRowId: (rowId: string) => void;
-  readonly onSelectRow: (row: HarnessModelRow) => void;
+  readonly onSelectActive: () => void;
   readonly onQueryChange: (next: string) => void;
+  readonly onCascadeBack: () => void;
   readonly onClose: () => void;
 }
 
@@ -19,19 +25,21 @@ export function handleHarnessModelPickerKeyDown(
   input: HarnessModelPickerKeyboardInput,
 ): void {
   const {
-    visibleRows,
+    visibleItems,
     effectiveActiveRowId,
-    activeRow,
+    activeItemId,
     trimmedQuery,
     listRef,
+    canNavigateCascade,
     onActiveRowId,
-    onSelectRow,
+    onSelectActive,
     onQueryChange,
+    onCascadeBack,
     onClose,
   } = input;
 
   const navigation = {
-    visibleRows,
+    visibleItems,
     effectiveActiveRowId,
     listRef,
     onActiveRowId,
@@ -59,21 +67,48 @@ export function handleHarnessModelPickerKeyDown(
     event.preventDefault();
     activateRowIndex({
       ...navigation,
-      index: visibleRows.length - 1,
+      index: visibleItems.length - 1,
       align: "end",
     });
     return;
   }
 
   if (event.key === "Enter") {
-    if (activeRow === null) return;
+    if (activeItemId === null) return;
     event.preventDefault();
-    onSelectRow(activeRow);
+    onSelectActive();
+    return;
+  }
+
+  // Level-up: ArrowLeft always (when cascade allows and query empty).
+  if (
+    event.key === "ArrowLeft" &&
+    trimmedQuery.length === 0 &&
+    canNavigateCascade
+  ) {
+    event.preventDefault();
+    onCascadeBack();
+    return;
+  }
+
+  // Backspace with empty query goes up one cascade level (never deletes nothing).
+  if (
+    event.key === "Backspace" &&
+    trimmedQuery.length === 0 &&
+    canNavigateCascade
+  ) {
+    event.preventDefault();
+    onCascadeBack();
     return;
   }
 
   if (event.key === "Escape") {
     if (trimmedQuery.length === 0) {
+      if (canNavigateCascade) {
+        event.preventDefault();
+        onCascadeBack();
+        return;
+      }
       onClose();
       return;
     }
@@ -83,7 +118,7 @@ export function handleHarnessModelPickerKeyDown(
 }
 
 interface RowNavigationInput {
-  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  readonly visibleItems: ReadonlyArray<CascadeNavItem>;
   readonly effectiveActiveRowId: string;
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly onActiveRowId: (rowId: string) => void;
@@ -93,22 +128,22 @@ function moveActiveRow(
   input: RowNavigationInput & { readonly direction: 1 | -1 },
 ): void {
   const {
-    visibleRows,
+    visibleItems,
     effectiveActiveRowId,
     listRef,
     onActiveRowId,
     direction,
   } = input;
-  if (visibleRows.length === 0) return;
-  const currentIndex = visibleRows.findIndex(
-    (row) => row.id === effectiveActiveRowId,
+  if (visibleItems.length === 0) return;
+  const currentIndex = visibleItems.findIndex(
+    (item) => item.id === effectiveActiveRowId,
   );
-  const fallbackIndex = direction > 0 ? -1 : visibleRows.length;
+  const fallbackIndex = direction > 0 ? -1 : visibleItems.length;
   const nextIndex = clampIndex(
     (currentIndex === -1 ? fallbackIndex : currentIndex) + direction,
-    visibleRows.length,
+    visibleItems.length,
   );
-  onActiveRowId(visibleRows.at(nextIndex)?.id ?? "");
+  onActiveRowId(visibleItems.at(nextIndex)?.id ?? "");
   listRef.current?.scrollIntoView({
     index: nextIndex,
     behavior: "auto",
@@ -121,10 +156,10 @@ function activateRowIndex(
     readonly align: "center" | "end" | "start";
   },
 ): void {
-  const { visibleRows, listRef, onActiveRowId, index, align } = input;
-  const row = visibleRows.at(index);
-  if (row === undefined) return;
-  onActiveRowId(row.id);
+  const { visibleItems, listRef, onActiveRowId, index, align } = input;
+  const item = visibleItems.at(index);
+  if (item === undefined) return;
+  onActiveRowId(item.id);
   listRef.current?.scrollToIndex({
     index,
     align,

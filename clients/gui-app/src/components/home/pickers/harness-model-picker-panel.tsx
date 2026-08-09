@@ -12,6 +12,8 @@ import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/har
 import type {
   HarnessOption,
   ProviderId,
+  ReasoningLevel,
+  ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
@@ -21,12 +23,16 @@ import type {
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
-import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import type {
+  HarnessModelRow,
+  HarnessSubproviderEntry,
+} from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
   useCallback,
   useState,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import {
@@ -34,6 +40,12 @@ import {
   type ReasoningFooterConfig,
   type ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import type { CascadeLevel } from "@/components/home/pickers/harness-model-picker-cascade";
+import {
+  CascadeLevelHeader,
+  EffortList,
+  SubproviderList,
+} from "@/components/home/pickers/harness-model-picker-cascade-views";
 
 interface HarnessModelPickerPanelProps {
   readonly trimmedQuery: string;
@@ -111,6 +123,20 @@ interface HarnessModelPickerPanelProps {
     string | null,
     ProfileRowAdmission
   > | null;
+  // Cascade drill-down
+  readonly cascadeLevel: CascadeLevel;
+  readonly cascadePathLabels: ReadonlyArray<string>;
+  readonly cascadeBackAriaLabel: string;
+  readonly onCascadeBack: () => void;
+  readonly subproviderEntries: ReadonlyArray<HarnessSubproviderEntry>;
+  readonly selectedSubproviderId: string | null;
+  readonly onSelectSubprovider: (entry: HarnessSubproviderEntry) => void;
+  readonly suppressSectionHeaders: boolean;
+  readonly effortOptions: ReadonlyArray<ReasoningLevelOption>;
+  readonly selectedEffort: ReasoningLevel;
+  readonly onSelectEffort: (effort: ReasoningLevel) => void;
+  /** When true, Escape with an empty query steps up the cascade instead of closing. */
+  readonly canNavigateCascade: boolean;
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
@@ -162,6 +188,18 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     createProfileDisabled,
     createProfileDisabledReason,
     profileAdmission,
+    cascadeLevel,
+    cascadePathLabels,
+    cascadeBackAriaLabel,
+    onCascadeBack,
+    subproviderEntries,
+    selectedSubproviderId,
+    onSelectSubprovider,
+    suppressSectionHeaders,
+    effortOptions,
+    selectedEffort,
+    onSelectEffort,
+    canNavigateCascade,
   } = props;
   const openAddProfile = useProviderProfileAddFlowStore(
     (state) => state.openForHarness,
@@ -197,9 +235,17 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       }}
       onKeyDown={onKeyDown}
       onEscapeKeyDown={(event) => {
-        if (trimmedQuery.length === 0) return;
-        event.preventDefault();
-        onQueryChange("");
+        // Query non-empty: clear search first. Cascade can go up: step up
+        // (keyboard handler owns the transition). Only let Radix close when
+        // both are idle.
+        if (trimmedQuery.length > 0) {
+          event.preventDefault();
+          onQueryChange("");
+          return;
+        }
+        if (canNavigateCascade) {
+          event.preventDefault();
+        }
       }}
       onInteractOutside={(event) => {
         if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
@@ -272,25 +318,40 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           ) : (
             <PickerProviderAuthLine state={activeProviderState} />
           )}
+          {hasQuery ? null : (
+            <CascadeLevelHeader
+              pathLabels={cascadePathLabels}
+              backAriaLabel={cascadeBackAriaLabel}
+              onBack={onCascadeBack}
+            />
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">
-            <HarnessModelPickerList
+            <CascadeBody
+              hasQuery={hasQuery}
+              cascadeLevel={cascadeLevel}
               idPrefix={idPrefix}
               listboxId={listboxId}
               listRef={listRef}
               listKey={listKey}
-              rows={visibleRows}
+              visibleRows={visibleRows}
               selectedRowId={selectedRowId}
-              activeRowId={effectiveActiveRowId}
+              effectiveActiveRowId={effectiveActiveRowId}
               hoveredRowId={hoveredRowId}
-              hasQuery={hasQuery}
+              suppressSectionHeaders={suppressSectionHeaders}
               initialTopMostItemIndex={initialTopMostItemIndex}
-              catalogLoading={catalogHarnessesLoading}
-              catalogError={catalogHarnessesError}
+              catalogHarnessesLoading={catalogHarnessesLoading}
+              catalogHarnessesError={catalogHarnessesError}
               activeProvider={activeProvider}
-              onHover={onHoverRow}
-              onActive={onActiveRow}
-              onSelect={onSelectRow}
+              onHoverRow={onHoverRow}
+              onActiveRow={onActiveRow}
+              onSelectRow={onSelectRow}
               onOpenProviderSettings={onOpenProviderSettings}
+              subproviderEntries={subproviderEntries}
+              selectedSubproviderId={selectedSubproviderId}
+              onSelectSubprovider={onSelectSubprovider}
+              effortOptions={effortOptions}
+              selectedEffort={selectedEffort}
+              onSelectEffort={onSelectEffort}
             />
           </div>
           <HarnessModelPickerModelSettingsFooter
@@ -300,5 +361,124 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         </div>
       </div>
     </PopoverContent>
+  );
+}
+
+interface CascadeBodyProps {
+  readonly hasQuery: boolean;
+  readonly cascadeLevel: CascadeLevel;
+  readonly idPrefix: string;
+  readonly listboxId: string;
+  readonly listRef: RefObject<VirtuosoHandle | null>;
+  readonly listKey: string;
+  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  readonly selectedRowId: string;
+  readonly effectiveActiveRowId: string;
+  readonly hoveredRowId: string;
+  readonly suppressSectionHeaders: boolean;
+  readonly initialTopMostItemIndex: {
+    index: number;
+    align: "center" | "end" | "start";
+    behavior: "auto";
+  };
+  readonly catalogHarnessesLoading: boolean;
+  readonly catalogHarnessesError: boolean;
+  readonly activeProvider: GuiHarnessCatalogEntry | null;
+  readonly onHoverRow: (rowId: string) => void;
+  readonly onActiveRow: (rowId: string) => void;
+  readonly onSelectRow: (row: HarnessModelRow) => void;
+  readonly onOpenProviderSettings: () => void;
+  readonly subproviderEntries: ReadonlyArray<HarnessSubproviderEntry>;
+  readonly selectedSubproviderId: string | null;
+  readonly onSelectSubprovider: (entry: HarnessSubproviderEntry) => void;
+  readonly effortOptions: ReadonlyArray<ReasoningLevelOption>;
+  readonly selectedEffort: ReasoningLevel;
+  readonly onSelectEffort: (effort: ReasoningLevel) => void;
+}
+
+function CascadeBody(props: CascadeBodyProps): ReactNode {
+  const {
+    hasQuery,
+    cascadeLevel,
+    idPrefix,
+    listboxId,
+    listRef,
+    listKey,
+    visibleRows,
+    selectedRowId,
+    effectiveActiveRowId,
+    hoveredRowId,
+    suppressSectionHeaders,
+    initialTopMostItemIndex,
+    catalogHarnessesLoading,
+    catalogHarnessesError,
+    activeProvider,
+    onHoverRow,
+    onActiveRow,
+    onSelectRow,
+    onOpenProviderSettings,
+    subproviderEntries,
+    selectedSubproviderId,
+    onSelectSubprovider,
+    effortOptions,
+    selectedEffort,
+    onSelectEffort,
+  } = props;
+
+  // Efforts always win over search bypass (selecting a search hit with efforts
+  // clears the query, but also guard here so level 3 is never masked).
+  if (cascadeLevel === "efforts" && !hasQuery) {
+    return (
+      <EffortList
+        idPrefix={idPrefix}
+        listboxId={listboxId}
+        options={effortOptions}
+        selectedEffort={selectedEffort}
+        activeId={effectiveActiveRowId}
+        onHover={onHoverRow}
+        onActive={onActiveRow}
+        onSelect={onSelectEffort}
+      />
+    );
+  }
+
+  if (cascadeLevel === "subproviders" && !hasQuery) {
+    return (
+      <SubproviderList
+        idPrefix={idPrefix}
+        listboxId={listboxId}
+        entries={subproviderEntries}
+        selectedGroupId={selectedSubproviderId}
+        activeId={effectiveActiveRowId}
+        hoveredId={hoveredRowId}
+        onHover={onHoverRow}
+        onActive={onActiveRow}
+        onSelect={onSelectSubprovider}
+      />
+    );
+  }
+
+  // Search bypass or models level: flat (or group-filtered) model list.
+  return (
+    <HarnessModelPickerList
+      idPrefix={idPrefix}
+      listboxId={listboxId}
+      listRef={listRef}
+      listKey={listKey}
+      rows={visibleRows}
+      selectedRowId={selectedRowId}
+      activeRowId={effectiveActiveRowId}
+      hoveredRowId={hoveredRowId}
+      hasQuery={hasQuery}
+      suppressSectionHeaders={!hasQuery && suppressSectionHeaders}
+      initialTopMostItemIndex={initialTopMostItemIndex}
+      catalogLoading={catalogHarnessesLoading}
+      catalogError={catalogHarnessesError}
+      activeProvider={activeProvider}
+      onHover={onHoverRow}
+      onActive={onActiveRow}
+      onSelect={onSelectRow}
+      onOpenProviderSettings={onOpenProviderSettings}
+    />
   );
 }

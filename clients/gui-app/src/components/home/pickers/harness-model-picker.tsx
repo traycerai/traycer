@@ -7,9 +7,11 @@ import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-tri
 import {
   findUpgradeServiceTierForModel,
   findReasoningOptionsForModel,
+  normalizeReasoningForModel,
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningLevel,
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -28,13 +30,25 @@ import {
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   buildAllHarnessModelRows,
+  buildSubproviderEntries,
   createModelRowSearchIndex,
   filterModelRows,
   flattenModelRowSections,
   sectionModelRowsByProviderRank,
   selectedModelRowId,
   type HarnessModelRow,
+  type HarnessSubproviderEntry,
 } from "@/components/home/data/harness-model-search";
+import {
+  cascadeBack,
+  cascadePathLabels,
+  cascadeSelectModel,
+  cascadeSelectSubprovider,
+  resolveCascadeForProvider,
+  shouldShowSubproviderLevel,
+  type CascadeState,
+} from "@/components/home/pickers/harness-model-picker-cascade";
+import { cascadeItemElementId } from "@/components/home/pickers/harness-model-picker-cascade-views";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
   useCallback,
@@ -227,12 +241,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeRowId,
     hoveredRowId,
     openVersion,
+    cascade,
     visibleOpen,
     handleOpenChange,
     handleQueryChange,
     setActiveRailEntry,
     setActiveRowId,
     setHoveredRowId,
+    setCascade,
     closeOnly,
   } = useHarnessModelPickerState(
     selection.harnessId,
@@ -649,18 +665,51 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => rows.filter((row) => row.harnessId === resolvedActiveProviderId),
     [resolvedActiveProviderId, rows],
   );
+  const subproviderEntries = useMemo(
+    () => buildSubproviderEntries(providerRows),
+    [providerRows],
+  );
+  // Profile-scoped rail entry (multi-profile harness with a concrete profile
+  // selected) skips the subprovider level per cascade skip rules.
+  const profileScoped =
+    activePanelProfileId !== null && activeProviderProfiles.length >= 2;
+  const canShowSubproviders = shouldShowSubproviderLevel(
+    subproviderEntries,
+    profileScoped,
+  );
   const providerSearchIndex = useMemo(
     () => createModelRowSearchIndex(providerRows),
     [providerRows],
   );
+  // Search bypass: flat global fuzzy results across all groups. Browse mode
+  // filters to the active subprovider when drilled in.
   const visibleRows = useMemo(() => {
-    if (!hasQuery) return providerRows;
-    return flattenModelRowSections(
-      sectionModelRowsByProviderRank(
-        filterModelRows(providerRows, providerSearchIndex, query),
-      ),
-    );
-  }, [hasQuery, providerRows, providerSearchIndex, query]);
+    if (hasQuery) {
+      return flattenModelRowSections(
+        sectionModelRowsByProviderRank(
+          filterModelRows(providerRows, providerSearchIndex, query),
+        ),
+      );
+    }
+    if (
+      cascade.level === "models" &&
+      cascade.activeGroupId !== null &&
+      canShowSubproviders
+    ) {
+      return providerRows.filter(
+        (row) => row.providerGroupId === cascade.activeGroupId,
+      );
+    }
+    return providerRows;
+  }, [
+    canShowSubproviders,
+    cascade.activeGroupId,
+    cascade.level,
+    hasQuery,
+    providerRows,
+    providerSearchIndex,
+    query,
+  ]);
   const visibleRowsById = useMemo(
     () => new Map(visibleRows.map((row) => [row.id, row])),
     [visibleRows],
@@ -669,10 +718,63 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => selectedModelRowId(selection, rows),
     [rows, selection],
   );
-  const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
+  const pendingEffortModel = useMemo(() => {
+    if (cascade.pendingEffortModelId === null) return null;
+    return (
+      providerRows.find((row) => row.id === cascade.pendingEffortModelId) ??
+      null
+    );
+  }, [cascade.pendingEffortModelId, providerRows]);
+  const effortOptions = useMemo(
+    () =>
+      pendingEffortModel === null
+        ? []
+        : findReasoningOptionsForModel(pendingEffortModel.model),
+    [pendingEffortModel],
+  );
+  // Pre-highlight: current composer effort when it matches this model, else
+  // the model's default (via normalizeReasoningForModel).
+  const selectedEffortForPending = useMemo((): ReasoningLevel => {
+    if (pendingEffortModel === null) return "";
+    if (
+      selection.harnessId === pendingEffortModel.harnessId &&
+      selectedRowId === pendingEffortModel.id
+    ) {
+      return normalizeReasoningForModel(reasoning, pendingEffortModel.model);
+    }
+    return normalizeReasoningForModel("", pendingEffortModel.model);
+  }, [pendingEffortModel, reasoning, selectedRowId, selection.harnessId]);
+  // Navigable items for the active cascade level (or search results).
+  const cascadeNavItems = useMemo(() => {
+    if (hasQuery || cascade.level === "models") {
+      return visibleRows.map((row) => ({ id: row.id }));
+    }
+    if (cascade.level === "subproviders") {
+      return subproviderEntries.map((entry) => ({
+        id: entry.providerGroupId,
+      }));
+    }
+    return effortOptions.map((option) => ({ id: option.id }));
+  }, [
+    cascade.level,
+    effortOptions,
+    hasQuery,
+    subproviderEntries,
     visibleRows,
-    visibleRowsById,
-    selectedRowId,
+  ]);
+  const cascadeNavById = useMemo(
+    () => new Map(cascadeNavItems.map((item) => [item.id, item])),
+    [cascadeNavItems],
+  );
+  const anchorSelectedId =
+    hasQuery || cascade.level === "models"
+      ? selectedRowId
+      : cascade.level === "subproviders"
+        ? (selectedRowGroupId(selectedRowId, providerRows) ?? "")
+        : selectedEffortForPending;
+  const { effectiveActiveRowId, initialTopMostItemIndex } = resolveRowAnchors({
+    visibleItemIds: cascadeNavItems.map((item) => item.id),
+    selectedItemId: anchorSelectedId,
     activeRowId,
     hasQuery,
   });
@@ -682,21 +784,129 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     hasQuery,
     query: trimmedQuery,
     activeProviderId: resolvedActiveProviderId,
+    cascadeLevel: cascade.level,
+    activeGroupId: cascade.activeGroupId,
   });
+
+  const resolveCascadeFor = useCallback(
+    (
+      providerId: ProviderId,
+      profileId: string | null,
+      profiles: ReadonlyArray<ProviderProfile>,
+    ): CascadeState => {
+      const scoped = profileId !== null && profiles.length >= 2;
+      const targetRows = rows.filter((row) => row.harnessId === providerId);
+      const targetSelectedRowId =
+        selection.harnessId === providerId
+          ? selectedModelRowId(selection, rows)
+          : "";
+      return resolveCascadeForProvider({
+        providerRows: targetRows,
+        selectedRowId: targetSelectedRowId,
+        profileScoped: scoped,
+      });
+    },
+    [rows, selection],
+  );
+
+  const onOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        handleOpenChange(false, undefined);
+        return;
+      }
+      const profiles = profilesByHarnessId.get(selection.harnessId) ?? [];
+      const nextCascade = resolveCascadeFor(
+        selection.harnessId,
+        selection.profileId,
+        profiles,
+      );
+      handleOpenChange(true, nextCascade);
+    },
+    [
+      handleOpenChange,
+      profilesByHarnessId,
+      resolveCascadeFor,
+      selection.harnessId,
+      selection.profileId,
+    ],
+  );
+
   const selectRow = useCallback(
     (row: HarnessModelRow) => {
       if (disabled) {
         closeOnly();
         return;
       }
+      const result = cascadeSelectModel(row);
+      if (result.kind === "drillEffort") {
+        // Clear search so the efforts level is not hidden behind the search
+        // bypass (query non-empty forces flat model results).
+        if (query.trim().length > 0) {
+          handleQueryChange("");
+        }
+        setCascade(result.state);
+        return;
+      }
       // Commit the picked model through the memory-aware funnel (restores that
       // (provider, model)'s remembered effort/tier, or the model's defaults).
-      // Selecting a model keeps the picker open; it only closes on an outside
-      // click / escape (handled by Popover's onOpenChange -> closeOnly).
+      // Selecting a model without efforts keeps the picker open (today's behavior).
       commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
-    [activePanelProfileId, closeOnly, disabled, store],
+    [
+      activePanelProfileId,
+      closeOnly,
+      disabled,
+      handleQueryChange,
+      query,
+      setCascade,
+      store,
+    ],
   );
+
+  const selectSubprovider = useCallback(
+    (entry: HarnessSubproviderEntry) => {
+      setCascade(cascadeSelectSubprovider(entry.providerGroupId));
+    },
+    [setCascade],
+  );
+
+  const selectEffort = useCallback(
+    (effort: ReasoningLevel) => {
+      if (disabled || pendingEffortModel === null) {
+        closeOnly();
+        return;
+      }
+      // One write path: memory-aware model commit, then the same setReasoning
+      // the footer uses for effort.
+      commitSelection(
+        store,
+        pendingEffortModel.harnessId,
+        pendingEffortModel.value,
+        activePanelProfileId,
+      );
+      setReasoning(effort);
+      closeOnly();
+    },
+    [
+      activePanelProfileId,
+      closeOnly,
+      disabled,
+      pendingEffortModel,
+      setReasoning,
+      store,
+    ],
+  );
+
+  const handleCascadeBack = useCallback(() => {
+    const next = cascadeBack(cascade, canShowSubproviders && !hasQuery);
+    if (next === null) {
+      closeOnly();
+      return;
+    }
+    setCascade(next);
+  }, [canShowSubproviders, cascade, closeOnly, hasQuery, setCascade]);
+
   const handleRailEntryChange = useCallback(
     (providerId: ProviderId) => {
       // Locked fork (terminal): the harness is immovable - never switch off it.
@@ -707,8 +917,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // provider's (a same-provider re-click / no-op), else the committed
       // selection's profile if this provider is already selected, else the
       // provider's first selectable profile.
+      const profiles = profilesByHarnessId.get(providerId) ?? [];
       const resolvedProfileId = resolveActiveProfileForHarness(
-        profilesByHarnessId.get(providerId) ?? [],
+        profiles,
         providerId === activeProviderId ? activeProfileId : null,
         providerId === selection.harnessId ? selection.profileId : null,
       );
@@ -721,7 +932,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       if (entry !== undefined && entry.harness.available && !entry.degraded) {
         commitSelection(store, providerId, null, resolvedProfileId);
       }
-      setActiveRailEntry(providerId, resolvedProfileId);
+      const nextCascade = resolveCascadeFor(
+        providerId,
+        resolvedProfileId,
+        profiles,
+      );
+      setActiveRailEntry(providerId, resolvedProfileId, nextCascade);
     },
     [
       activeProfileId,
@@ -729,6 +945,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       lockedHarnessId,
       profilesByHarnessId,
       railEntries,
+      resolveCascadeFor,
       selection.harnessId,
       selection.profileId,
       setActiveRailEntry,
@@ -752,34 +969,81 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       } else {
         commitSelection(store, providerId, null, profileId);
       }
-      setActiveRailEntry(providerId, profileId);
+      const profiles = profilesByHarnessId.get(providerId) ?? [];
+      const nextCascade = resolveCascadeFor(providerId, profileId, profiles);
+      setActiveRailEntry(providerId, profileId, nextCascade);
     },
-    [lockedHarnessId, setActiveRailEntry, store],
+    [
+      lockedHarnessId,
+      profilesByHarnessId,
+      resolveCascadeFor,
+      setActiveRailEntry,
+      store,
+    ],
   );
+
+  const selectActiveNavItem = useCallback(() => {
+    if (hasQuery || cascade.level === "models") {
+      if (activeRow !== null) selectRow(activeRow);
+      return;
+    }
+    if (cascade.level === "subproviders") {
+      const entry = subproviderEntries.find(
+        (candidate) => candidate.providerGroupId === effectiveActiveRowId,
+      );
+      if (entry !== undefined) selectSubprovider(entry);
+      return;
+    }
+    if (effortOptions.some((option) => option.id === effectiveActiveRowId)) {
+      selectEffort(effectiveActiveRowId);
+    }
+  }, [
+    activeRow,
+    cascade.level,
+    effectiveActiveRowId,
+    effortOptions,
+    hasQuery,
+    selectEffort,
+    selectRow,
+    selectSubprovider,
+    subproviderEntries,
+  ]);
+
+  // Can go up a cascade level (ArrowLeft / Escape-empty / Backspace-empty).
+  const canNavigateCascade =
+    !hasQuery &&
+    cascadeBack(cascade, canShowSubproviders) !== null;
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
       handleHarnessModelPickerKeyDown(event, {
-        visibleRows,
+        visibleItems: cascadeNavItems,
         effectiveActiveRowId,
-        activeRow,
+        activeItemId:
+          cascadeNavById.has(effectiveActiveRowId)
+            ? effectiveActiveRowId
+            : null,
         trimmedQuery,
         listRef,
+        canNavigateCascade,
         onActiveRowId: setActiveRowId,
-        onSelectRow: selectRow,
+        onSelectActive: selectActiveNavItem,
         onQueryChange: handleQueryChange,
+        onCascadeBack: handleCascadeBack,
         onClose: closeOnly,
       });
     },
     [
-      activeRow,
+      canNavigateCascade,
+      cascadeNavById,
+      cascadeNavItems,
       closeOnly,
       effectiveActiveRowId,
+      handleCascadeBack,
       handleQueryChange,
-      selectRow,
+      selectActiveNavItem,
       setActiveRowId,
       trimmedQuery,
-      visibleRows,
     ],
   );
 
@@ -792,6 +1056,34 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       window.clearTimeout(timer);
     };
   }, [visibleOpen]);
+
+  // Catalog rows are gated on `visibleOpen`, so the open-time cascade resolve
+  // often sees an empty provider list. Re-resolve once per open once rows land,
+  // so reopen lands on the selected model's subprovider. Do not re-run after
+  // the user has already navigated within this open (tracked by openVersion).
+  const cascadeResolvedOpenVersionRef = useRef(0);
+  useEffect(() => {
+    if (!visibleOpen) return;
+    if (cascadeResolvedOpenVersionRef.current === openVersion) return;
+    if (providerRows.length === 0) return;
+    cascadeResolvedOpenVersionRef.current = openVersion;
+    setCascade(
+      resolveCascadeFor(
+        resolvedActiveProviderId,
+        activePanelProfileId,
+        activeProviderProfiles,
+      ),
+    );
+  }, [
+    activePanelProfileId,
+    activeProviderProfiles,
+    openVersion,
+    providerRows,
+    resolveCascadeFor,
+    resolvedActiveProviderId,
+    setCascade,
+    visibleOpen,
+  ]);
 
   // Leader-key scope: while open, ⌘+digit switches the browsed rail entry
   // (suppressing epic-tab switching) and ⌥+digit sets the thinking level.
@@ -824,14 +1116,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const modelPickerChord = useBindingForAction("composer.model-picker.toggle");
   const activationController = useMemo(
     () => ({
-      toggle: () => handleOpenChange(!visibleOpen),
+      toggle: () => onOpenChange(!visibleOpen),
       getSelectionSummary: () =>
         modelPickerSelectionSummary(
           presentation.label,
           presentation.reasoningLabel,
         ),
     }),
-    [handleOpenChange, visibleOpen, presentation],
+    [onOpenChange, visibleOpen, presentation],
   );
   useRegisterActiveModelPicker(
     registerActivation && activityEnabled && !disabled,
@@ -857,8 +1149,38 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     />
   );
 
+  const subproviderLabelForPath =
+    cascade.activeGroupId === null
+      ? null
+      : (subproviderEntries.find(
+          (entry) => entry.providerGroupId === cascade.activeGroupId,
+        )?.providerGroupLabel ?? cascade.activeGroupId);
+  const pathLabels = hasQuery
+    ? []
+    : cascadePathLabels({
+        state: cascade,
+        providerLabel: activePanelLabel,
+        subproviderLabel: subproviderLabelForPath,
+        pendingModelLabel:
+          pendingEffortModel === null ? null : pendingEffortModel.browseLabel,
+      });
+  const cascadeBackAriaLabel =
+    cascade.level === "efforts"
+      ? "Back to models"
+      : cascade.level === "models"
+        ? "Back to subproviders"
+        : "Back";
+  // Highlight the selected model's group on the subprovider list.
+  const selectedSubproviderId = selectedRowGroupId(selectedRowId, providerRows);
+  // Suppress group headers when drilled into a specific subprovider (or when
+  // search is off and we're past the subprovider step).
+  const suppressSectionHeaders =
+    !hasQuery &&
+    cascade.level === "models" &&
+    (cascade.activeGroupId !== null || !canShowSubproviders);
+
   return (
-    <Popover open={visibleOpen} onOpenChange={handleOpenChange}>
+    <Popover open={visibleOpen} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <TooltipWrapper
           label={tooltipLabel}
@@ -889,7 +1211,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         query={query}
         onQueryChange={handleQueryChange}
         activeProviderLabel={activePanelLabel}
-        activeDescendant={modelRowActiveDescendant(idPrefix, activeRow)}
+        activeDescendant={cascadeActiveDescendant(
+          idPrefix,
+          effectiveActiveRowId,
+        )}
         onKeyDown={handleKeyDown}
         catalogHarnesses={catalogHarnesses}
         fallbackHarnesses={harnesses}
@@ -928,6 +1253,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
         profileAdmission={profileAdmission}
+        cascadeLevel={cascade.level}
+        cascadePathLabels={pathLabels}
+        cascadeBackAriaLabel={cascadeBackAriaLabel}
+        onCascadeBack={handleCascadeBack}
+        subproviderEntries={subproviderEntries}
+        selectedSubproviderId={selectedSubproviderId}
+        onSelectSubprovider={selectSubprovider}
+        suppressSectionHeaders={suppressSectionHeaders}
+        effortOptions={effortOptions}
+        selectedEffort={selectedEffortForPending}
+        onSelectEffort={selectEffort}
+        canNavigateCascade={canNavigateCascade}
       />
     </Popover>
   );
@@ -1141,9 +1478,8 @@ function resolveActiveProviderId(input: {
 }
 
 interface ResolveRowAnchorsInput {
-  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
-  readonly visibleRowsById: ReadonlyMap<string, HarnessModelRow>;
-  readonly selectedRowId: string;
+  readonly visibleItemIds: ReadonlyArray<string>;
+  readonly selectedItemId: string;
   readonly activeRowId: string;
   readonly hasQuery: boolean;
 }
@@ -1160,46 +1496,55 @@ interface ResolveRowAnchorsResult {
 function resolveRowAnchors(
   input: ResolveRowAnchorsInput,
 ): ResolveRowAnchorsResult {
-  const { visibleRows, visibleRowsById, selectedRowId, activeRowId, hasQuery } =
-    input;
+  const { visibleItemIds, selectedItemId, activeRowId, hasQuery } = input;
+  const idSet = new Set(visibleItemIds);
   // While searching, anchor on the top (best) match: scroll to the start and
   // pre-highlight the first result so Enter selects it. `activeRowId` is reset
   // on every keystroke (see `handleQueryChange`), so it only holds a value here
   // when the user has explicitly arrowed through the current result set.
   if (hasQuery) {
-    const firstRowId = visibleRows.at(0)?.id ?? "";
+    const firstRowId = visibleItemIds.at(0) ?? "";
     return {
-      effectiveActiveRowId: visibleRowsById.has(activeRowId)
-        ? activeRowId
-        : firstRowId,
+      effectiveActiveRowId: idSet.has(activeRowId) ? activeRowId : firstRowId,
       initialTopMostItemIndex: { index: 0, align: "start", behavior: "auto" },
     };
   }
-  const selectedRowVisible = visibleRowsById.has(selectedRowId);
-  const selectedRowIndex = selectedRowVisible
-    ? visibleRows.findIndex((row) => row.id === selectedRowId)
+  const selectedVisible = idSet.has(selectedItemId);
+  const selectedIndex = selectedVisible
+    ? visibleItemIds.findIndex((id) => id === selectedItemId)
     : -1;
   const fallbackActiveRowId =
-    (selectedRowVisible ? selectedRowId : visibleRows.at(0)?.id) ?? "";
-  const effectiveActiveRowId = visibleRowsById.has(activeRowId)
+    (selectedVisible ? selectedItemId : visibleItemIds.at(0)) ?? "";
+  const effectiveActiveRowId = idSet.has(activeRowId)
     ? activeRowId
     : fallbackActiveRowId;
   return {
     effectiveActiveRowId,
     initialTopMostItemIndex: {
-      index: selectedRowIndex === -1 ? 0 : selectedRowIndex,
-      align: selectedRowIndex === -1 ? "start" : "center",
+      index: selectedIndex === -1 ? 0 : selectedIndex,
+      align: selectedIndex === -1 ? "start" : "center",
       behavior: "auto",
     },
   };
 }
 
-function modelRowActiveDescendant(
+function cascadeActiveDescendant(
   idPrefix: string,
-  row: HarnessModelRow | null,
+  itemId: string,
 ): string | undefined {
-  if (row === null) return undefined;
-  return `${idPrefix}-row-${row.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  if (itemId.length === 0) return undefined;
+  return cascadeItemElementId(idPrefix, itemId);
+}
+
+function selectedRowGroupId(
+  selectedRowId: string,
+  providerRows: ReadonlyArray<HarnessModelRow>,
+): string | null {
+  if (selectedRowId.length === 0) return null;
+  return (
+    providerRows.find((row) => row.id === selectedRowId)?.providerGroupId ??
+    null
+  );
 }
 
 interface ModelRowsListKeyInput {
@@ -1207,6 +1552,8 @@ interface ModelRowsListKeyInput {
   readonly hasQuery: boolean;
   readonly query: string;
   readonly activeProviderId: ProviderId;
+  readonly cascadeLevel: string;
+  readonly activeGroupId: string | null;
 }
 
 // Note: `selectedRowId` is deliberately NOT part of the key. Selecting a model
@@ -1215,9 +1562,16 @@ interface ModelRowsListKeyInput {
 // key, so baking selection in here would remount the whole Virtuoso list on
 // every pick while the picker stays open.
 function modelRowsListKey(input: ModelRowsListKeyInput): string {
-  const { openVersion, hasQuery, query, activeProviderId } = input;
+  const {
+    openVersion,
+    hasQuery,
+    query,
+    activeProviderId,
+    cascadeLevel,
+    activeGroupId,
+  } = input;
   const modeKey = hasQuery
     ? `search:${activeProviderId}:${query}`
-    : `browse:${activeProviderId}`;
+    : `browse:${activeProviderId}:${cascadeLevel}:${activeGroupId ?? ""}`;
   return `${openVersion}:${modeKey}`;
 }

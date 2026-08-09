@@ -1,4 +1,8 @@
 import type { ProviderId } from "@/components/home/data/landing-options";
+import {
+  INITIAL_CASCADE_STATE,
+  type CascadeState,
+} from "@/components/home/pickers/harness-model-picker-cascade";
 import { useCallback, useEffect, useReducer } from "react";
 
 interface HarnessModelPickerState {
@@ -11,6 +15,9 @@ interface HarnessModelPickerState {
   readonly activeRowId: string;
   readonly hoveredRowId: string;
   readonly openVersion: number;
+  /** Cascade drill-down (Provider → Subprovider → Model → Effort). Query
+   *  non-empty forces flat search display without clearing these fields. */
+  readonly cascade: CascadeState;
 }
 
 type HarnessModelPickerStateAction =
@@ -19,6 +26,7 @@ type HarnessModelPickerStateAction =
       readonly open: boolean;
       readonly selectedProviderId: ProviderId;
       readonly selectedProfileId: string | null;
+      readonly cascade: CascadeState;
     }
   | { readonly type: "closeOnly" }
   | { readonly type: "closeForDisabled" }
@@ -27,20 +35,27 @@ type HarnessModelPickerStateAction =
       readonly type: "setActiveRailEntry";
       readonly providerId: ProviderId;
       readonly profileId: string | null;
+      readonly cascade: CascadeState;
     }
   | { readonly type: "setActiveRowId"; readonly rowId: string }
-  | { readonly type: "setHoveredRowId"; readonly rowId: string };
+  | { readonly type: "setHoveredRowId"; readonly rowId: string }
+  | { readonly type: "setCascade"; readonly cascade: CascadeState };
 
 interface HarnessModelPickerStateController extends HarnessModelPickerState {
   readonly visibleOpen: boolean;
-  readonly handleOpenChange: (next: boolean) => void;
+  readonly handleOpenChange: (
+    next: boolean,
+    cascade: CascadeState | undefined,
+  ) => void;
   readonly handleQueryChange: (next: string) => void;
   readonly setActiveRailEntry: (
     providerId: ProviderId,
     profileId: string | null,
+    cascade: CascadeState,
   ) => void;
   readonly setActiveRowId: (rowId: string) => void;
   readonly setHoveredRowId: (rowId: string) => void;
+  readonly setCascade: (cascade: CascadeState) => void;
   readonly closeOnly: () => void;
 }
 
@@ -62,7 +77,7 @@ export function useHarnessModelPickerState(
   }, [disabled, state.open]);
 
   const handleOpenChange = useCallback(
-    (next: boolean) => {
+    (next: boolean, cascade: CascadeState | undefined) => {
       if (disabled) {
         dispatch({ type: "closeForDisabled" });
         return;
@@ -72,6 +87,7 @@ export function useHarnessModelPickerState(
         open: next,
         selectedProviderId,
         selectedProfileId,
+        cascade: cascade ?? INITIAL_CASCADE_STATE,
       });
     },
     [disabled, selectedProviderId, selectedProfileId],
@@ -80,8 +96,17 @@ export function useHarnessModelPickerState(
     dispatch({ type: "setQuery", query: next });
   }, []);
   const setActiveRailEntry = useCallback(
-    (providerId: ProviderId, profileId: string | null) => {
-      dispatch({ type: "setActiveRailEntry", providerId, profileId });
+    (
+      providerId: ProviderId,
+      profileId: string | null,
+      cascade: CascadeState,
+    ) => {
+      dispatch({
+        type: "setActiveRailEntry",
+        providerId,
+        profileId,
+        cascade,
+      });
     },
     [],
   );
@@ -90,6 +115,9 @@ export function useHarnessModelPickerState(
   }, []);
   const setHoveredRowId = useCallback((rowId: string) => {
     dispatch({ type: "setHoveredRowId", rowId });
+  }, []);
+  const setCascade = useCallback((cascade: CascadeState) => {
+    dispatch({ type: "setCascade", cascade });
   }, []);
   const closeOnly = useCallback(() => {
     dispatch({ type: "closeOnly" });
@@ -103,6 +131,7 @@ export function useHarnessModelPickerState(
     setActiveRailEntry,
     setActiveRowId,
     setHoveredRowId,
+    setCascade,
     closeOnly,
   };
 }
@@ -119,6 +148,7 @@ function initialHarnessModelPickerState(seed: {
     activeRowId: "",
     hoveredRowId: "",
     openVersion: 0,
+    cascade: INITIAL_CASCADE_STATE,
   };
 }
 
@@ -138,6 +168,7 @@ function harnessModelPickerStateReducer(
           activeProfileId: action.selectedProfileId,
           hoveredRowId: "",
           activeRowId: "",
+          cascade: action.cascade,
         };
       }
       return {
@@ -156,6 +187,8 @@ function harnessModelPickerStateReducer(
         activeRowId: "",
       };
     case "setQuery":
+      // Query does not destroy cascade level — clearing returns to the saved
+      // level. Only reset the keyboard highlight.
       return {
         ...state,
         query: action.query,
@@ -166,11 +199,21 @@ function harnessModelPickerStateReducer(
         ...state,
         activeProviderId: action.providerId,
         activeProfileId: action.profileId,
+        activeRowId: "",
+        hoveredRowId: "",
+        cascade: action.cascade,
       };
     case "setActiveRowId":
       return { ...state, activeRowId: action.rowId };
     case "setHoveredRowId":
       return { ...state, hoveredRowId: action.rowId };
+    case "setCascade":
+      return {
+        ...state,
+        cascade: action.cascade,
+        activeRowId: "",
+        hoveredRowId: "",
+      };
     default: {
       const _exhaustive: never = action;
       return _exhaustive;
