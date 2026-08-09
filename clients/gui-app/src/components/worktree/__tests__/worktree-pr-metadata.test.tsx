@@ -10,7 +10,7 @@ import type {
   DiskWorktreeEntry,
   WorktreeBinding,
   WorktreeHostEntryV12,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -27,6 +27,7 @@ import { WorktreePrStateIcons } from "@/components/worktree/worktree-pr-state-ic
 import {
   ownerWorkspaceMetadataItems,
   worktreePrReferences,
+  type WorktreePrReference,
 } from "@/components/worktree/worktree-pr-metadata-model";
 import {
   compositeOverBackground,
@@ -113,7 +114,7 @@ function diskEntry(
 function workspaceSummary(
   workspacePath: string,
   worktrees: readonly DiskWorktreeEntry[],
-): WorktreeWorkspaceSummaryV13 {
+): WorktreeWorkspaceSummaryV14 {
   return {
     workspacePath,
     isGitRepo: true,
@@ -121,6 +122,7 @@ function workspaceSummary(
     mainBranch: "main",
     worktrees: [...worktrees],
     scripts: null,
+    repoBranchPrefix: { status: "absent" },
     resolvedAt: 1_000,
   };
 }
@@ -283,6 +285,7 @@ describe("worktree PR metadata", () => {
           maximumVisible={null}
           className={undefined}
           testId="history-prs"
+          openPrInApp={null}
         />
         <OwnerWorkspaceMetadataContent
           binding={BINDING}
@@ -290,6 +293,7 @@ describe("worktree PR metadata", () => {
           workspaces={[]}
           pending={false}
           error={false}
+          openPrInApp={null}
         />
       </>,
     );
@@ -351,6 +355,7 @@ describe("worktree PR metadata", () => {
         maximumVisible={2}
         className={undefined}
         testId="history-prs"
+        openPrInApp={null}
       />,
     );
 
@@ -382,6 +387,7 @@ describe("worktree PR metadata", () => {
         workspaces={[]}
         pending={false}
         error={false}
+        openPrInApp={null}
       />,
     );
 
@@ -406,6 +412,32 @@ describe("worktree PR metadata", () => {
     ).toBe("-1");
   });
 
+  it("hands an owner-hover PR pill to the in-app opener", () => {
+    const opened: WorktreePrReference[] = [];
+    renderWithProviders(
+      <OwnerWorkspaceMetadataContent
+        binding={BINDING}
+        worktrees={[worktree({})]}
+        workspaces={[]}
+        pending={false}
+        error={false}
+        openPrInApp={(reference) => opened.push(reference)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Open PR #42 Open" }));
+
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "app",
+      prNumber: 42,
+    });
+    expect(document.querySelector(".lucide-panels-top-left")).not.toBeNull();
+    expect(document.querySelector(".lucide-external-link")).toBeNull();
+  });
+
   it("keeps the owner-preview scroll root out of sequential focus inside a HoverCard", () => {
     const entry = worktree({});
     renderWithProviders(
@@ -420,6 +452,7 @@ describe("worktree PR metadata", () => {
             workspaces={[]}
             pending={false}
             error={false}
+            openPrInApp={null}
           />
         </HoverCardContent>
       </HoverCard>,
@@ -478,6 +511,7 @@ describe("worktree PR metadata", () => {
           workspaces={[]}
           pending={false}
           error={false}
+          openPrInApp={null}
         />,
       );
       // The owner preview is a hover-preview card on the normal `bg-popover`
@@ -547,6 +581,7 @@ describe("worktree PR metadata", () => {
             maximumVisible={null}
             className={undefined}
             testId="history-prs"
+            openPrInApp={null}
           />
           <WorktreePrStateIcons references={[reference]} testId="row-prs" />
         </>,

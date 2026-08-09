@@ -31,6 +31,7 @@ function folder(over: {
     summary: null,
     currentIntent: over.currentIntent,
     defaultNewBranchName: "traycer/swift-otter",
+    branchPrefixWarning: null,
     repoIdentifier: null,
     isPrimary: true,
     canChangePrimary: true,

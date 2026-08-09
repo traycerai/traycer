@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { worktreeListByWorkspacePathsParams } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -78,7 +78,7 @@ export function useWorktreeWorkspacesRefresh(args: {
    */
   readonly workspacePaths: ReadonlyArray<string>;
   /** The summaries currently on screen, for the "Checked …" stamp. */
-  readonly summaries: ReadonlyArray<WorktreeWorkspaceSummaryV13>;
+  readonly summaries: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
 }): WorktreeWorkspacesRefresh {
   const queryClient = useQueryClient();
   const { client, workspacePaths, summaries } = args;
