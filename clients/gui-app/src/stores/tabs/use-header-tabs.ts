@@ -150,41 +150,43 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
     [draftTabs],
   );
 
-  return useMemo(
-    () =>
-      items
-        .flatMap((item) =>
-          projectHeaderStripItem(item, {
-            epicTabsById,
-            draftTabsById,
-            systemTabs,
-            structuralLockRevision,
-          }),
-        )
-        .flatMap((item) => {
-          if (item.kind === "tab") {
-            return headerTabVisibleInProfile(
-              item.tab,
-              activeProfile,
-              historyByEpicId,
-            )
-              ? [item]
-              : [];
-          }
-          // Split groups keep their authority shape; foreign members render as
-          // fillable via useHeaderStripItem so strip indexes stay stable.
-          return [item];
-        }),
-    [
-      activeProfile,
-      draftTabsById,
-      epicTabsById,
-      historyByEpicId,
-      items,
-      structuralLockRevision,
-      systemTabs,
-    ],
-  );
+  return useMemo((): ReadonlyArray<HeaderStripItem> => {
+    const projected = items.flatMap((item) =>
+      projectHeaderStripItem(item, {
+        epicTabsById,
+        draftTabsById,
+        systemTabs,
+        structuralLockRevision,
+      }),
+    );
+    const visible: HeaderStripItem[] = [];
+    for (const item of projected) {
+      if (item.kind === "tab") {
+        if (
+          headerTabVisibleInProfile(
+            item.tab,
+            activeProfile,
+            historyByEpicId,
+          )
+        ) {
+          visible.push(item);
+        }
+        continue;
+      }
+      // Split groups keep their authority shape; foreign members render as
+      // fillable via useHeaderStripItem so strip indexes stay stable.
+      visible.push(item);
+    }
+    return visible;
+  }, [
+    activeProfile,
+    draftTabsById,
+    epicTabsById,
+    historyByEpicId,
+    items,
+    structuralLockRevision,
+    systemTabs,
+  ]);
 }
 
 function projectHeaderStripItem(

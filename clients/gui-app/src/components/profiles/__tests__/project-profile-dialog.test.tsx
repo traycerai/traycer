@@ -38,7 +38,14 @@ describe("ProjectProfileDialog", () => {
     resetStores();
     pickAndPrepareFolders.mockReset();
     pickAndPrepareFolders.mockResolvedValue({
-      folders: [{ path: "/Users/x/Acme", name: "Acme" }],
+      folders: [
+        {
+          workspacePath: "/Users/x/Acme",
+          workspaceName: "Acme",
+          repoIdentifier: null,
+          repoUrl: null,
+        },
+      ],
       repoIdentifiers: [],
       hostId: "h1",
     });

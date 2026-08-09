@@ -495,22 +495,32 @@ describe("useHistoryQuery", () => {
 
   it("filters history items by the active project profile (owned + unscoped)", () => {
     const owned = taskLight("epic-owned", "Owned epic", "traycer/gui-app");
+    if (owned.epic === null || owned.epic === undefined) {
+      throw new Error("expected owned.epic");
+    }
     owned.epic = {
-      ...owned.epic!,
+      ...owned.epic,
       workspaces: [
         {
+          task: { taskId: "epic-owned", taskType: "epic" },
           hostId: "h1",
           workspacePath: "/Users/x/Acme",
+          createdAt: Date.parse("2026-04-22T10:00:00.000Z"),
         },
       ],
     };
     const foreign = taskLight("epic-foreign", "Foreign epic", "traycer/server");
+    if (foreign.epic === null || foreign.epic === undefined) {
+      throw new Error("expected foreign.epic");
+    }
     foreign.epic = {
-      ...foreign.epic!,
+      ...foreign.epic,
       workspaces: [
         {
+          task: { taskId: "epic-foreign", taskType: "epic" },
           hostId: "h1",
           workspacePath: "/Users/x/Other",
+          createdAt: Date.parse("2026-04-22T10:00:00.000Z"),
         },
       ],
     };

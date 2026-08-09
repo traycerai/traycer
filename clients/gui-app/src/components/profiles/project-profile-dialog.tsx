@@ -81,9 +81,11 @@ export function ProjectProfileDialog(
         setFolders((prev) => {
           const next = [...prev];
           for (const folder of result.folders) {
-            if (next.some((entry) => entry.path === folder.path)) continue;
+            if (next.some((entry) => entry.path === folder.workspacePath)) {
+              continue;
+            }
             next.push({
-              path: folder.path,
+              path: folder.workspacePath,
               hostId: result.hostId,
             });
           }
