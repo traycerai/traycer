@@ -210,29 +210,27 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                   <WorktreeIntentStagingPersistLifecycleBridge>
                     <EpicCanvasPersistLifecycleBridge>
                       <LandingTerminalPersistLifecycleBridge>
-                        <ProjectProfilesPersistLifecycleBridge>
-                          <ActiveProjectProfilePersistLifecycleBridge>
-                            <LandingTerminalTombstoneRecoveryBridge />
-                            <EpicTabExistenceReconciler />
-                            <ProfileAutoSwitchBridge router={props.router} />
-                            <HostStreamProvider>
-                              <HostScopeReady scope="default-host">
-                                <WorktreeChangedStreamMount />
-                              </HostScopeReady>
-                              <AppLocalNotificationsPersistLifecycleBridge>
-                                <ReadingPositionPersistLifecycleBridge>
-                                  <NotificationsSessionProvider
-                                    navigate={props.router.navigate}
-                                  >
-                                    <TraycerAppRuntimeSurface
-                                      router={props.router}
-                                    />
-                                  </NotificationsSessionProvider>
-                                </ReadingPositionPersistLifecycleBridge>
-                              </AppLocalNotificationsPersistLifecycleBridge>
-                            </HostStreamProvider>
-                          </ActiveProjectProfilePersistLifecycleBridge>
-                        </ProjectProfilesPersistLifecycleBridge>
+                        <LandingTerminalTombstoneRecoveryBridge />
+                        <ProjectProfilesPersistLifecycleBridge />
+                        <ActiveProjectProfilePersistLifecycleBridge />
+                        <EpicTabExistenceReconciler />
+                        <ProfileAutoSwitchBridge router={props.router} />
+                        <HostStreamProvider>
+                          <HostScopeReady scope="default-host">
+                            <WorktreeChangedStreamMount />
+                          </HostScopeReady>
+                          <AppLocalNotificationsPersistLifecycleBridge>
+                            <ReadingPositionPersistLifecycleBridge>
+                              <NotificationsSessionProvider
+                                navigate={props.router.navigate}
+                              >
+                                <TraycerAppRuntimeSurface
+                                  router={props.router}
+                                />
+                              </NotificationsSessionProvider>
+                            </ReadingPositionPersistLifecycleBridge>
+                          </AppLocalNotificationsPersistLifecycleBridge>
+                        </HostStreamProvider>
                       </LandingTerminalPersistLifecycleBridge>
                     </EpicCanvasPersistLifecycleBridge>
                   </WorktreeIntentStagingPersistLifecycleBridge>

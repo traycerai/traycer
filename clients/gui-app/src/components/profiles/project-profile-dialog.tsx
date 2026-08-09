@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Folder, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,9 +30,29 @@ export interface ProjectProfileDialogProps {
   readonly editing: ProjectProfile | null;
 }
 
+/**
+ * Create/edit shell. Callers that unmount when closed (e.g. the switcher)
+ * remount a fresh form; the body is also keyed by edit id for in-place mode
+ * switches without a prop→state sync effect.
+ */
 export function ProjectProfileDialog(
   props: ProjectProfileDialogProps,
 ): ReactNode {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <ProjectProfileDialogBody
+        key={props.editing === null ? "create" : props.editing.id}
+        editing={props.editing}
+        onOpenChange={props.onOpenChange}
+      />
+    </Dialog>
+  );
+}
+
+function ProjectProfileDialogBody(props: {
+  readonly editing: ProjectProfile | null;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
   const createProfile = useProjectProfilesStore((s) => s.createProfile);
   const updateProfile = useProjectProfilesStore((s) => s.updateProfile);
   const deleteProfile = useProjectProfilesStore((s) => s.deleteProfile);
@@ -44,30 +64,20 @@ export function ProjectProfileDialog(
   );
   const { pickAndPrepareFolders } = useWorkspaceFolderActions();
 
-  const [name, setName] = useState("");
-  const [icon, setIcon] = useState("folder");
-  const [color, setColor] = useState("blue");
+  const [name, setName] = useState(
+    () => props.editing?.name ?? "",
+  );
+  const [icon, setIcon] = useState(
+    () => props.editing?.icon ?? "folder",
+  );
+  const [color, setColor] = useState(
+    () => props.editing?.color ?? "blue",
+  );
   const [folders, setFolders] = useState<ReadonlyArray<ProjectProfileFolder>>(
-    [],
+    () => props.editing?.folders ?? [],
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isPicking, setIsPicking] = useState(false);
-
-  useEffect(() => {
-    if (!props.open) return;
-    if (props.editing === null) {
-      setName("");
-      setIcon("folder");
-      setColor("blue");
-      setFolders([]);
-    } else {
-      setName(props.editing.name);
-      setIcon(props.editing.icon);
-      setColor(props.editing.color);
-      setFolders(props.editing.folders);
-    }
-    setConfirmDelete(false);
-  }, [props.open, props.editing]);
 
   const canSubmit = name.trim().length > 0 && folders.length >= 1;
   const isEdit = props.editing !== null;
@@ -132,7 +142,6 @@ export function ProjectProfileDialog(
   };
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         className="sm:max-w-md"
         data-testid="project-profile-dialog"
@@ -322,6 +331,5 @@ export function ProjectProfileDialog(
           ) : null}
         </DialogFooter>
       </DialogContent>
-    </Dialog>
   );
 }

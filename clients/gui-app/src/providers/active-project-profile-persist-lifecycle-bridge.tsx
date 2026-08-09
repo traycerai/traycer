@@ -11,13 +11,8 @@ import {
   retargetPersistedStore,
 } from "@/lib/persist/zustand-persist-lifecycle";
 
-export interface ActiveProjectProfilePersistLifecycleBridgeProps {
-  readonly children: ReactNode;
-}
-
-export function ActiveProjectProfilePersistLifecycleBridge(
-  props: ActiveProjectProfilePersistLifecycleBridgeProps,
-): ReactNode {
+/** Account-scoped re-key for the active project profile id. Renders null. */
+export function ActiveProjectProfilePersistLifecycleBridge(): ReactNode {
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
 
@@ -37,5 +32,5 @@ export function ActiveProjectProfilePersistLifecycleBridge(
 
   useAuthIdentityTransition(status, email, onTransition);
 
-  return <>{props.children}</>;
+  return null;
 }
