@@ -31,7 +31,7 @@ import {
 
 function buildState(platform: NodeJS.Platform): MenuState {
   return {
-    appName: "Traycer",
+    appName: "Thanos",
     platform,
     authSession: {
       status: "signed-in",
@@ -116,7 +116,7 @@ describe("buildApplicationMenu", () => {
     const appMenu =
       menuByLabel(
         template(buildApplicationMenu(withUpdate, actions)),
-        "Traycer",
+        "Thanos",
       ).submenu ?? [];
 
     const update = menuByLabel(appMenu, "Update to 2.0.0");
@@ -124,7 +124,7 @@ describe("buildApplicationMenu", () => {
     expect(commands).toEqual(["host.installUpdate"]);
 
     const withoutUpdate =
-      menuByLabel(template(buildApplicationMenu(state, actions)), "Traycer")
+      menuByLabel(template(buildApplicationMenu(state, actions)), "Thanos")
         .submenu ?? [];
     expect(
       withoutUpdate.some((item) => item.label?.startsWith("Update to ")),
@@ -146,12 +146,12 @@ describe("buildApplicationMenu", () => {
       }),
     );
 
-    const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
-    const appAbout = menuByLabel(appMenu, "About Traycer");
+    const appMenu = menuByLabel(items, "Thanos").submenu ?? [];
+    const appAbout = menuByLabel(appMenu, "About Thanos");
     const helpMenu = menuByLabel(items, "Help").submenu ?? [];
     const documentation = menuByLabel(helpMenu, "Documentation");
     const releaseNotes = menuByLabel(helpMenu, "Release Notes");
-    const helpAbout = menuByLabel(helpMenu, "About Traycer");
+    const helpAbout = menuByLabel(helpMenu, "About Thanos");
     expect(appAbout.role).toBeUndefined();
     appAbout.click?.(null, null);
     documentation.click?.(null, null);
@@ -177,7 +177,7 @@ describe("buildApplicationMenu", () => {
         }),
       );
       const helpMenu = menuByLabel(items, "Help").submenu ?? [];
-      const about = menuByLabel(helpMenu, "About Traycer");
+      const about = menuByLabel(helpMenu, "About Thanos");
       about.click?.(null, null);
       expect(commands).toEqual(["app.aboutDetails"]);
     }

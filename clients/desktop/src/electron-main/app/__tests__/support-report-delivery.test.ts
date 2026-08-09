@@ -153,7 +153,7 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     environment: "production",
   };
   return new DesktopSupportService({
-    appName: "Traycer",
+    appName: "Thanos",
     host: { getSnapshot: () => null },
     authSession: {
       get: () =>

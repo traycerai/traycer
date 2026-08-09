@@ -130,7 +130,7 @@ describe("labelForEnvironment", () => {
     withDevDesktopSlot("Worktree Slot", () => {
       const label = labelForEnvironment("dev");
       expect(label.id).toBe("ai.traycer.host.dev.worktree-slot");
-      expect(label.displayName).toBe("Traycer Host (Dev worktree-slot)");
+      expect(label.displayName).toBe("Thanos Host (Dev worktree-slot)");
       expect(label.appSupportDirName).toBe("Traycer-Dev-worktree-slot");
     });
   });
@@ -138,7 +138,7 @@ describe("labelForEnvironment", () => {
   it("gives the internal staging slot its OWN ai.traycer.host.staging id (never the dev slot's)", () => {
     const label = labelForEnvironment("staging");
     expect(label.id).toBe("ai.traycer.host.staging");
-    expect(label.displayName).toBe("Traycer Host (Staging)");
+    expect(label.displayName).toBe("Thanos Host (Staging)");
     expect(label.appSupportDirName).toBe("Traycer-Staging");
   });
 });

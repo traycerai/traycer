@@ -28,8 +28,8 @@ runConfigTargetCli({
     // lock, the OAuth scheme, and the Windows AppUserModelId). Source holds the
     // dev values; a production build stamps the shipped identity.
     appName: {
-      dev: "Traycer Dev",
-      production: "Traycer",
+      dev: "Thanos Dev",
+      production: "Thanos",
     },
     protocolScheme: {
       dev: "traycer-dev",

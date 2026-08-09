@@ -10,7 +10,7 @@ describe("resolution child environment", () => {
   it("removes slotted dev identity before launching the no-slot harness", () => {
     const childEnv = resolutionHarness.createResolutionChildEnv({
       DEV_DESKTOP_SLOT: "traycer-spry-panda-a2acaa5e",
-      TRAYCER_DESKTOP_DEV_DISPLAY_NAME: "Traycer Dev — spry-panda",
+      TRAYCER_DESKTOP_DEV_DISPLAY_NAME: "Thanos Dev — spry-panda",
       PATH: "/usr/bin",
     });
 

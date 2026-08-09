@@ -102,7 +102,7 @@ function buildService(hostLayout: HostFsLayout): DesktopSupportService {
     profile: null,
   };
   return new DesktopSupportService({
-    appName: "Traycer",
+    appName: "Thanos",
     host: { getSnapshot: () => null },
     authSession: { get: () => authSession },
     hostLayout,

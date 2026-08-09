@@ -1,6 +1,6 @@
 {
   "name": "@traycer-clients/desktop",
-  "productName": "Traycer",
+  "productName": "Thanos",
   "desktopName": "traycer-desktop.desktop",
   "version": "0.0.0",
   "description": "Traycer standalone desktop shell (Electron) hosting the gui-app renderer; host lifecycle is delegated to the Traycer CLI.",
@@ -65,7 +65,7 @@
   },
   "build": {
     "appId": "ai.traycer.desktop",
-    "productName": "Traycer",
+    "productName": "Thanos",
     "artifactName": "traycer-desktop-${arch}.${ext}",
     "asar": true,
     "electronFuses": {
@@ -132,7 +132,7 @@
     ],
     "protocols": [
       {
-        "name": "Traycer",
+        "name": "Thanos",
         "schemes": [
           "traycer"
         ]

@@ -649,8 +649,8 @@ describe("desktop app updater", () => {
 
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith(
-      "Traycer update available",
-      "Open Traycer to download v2.0.0.",
+      "Thanos update available",
+      "Open Thanos to download v2.0.0.",
       expect.any(Function),
     );
   });

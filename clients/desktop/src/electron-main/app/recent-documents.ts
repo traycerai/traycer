@@ -38,7 +38,7 @@ export function installWindowsJumplistTasks(): void {
       iconPath: exe,
       iconIndex: 0,
       title: "Settings",
-      description: "Open Traycer settings",
+      description: "Open Thanos settings",
     },
   ]);
   log.info("[recent-documents] windows jumplist installed");

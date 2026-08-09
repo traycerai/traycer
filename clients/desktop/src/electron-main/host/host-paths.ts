@@ -23,13 +23,13 @@ export interface ServiceLabel {
 
 export const PRODUCTION_LABEL: ServiceLabel = {
   id: "ai.traycer.host",
-  displayName: "Traycer Host",
+  displayName: "Thanos Host",
   appSupportDirName: "Traycer",
 };
 
 export const DEV_LABEL: ServiceLabel = {
   id: "ai.traycer.host.dev",
-  displayName: "Traycer Host (Dev)",
+  displayName: "Thanos Host (Dev)",
   appSupportDirName: "Traycer-Dev",
 };
 
@@ -46,7 +46,7 @@ export function labelForEnvironment(environment: Environment): ServiceLabel {
   if (devSlot !== null) {
     return {
       id: `ai.traycer.host.dev.${devSlot}`,
-      displayName: `Traycer Host (Dev ${devSlot})`,
+      displayName: `Thanos Host (Dev ${devSlot})`,
       appSupportDirName: `Traycer-Dev-${devSlot}`,
     };
   }
@@ -54,7 +54,7 @@ export function labelForEnvironment(environment: Environment): ServiceLabel {
   const titled = capitalizeEnvironment(environment);
   return {
     id: `ai.traycer.host.${environment}`,
-    displayName: `Traycer Host (${titled})`,
+    displayName: `Thanos Host (${titled})`,
     appSupportDirName: `Traycer-${titled}`,
   };
 }

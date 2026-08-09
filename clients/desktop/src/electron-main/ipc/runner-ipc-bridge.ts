@@ -1194,7 +1194,7 @@ class SingleWindowRegistry implements IpcWindowRegistry {
     return [
       {
         windowId: this.record.windowId,
-        title: "Traycer",
+        title: "Thanos",
         isFocused: this.record.window.isFocused(),
         isVisible: this.record.window.isVisible(),
       },
@@ -1378,7 +1378,7 @@ class NullPerWindowState implements IpcPerWindowState {
 class NullSupportService implements IpcSupportService {
   getSnapshot(): Promise<SupportSnapshot> {
     return Promise.resolve({
-      appName: "Traycer",
+      appName: "Thanos",
       appVersion: "0.0.0",
       platform: process.platform,
       arch: process.arch,

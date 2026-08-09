@@ -300,7 +300,7 @@ function buildHelpMenu(
       checkForUpdatesItem(state, actions),
       { type: "separator" },
       {
-        label: "About Traycer",
+        label: `About ${state.appName}`,
         click: (_item, browserWindow) =>
           actions.command("app.aboutDetails", browserWindow ?? null),
       },

@@ -22,7 +22,7 @@ import { scrubSupportText } from "./support-scrubber";
  */
 
 const COMPONENT_DESKTOP_APP = "Desktop app";
-const GENERIC_FALLBACK_TITLE = "Traycer desktop issue";
+const GENERIC_FALLBACK_TITLE = "Thanos desktop issue";
 // Titles are meant to stay short; a raw error message or intent sentence can
 // run to a full paragraph, so both are capped independently of the overall
 // URL budget below.

@@ -29,7 +29,7 @@ import {
 
 vi.mock("electron", () => ({
   app: {
-    getName: () => "Traycer",
+    getName: () => "Thanos",
     getPath: () => "/tmp",
     on: () => undefined,
     whenReady: () => Promise.resolve(),

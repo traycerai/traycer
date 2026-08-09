@@ -70,7 +70,7 @@ describe("buildChildEnv", () => {
     const childEnv = devStack.buildChildEnv({
       DEV_DESKTOP_SLOT: "active-slot",
       VITE_DEV_DESKTOP_WORKTREE_LABEL: "stale-slot",
-      VITE_DEV_DESKTOP_DISPLAY_NAME: "Traycer Dev — stale-slot",
+      VITE_DEV_DESKTOP_DISPLAY_NAME: "Thanos Dev — stale-slot",
     });
 
     expect(childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL).toBeUndefined();

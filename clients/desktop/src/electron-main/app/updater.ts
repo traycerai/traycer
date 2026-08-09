@@ -1200,15 +1200,15 @@ function notifyUpdateWhenUnfocused(
     // When updates can't be installed from this location, point at the fix
     // instead of telling the user to download something they can't apply.
     showSimpleNotification(
-      "Traycer update available",
+      "Thanos update available",
       currentInstallBlockedReason() ??
-        `Open Traycer to download${versionLabel}.`,
+        `Open Thanos to download${versionLabel}.`,
       focus,
     );
     return;
   }
   showSimpleNotification(
-    "Traycer update ready",
+    "Thanos update ready",
     `Restart Traycer to install${versionLabel}.`,
     focus,
   );

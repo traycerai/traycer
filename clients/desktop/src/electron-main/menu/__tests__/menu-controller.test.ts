@@ -356,7 +356,7 @@ function createController(options: {
   ) => boolean;
 }): MenuController {
   return new MenuController({
-    appName: "Traycer",
+    appName: "Thanos",
     platform: "darwin",
     windowRegistry: options.registry,
     host: options.host,
@@ -732,7 +732,7 @@ describe("MenuController", () => {
     const zoomController = new FakeZoomController();
     const dispatchRendererCommand = vi.fn(() => true);
     const controller = new MenuController({
-      appName: "Traycer",
+      appName: "Thanos",
       platform: "darwin",
       windowRegistry: new FakeWindowRegistry(),
       host: new FakeHost(),

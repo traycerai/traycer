@@ -21,7 +21,7 @@ export function initCrashReporter(): void {
   const hasDsn = typeof dsn === "string" && dsn.length > 0;
 
   crashReporter.start({
-    productName: "Traycer",
+    productName: "Thanos",
     companyName: "Traycer AI",
     submitURL: "",
     uploadToServer: false,

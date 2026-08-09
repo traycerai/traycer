@@ -674,7 +674,7 @@ describe("preload new-capability wiring", () => {
   it("exposes menu-command and support bridges", async () => {
     const invokeFn = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === RunnerHostInvoke.supportSnapshotGet) {
-        return { appName: "Traycer", logs: [] };
+        return { appName: "Thanos", logs: [] };
       }
       if (channel === RunnerHostInvoke.supportRevealLog) {
         return { target: args[0], path: "/tmp/log" };
@@ -712,7 +712,7 @@ describe("preload new-capability wiring", () => {
     });
 
     await expect(bridge.support.getSnapshot()).resolves.toEqual({
-      appName: "Traycer",
+      appName: "Thanos",
       logs: [],
     });
     await expect(bridge.support.revealLog("host")).resolves.toEqual({

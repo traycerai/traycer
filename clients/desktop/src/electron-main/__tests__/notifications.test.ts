@@ -80,7 +80,7 @@ async function loadNotifications() {
 
 function showOptions(replaceKey: string) {
   return {
-    title: "Traycer",
+    title: "Thanos",
     body: "Agent finished",
     replaceKey,
     deliveryKey: null,

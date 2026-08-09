@@ -25,16 +25,16 @@ describe("dev Electron bundle state", () => {
   it("includes the display name so a renamed slot rebuilds its bundle", () => {
     const spryPandaState = electronBinary.createDevBundleState({
       ...bundleStateOptions,
-      bundleDisplayName: "Traycer Dev — spry-panda",
+      bundleDisplayName: "Thanos Dev — spry-panda",
     });
     const amberLionState = electronBinary.createDevBundleState({
       ...bundleStateOptions,
-      bundleDisplayName: "Traycer Dev — amber-lion",
+      bundleDisplayName: "Thanos Dev — amber-lion",
     });
 
     expect(spryPandaState).not.toBe(amberLionState);
     expect(JSON.parse(spryPandaState)).toMatchObject({
-      bundleDisplayName: "Traycer Dev — spry-panda",
+      bundleDisplayName: "Thanos Dev — spry-panda",
     });
   });
 });
