@@ -126,6 +126,9 @@ import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner"
 import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
+import { ProjectProfileBadge } from "@/components/profiles/project-profile-badge";
+import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
+import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
@@ -918,6 +921,15 @@ function HomeWorkspaceRows(props: {
     [stagingKey, activeHostClient, regenerateBranchNameForWorkspace],
   );
 
+  if (workspaceSource.profileLocked) {
+    return (
+      <ProfileLockedWorkspaceChip
+        hostSlot={props.hostSlot}
+        primaryPath={workspaceSource.primaryWorkspacePath}
+      />
+    );
+  }
+
   return (
     <>
       <PrimaryChangeLiveRegion announcement={primaryAnnouncement} />
@@ -963,6 +975,48 @@ function HomeWorkspaceRows(props: {
         }}
       />
     </>
+  );
+}
+
+function ProfileLockedWorkspaceChip(props: {
+  readonly hostSlot: ReactNode;
+  readonly primaryPath: string | null;
+}): ReactNode {
+  const activeProfile = useActiveProjectProfile();
+  if (activeProfile === null) return null;
+  const primaryName =
+    props.primaryPath === null
+      ? null
+      : workspaceFolderName(props.primaryPath);
+
+  return (
+    <div
+      className={cn(
+        "inline-flex max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden",
+      )}
+      data-testid="profile-locked-workspace"
+    >
+      {props.hostSlot === null ? null : (
+        <div className="min-w-0 flex-[0_1_10rem] max-w-[min(34%,10rem)] overflow-hidden">
+          {props.hostSlot}
+        </div>
+      )}
+      <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1">
+        <ProjectProfileBadge
+          profile={activeProfile}
+          className="min-w-0"
+          trailing={undefined}
+        />
+        {primaryName === null ? null : (
+          <span
+            className="min-w-0 truncate text-ui-sm text-muted-foreground"
+            title={props.primaryPath ?? undefined}
+          >
+            {primaryName}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 

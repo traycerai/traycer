@@ -23,6 +23,7 @@ import {
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import { restampWorktreeIntentPrimary } from "./worktree-intent-merge";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -47,6 +48,12 @@ export interface HomeWorkspaceSource {
   readonly primaryPath: string | null;
   /** Membership-validated primary folder for launch consumers. */
   readonly primaryWorkspacePath: string | null;
+  /**
+   * When true, folders/primary are forced from the active project profile.
+   * Mutating functions stay wired for callers that ignore the flag, but the
+   * locked UI must not expose add/remove/primary controls.
+   */
+  readonly profileLocked: boolean;
   readonly addResolvedFolders: (
     folders: ReadonlyArray<WorkspaceFolderInfo>,
   ) => void;
@@ -67,6 +74,7 @@ export function useHomeWorkspaceSource(
   stagingKey: WorktreeStagingKey,
   workspaceSeed: LandingDraftWorkspaceSnapshot | null,
 ): HomeWorkspaceSource {
+  const activeProfile = useActiveProjectProfile();
   const draftId = stagingKey.surface === "landing" ? stagingKey.draftId : null;
   const modalEpicId =
     stagingKey.surface === "new-conversation" ? stagingKey.epicId : null;
@@ -159,8 +167,25 @@ export function useHomeWorkspaceSource(
   // the global store directly (mirrors `useResolvedWorkspaceFolders`'s own
   // `source === null` fallback) - so the raw primary must fall back the same
   // way, or the two would disagree about which folder is primary.
-  const primaryPath = source !== null ? source.primaryPath : globalPrimaryPath;
-  const folders = source !== null ? source.folders : globalFolders;
+  const unlockedPrimaryPath =
+    source !== null ? source.primaryPath : globalPrimaryPath;
+  const unlockedFolders = source !== null ? source.folders : globalFolders;
+  // Profile-locked sources force folders/primary from the active project
+  // (read-side override only). External folder mutation APIs stay intact but
+  // the locked UI must not reach them.
+  const profileFolders = useMemo(
+    () =>
+      activeProfile === null
+        ? null
+        : activeProfile.folders.map((folder) => folder.path),
+    [activeProfile],
+  );
+  const profileLocked = profileFolders !== null;
+  const folders = profileFolders ?? unlockedFolders;
+  const primaryPath =
+    profileFolders !== null
+      ? (profileFolders[0] ?? null)
+      : unlockedPrimaryPath;
   const primaryWorkspacePath = resolvePrimaryPath(folders, primaryPath);
   const sourceFolderInfoByPath =
     source !== null ? source.folderInfoByPath : globalFolderInfoByPath;
@@ -185,6 +210,7 @@ export function useHomeWorkspaceSource(
       folders,
       primaryPath,
       primaryWorkspacePath,
+      profileLocked,
       addResolvedFolders: (folders) => {
         // The 50-folder cap can evict a SECONDARY folder as a side effect of
         // an add; an evicted folder disappears from rows/persistence but its
@@ -336,6 +362,7 @@ export function useHomeWorkspaceSource(
       modalSeedWorkspace,
       primaryPath,
       primaryWorkspacePath,
+      profileLocked,
       removeDraftFolder,
       removeGlobalFolder,
       removeModalFolder,
