@@ -91,6 +91,93 @@ const MODEL_ROW_FUSE_OPTIONS: IFuseOptions<HarnessModelRow> = {
   ],
 };
 
+/** Common vendor ids → display labels for slug-derived groups. */
+const VENDOR_GROUP_LABELS: ReadonlyMap<string, string> = new Map([
+  ["anthropic", "Anthropic"],
+  ["openai", "OpenAI"],
+  ["google", "Google"],
+  ["x-ai", "xAI"],
+  ["meta", "Meta"],
+  ["meta-llama", "Meta"],
+  ["mistral", "Mistral"],
+  ["mistralai", "Mistral"],
+  ["deepseek", "DeepSeek"],
+  ["qwen", "Qwen"],
+  ["moonshot", "Moonshot"],
+  ["moonshotai", "Moonshot AI"],
+  ["minimax", "MiniMax"],
+  ["cline-pass", "ClinePass"],
+]);
+
+/**
+ * Hosts that never declare group metadata can still embed the vendor in the
+ * model slug (OpenRouter ids are `<vendor>/<model>`). Derive the group from
+ * the first slug segment. A leading "/" (absolute-path custom-endpoint slugs)
+ * or a missing second segment means no group.
+ */
+function deriveSlugGroup(slug: string): string | null {
+  const slash = slug.indexOf("/");
+  if (slash <= 0 || slash === slug.length - 1) return null;
+  return slug.slice(0, slash).toLowerCase();
+}
+
+function derivedGroupLabel(groupId: string): string {
+  const known = VENDOR_GROUP_LABELS.get(groupId);
+  if (known !== undefined) return known;
+  return groupId.charAt(0).toUpperCase() + groupId.slice(1);
+}
+
+interface ModelGroupIdentity {
+  readonly id: string;
+  readonly label: string;
+}
+
+/** Group identity from host metadata, falling back to the slug vendor. */
+function modelGroupIdentity(model: ModelOption): ModelGroupIdentity | null {
+  const metadataId = modelMetadataString(model.metadata.openCodeProviderId);
+  if (metadataId.length > 0) {
+    const metadataLabel = modelMetadataString(
+      model.metadata.openCodeProviderLabel,
+    );
+    return {
+      id: metadataId,
+      label: metadataLabel.length > 0 ? metadataLabel : metadataId,
+    };
+  }
+  const derived = deriveSlugGroup(model.slug);
+  return derived === null
+    ? null
+    : { id: derived, label: derivedGroupLabel(derived) };
+}
+
+/**
+ * Display label for a slug-derived group row: drop the harness prefix
+ * ("OpenRouter · ") and vendor prefix ("anthropic/") the label may carry
+ * ("OpenRouter · anthropic/claude Fable 5" → "Claude Fable 5"). Falls back to
+ * the untouched label when stripping would leave nothing.
+ */
+function stripDerivedGroupPrefixes(
+  label: string,
+  harnessLabel: string,
+  groupId: string,
+): string {
+  let out = label;
+  const harnessPrefix = `${harnessLabel} · `;
+  if (out.toLowerCase().startsWith(harnessPrefix.toLowerCase())) {
+    out = out.slice(harnessPrefix.length);
+  }
+  const vendorPrefix = `${groupId}/`;
+  if (out.toLowerCase().startsWith(vendorPrefix.toLowerCase())) {
+    out = out.slice(vendorPrefix.length);
+  }
+  // Vendor-prefixed names often keep a lowercase family from the slug
+  // ("anthropic/claude Fable 5" → "claude Fable 5") — restore sentence case.
+  if (out.length > 0 && out[0] === out[0].toLowerCase()) {
+    out = out.charAt(0).toUpperCase() + out.slice(1);
+  }
+  return out.length > 0 ? out : label;
+}
+
 export function buildHarnessModelRows(
   harness: HarnessOption,
   models: ReadonlyArray<ModelOption>,
@@ -102,12 +189,11 @@ export function buildHarnessModelRows(
   // annotated list (a transitional/skewed host that tags only some models) keeps
   // host order rather than floating the unannotated models to the top. Ungrouped
   // harnesses keep host order too - the first model is preferred and stays first.
+  // Group identity comes from host metadata, falling back to the slug vendor
+  // (OpenRouter-style `<vendor>/<model>` ids carry no metadata).
   const isGrouped =
     models.length > 0 &&
-    models.every(
-      (model) =>
-        modelMetadataString(model.metadata.openCodeProviderId).length > 0,
-    );
+    models.every((model) => modelGroupIdentity(model) !== null);
   const orderedModels = isGrouped ? sortByProviderGroup(models) : models;
   return orderedModels.map((model) => modelRow(harness, model));
 }
@@ -261,15 +347,25 @@ function modelRow(harness: HarnessOption, model: ModelOption): HarnessModelRow {
   // list (OpenCode by upstream provider, OpenRouter by vendor prefix, Hugging
   // Face by `<org>` id prefix) - the
   // renderer is harness-agnostic. Fall back to the id as header text when the
-  // label is missing so such models still group rather than scattering.
-  const providerGroupId =
+  // label is missing so such models still group rather than scattering. Hosts
+  // that declare nothing get one more chance via the slug vendor
+  // (`anthropic/claude-fable-5` → group `anthropic`).
+  const metadataGroupId =
     openCodeProviderId.length > 0 ? openCodeProviderId : null;
-  const providerGroupLabel = openCodeGroupLabel(
-    providerGroupId,
-    openCodeProviderLabel,
-  );
-  const browseLabel =
-    providerGroupLabel === null ? model.label : modelDisplayLabel(model);
+  const derivedGroupId =
+    metadataGroupId === null ? deriveSlugGroup(model.slug) : null;
+  const providerGroupId = metadataGroupId ?? derivedGroupId;
+  const providerGroupLabel =
+    derivedGroupId === null
+      ? openCodeGroupLabel(metadataGroupId, openCodeProviderLabel)
+      : derivedGroupLabel(derivedGroupId);
+  let browseLabel = model.label;
+  if (providerGroupId !== null) {
+    browseLabel =
+      derivedGroupId === null
+        ? modelDisplayLabel(model)
+        : stripDerivedGroupPrefixes(model.label, harness.label, derivedGroupId);
+  }
   return {
     id: rowId(harness.id, model.slug),
     value: model.slug,
@@ -305,13 +401,13 @@ function sortByProviderGroup(
   models: ReadonlyArray<ModelOption>,
 ): ReadonlyArray<ModelOption> {
   return models.toSorted((left, right) => {
-    const leftLabel = modelMetadataString(left.metadata.openCodeProviderLabel);
-    const rightLabel = modelMetadataString(
-      right.metadata.openCodeProviderLabel,
-    );
+    const leftGroup = modelGroupIdentity(left);
+    const rightGroup = modelGroupIdentity(right);
+    const leftLabel = leftGroup?.label ?? "";
+    const rightLabel = rightGroup?.label ?? "";
     if (leftLabel !== rightLabel) return leftLabel.localeCompare(rightLabel);
-    const leftId = modelMetadataString(left.metadata.openCodeProviderId);
-    const rightId = modelMetadataString(right.metadata.openCodeProviderId);
+    const leftId = leftGroup?.id ?? "";
+    const rightId = rightGroup?.id ?? "";
     if (leftId !== rightId) return leftId.localeCompare(rightId);
     return left.label.localeCompare(right.label);
   });

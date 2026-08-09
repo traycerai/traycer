@@ -678,3 +678,94 @@ describe("harness model search", () => {
     });
   });
 });
+
+describe("slug-derived vendor groups (OpenRouter-style)", () => {
+  it("groups by the slug vendor and strips harness/vendor prefixes from the label", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({
+        harnessId: "openrouter",
+        slug: "anthropic/claude-fable-5",
+        label: "OpenRouter · anthropic/claude Fable 5",
+      }),
+    ]);
+    expect(rows[0].providerGroupId).toBe("anthropic");
+    expect(rows[0].providerGroupLabel).toBe("Anthropic");
+    expect(rows[0].browseLabel).toBe("Claude Fable 5");
+    // Raw label stays available for search recall.
+    expect(rows[0].searchLabel).toBe("OpenRouter · anthropic/claude Fable 5");
+  });
+
+  it("keeps an already-clean label untouched", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({
+        harnessId: "openrouter",
+        slug: "anthropic/claude-opus-5",
+        label: "Claude Opus 5",
+      }),
+    ]);
+    expect(rows[0].providerGroupId).toBe("anthropic");
+    expect(rows[0].browseLabel).toBe("Claude Opus 5");
+  });
+
+  it("does not group slugs without a vendor segment", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({ harnessId: "openrouter", slug: "gpt-5.2", label: "GPT-5.2" }),
+    ]);
+    expect(rows[0].providerGroupId).toBe(null);
+    expect(rows[0].browseLabel).toBe("GPT-5.2");
+  });
+
+  it("does not group absolute-path custom-endpoint slugs", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({
+        harnessId: "openrouter",
+        slug: "/workspace/models/dsv4-flash-q4.gguf",
+        label: "Custom endpoint · /workspace/models/dsv4 Flash q4.gguf",
+      }),
+    ]);
+    expect(rows[0].providerGroupId).toBe(null);
+  });
+
+  it("host metadata group wins over the slug derivation", () => {
+    const rows = buildHarnessModelRows(OPENCODE_HARNESS, [
+      model({
+        harnessId: "opencode",
+        slug: "anthropic/claude-opus-5",
+        label: "Perplexity: Sonar",
+        metadata: {
+          openCodeProviderId: "perplexity",
+          openCodeProviderLabel: "Perplexity",
+        },
+      }),
+    ]);
+    expect(rows[0].providerGroupId).toBe("perplexity");
+    expect(rows[0].providerGroupLabel).toBe("Perplexity");
+  });
+
+  it("feeds cascade subprovider entries with one group per vendor", () => {
+    const rows = buildHarnessModelRows(OPENROUTER_HARNESS, [
+      model({
+        harnessId: "openrouter",
+        slug: "anthropic/claude-fable-5",
+        label: "OpenRouter · anthropic/claude Fable 5",
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "anthropic/claude-opus-5",
+        label: "OpenRouter · anthropic/claude Opus 5",
+      }),
+      model({
+        harnessId: "openrouter",
+        slug: "openai/gpt-5.6-sol",
+        label: "OpenRouter · openai/gpt 5.6 Sol",
+      }),
+    ]);
+    const entries = buildSubproviderEntries(rows);
+    expect(
+      entries.map((entry) => [entry.providerGroupId, entry.modelCount]),
+    ).toEqual([
+      ["anthropic", 2],
+      ["openai", 1],
+    ]);
+  });
+});
