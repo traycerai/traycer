@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
@@ -9,27 +9,32 @@ import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
 
 // A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
-// ever reads `.data` off this query, and hand-building a whole `UseQueryResult`
-// (twenty-odd required fields, most meaningless for a synchronous mock) would
-// buy nothing but cast noise. Same convention as
+// ever reads `.data` and `.isPending` off this query, and hand-building a
+// whole `UseQueryResult` (twenty-odd required fields, most meaningless for a
+// synchronous mock) would buy nothing but cast noise. Same convention as
 // `use-epic-collaborators-query.test.tsx`'s `MockQueryResult` - mock at the
 // hook boundary with only the fields the component under test actually uses.
 interface MockReplicaQueryResult {
   readonly data: ChatReplicaReadResponse | undefined;
+  readonly isPending: boolean;
+}
+
+interface MockHostReachability {
+  readonly status: "reachable" | "unreachable";
+  readonly hostLabel: string;
 }
 
 const mockUseCloudChatTranscript = vi.fn<() => CloudChatTranscriptState>();
 const mockUseChatReplicaRead =
   vi.fn<(args: { readonly enabled: boolean }) => MockReplicaQueryResult>();
+const mockUseHostReachability =
+  vi.fn<(hostId: string) => MockHostReachability>();
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: "unreachable",
-    hostLabel: "Ada's Mac",
-  }),
+  useHostReachability: (hostId: string) => mockUseHostReachability(hostId),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-transcript", () => ({
   useCloudChatTranscript: () => mockUseCloudChatTranscript(),
@@ -84,6 +89,7 @@ function refusedCorrupt(): CloudChatTranscriptState {
 
 function replicaOk(): MockReplicaQueryResult {
   return {
+    isPending: false,
     data: {
       outcome: {
         status: "ok",
@@ -102,13 +108,74 @@ function replicaOk(): MockReplicaQueryResult {
   };
 }
 
+/**
+ * A replica read whose one message carries a block this build cannot parse -
+ * exercises `convertReplicaChat`'s real placeholder-swap path (not mocked
+ * here), so `unreadableCount` on the resulting conversion is genuinely `1`,
+ * the same way it would be in production.
+ */
+function replicaOkWithUnreadableBlock(): MockReplicaQueryResult {
+  return {
+    isPending: false,
+    data: {
+      outcome: {
+        status: "ok",
+        chat: {
+          chatId: "chat-1",
+          title: "Replica title",
+          userId: "user-1",
+          hostId: "owner-host-1",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        messages: [
+          {
+            role: "assistant",
+            messageId: "m1",
+            timestamp: 1,
+            turnId: null,
+            usage: null,
+            sender: {
+              type: "agent",
+              harnessId: "claude",
+              agentId: "a1",
+              displayName: null,
+              reply: { expectsReply: false },
+              inReplyTo: null,
+            },
+            blocks: [
+              {
+                blockId: "b1",
+                status: "completed",
+                timestamp: 1,
+                parentBlockId: null,
+                // A type outside this build's vocabulary.
+                type: "holodeck",
+                payload: { deck: 7 },
+              },
+            ],
+          },
+        ],
+        events: [],
+      },
+    },
+  };
+}
+
 function replicaAbsent(): MockReplicaQueryResult {
-  return { data: { outcome: { status: "absent" } } };
+  return { isPending: false, data: { outcome: { status: "absent" } } };
 }
 
 function replicaNotFetched(): MockReplicaQueryResult {
-  return { data: undefined };
+  return { isPending: true, data: undefined };
 }
+
+beforeEach(() => {
+  mockUseHostReachability.mockReturnValue({
+    status: "unreachable",
+    hostLabel: "Ada's Mac",
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -204,6 +271,71 @@ describe("PublishedChatTile - doc-replica fallback", () => {
 
     expect(mockUseChatReplicaRead).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: true }),
+    );
+  });
+
+  it("shows the loading state instead of the notice while the replica read is enabled and still pending", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    // Neither the notice NOR the transcript yet - a stale "not published"
+    // flash is exactly the bug this branch exists to prevent.
+    expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+    expect(screen.queryByTestId("chat-tile-session-view")).toBeNull();
+  });
+
+  it("uses the reachable-owner sentence once the owner comes back while the replica view is open", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue({
+      status: "reachable",
+      hostLabel: "Ada's Mac",
+    });
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    const view = screen.getByTestId("chat-tile-session-view");
+    // The cloud read can stay `unpublished` forever (a legacy chat, or a
+    // server declining this viewer the row) even after the owner is back
+    // online, so the lock reason must say so honestly instead of repeating
+    // the "which is offline" sentence past the point it stopped being true.
+    expect(view.textContent).toContain("not available live from this device");
+    expect(view.textContent).not.toContain("which is offline");
+  });
+
+  it("appends the unreadable-item count to the replica lock reason", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOkWithUnreadableBlock());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    const view = screen.getByTestId("chat-tile-session-view");
+    expect(view.textContent).toContain(
+      "1 item need a newer version of Traycer to render",
     );
   });
 });

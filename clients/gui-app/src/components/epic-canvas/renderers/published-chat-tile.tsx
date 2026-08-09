@@ -42,10 +42,21 @@ import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source";
  * A chat this host neither owns nor has ever published still syncs into the
  * epic Y.Doc through ordinary collaboration, so when the cloud read settles
  * `unpublished` - and only then, no other refusal is masked - the tile asks
- * the SAME serving host to read its own doc replica. Doc content has no
- * content-addressed shards to redirect (it is already the full, inline-blocks
- * transcript), so this branch renders straight into `ChatTileSessionView`
- * without `PublishedChatSourceProvider`.
+ * the SAME serving host to read its own doc replica. "Unpublished" is wider
+ * than its name: per `cloud-chat-reader.ts`, it also covers the server
+ * declining to serve THIS viewer the row (a missing row and a not-readable
+ * one answer identically by design, so the client cannot and does not try to
+ * tell them apart) - the replica fallback fires in that case too, which is
+ * the right behavior (a synced copy this device can read is not made wrong by
+ * the cloud saying nothing), just not literally "never published".
+ *
+ * Doc messages DO carry the same content-addressed hashes a published
+ * transcript's do - what a doc row lacks is a PUBLICATION to redirect a
+ * fetch to, which is `PublishedChatSourceProvider`'s only job. This branch
+ * renders without it, so a block that names heavy content falls through to
+ * the surface's ordinary local-store lookup and reads `blob_missing` if nothing
+ * local has that hash - the honest outcome for a host that has the chat's
+ * text but not the file bytes a wholly different host attached to it.
  */
 
 export interface PublishedChatTileProps {
@@ -168,6 +179,10 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       epicId: props.epicId,
       chatId: node.chatId,
       ownerUserId: replicaOutcome.chat.userId,
+      // No `?? node.name` fallback here unlike the published branch below:
+      // this outcome's `title` comes straight off the doc record
+      // (`ChatV200.title: z.string()`, never nullable), so a fallback would
+      // be dead code the repo's `no-unnecessary-condition` rule would flag.
       title: replicaOutcome.chat.title,
       createdAt: replicaOutcome.chat.createdAt,
       updatedAt: replicaOutcome.chat.updatedAt,
@@ -202,8 +217,26 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           viewTabId={props.viewTabId}
           isActive={props.isActive}
           currentEpicId={props.epicId}
-          readOnlyNotice={replicaChatLockReason(ownerLabel)}
+          readOnlyNotice={replicaChatLockReason({
+            ownerIsReachable: ownerReachability.status === "reachable",
+            ownerLabel,
+            unreadableCount: replicaConversion.unreadableCount,
+          })}
         />
+      </div>
+    );
+  }
+
+  if (cloudUnpublished && replicaQuery.isPending) {
+    // The replica read is enabled and in flight - without this gate, the
+    // notice branch below would render "not published yet" for the instant
+    // between the cloud read settling `unpublished` and the replica read
+    // resolving, then immediately flip to the transcript once it does. A
+    // reader would see a real notice flash on-screen for content that turns
+    // out to exist.
+    return (
+      <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        <ChatTileLoading />
       </div>
     );
   }
@@ -302,12 +335,25 @@ export function publishedChatLockReason(input: {
 /**
  * The doc-replica branch's composer lock reason.
  *
- * One sentence, not three: unlike `publishedChatLockReason` this branch is
- * only ever reached when the owner is unreachable (the cloud read refused
- * `unpublished` AND the doc replica had content) - "showing this device's
- * synced copy" is honest about the source in every case that reaches here,
- * so there is no reachable/unreachable split to make.
+ * Branches on live reachability the same way `publishedChatLockReason` does,
+ * for the same reason: the cloud read staying `unpublished` is NOT proof the
+ * owner is still away. `unpublished` also covers a legacy chat that will
+ * never get a row, and a server declining to serve this viewer the row - in
+ * both cases the owner can come back online while this tile keeps rendering
+ * the replica branch, because nothing here re-checks the cloud read once it
+ * has settled. A fixed "which is offline" sentence would then render false
+ * mid-session, not just after some future edit.
  */
-export function replicaChatLockReason(ownerLabel: string): string {
-  return `This agent lives on ${ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
+export function replicaChatLockReason(input: {
+  readonly ownerIsReachable: boolean;
+  readonly ownerLabel: string;
+  readonly unreadableCount: number;
+}): string {
+  const base = input.ownerIsReachable
+    ? `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
+    : `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
+  if (input.unreadableCount > 0) {
+    return `${base} ${input.unreadableCount} item${input.unreadableCount === 1 ? "" : "s"} need a newer version of Traycer to render.`;
+  }
+  return base;
 }

@@ -243,4 +243,40 @@ describe("convertReplicaChat", () => {
     expect(converted.messages).toHaveLength(0);
     expect(converted.unreadableCount).toBe(1);
   });
+
+  it("swaps null and non-object block entries for placeholders too, not just unrecognized objects", () => {
+    // `null` and a bare number are the two shapes the block-id fallback in
+    // `rebuildReplicaMessage` exists for - `typeof null === "object"` would
+    // otherwise slip past a naive object check, and a number has no
+    // `blockId` to read at all. Built as a plain row rather than through
+    // `replicaAssistantRow` (typed to `readonly JsonObject[]`) since neither
+    // shape here IS one.
+    const row: Record<string, unknown> = {
+      role: "assistant",
+      messageId: "m1",
+      timestamp: 1,
+      turnId: null,
+      usage: null,
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "a1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [textBlock("b1", "known text"), null, 42],
+    };
+    const converted = convertReplicaChat([row], []);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(3);
+    const placeholders = message.blocks.filter(
+      (block) =>
+        block.type === "text" && /needs a newer version/.test(block.text),
+    );
+    expect(placeholders).toHaveLength(2);
+    expect(converted.unreadableCount).toBe(2);
+  });
 });
