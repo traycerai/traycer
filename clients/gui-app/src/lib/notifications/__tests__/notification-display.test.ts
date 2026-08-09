@@ -3,10 +3,13 @@ import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import {
+  clearDisplayedDeliveryKeysForTests,
+  displayForwardedForegroundNotification,
   displayHostChannelEmission,
   displayNotificationRows,
   notificationReplaceKey,
 } from "@/lib/notifications/notification-display";
+import type { NotificationForegroundDisplay } from "@traycer-clients/shared/platform/runner-host";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -54,9 +57,14 @@ function row(title: string): MergedNotificationRow {
 describe("notification display", () => {
   beforeEach(() => {
     toastCalls.length = 0;
+    clearDisplayedDeliveryKeysForTests();
+    // The in-app toast only renders in a focused window; jsdom reports
+    // unfocused by default.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     cleanup();
   });
 
@@ -88,7 +96,7 @@ describe("notification display", () => {
         originHostId: "origin-host-1",
       }),
       replaceKey: "host:chat:chat-1",
-      deliveryKey: null,
+      deliveryKey: "host:n-1:10",
       foregroundAppLocal: null,
     });
     expect(toastCalls).toHaveLength(1);
@@ -163,7 +171,7 @@ describe("notification display", () => {
     const first = row("One");
 
     displayNotificationRows(
-      [first, row("Two")],
+      [first, { ...row("Two"), sourceId: "n-2" }],
       {
         showNotification,
         playChime,
@@ -185,7 +193,7 @@ describe("notification display", () => {
         originHostId: "origin-host-1",
       }),
       replaceKey: "notification-batch",
-      deliveryKey: null,
+      deliveryKey: "host:n-1:10|host:n-2:10",
       foregroundAppLocal: null,
     });
 
@@ -263,7 +271,7 @@ describe("notification display", () => {
       body: "New chat • Done",
       payload: null,
       replaceKey: "host:id:n-1",
-      deliveryKey: null,
+      deliveryKey: "host:n-1:10",
       foregroundAppLocal: null,
     });
   });
@@ -320,6 +328,7 @@ function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
 describe("host channel emission focus gate", () => {
   beforeEach(() => {
     toastCalls.length = 0;
+    clearDisplayedDeliveryKeysForTests();
   });
 
   afterEach(() => {
@@ -407,13 +416,13 @@ describe("host channel emission focus gate", () => {
         },
       },
       replaceKey: "host:chat:chat-2",
-      deliveryKey: null,
+      deliveryKey: "host:n-2:10",
     });
     expect(typeof nativeCall.title).toBe("string");
     expect(typeof nativeCall.body).toBe("string");
   });
 
-  it("displays rows for the active entity when the window is blurred", () => {
+  it("hands blurred-window rows to the native pass without a local toast", () => {
     focusChatTile("chat-1");
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const target = displayTarget();
@@ -424,8 +433,177 @@ describe("host channel emission focus gate", () => {
       "stream-host-1",
     );
 
+    // Blur disarms the focus gate, so the row must still go out - but only
+    // through the native pass (OS banner or foreground relay). A toast and
+    // chime in a window nobody is looking at reach nobody.
     expect(target.showNotification).toHaveBeenCalledOnce();
-    expect(target.playChime).toHaveBeenCalledOnce();
+    expect(target.playChime).not.toHaveBeenCalled();
+    expect(toastCalls).toHaveLength(0);
+  });
+});
+
+describe("forwarded foreground display gate", () => {
+  beforeEach(() => {
+    toastCalls.length = 0;
+    clearDisplayedDeliveryKeysForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      canvasByTabId: {},
+      openTabOrder: [],
+      activeTabId: null,
+      mostRecentTabIdByEpicId: {},
+    });
+    cleanup();
+  });
+
+  function focusChatTile(chatId: string): void {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    useEpicCanvasStore.getState().openTileInTab(
+      tabId,
+      makeOpenableNodeRef({
+        id: chatId,
+        instanceId: `${chatId}-instance`,
+        type: "chat",
+        name: "Chat",
+        hostId: "host-1",
+      }),
+    );
+  }
+
+  function forwardedDisplay(
+    chatId: string | null,
+    deliveryKey: string | null,
+  ): NotificationForegroundDisplay {
+    return {
+      title: "Agent",
+      body: "Agent • Stopped",
+      payload: buildNotificationActivationEnvelope({
+        route:
+          chatId === null
+            ? { kind: "epic", epicId: "epic-1" }
+            : { kind: "chat", epicId: "epic-1", chatId },
+        feed: { source: "cloud", id: "entry-1" },
+        originHostId: "origin-host-1",
+      }),
+      replaceKey: "host:chat:chat-1",
+      deliveryKey,
+      foregroundAppLocal: null,
+    };
+  }
+
+  it("drops a relayed display addressed to the focused chat", () => {
+    // The cross-window repro: a background window (blurred, so its own gate
+    // is disarmed) displays a cloud arrival for the chat THIS window is
+    // focused on; the main process relays it here. Without the receive-side
+    // gate it toasts over the very chat the user is looking at.
+    focusChatTile("chat-1");
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
+      playChime,
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("drops a relayed epic-level display while any tile of that epic is focused", () => {
+    focusChatTile("chat-1");
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(forwardedDisplay(null, null), {
+      playChime,
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("renders a relayed display for a sibling chat", () => {
+    focusChatTile("chat-1");
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(forwardedDisplay("chat-2", null), {
+      playChime,
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("skips a relayed display this window already rendered locally", () => {
+    focusChatTile("chat-2");
+    const target = {
+      showNotification: vi.fn(() => Promise.resolve()),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+    // Local feed display for chat-1 (not focused) renders and records
+    // `host:n-1:10`; the same occurrence relayed back from another window
+    // must not chime a second time.
+    displayNotificationRows([row("Agent finished")], target, "origin-host-1");
+    expect(toastCalls).toHaveLength(1);
+
+    const playChime = vi.fn();
+    displayForwardedForegroundNotification(
+      forwardedDisplay("chat-1", "host:n-1:10"),
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("skips the local render for an occurrence a relay already displayed", () => {
+    focusChatTile("chat-2");
+    const playChime = vi.fn();
+    displayForwardedForegroundNotification(
+      forwardedDisplay("chat-1", "host:n-1:10"),
+      { playChime, onToastClick: vi.fn() },
+    );
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+
+    const target = {
+      showNotification: vi.fn(() => Promise.resolve()),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+    displayNotificationRows([row("Agent finished")], target, "origin-host-1");
+
+    // The native pass still runs (the main process dedups it by the same
+    // key); only the duplicate local toast and chime are skipped.
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(toastCalls).toHaveLength(1);
+    expect(target.playChime).not.toHaveBeenCalled();
+  });
+
+  it("renders a payload-less relayed display unchanged", () => {
+    focusChatTile("chat-1");
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Traycer",
+        body: "Something happened",
+        payload: null,
+        replaceKey: null,
+        deliveryKey: null,
+        foregroundAppLocal: null,
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
   });
 });
 

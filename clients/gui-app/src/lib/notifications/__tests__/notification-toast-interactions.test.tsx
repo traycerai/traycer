@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import {
+  clearDisplayedDeliveryKeysForTests,
   displayNotificationRows,
   type NotificationDisplayTarget,
 } from "@/lib/notifications/notification-display";
@@ -42,12 +43,17 @@ describe("notification toast interactions", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(1_000);
+    // The in-app toast only renders in a focused window; jsdom reports
+    // unfocused by default.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    clearDisplayedDeliveryKeysForTests();
   });
 
   afterEach(() => {
     toast.dismiss();
     cleanup();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("activates when the rendered toast surface is clicked", async () => {

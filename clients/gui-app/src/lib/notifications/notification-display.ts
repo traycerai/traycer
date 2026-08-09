@@ -15,13 +15,22 @@ import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local
 import type {
   HostNotificationEntryV21,
   HostNotificationsCloudFeedRow,
+  HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
+  notificationEntityFromPayload,
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
-import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
-import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import {
+  isDocumentFocused,
+  readFocusedHostNotificationPresenceEntity,
+} from "@/lib/notifications/notification-presence";
+import {
+  buildNotificationActivationEnvelope,
+  parseNotificationActivationPayload,
+  type ParsedNotificationActivationPayload,
+} from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
 
 export interface NotificationDisplayTarget {
@@ -36,6 +45,15 @@ interface NativeNotificationDisplayOptions {
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
+/**
+ * Renders a notification another window's native pass relayed here because
+ * this window holds app focus. The relay is entity-blind: the sending window
+ * gates on ITS OWN focused entity (null while it is unfocused, which is
+ * exactly when it relays), so the entity check for the entity THIS window is
+ * looking at can only happen here, at receive time. Without it, a background
+ * window's display of a row for the focused chat lands as a toast over that
+ * very chat.
+ */
 export function displayForwardedForegroundNotification(
   display: NotificationForegroundDisplay,
   target: {
@@ -43,6 +61,17 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
+  const entity = entityFromActivationPayload(display.payload);
+  if (entity !== null) {
+    const focusedEntity = readFocusedHostNotificationPresenceEntity();
+    if (
+      focusedEntity !== null &&
+      notificationEntityMatchesPresence(entity, focusedEntity)
+    ) {
+      return;
+    }
+  }
+  if (wasDeliveryKeyDisplayed(display.deliveryKey)) return;
   const actionable = display.payload !== null;
   const title = actionable
     ? createElement(
@@ -73,6 +102,7 @@ export function displayForwardedForegroundNotification(
     description: actionable ? undefined : display.body,
     id: display.replaceKey ?? undefined,
   });
+  rememberDisplayedDeliveryKey(display.deliveryKey);
   target.playChime();
 }
 
@@ -82,12 +112,35 @@ export function displayNotificationRows(
   originHostId: string | null,
 ): void {
   void displayNotificationRowsAwaitNative(rows, target, {
-    deliveryKey: null,
+    deliveryKey: feedRowsDeliveryKey(rows),
     originHostId,
     foregroundAppLocal: null,
   }).catch(() => {
     // The feed remains authoritative; a failed native toast is non-critical.
   });
+}
+
+/**
+ * Every window subscribed to a feed displays the same arrival, so without a
+ * delivery key the main process treats N windows as N notifications: N-1
+ * foreground relays into the focused window (N-1 extra chimes), or a native
+ * banner per window. The key collapses that fan-out to one delivery per
+ * occurrence app-wide, whichever window reports it first.
+ */
+function feedRowsDeliveryKey(
+  rows: ReadonlyArray<MergedNotificationRow>,
+): string | null {
+  if (rows.length === 0) return null;
+  return rows.map(feedRowDeliveryKey).join("|");
+}
+
+function feedRowDeliveryKey(row: MergedNotificationRow): string {
+  // A cloud entry is an immutable occurrence: its entryId alone names the
+  // delivery. A host (v1 local) row reuses its semantic id across
+  // occurrences, so the delivered version must be part of the key -
+  // `createdAt` carries the entry's `updatedAt` (see `rowFromHostEntry`).
+  if (row.source === "cloud") return `cloud:${row.sourceId}`;
+  return `${row.source}:${row.sourceId}:${String(row.createdAt)}`;
 }
 
 async function displayNotificationRowsAwaitNative(
@@ -116,17 +169,28 @@ async function displayNotificationRowsAwaitNative(
       foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
-    renderNotificationToast(content, target);
+    renderNotificationToast(content, target, options.deliveryKey);
     throw error;
   }
-  renderNotificationToast(content, target);
+  renderNotificationToast(content, target, options.deliveryKey);
   await nativeDisplay;
 }
 
 function renderNotificationToast(
   content: NotificationToastContent,
   target: NotificationDisplayTarget,
+  deliveryKey: string | null,
 ): void {
+  // An unfocused window's toast and chime reach nobody: the native pass owns
+  // delivery there (OS banner, or the relay into the focused window - which
+  // applies its own entity gate). Rendering here anyway leaks an audible
+  // chime out of a background window.
+  if (!isDocumentFocused()) return;
+  // A focused window can receive the same occurrence twice - its own feed
+  // display racing another window's foreground relay. Whichever rendered
+  // first wins; the sonner id already coalesces the visual, this collapses
+  // the chime too.
+  if (wasDeliveryKeyDisplayed(deliveryKey)) return;
   const isActionable = content.row.payload !== null;
   const toastTitle = isActionable
     ? createElement(
@@ -157,7 +221,52 @@ function renderNotificationToast(
     description: isActionable ? undefined : content.body,
     id: content.replaceKey,
   });
+  rememberDisplayedDeliveryKey(deliveryKey);
   target.playChime();
+}
+
+const MAX_DISPLAYED_DELIVERY_KEYS = 500;
+const displayedDeliveryKeys = new Set<string>();
+
+export function clearDisplayedDeliveryKeysForTests(): void {
+  displayedDeliveryKeys.clear();
+}
+
+function wasDeliveryKeyDisplayed(deliveryKey: string | null): boolean {
+  return deliveryKey !== null && displayedDeliveryKeys.has(deliveryKey);
+}
+
+function rememberDisplayedDeliveryKey(deliveryKey: string | null): void {
+  if (deliveryKey === null || displayedDeliveryKeys.has(deliveryKey)) return;
+  while (displayedDeliveryKeys.size >= MAX_DISPLAYED_DELIVERY_KEYS) {
+    const oldest = displayedDeliveryKeys.values().next();
+    if (oldest.done) return;
+    displayedDeliveryKeys.delete(oldest.value);
+  }
+  displayedDeliveryKeys.add(deliveryKey);
+}
+
+function entityFromActivationPayload(
+  payload: unknown,
+): HostNotificationsEntityRef | null {
+  if (payload === null) return null;
+  const route = activationRoute(parseNotificationActivationPayload(payload));
+  return route === null ? null : notificationEntityFromPayload(route);
+}
+
+function activationRoute(
+  parsed: ParsedNotificationActivationPayload,
+): NotificationPayload | null {
+  switch (parsed.kind) {
+    case "v1":
+      return parsed.envelope.route;
+    case "legacy":
+      return parsed.payload;
+    // An unrecognized payload names no entity, so it cannot be gated - it
+    // displays, matching how activation itself degrades to opening the center.
+    case "unknown":
+      return null;
+  }
 }
 
 /**
