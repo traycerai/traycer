@@ -6,31 +6,8 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
-
-const membershipItems: HistoryItem[] = [];
-
-vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
-    data: {
-      items: membershipItems,
-      membershipItems,
-      availableRepos: [],
-      availableWorkspaces: [],
-      totalCount: membershipItems.length,
-      facets: { repos: [], workspaces: [], ownershipScopes: [] },
-      worktreesByEpicId: new Map(),
-    },
-    isPending: false,
-    isFetching: false,
-    error: null,
-    hostId: "h1",
-    refetch: vi.fn(),
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
-  }),
-}));
 
 function historyItem(
   epicId: string,
@@ -57,7 +34,6 @@ function historyItem(
 }
 
 function resetState(): void {
-  membershipItems.length = 0;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState({
     version: 2,
@@ -71,6 +47,7 @@ function resetState(): void {
   });
   useProjectProfilesStore.getState().resetForTests();
   useActiveProjectProfileStore.getState().resetForTests();
+  useHistoryMembershipCacheStore.getState().resetForTests();
 }
 
 function seedTabs(): void {
@@ -146,14 +123,14 @@ function seedTabs(): void {
       settings: null,
     },
   });
-  membershipItems.push(
+  useHistoryMembershipCacheStore.getState().setMembershipItems([
     historyItem("epic-owned", [
       { hostId: "h1", workspacePath: "/Users/x/Acme" },
     ]),
     historyItem("epic-foreign", [
       { hostId: "h1", workspacePath: "/Users/x/Other" },
     ]),
-  );
+  ]);
 }
 
 describe("useHeaderTabs profile filter", () => {

@@ -35,7 +35,8 @@ import { patchHistorySearch } from "@/lib/history-search";
 import { itemVisibleInProfile } from "@/lib/profiles/profile-membership";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const LOCAL_FUSE_OPTIONS: IFuseOptions<HistoryItem> = {
@@ -236,6 +237,14 @@ export function useHistoryQuery(
   ]);
 
   const refetch = useCallback(() => tasksQueryRefetch(), [tasksQueryRefetch]);
+
+  // Publish unfiltered rows for host-free consumers (header tab strip).
+  useEffect(() => {
+    if (data === undefined) return;
+    useHistoryMembershipCacheStore
+      .getState()
+      .setMembershipItems(data.membershipItems);
+  }, [data]);
 
   return {
     data,

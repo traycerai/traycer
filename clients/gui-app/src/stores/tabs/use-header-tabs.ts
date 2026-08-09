@@ -1,11 +1,10 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import { useHistoryQuery } from "@/hooks/home/use-history-query";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { itemVisibleInProfile } from "@/lib/profiles/profile-membership";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import type { ProjectProfile } from "@/lib/profiles/types";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
@@ -56,7 +55,9 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
   const activeProfile = useActiveProjectProfile();
-  const historyByEpicId = useHistoryMembershipByEpicId();
+  const historyByEpicId = useHistoryMembershipCacheStore(
+    (s) => s.itemsByEpicId,
+  );
 
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((t) => [t.tabId, t])),
@@ -139,7 +140,9 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
   const activeProfile = useActiveProjectProfile();
-  const historyByEpicId = useHistoryMembershipByEpicId();
+  const historyByEpicId = useHistoryMembershipCacheStore(
+    (s) => s.itemsByEpicId,
+  );
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((tab) => [tab.tabId, tab])),
     [epicTabs],
@@ -250,7 +253,9 @@ export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
   const left = useHeaderTabForRef(leftRef);
   const right = useHeaderTabForRef(rightRef);
   const activeProfile = useActiveProjectProfile();
-  const historyByEpicId = useHistoryMembershipByEpicId();
+  const historyByEpicId = useHistoryMembershipCacheStore(
+    (s) => s.itemsByEpicId,
+  );
   return useMemo(() => {
     if (item === null) return null;
     if (item.kind === "tab") {
@@ -473,21 +478,6 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
       structuralLockRevision: getTabStructuralLockRevision(),
     }),
   );
-}
-
-function useHistoryMembershipByEpicId(): ReadonlyMap<string, HistoryItem> {
-  const history = useHistoryQuery({
-    search: DEFAULT_HISTORY_SEARCH,
-    nowMs: null,
-  });
-  const membershipItems = history.data?.membershipItems;
-  return useMemo(() => {
-    const map = new Map<string, HistoryItem>();
-    for (const item of membershipItems ?? []) {
-      map.set(item.epicId, item);
-    }
-    return map;
-  }, [membershipItems]);
 }
 
 function headerTabVisibleInProfile(
