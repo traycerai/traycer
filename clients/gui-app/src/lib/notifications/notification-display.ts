@@ -102,8 +102,22 @@ export function displayNotificationRows(
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
+  displayFeedRows(rows, target, originHostId, feedRowsDeliveryKey(rows));
+}
+
+/**
+ * Displays feed rows under an explicit delivery identity. Separate from
+ * `displayNotificationRows` because a caller that shows a FOCUS-FILTERED
+ * subset must still name the whole arrival: see `displayHostChannelEmission`.
+ */
+function displayFeedRows(
+  rows: ReadonlyArray<MergedNotificationRow>,
+  target: NotificationDisplayTarget,
+  originHostId: string | null,
+  deliveryKey: string | null,
+): void {
   void displayNotificationRowsAwaitNative(rows, target, {
-    deliveryKey: feedRowsDeliveryKey(rows),
+    deliveryKey,
     originHostId,
     foregroundAppLocal: null,
   }).catch(() => {
@@ -285,28 +299,34 @@ function isHostFeedRelay(
  * lands on the entity, or presence can go stale mid-hold. This gate re-checks
  * live focus at display time so the tab you are looking at never toasts about
  * its own activity; rows for other entities still display.
+ *
+ * The delivery key names the WHOLE emission, never this window's visible
+ * subset. An emission is one batched display, and each window filters it by
+ * its own focus - so a subset-derived key would differ between a window that
+ * dropped the focused row and one that kept it, the two would fail to
+ * deduplicate, and the focused window would show its own filtered toast plus
+ * the relayed full batch, chiming twice. Delivery identity has to survive
+ * focus filtering to collapse the fan-out it exists to collapse.
  */
 export function displayHostChannelEmission(
   entries: ReadonlyArray<HostNotificationEntryV21>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
+  const rows = entries.map(rowFromHostEntry);
+  const emissionDeliveryKey = feedRowsDeliveryKey(rows);
   const focusedEntity = readFocusedHostNotificationPresenceEntity();
-  const visibleEntries =
+  const visibleRows =
     focusedEntity === null
-      ? entries
-      : entries.filter((entry) => {
-          const entity = notificationEntityFromHostEntry(entry);
+      ? rows
+      : rows.filter((_row, index) => {
+          const entity = notificationEntityFromHostEntry(entries[index]);
           return (
             entity === null ||
             !notificationEntityMatchesPresence(entity, focusedEntity)
           );
         });
-  displayNotificationRows(
-    visibleEntries.map(rowFromHostEntry),
-    target,
-    originHostId,
-  );
+  displayFeedRows(visibleRows, target, originHostId, emissionDeliveryKey);
 }
 
 /** Whole cloud snapshots carry no emission frame, so accepted post-baseline

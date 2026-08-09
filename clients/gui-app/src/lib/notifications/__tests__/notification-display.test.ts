@@ -363,6 +363,11 @@ function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
   };
 }
 
+const EMISSION_N1_N2_DELIVERY_KEY = JSON.stringify([
+  JSON.stringify(["host:n-1", 10, "n-1"]),
+  JSON.stringify(["host:n-2", 10, "n-2"]),
+]);
+
 describe("host channel emission focus gate", () => {
   beforeEach(() => {
     toastCalls.length = 0;
@@ -454,10 +459,37 @@ describe("host channel emission focus gate", () => {
         },
       },
       replaceKey: "host:chat:chat-2",
-      deliveryKey: JSON.stringify([JSON.stringify(["host:n-2", 10, "n-2"])]),
+      // Names the whole emission, not this window's visible subset.
+      deliveryKey: EMISSION_N1_N2_DELIVERY_KEY,
     });
     expect(typeof nativeCall.title).toBe("string");
     expect(typeof nativeCall.body).toBe("string");
+  });
+
+  it("keys an emission identically whether or not this window filtered it", () => {
+    // Delivery identity must survive focus filtering. A focused window that
+    // drops the focused row and a background window that keeps it are showing
+    // the SAME emission; if their keys differed, neither the main-process nor
+    // the renderer-local set would dedupe, and the focused window would show
+    // its filtered toast plus the relayed full batch - two chimes.
+    const entries = [hostEntry("n-1", "chat-1"), hostEntry("n-2", "chat-2")];
+
+    focusChatTile("chat-1");
+    const focused = displayTarget();
+    displayHostChannelEmission(entries, focused, "stream-host-1");
+
+    clearDisplayedDeliveryKeysForTests();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const background = displayTarget();
+    displayHostChannelEmission(entries, background, "stream-host-1");
+
+    const focusedKey = focused.showNotification.mock.calls[0][0].deliveryKey;
+    const backgroundKey =
+      background.showNotification.mock.calls[0][0].deliveryKey;
+    expect(focusedKey).toBe(EMISSION_N1_N2_DELIVERY_KEY);
+    expect(backgroundKey).toBe(focusedKey);
+    // The focused window still shows only its sibling row.
+    expect(toastCalls).toHaveLength(1);
   });
 
   it("hands blurred-window rows to the native pass without a local toast", () => {
