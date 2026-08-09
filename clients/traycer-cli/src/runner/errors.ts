@@ -27,6 +27,15 @@ export const CLI_ERROR_CODES = {
   // would mislead here).
   ROLE_FORBIDDEN: "E_ROLE_FORBIDDEN",
 
+  // --- Agent archive (`epic.setChatArchived`) ---
+  // The host folds both conditions below into a generic `RPC_ERROR` with a
+  // reason prefix on the message (`AGENT_BUSY:` / `RECORD_NOT_FOUND:`) rather
+  // than a typed wire code - see `epic-set-chat-archived-resolver.ts`. The CLI
+  // detects those prefixes and remaps them to these codes so callers can
+  // switch on `code` instead of parsing message text.
+  AGENT_ARCHIVE_BUSY: "E_AGENT_ARCHIVE_BUSY",
+  AGENT_RECORD_NOT_FOUND: "E_AGENT_RECORD_NOT_FOUND",
+
   // --- Auth ---
   AUTH_NO_CREDENTIALS: "E_AUTH_NO_CREDENTIALS",
   AUTH_REJECTED: "E_AUTH_REJECTED",
