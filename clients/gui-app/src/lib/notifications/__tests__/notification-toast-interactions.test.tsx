@@ -13,6 +13,7 @@ import {
   type NotificationDisplayTarget,
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
@@ -62,7 +63,9 @@ describe("notification toast interactions", () => {
       displayNotificationRows(
         [NOTIFICATION],
         {
-          showNotification: vi.fn(() => Promise.resolve()),
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
           playChime: vi.fn(),
           onToastClick,
         },
@@ -90,7 +93,9 @@ describe("notification toast interactions", () => {
       displayNotificationRows(
         [NOTIFICATION],
         {
-          showNotification: vi.fn(() => Promise.resolve()),
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
           playChime: vi.fn(),
           onToastClick,
         },

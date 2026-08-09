@@ -8,7 +8,10 @@ import {
   displayNotificationRows,
   notificationReplaceKey,
 } from "@/lib/notifications/notification-display";
-import type { NotificationForegroundDisplay } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  NotificationForegroundDisplay,
+  NotificationShowOutcome,
+} from "@traycer-clients/shared/platform/runner-host";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
@@ -72,7 +75,9 @@ describe("notification display", () => {
   });
 
   it("shows exactly one toast and one chime for one display emission", () => {
-    const showNotification = vi.fn(() => Promise.resolve());
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    );
     const playChime = vi.fn();
 
     displayNotificationRows(
@@ -153,7 +158,8 @@ describe("notification display", () => {
     // source ref would collide with the prompt it superseded, and the dedup
     // would suppress the new approval's notification entirely.
     const showNotification = vi.fn(
-      (_input: { readonly deliveryKey: string | null }) => Promise.resolve(),
+      (_input: { readonly deliveryKey: string | null }) =>
+        Promise.resolve<NotificationShowOutcome>("presented"),
     );
     const prompt: MergedNotificationRow = {
       ...row("Approval needed"),
@@ -203,7 +209,9 @@ describe("notification display", () => {
   });
 
   it("uses one key for batched notifications", () => {
-    const showNotification = vi.fn(() => Promise.resolve());
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    );
     const playChime = vi.fn();
     const onToastClick = vi.fn();
     const first = row("One");
@@ -274,7 +282,9 @@ describe("notification display", () => {
     displayNotificationRows(
       [notification],
       {
-        showNotification: vi.fn(() => Promise.resolve()),
+        showNotification: vi.fn(() =>
+          Promise.resolve<NotificationShowOutcome>("presented"),
+        ),
         playChime: vi.fn(),
         onToastClick,
       },
@@ -292,7 +302,9 @@ describe("notification display", () => {
   });
 
   it("does not make notifications without a destination clickable", () => {
-    const showNotification = vi.fn(() => Promise.resolve());
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    );
     displayNotificationRows(
       [{ ...row("Agent finished"), payload: null }],
       {
@@ -321,7 +333,9 @@ describe("notification display", () => {
     displayNotificationRows(
       [row("Checkout notifications")],
       {
-        showNotification: vi.fn(() => Promise.resolve()),
+        showNotification: vi.fn(() =>
+          Promise.resolve<NotificationShowOutcome>("presented"),
+        ),
         playChime: vi.fn(),
         onToastClick: vi.fn(),
       },
@@ -331,6 +345,99 @@ describe("notification display", () => {
     expect(toastCalls).toHaveLength(1);
     expect(isValidElement(toastCalls[0]?.title)).toBe(true);
     expect(toastCalls[0]?.options.description).toBeUndefined();
+  });
+
+  it("plays one fallback chime when the shell reports undeliverable", async () => {
+    // Platforms where Electron cannot present notifications, app blurred: the
+    // main process shows nothing, relays nothing, and burns the delivery key.
+    // The winning window - the only one to hear `undeliverable` - owns the
+    // sole audible cue; its focus-gated chime was skipped because it is
+    // blurred, so this is not a duplicate.
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const playChime = vi.fn();
+
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      {
+        showNotification: vi.fn(() =>
+          Promise.resolve<NotificationShowOutcome>("undeliverable"),
+        ),
+        playChime,
+        onToastClick: vi.fn(),
+      },
+      "origin-host-1",
+    );
+
+    await vi.waitFor(() => {
+      expect(playChime).toHaveBeenCalledOnce();
+    });
+    // The toast still rendered - unseen but harmless, and never load-bearing.
+    expect(toastCalls).toHaveLength(1);
+  });
+
+  it("stays silent in a blurred window when the shell presented elsewhere", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const playChime = vi.fn();
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    );
+
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      { showNotification, playChime, onToastClick: vi.fn() },
+      "origin-host-1",
+    );
+
+    await vi.waitFor(() => {
+      expect(showNotification).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("stays silent in a blurred window when another window won the delivery", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const playChime = vi.fn();
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("duplicate"),
+    );
+
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      { showNotification, playChime, onToastClick: vi.fn() },
+      "origin-host-1",
+    );
+
+    await vi.waitFor(() => {
+      expect(showNotification).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("does not double-chime when focus lands before an undeliverable outcome", async () => {
+    // Focused at render time -> the focus-gated chime already played. If the
+    // main process still answered `undeliverable` (it read focus moments
+    // earlier), the fallback must not add a second voice.
+    const playChime = vi.fn();
+
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      {
+        showNotification: vi.fn(() =>
+          Promise.resolve<NotificationShowOutcome>("undeliverable"),
+        ),
+        playChime,
+        onToastClick: vi.fn(),
+      },
+      "origin-host-1",
+    );
+
+    await vi.waitFor(() => {
+      expect(playChime).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(playChime).toHaveBeenCalledOnce();
   });
 });
 
@@ -412,7 +519,7 @@ describe("host channel emission focus gate", () => {
           readonly payload: unknown;
           readonly replaceKey: string | null;
           readonly deliveryKey: string | null;
-        }) => Promise.resolve(),
+        }) => Promise.resolve<NotificationShowOutcome>("presented"),
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),

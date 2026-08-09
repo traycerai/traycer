@@ -1,4 +1,5 @@
 import { BrowserWindow, Notification } from "electron";
+import type { DesktopNotificationShowOutcome } from "../ipc-contracts/notification-types";
 import { log } from "./app/logger";
 
 const MAX_REPLACEABLE_NOTIFICATIONS = 100;
@@ -20,15 +21,22 @@ export interface NativeNotificationOptions {
  * replacement key groups notifications that describe the same entity: a newer
  * notification closes and re-alerts over the prior one instead of leaving a
  * stack in the OS notification center.
+ *
+ * The returned outcome names the delivery decision so the calling renderer
+ * can tell "someone is presenting this" from "nothing was and nothing will".
+ * The delivery-key ledger makes `undeliverable` a single-winner outcome: the
+ * first window to report an occurrence on an unsupported platform hears it,
+ * every later window hears `duplicate` - which is what lets exactly one
+ * renderer own the fallback cue without re-creating the per-window fan-out.
  */
 export function showNativeNotification(
   options: NativeNotificationOptions,
-): void {
+): DesktopNotificationShowOutcome {
   if (
     options.deliveryKey !== null &&
     deliveredNotificationKeys.has(options.deliveryKey)
   ) {
-    return;
+    return "duplicate";
   }
   if (
     BrowserWindow.getAllWindows().some(
@@ -41,12 +49,12 @@ export function showNativeNotification(
     // exact key so another renderer cannot replay the same event after focus
     // changes; the suppression callback relays it to the foreground renderer.
     rememberDeliveredNotificationKey(options.deliveryKey);
-    return;
+    return "presented";
   }
   if (!Notification.isSupported()) {
     log.warn("[notifications] not supported on this platform");
     rememberDeliveredNotificationKey(options.deliveryKey);
-    return;
+    return "undeliverable";
   }
 
   const notification = new Notification({
@@ -75,6 +83,7 @@ export function showNativeNotification(
   }
   notification.show();
   rememberDeliveredNotificationKey(options.deliveryKey);
+  return "presented";
 }
 
 function closeReplacement(replaceKey: string | null): void {

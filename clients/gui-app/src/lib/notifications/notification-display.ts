@@ -2,6 +2,7 @@ import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 import type {
   NotificationForegroundAppLocal,
   NotificationForegroundDisplay,
+  NotificationShowOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { createElement } from "react";
 import { toast } from "sonner";
@@ -242,7 +243,7 @@ async function displayNotificationRowsAwaitNative(
           feed: { source: content.row.source, id: content.row.sourceId },
           originHostId: options.originHostId,
         });
-  let nativeDisplay: Promise<void>;
+  let nativeDisplay: Promise<NotificationShowOutcome>;
   try {
     nativeDisplay = target.showNotification({
       title: content.title,
@@ -257,7 +258,17 @@ async function displayNotificationRowsAwaitNative(
     throw error;
   }
   renderNotificationToast(content, target);
-  await nativeDisplay;
+  const outcome = await nativeDisplay;
+  // `undeliverable`: the platform cannot present notifications and no window
+  // was focused, so nothing was shown or relayed and the burnt delivery key
+  // makes it unretryable - this window (the ledger's single winner; every
+  // other window heard `duplicate`) owns the only audible cue there will be.
+  // Re-checking focus keeps the fallback single-voiced against a mid-flight
+  // focus flip: a window focused by now already owns its rendered toast, and
+  // its focus-gated chime if it had one.
+  if (outcome === "undeliverable" && !isDocumentFocused()) {
+    target.playChime();
+  }
 }
 
 function renderNotificationToast(

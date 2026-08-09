@@ -9,6 +9,7 @@ import type {
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationShowOutcome,
   NotificationForegroundDisplay,
   NotificationForegroundAppLocal,
   IRunnerHost,
@@ -548,7 +549,7 @@ export class MockRunnerHost implements IRunnerHost {
       replaceKey: string | null,
       deliveryKey: string | null,
       foregroundAppLocal: NotificationForegroundAppLocal | null,
-    ): Promise<void> => {
+    ): Promise<NotificationShowOutcome> => {
       this.notificationsSent.push({
         title,
         body,
@@ -557,6 +558,7 @@ export class MockRunnerHost implements IRunnerHost {
         deliveryKey,
         foregroundAppLocal,
       });
+      return "presented";
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
       this.notificationClickHandlers.add(handler);

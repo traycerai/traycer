@@ -22,6 +22,7 @@ import type {
   MutationOutcome,
   NotificationForegroundAppLocal,
   NotificationForegroundDisplay,
+  NotificationShowOutcome,
   ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
@@ -189,7 +190,7 @@ export interface DesktopPreloadBridge {
       replaceKey: string | null,
       deliveryKey: string | null,
       foregroundAppLocal: NotificationForegroundAppLocal | null,
-    ): Promise<void>;
+    ): Promise<NotificationShowOutcome>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
     onForegroundDisplay(
       handler: (display: NotificationForegroundDisplay) => void,

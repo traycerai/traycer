@@ -902,6 +902,24 @@ export interface ITokenStore {
   ): Promise<CredentialsMigrationOutcome>;
 }
 
+/**
+ * What the shell's delivery decision actually did with a `show` request.
+ *
+ * - `presented`: an alert surface exists somewhere - an OS banner was shown,
+ *   the display was relayed to the focused window, or the focused sender
+ *   already owns its own in-app surfaces.
+ * - `duplicate`: this delivery key was already handled app-wide; another
+ *   window's request won.
+ * - `undeliverable`: the platform cannot present notifications and no window
+ *   is focused, so NOTHING was shown or relayed and the key is burnt. The
+ *   caller is the sole owner of any fallback cue. This is a resolved outcome,
+ *   not a rejection, deliberately: rejection semantics are load-bearing for
+ *   retry loops (see `drainPendingNotifications`), and an unsupported
+ *   platform must not retry forever.
+ */
+export type NotificationShowOutcome =
+  "presented" | "duplicate" | "undeliverable";
+
 export interface INotificationHost {
   show(
     title: string,
@@ -910,7 +928,7 @@ export interface INotificationHost {
     replaceKey: string | null,
     deliveryKey: string | null,
     foregroundAppLocal: NotificationForegroundAppLocal | null,
-  ): Promise<void>;
+  ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,

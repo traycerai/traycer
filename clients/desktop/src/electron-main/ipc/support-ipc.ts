@@ -136,7 +136,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
         deliveryKey,
         foregroundAppLocal: parsedForegroundAppLocal,
       };
-      showNativeNotification({
+      return showNativeNotification({
         title,
         body,
         replaceKey,
