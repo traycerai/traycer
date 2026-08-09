@@ -682,7 +682,7 @@ export function ProviderMcpTab(props: {
       })
       // `pickAndPrepareFolders` guards only its `prepareFoldersAsync` call; the
       // pickers upstream of it (`runnerHost.workspaceFolders.pickFolders()`,
-      // `openRemoteWorkspacePathPicker`) are awaited bare, so a failure there
+      // the remote folder picker's `requestPick`) are awaited bare, so a failure there
       // rejects out of `browseForWorkspace`. Without this the rejection is
       // unhandled and the user is told nothing at all - the popover simply
       // stays as it was, which reads as the click having missed.

@@ -32,6 +32,12 @@ export interface WorkspaceRunItem {
   readonly summary: WorktreeWorkspaceSummary | null;
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
+  // Non-null when this row's `defaultNewBranchName` fell back to the global
+  // prefix because the repository's own `.traycer/environment.json` override
+  // was invalid or unreadable - visible here so the fallback is never silent,
+  // without blocking creation (`resolveEffectiveBranchPrefix`'s warning text,
+  // already naming the file to fix).
+  readonly branchPrefixWarning: string | null;
   readonly repoIdentifier: WorktreeFolderIntent["repoIdentifier"];
   readonly isPrimary: boolean;
   // Surface capability (same value for every row in a given surface): true

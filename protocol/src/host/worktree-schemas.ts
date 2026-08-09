@@ -414,6 +414,52 @@ export type WorktreeListByWorkspacePathsResponseV13 = z.infer<
   typeof worktreeListByWorkspacePathsResponseSchemaV13
 >;
 
+/**
+ * Resolved read of a repository's `.traycer/environment.json` worktree
+ * branch-prefix override. `"absent"` means the file/key doesn't exist (or the
+ * workspace isn't a git repo) - the client silently inherits the global
+ * default. `"present"` carries the raw stored string VERBATIM, including an
+ * intentional `""` - the host does not judge git-ref validity; that rule
+ * lives once, client-side, in `worktreeBranchPrefixError` (re-run here would
+ * fork the same rule across the wire boundary). `"malformed"` means the file
+ * exists but isn't a readable JSON object, or the `branchPrefix` key isn't a
+ * string - the client falls back to the global default and warns, the same
+ * way it treats a client-invalid `"present"` value.
+ */
+export const repoBranchPrefixStateSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("absent") }),
+  z.object({ status: z.literal("present"), value: z.string() }),
+  z.object({ status: z.literal("malformed") }),
+]);
+export type RepoBranchPrefixState = z.infer<typeof repoBranchPrefixStateSchema>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.4 summary. Adds `repoBranchPrefix`, the
+ * resolved repository-local branch-prefix override read from the same
+ * `.traycer/environment.json` `scripts` already reads. Request is unchanged
+ * from v1.3.
+ */
+export const worktreeWorkspaceSummarySchemaV14 =
+  worktreeWorkspaceSummarySchemaV13.extend({
+    repoBranchPrefix: repoBranchPrefixStateSchema,
+  });
+export type WorktreeWorkspaceSummaryV14 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV14
+>;
+
+export const worktreeListByWorkspacePathsRequestSchemaV14 =
+  worktreeListByWorkspacePathsRequestSchemaV13;
+export type WorktreeListByWorkspacePathsRequestV14 =
+  WorktreeListByWorkspacePathsRequestV13;
+
+export const worktreeListByWorkspacePathsResponseSchemaV14 = z.object({
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV14),
+  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+});
+export type WorktreeListByWorkspacePathsResponseV14 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV14
+>;
+
 export const worktreeBranchSchema = z.object({
   name: z.string(),
   isCurrent: z.boolean(),
@@ -1166,4 +1212,29 @@ export const worktreeSetRepoScriptsResponseSchema = z.object({
 });
 export type WorktreeSetRepoScriptsResponse = z.infer<
   typeof worktreeSetRepoScriptsResponseSchema
+>;
+
+/**
+ * `worktree.setRepoBranchPrefix` request. `branchPrefix: null` clears the
+ * repository override (back to "absent", inheriting the global default);
+ * a string - including `""` - sets an explicit override (deliberately no
+ * prefix). Mirrors `worktreeSetRepoScriptsRequestSchema`'s `epicId`/
+ * `workspacePath` authn/target shape, but the target is always the exact
+ * source workspace path (never a new/checkout worktree's own file - see the
+ * host resolver doc comment).
+ */
+export const worktreeSetRepoBranchPrefixRequestSchema = z.object({
+  epicId: z.string(),
+  workspacePath: z.string(),
+  branchPrefix: z.string().nullable(),
+});
+export type WorktreeSetRepoBranchPrefixRequest = z.infer<
+  typeof worktreeSetRepoBranchPrefixRequestSchema
+>;
+
+export const worktreeSetRepoBranchPrefixResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type WorktreeSetRepoBranchPrefixResponse = z.infer<
+  typeof worktreeSetRepoBranchPrefixResponseSchema
 >;

@@ -24,7 +24,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
-import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
 import { ManagedCommandDeletedBanner } from "@/components/epic-canvas/renderers/dead-tile-banner";
@@ -38,8 +38,7 @@ import type {
 } from "@/stores/managed-commands/managed-command-output-store";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import {
-  managedCommandKindLabel,
-  managedCommandOutputWindowTitle,
+  MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   managedCommandStatusLabel,
   managedCommandTitle,
 } from "@/lib/managed-commands/managed-command-copy";
@@ -136,7 +135,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
       >
         <p className="max-w-md">
           Host &quot;{reachability.hostLabel}&quot; is unreachable, so this
-          output cannot be read. The command and its log are kept on that host.
+          output cannot be read. The shell and its log are kept on that host.
         </p>
         <Button
           type="button"
@@ -397,7 +396,7 @@ function ManagedCommandOutputTileBody(props: {
         data-testid="managed-command-output-unavailable"
         role="status"
       >
-        This host is too old to show monitors and shells.
+        This host is too old to show shells.
       </div>
     );
   }
@@ -412,7 +411,11 @@ function ManagedCommandOutputTileBody(props: {
       <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5">
         {command === null ? null : (
           <>
-            <ManagedCommandKindIcon kind={command.kind} className={undefined} />
+            <ManagedCommandMonitorIcon
+              monitoring={command.monitoring}
+              decorative
+              className={undefined}
+            />
             <ManagedCommandStatusDot
               status={command.status}
               className={undefined}
@@ -455,9 +458,7 @@ function ManagedCommandOutputTileBody(props: {
 
       {gone ? (
         <ManagedCommandDeletedBanner
-          kindLabel={
-            command === null ? null : managedCommandKindLabel(command.kind)
-          }
+          deletionConfirmed={command !== null}
           onClose={props.onClose}
           testId="managed-command-output-deleted"
         />
@@ -477,9 +478,7 @@ function ManagedCommandOutputTileBody(props: {
           data-testid="managed-command-output-timeline"
           role="log"
           aria-label={
-            command === null
-              ? "Output"
-              : managedCommandOutputWindowTitle(command.kind)
+            command === null ? "Output" : MANAGED_COMMAND_OUTPUT_WINDOW_TITLE
           }
           // Command output is terminal output, so it follows the Terminal
           // typography settings the way a terminal tile does. `font-mono` and
@@ -565,7 +564,7 @@ function OutputRow(props: { readonly line: ManagedCommandTimelineLine }) {
 }
 
 /**
- * Wall-clock time of day, seconds included: a human reading a monitor at 3am is
+ * Wall-clock time of day, seconds included: a human reading a shell at 3am is
  * matching lines against something else that happened, and the date is already
  * carried by the window they are in. `null` is a line the host could not read a
  * timestamp from - a partial record left by a crash.

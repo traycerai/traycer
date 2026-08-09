@@ -6,8 +6,11 @@ import { Button } from "@/components/ui/button";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { Kbd } from "@/components/ui/kbd";
 import { OwnerWorkspaceMetadataContent } from "@/components/worktree/worktree-pr-metadata";
+import type { WorktreePrReference } from "@/components/worktree/worktree-pr-metadata-model";
 import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owner-settings-header";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
@@ -67,6 +70,27 @@ export function WorktreeOwnerMetadataTooltip(props: {
     useState<OwnerMetadataHoverState>(CLOSED_HOVER_STATE);
   const open = !hoverState.pressed && hoverState.hoverOpen;
   const client = useHostClientForHostId(props.hostId);
+  const tileNavigation = useEpicTileNavigation();
+  const openPrInApp = (reference: WorktreePrReference): void => {
+    if (
+      reference.githubHost === null ||
+      reference.owner === null ||
+      reference.repo === null
+    ) {
+      return;
+    }
+    tileNavigation.openTileInEpic(
+      props.epicId,
+      makePrDetailTile({
+        hostId: props.hostId,
+        githubHost: reference.githubHost,
+        owner: reference.owner,
+        repo: reference.repo,
+        prNumber: reference.prNumber,
+        name: `${reference.repo} #${reference.prNumber}`,
+      }),
+    );
+  };
   const metadata = useWorktreeOwnerMetadata({
     client,
     epicId: props.epicId,
@@ -160,6 +184,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
               workspaces={metadata.workspaces}
               pending={metadata.isPending}
               error={metadata.error !== null}
+              openPrInApp={openPrInApp}
             />
           </span>
           {props.supplementalContent === null ? null : (

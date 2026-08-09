@@ -1,17 +1,16 @@
 /**
  * Shared wire shapes for the managed-command surface - the human half of the
- * subsystem whose agent half is the `traycer_*_monitor(s)` tool set. A managed
- * command is a supervised shell command owned by the host; its two kinds are a
- * `monitor` (meant to keep running) and a `shell` (runs once to completion).
+ * subsystem whose agent half is the `traycer_*_shell` tool set. A managed
+ * command is a supervised shell command owned by the host. There is ONE entity
+ * and no kinds: a shell either notifies its owning agent as it prints
+ * (`monitoring`) or only when it dies, and that flag is live-tunable, so it is
+ * state to render rather than a second sort of thing.
  *
  * These schemas are shared by the unary lifecycle contracts in `./contracts.ts`
  * and the two streams in `./subscribe.ts`, the same way `terminalSessionInfo`
  * is shared across the terminal surface.
  */
 import { z } from "zod";
-
-export const managedCommandKindSchema = z.enum(["monitor", "shell"]);
-export type ManagedCommandKind = z.infer<typeof managedCommandKindSchema>;
 
 /**
  * The command's lifecycle, mirroring the supervisor's own status union. There
@@ -43,19 +42,24 @@ export const managedCommandStatusSchema = z.discriminatedUnion("state", [
 export type ManagedCommandStatus = z.infer<typeof managedCommandStatusSchema>;
 
 /**
- * One managed command as a human surface sees it: enough to render a
- * kind-explicit row ("Monitor · deploy watcher"), a status dot, an activity
- * ordering, and the backlink to the chat that created it.
+ * One managed command as a human surface sees it: enough to render a row
+ * ("Shell · deploy watcher"), a status dot, an activity ordering, and the
+ * backlink to the chat that created it.
  *
  * Deliberately narrower than the agent's view: no `command`, `cwd`,
  * `interpreter` or `logDirectory`. The UI neither authors nor edits commands
  * (that is the agent's job) and reads output through `subscribeOutput` rather
  * than off the filesystem, so carrying the spec would only widen what a viewer
  * learns about the host's disk.
+ *
+ * `monitoring` is the flag, never its tuning: the debounce/max-wait/throttle
+ * timings that pace a monitoring shell's digests are the agent's business, and a
+ * viewer renders what the shell IS, not the policy behind it.
  */
 export const managedCommandSchema = z.object({
   id: z.string(),
-  kind: managedCommandKindSchema,
+  /** Output is delivered to the owning agent as it prints, not only at death. */
+  monitoring: z.boolean(),
   /** The command's human label, shown as the row title. */
   description: z.string(),
   status: managedCommandStatusSchema,

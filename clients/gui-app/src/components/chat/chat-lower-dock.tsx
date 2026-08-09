@@ -189,6 +189,7 @@ function BackgroundSection(props: {
       items={items}
       epicId={dock.epicId}
       chatId={dock.chatId}
+      viewTabId={dock.viewTabId}
       canAct={dock.canAct}
       readOnly={dock.readOnly}
       pendingStopTaskIds={dock.backgroundStopPendingTaskIds}

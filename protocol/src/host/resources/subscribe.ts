@@ -324,7 +324,7 @@ export const resourcesSubscribeV13 = defineStreamRpcContract({
 
 /**
  * `@1.4` grows the owner vocabulary by `managed-command` - the host's
- * supervised long-running commands (Monitors and Shells). Their trees were
+ * supervised long-running commands (shells). Their trees were
  * always tracked; before `@1.4` the host folded them into `other` because the
  * wire had no kind for them, and it still does that for any peer negotiated
  * below `@1.4`. The `@1.0`-`@1.3` enum stays frozen: a kind is not an additive
@@ -347,23 +347,35 @@ export const resourceOwnerRefSchemaV14 = z.object({
 export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
 
 /**
- * What a `managed-command` owner row needs beyond the generic owner fields:
- * the kind the UI names ("Monitor …" / "Shell …") and the human description
- * the command was created with. `commandId` repeats `owner.ownerId` - the same
+ * What a `managed-command` owner row needs beyond the generic owner fields: the
+ * human description the command was created with, and whether it is monitoring -
+ * the same state its row in the Shells list renders, so one process tree is not
+ * labelled two different ways. `commandId` repeats `owner.ownerId` - the same
  * value by construction - so a client joining this row to the managed-command
  * list stream does it through a named field rather than a convention.
+ *
+ * `createdByAgentId` names the shell's creator - the agent whose tool call made
+ * it, which is what lets a client nest the row under that agent instead of
+ * listing it beside one. The owner list stays flat on the wire: the creator is
+ * an id, and whether it currently has an owner row of its own is a question
+ * only the client's own view can answer. It defaults rather than requires: a
+ * host from before the field exists must degrade to today's flat list, not
+ * fail the whole frame's parse and blank the panel.
  */
 export const managedCommandOwnerSchema = z.object({
   commandId: z.string(),
-  kind: z.enum(["monitor", "shell"]),
+  monitoring: z.boolean(),
   description: z.string(),
+  createdByAgentId: z.string().default(""),
 });
 export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;
 
 /**
- * Frozen `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind
- * and `managedCommand`, which is non-null exactly when the kind is
- * `managed-command`.
+ * `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind and
+ * `managedCommand`, which is non-null exactly when the kind is
+ * `managed-command`. Not yet frozen: the v2 surface is staging-only with
+ * matched fleets, so this shape is still edited in place (see the shell
+ * unification ADR) - additions must default so an older host still parses.
  */
 export const ownerResourceSnapshotSchemaV14 = z.object({
   ...ownerResourceSnapshotSchemaV13.shape,

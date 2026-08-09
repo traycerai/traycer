@@ -52,7 +52,7 @@ describe("<AutonomousResumeSegment />", () => {
 
   it("never claims a still-running producer finished", () => {
     // `status` is a persisted enum with no value for "running", so a digest
-    // from a live monitor (or a backgrounded shell still streaming) carries
+    // from a shell still streaming carries
     // `completed` for older readers. A reader that understands `live` must
     // prefer it - otherwise the most glanceable line in the turn says the
     // command is done while it is still going.
@@ -74,7 +74,7 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
-    expect(screen.queryByText("Monitor completed")).toBeNull();
+    expect(screen.queryByText("Shell completed")).toBeNull();
     expect(screen.getByText("Command still running")).toBeTruthy();
     expect(screen.getByText("still running - 12 new log lines")).toBeTruthy();
   });
@@ -98,6 +98,8 @@ describe("<AutonomousResumeSegment />", () => {
       />,
     );
 
+    // Kind-only trigger (no `managedCommand` block): the harness's own
+    // Monitor tool, which keeps its real name.
     expect(screen.getByText("Monitor failed")).toBeTruthy();
     expect(screen.queryByText("Command still running")).toBeNull();
   });
@@ -214,7 +216,7 @@ describe("<AutonomousResumeSegment />", () => {
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 
-  it("renders monitor triggers as non-expandable cards with no output row", () => {
+  it("renders shell triggers as non-expandable cards with no output row", () => {
     render(
       <AutonomousResumeSegment
         triggers={[
@@ -234,8 +236,8 @@ describe("<AutonomousResumeSegment />", () => {
     );
 
     expect(screen.queryByRole("status", { name: "Resumed" })).toBeNull();
-    // Monitor never has a capturable output file, so the card is a static
-    // header - no expand toggle/button, no "Output file unavailable" row.
+    // A monitor trigger never has a capturable output file, so the card is a
+    // static header - no expand toggle/button, no "Output file unavailable".
     expect(
       screen.queryByRole("button", { name: /Monitor stopped/ }),
     ).toBeNull();

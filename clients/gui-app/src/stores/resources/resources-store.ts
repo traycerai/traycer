@@ -125,8 +125,9 @@ function ownerUsageEqual(
   );
 }
 
-// Renaming a Monitor changes what its row reads without moving a number, so
-// the naming has to take part in the identity check that gates re-renders.
+// Renaming a shell - or muting one - changes what its row reads without moving
+// a number, so both have to take part in the identity check that gates
+// re-renders.
 function managedCommandEqual(
   a: ManagedCommandOwnerWire | null,
   b: ManagedCommandOwnerWire | null,
@@ -134,8 +135,9 @@ function managedCommandEqual(
   if (a === null || b === null) return a === b;
   return (
     a.commandId === b.commandId &&
-    a.kind === b.kind &&
-    a.description === b.description
+    a.monitoring === b.monitoring &&
+    a.description === b.description &&
+    a.createdByAgentId === b.createdByAgentId
   );
 }
 

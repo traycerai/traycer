@@ -13,7 +13,7 @@ import type {
 } from "@/stores/chats/chat-session-store";
 
 /**
- * The read side of "Monitors & Shells" for one chat.
+ * The read side of the Shells surface for one chat.
  *
  * The set rides that chat's own `chat.subscribe` stream, so these hooks are
  * projections of the chat session store rather than a stream of their own.

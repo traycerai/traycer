@@ -3,7 +3,6 @@ import {
   Bell,
   Check,
   CheckCircle2,
-  CircleAlert,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -12,6 +11,10 @@ import {
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
+import {
+  FAILURE_TONE,
+  notificationFeedTone,
+} from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
@@ -69,8 +72,8 @@ function isBlockingAttentionRow(row: MergedNotificationRow): boolean {
  * visibility), so its presence never shifts row content. The row itself
  * spans the popover's true edge-to-edge width (no section-level inset) so
  * its bottom divider isn't cut off short of the popover's edges - `pl-6`/
- * `pr-4` reproduce the old section inset (px-4) plus the rail gutter purely
- * as content padding.
+ * `pr-4` reproduce the section inset plus the rail gutter purely as content
+ * padding.
  */
 export function NotificationRow(props: NotificationRowProps): ReactNode {
   const row = useMergedNotificationRow(props.feedId);
@@ -295,9 +298,7 @@ interface RowGlyph {
   readonly colorClassName: string;
 }
 
-const PROMPT_COLOR = "text-amber-600 dark:text-amber-400";
 const FAILURE_COLOR = "text-destructive";
-const DONE_COLOR = "text-blue-600 dark:text-blue-400";
 const NEUTRAL_COLOR = "text-muted-foreground";
 const SUCCESS_COLOR = "text-success-foreground";
 const INVITE_COLOR = "text-primary";
@@ -310,31 +311,25 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     return globalEventGlyph(row.globalEntry.event);
   }
   if (row.appLocalKind !== null) {
-    return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
-  }
-  if (row.severity === "failure") {
-    return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
-  }
-  if (row.severity === "needs_action") {
     return {
-      icon: row.hostKind === "approval.requested" ? Shield : MessageCircle,
-      colorClassName: PROMPT_COLOR,
+      icon: FAILURE_TONE.Icon,
+      colorClassName: FAILURE_TONE.className,
     };
   }
-  if (row.severity === "done") {
-    return { icon: Bell, colorClassName: DONE_COLOR };
+  const statusTone = notificationFeedTone(row);
+  if (statusTone !== null) {
+    return { icon: statusTone.Icon, colorClassName: statusTone.className };
   }
   switch (row.hostKind) {
     case "agent.stopped":
-      return { icon: Bell, colorClassName: DONE_COLOR };
+      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     case "agent.stalled":
-      return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
+      return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
     case "approval.requested":
-      return { icon: Shield, colorClassName: PROMPT_COLOR };
     case "interview.requested":
-      return { icon: MessageCircle, colorClassName: PROMPT_COLOR };
+      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     case "workspace.operation.failed":
-      return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
+      return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
     // Only reachable for an `info` row: the severity branches above already
     // claim every `done`/`failure`/`needs_action` host-operation row, and the
     // kind itself says nothing about how the operation ended.

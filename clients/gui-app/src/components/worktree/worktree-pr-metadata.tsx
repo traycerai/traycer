@@ -1,10 +1,15 @@
-import { use, useCallback, type MouseEvent, type ReactNode } from "react";
+import { use, type MouseEvent, type ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
-import { ExternalLink, FolderGit2, GitBranch } from "lucide-react";
+import {
+  ExternalLink,
+  FolderGit2,
+  GitBranch,
+  PanelsTopLeft,
+} from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surface";
@@ -50,6 +55,7 @@ export function WorktreePrPills(props: {
   readonly maximumVisible: number | null;
   readonly className: string | undefined;
   readonly testId: string;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const references = worktreePrReferences(props.worktrees);
   if (references.length === 0) return null;
@@ -70,10 +76,14 @@ export function WorktreePrPills(props: {
           reference={reference}
           detailOnHover={props.detailOnHover}
           flexible={props.maximumVisible !== null}
+          openPrInApp={props.openPrInApp}
         />
       ))}
       {overflowReferences.length === 0 ? null : (
-        <WorktreePrOverflow references={overflowReferences} />
+        <WorktreePrOverflow
+          references={overflowReferences}
+          openPrInApp={props.openPrInApp}
+        />
       )}
     </span>
   );
@@ -83,6 +93,7 @@ function WorktreePrPill(props: {
   readonly reference: WorktreePrReference;
   readonly detailOnHover: boolean;
   readonly flexible: boolean;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   // The pill is a real PR link everywhere it renders - the Epic history list
   // and the chat/owner hover preview (now an interactive HoverCard, so a
@@ -99,6 +110,7 @@ function WorktreePrPill(props: {
     >
       <WorktreePrAnchor
         reference={props.reference}
+        openPrInApp={props.openPrInApp}
         className={cn("max-w-[min(60vw,16rem)]", props.flexible && "min-w-0")}
       />
     </Badge>
@@ -118,6 +130,7 @@ function WorktreePrPill(props: {
 
 function WorktreePrOverflow(props: {
   readonly references: readonly WorktreePrReference[];
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const count = props.references.length;
   return (
@@ -151,6 +164,7 @@ function WorktreePrOverflow(props: {
               reference={reference}
               detailOnHover={false}
               flexible={false}
+              openPrInApp={props.openPrInApp}
             />
           ))}
         </span>
@@ -162,6 +176,7 @@ function WorktreePrOverflow(props: {
 function WorktreePrPillContent(props: {
   readonly label: string;
   readonly state: WorktreeDisplayedPrState;
+  readonly opensInApp: boolean;
 }): ReactNode {
   const StateIcon = PR_STATE_ICON[props.state];
   return (
@@ -177,10 +192,17 @@ function WorktreePrPillContent(props: {
           on hover it confirms the affordance exactly when it is being
           considered. `opacity` (not conditional mount) so the pill's width is
           identical in both states and a row of them cannot reflow on hover. */}
-      <ExternalLink
-        className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
-        aria-hidden
-      />
+      {props.opensInApp ? (
+        <PanelsTopLeft
+          className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
+          aria-hidden
+        />
+      ) : (
+        <ExternalLink
+          className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
+          aria-hidden
+        />
+      )}
     </>
   );
 }
@@ -188,18 +210,21 @@ function WorktreePrPillContent(props: {
 function WorktreePrAnchor(props: {
   readonly reference: WorktreePrReference;
   readonly className: string | undefined;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
   const openExternalLink = useRunnerOpenExternalLink();
-  const openExternal = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      event.stopPropagation();
-      if (runnerHost === null) return;
+  const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
+    event.stopPropagation();
+    if (props.openPrInApp !== null && hasNativePrCoordinates(props.reference)) {
       event.preventDefault();
-      openExternalLink.mutate(props.reference.url);
-    },
-    [openExternalLink, props.reference.url, runnerHost],
-  );
+      props.openPrInApp(props.reference);
+      return;
+    }
+    if (runnerHost === null) return;
+    event.preventDefault();
+    openExternalLink.mutate(props.reference.url);
+  };
   return (
     <a
       href={props.reference.url}
@@ -209,13 +234,30 @@ function WorktreePrAnchor(props: {
       className={props.className}
       data-testid="worktree-context-pr-pill"
       data-pr-state={props.reference.state}
-      onClick={openExternal}
+      onClick={openPr}
     >
       <WorktreePrPillContent
         label={props.reference.label}
         state={props.reference.state}
+        opensInApp={
+          props.openPrInApp !== null && hasNativePrCoordinates(props.reference)
+        }
       />
     </a>
+  );
+}
+
+function hasNativePrCoordinates(
+  reference: WorktreePrReference,
+): reference is WorktreePrReference & {
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+} {
+  return (
+    reference.githubHost !== null &&
+    reference.owner !== null &&
+    reference.repo !== null
   );
 }
 
@@ -247,9 +289,10 @@ function WorktreePrHoverDetail(props: {
 export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
-  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly pending: boolean;
   readonly error: boolean;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   if (props.pending && props.binding === null) {
     return (
@@ -323,6 +366,7 @@ export function OwnerWorkspaceMetadataContent(props: {
               maximumVisible={null}
               className="mt-0.5 flex-wrap overflow-visible"
               testId={`owner-workspace-prs-${item.key}`}
+              openPrInApp={props.openPrInApp}
             />
           )}
         </span>

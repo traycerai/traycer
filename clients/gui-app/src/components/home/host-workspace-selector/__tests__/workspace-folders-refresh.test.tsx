@@ -63,6 +63,7 @@ const ITEM: WorkspaceRunItem = {
   summary: GIT_SUMMARY,
   currentIntent: null,
   defaultNewBranchName: "traycer/swift-otter",
+  branchPrefixWarning: null,
   repoIdentifier: { owner: "acme", repo: "app" },
   isPrimary: true,
   canChangePrimary: true,
