@@ -9,6 +9,9 @@ import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon"
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
+import { ProjectProfileSwitcher } from "@/components/profiles/project-profile-switcher";
+import { profileColorHex } from "@/components/profiles/profile-options";
+import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -69,6 +72,9 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   const dragSuppressed = useTitleBarDraggingSuppressed();
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
+  const isSignedIn = useAuthStore((state) => state.status === "signed-in");
+  const activeProfile = useActiveProjectProfile();
+  const showProjectSwitcher = showTabStrip && isSignedIn;
 
   return (
     <header
@@ -85,6 +91,14 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
           : "px-3",
       )}
     >
+      {showProjectSwitcher && activeProfile !== null ? (
+        <div
+          aria-hidden
+          data-testid="profile-accent-bar"
+          className="absolute inset-x-0 top-0 z-10 h-0.5"
+          style={{ backgroundColor: profileColorHex(activeProfile.color) }}
+        />
+      ) : null}
       <WindowsMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
       {/* Left drag handle: breathing room beside the traffic lights +
@@ -112,6 +126,14 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
           draggable && "[-webkit-app-region:drag]",
         )}
       >
+        {showProjectSwitcher ? (
+          <div
+            className="mr-1 shrink-0"
+            style={framelessDesktop ? NO_DRAG_STYLE : undefined}
+          >
+            <ProjectProfileSwitcher />
+          </div>
+        ) : null}
         {showTabStrip ? <TabStrip /> : null}
       </div>
       <div
