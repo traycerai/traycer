@@ -89,6 +89,8 @@ export interface CommGraphCanvasProps {
   /** The merged event array up to the cursor. */
   readonly events: ReadonlyArray<CommGraphEvent>;
   readonly hosts: ReadonlyArray<CommGraphHostState>;
+  /** Every source has delivered its initial bounded history. */
+  readonly initialHistoryCaughtUp: boolean;
   /** What the cursor event lights up, or null when it lights up nothing. */
   readonly pulse: CommGraphPulse | null;
   readonly view: CommGraphTileViewState;
@@ -156,6 +158,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     epicId,
     events,
     hosts,
+    initialHistoryCaughtUp,
     onJump,
     onJumpToCreated,
     onJumpToSender,
@@ -323,6 +326,9 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       commGraphEventTouchesAgent(event, selectedAgent.id),
     );
   }, [events, selectedAgent]);
+  const selectedEdgeHistoryCaughtUp =
+    selectedEdge !== null && initialHistoryCaughtUp;
+  const selectedAgentHistoryCaughtUp = initialHistoryCaughtUp;
 
   const handleMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
@@ -409,9 +415,11 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       </div>
       {selectedEdge === null ? null : (
         <CommGraphThreadPanel
+          key={selectedEdge.id}
           edge={selectedEdge}
           epicId={epicId}
           agentNames={nameById}
+          initialHistoryCaughtUp={selectedEdgeHistoryCaughtUp}
           canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={onJump}
@@ -425,10 +433,12 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       )}
       {selectedAgent === null ? null : (
         <CommGraphAgentDetailPanel
+          key={selectedAgent.id}
           agent={selectedAgent}
           epicId={epicId}
           agentNames={nameById}
           events={selectedAgentEvents}
+          initialHistoryCaughtUp={selectedAgentHistoryCaughtUp}
           canOpenAgentForEvent={canOpenAgentForEvent}
           canJump={canJump}
           onJump={onJump}

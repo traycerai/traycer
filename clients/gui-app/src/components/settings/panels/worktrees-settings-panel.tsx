@@ -76,7 +76,6 @@ import {
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
   DropdownMenu,
@@ -214,21 +213,18 @@ function useObservedHeight(): {
 }
 
 /**
- * Two stacked cards, no section headings - the branch-prefix strip's own
- * label + "All hosts" scope tag and the inventory's own host/search/filter
- * toolbar already identify what each card is, so a redundant "New
- * worktrees" / "Existing worktrees" heading above either would just repeat
- * that. The branch-prefix strip is a client-wide creation default; the
- * inventory below lists every git worktree under the selected host's
- * `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
+ * Inventory-only: this panel lists every git worktree under the selected
+ * host's `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
  * owning chat/agent was deleted still appear) and lets the user delete ones
- * they no longer need.
+ * they no longer need. The branch-prefix default lives in General settings;
+ * a per-repository override lives in that repo's Environment dialog - this
+ * page carries neither, so the inventory's own host/search/filter toolbar is
+ * the only chrome above the list.
  *
  * The scoped host comes from the ONE picker in the sidebar (`useHostScope`),
  * which reaches a non-active host through a transient client, so viewing
  * another host's worktrees never swaps the app-wide active host or reloads the
- * Epic list - and never affects the branch-prefix default above, which is not
- * host-scoped. This panel used to carry its own host `<Select>` in the
+ * Epic list. This panel used to carry its own host `<Select>` in the
  * toolbar; that slot is gone entirely — the sidebar names the scoped host,
  * and the toolbar keeps only the refresh control and its own filters.
  */
@@ -245,7 +241,7 @@ export function WorktreesSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Set the default branch prefix and manage Traycer-created worktrees."
+      description="Traycer-created worktrees on this host."
       fillHeight
       bodyClassName="relative rounded-none border-none bg-transparent"
     >
@@ -255,7 +251,6 @@ export function WorktreesSettingsPanel(): ReactNode {
           compact ? "gap-2.5" : "gap-3",
         )}
       >
-        <WorktreeBranchPrefixSection />
         <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
           <WorktreesBody
             client={scope.client}
@@ -3015,12 +3010,18 @@ function WorktreeScriptReviewDialog(props: {
       scriptSeed={props.scriptSeed}
       seedPending={false}
       errorNote={null}
+      scriptsNote={null}
+      repositoryDefaultsSlot={null}
       inUseNote={
         target.inUse ? "This worktree is in use by an active agent." : null
       }
+      saveLabel="Save"
       // Settings stashes the reviewed scripts synchronously for its delete flow;
       // wrap in a resolved promise so the shared dialog's success path runs.
       onSave={(scripts) => Promise.resolve(onSave(target, scripts))}
+      // No nested editor to protect here (no Branch naming section) - plain
+      // Escape-closes-the-dialog behavior.
+      onEscapeKeyDown={() => {}}
       onOpenChange={props.onOpenChange}
     />
   );

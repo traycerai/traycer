@@ -5,6 +5,7 @@ export const worktreeMutationKeys = {
   retrySetup: () => ["worktree.retrySetup"] as const,
   delete: () => ["worktree.delete"] as const,
   setRepoScripts: () => ["worktree.setRepoScripts"] as const,
+  setRepoBranchPrefix: () => ["worktree.setRepoBranchPrefix"] as const,
   refreshListing: () => ["worktree.listAllForHost", "forceRefresh"] as const,
   /**
    * The owner hover card's Refresh. Scoped by `ownerId` rather than sharing

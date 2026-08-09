@@ -25,7 +25,7 @@ import {
   workspaceMutationKeys,
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { openRemoteWorkspacePathPicker } from "@/lib/host/remote-workspace-path-picker";
+import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -155,7 +155,7 @@ export function useWorkspaceFolderActionsForClient(
     // Capture host identity at dispatch. Every post-await re-read must match
     // this id; otherwise refuse so we never stamp A-prepared paths as B.
     // Any bound host qualifies, not just a local one: a remote host reaches its
-    // own filesystem through the path-entry dialog below (T14).
+    // own filesystem through the RPC-backed browse dialog below.
     const dispatchHost = client?.getActiveHost() ?? null;
     if (client === null || dispatchHost === null) {
       reportableErrorToast("Select a host to add folders.", undefined, {
@@ -168,18 +168,31 @@ export function useWorkspaceFolderActionsForClient(
     }
     const dispatchHostId = dispatchHost.hostId;
 
-    // A remote host has no native OS picker to reach onto its filesystem — the
-    // path-entry dialog resolves to the same `readonly string[]` shape
-    // (`IRunnerHost.workspaceFolders.pickFolders()`'s contract), so everything
-    // downstream (`workspace.prepareFolders`, `addResolvedFolders`, …) runs
-    // unchanged regardless of which picker produced the path (T14).
+    // A local/mock host shares the client machine, so the shell's native OS
+    // directory dialog picks real host paths. Everything else — a remote host,
+    // or any shell without a native dialog (mobile/browser) — browses the
+    // host's filesystem over `workspace.browseFolders`. Both resolve to the
+    // same `readonly string[]` shape (`IRunnerHost.workspaceFolders
+    // .pickFolders()`'s contract), so everything downstream
+    // (`workspace.prepareFolders`, `addResolvedFolders`, …) runs unchanged
+    // regardless of which picker produced the path.
     let folderPaths: readonly string[];
-    if (canAssociateLocalWorkspaces(dispatchHost)) {
+    if (
+      canAssociateLocalWorkspaces(dispatchHost) &&
+      runnerHost.workspaceFolders.canPickNatively
+    ) {
       folderPaths = await runnerHost.workspaceFolders.pickFolders();
-    } else if (dispatchHost.kind === "remote") {
-      folderPaths = await openRemoteWorkspacePathPicker(client);
     } else {
-      folderPaths = [];
+      // Hand the picker a requester PINNED to dispatchHost. A tab's client is
+      // host-bound for life, but an app-wide one is not: if the active host
+      // changed while the dialog was open, an unpinned client would browse -
+      // and record recents on - whichever host became active, even though the
+      // path is submitted to dispatchHost below. The guard after this only
+      // catches the prepare call, by which point the browsing already leaked.
+      const pickedPath = await useRemoteFolderPickerStore
+        .getState()
+        .requestPick(client.createRequester(dispatchHost));
+      folderPaths = pickedPath === null ? [] : [pickedPath];
     }
     if (folderPaths.length === 0) {
       return null;
