@@ -33,7 +33,7 @@ describe("notification status tone registry", () => {
         NOTIFICATION_STATUS_TONES[pendingKind].Icon,
       );
       expect(NOTIFICATION_STATUS_TONES[resolvedKind].className).toBe(
-        NOTIFICATION_STATUS_TONES.done.className,
+        NOTIFICATION_STATUS_TONES[pendingKind].className,
       );
       expect(NOTIFICATION_STATUS_TONES[resolvedKind].Icon).not.toBe(
         NOTIFICATION_STATUS_TONES.done.Icon,

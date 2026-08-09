@@ -66,7 +66,7 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
   "interview-resolved": {
     testId: "interview-resolved",
     title: "Question resolved",
-    className: "text-success-foreground",
+    className: "text-warning-foreground",
     Icon: MessageSquareQuestionMark,
   },
   approval: {
@@ -78,7 +78,7 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
   "approval-resolved": {
     testId: "approval-resolved",
     title: "Approval resolved",
-    className: "text-success-foreground",
+    className: "text-warning-foreground",
     Icon: MessageSquareWarning,
   },
 };
@@ -109,9 +109,10 @@ interface NotificationFeedToneInput {
 
 /** Resolve a durable feed event onto the same semantic status vocabulary used
  * by live chat surfaces. A prompt's kind and disposition are independent:
- * resolution changes its tone to success without replacing its approval or
- * question glyph with the generic completion glyph. Informational events have
- * no agent-work tone and stay on the notification center's neutral fallback. */
+ * resolution changes its tooltip without replacing its approval/question
+ * glyph or color with the generic completion presentation. Informational
+ * events have no agent-work tone and stay on the notification center's neutral
+ * fallback. */
 export function notificationFeedTone(
   input: NotificationFeedToneInput,
 ): IndicatorTone | null {
