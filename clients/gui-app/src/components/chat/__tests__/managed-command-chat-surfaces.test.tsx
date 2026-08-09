@@ -13,6 +13,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -450,7 +451,7 @@ describe("running commands in the Background panel", () => {
     expect(findOpenArtifactInTab(TAB_ID, "mine-running")).not.toBeNull();
   });
 
-  it("reads in the panel's own row grammar: glyph, uppercase pill, elapsed, hover stop", () => {
+  it("reads in the panel's own row grammar: glyph, elapsed, hover stop", () => {
     renderPanel([]);
     act(() => {
       setCommands(
@@ -474,9 +475,15 @@ describe("running commands in the Background panel", () => {
       "managed-command-background-row-mine-running",
     );
     // The glyph is what keeps a supervised shell apart from the harness's own
-    // background kinds; the pill names it in the panel's existing grammar.
+    // background kinds; the title names the entity.
     expect(row.querySelector("[data-monitor-icon='off']")).not.toBeNull();
-    expect(row.textContent).toContain("Shell");
+    expect(row.textContent).toContain("Shell · deploy watcher");
+    // The pill slot is EMPTY on a shell that isn't monitoring - no placeholder,
+    // no dimmed variant. A constant "Shell" pill beside a title that already
+    // says Shell was pure repetition, so the slot now carries the one thing
+    // the row cannot otherwise say.
+    expect(within(row).queryByText("Shell")).toBeNull();
+    expect(within(row).queryByText("Monitoring")).toBeNull();
     // Same clock format the harness rows use, so two rows side by side read
     // as one list rather than two conventions.
     expect(row.textContent).toContain("1m 5s");
@@ -487,6 +494,23 @@ describe("running commands in the Background panel", () => {
       epicId: EPIC_ID,
       commandId: "mine-running",
     });
+  });
+
+  it("spends the pill on the monitor flag, the one state the row can't otherwise show", () => {
+    renderPanel([]);
+    act(() => {
+      setCommands([command({ id: "mine-running", monitoring: true })], CHAT_ID);
+    });
+    expandPanel();
+
+    const row = screen.getByTestId(
+      "managed-command-background-row-mine-running",
+    );
+    // Uppercased by the panel's shared pill styling, so the source text stays
+    // title-case like every other pill in this list.
+    const pill = within(row).getByText("Monitoring");
+    expect(pill.className).toContain("uppercase");
+    expect(row.querySelector("[data-monitor-icon='on']")).not.toBeNull();
   });
 
   it("offers stop and nothing destructive: this is a status, not the object", () => {

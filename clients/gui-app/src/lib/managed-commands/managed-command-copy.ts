@@ -10,7 +10,11 @@ import type {
  * collides with the command palette and with terminal commands.
  */
 
-/** The entity noun, wherever a bare label is what fits (pill, banner). */
+/**
+ * The entity noun, wherever a bare label is what fits (row title, resource
+ * kind label, resume prose). Deliberately NOT a pill anywhere: a pill beside a
+ * title that already says Shell reads as a second fact and is none.
+ */
 export const MANAGED_COMMAND_NOUN = "Shell";
 
 /** The list row / tab title: "Shell · deploy watcher". */
