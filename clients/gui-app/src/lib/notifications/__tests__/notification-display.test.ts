@@ -488,11 +488,18 @@ describe("host channel emission focus gate", () => {
       background.showNotification.mock.calls[0][0].deliveryKey;
     expect(focusedKey).toBe(EMISSION_N1_N2_DELIVERY_KEY);
     expect(backgroundKey).toBe(focusedKey);
-    // The focused window still shows only its sibling row.
-    expect(toastCalls).toHaveLength(1);
+    // Each simulated window renders its own subset - the focused one shows
+    // only the sibling row, the background one the full batch - but the
+    // shared key is what lets the main process deliver the emission once.
+    expect(toastCalls.map((call) => call.options.id)).toEqual([
+      "host:chat:chat-2",
+      "notification-batch",
+    ]);
+    expect(focused.playChime).toHaveBeenCalledOnce();
+    expect(background.playChime).not.toHaveBeenCalled();
   });
 
-  it("hands blurred-window rows to the native pass without a local toast", () => {
+  it("renders a blurred window's toast but withholds its chime", () => {
     focusChatTile("chat-1");
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const target = displayTarget();
@@ -503,12 +510,15 @@ describe("host channel emission focus gate", () => {
       "stream-host-1",
     );
 
-    // Blur disarms the focus gate, so the row must still go out - but only
-    // through the native pass (OS banner or foreground relay). A toast and
-    // chime in a window nobody is looking at reach nobody.
+    // Blur disarms the entity gate, so the row goes out. The toast must
+    // still render: the main process relays nothing back to a focused
+    // sender, so a renderer that skipped its own toast could leave the
+    // arrival with no surface when focus lands between the two checks.
+    // Only the chime - audible from a window nobody is looking at, and
+    // never the sole delivery - is withheld.
     expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(toastCalls).toHaveLength(1);
     expect(target.playChime).not.toHaveBeenCalled();
-    expect(toastCalls).toHaveLength(0);
   });
 });
 

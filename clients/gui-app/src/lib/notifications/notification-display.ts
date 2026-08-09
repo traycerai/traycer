@@ -184,11 +184,6 @@ function renderNotificationToast(
   target: NotificationDisplayTarget,
   deliveryKey: string | null,
 ): void {
-  // An unfocused window's toast and chime reach nobody: the native pass owns
-  // delivery there (OS banner, or the relay into the focused window - which
-  // applies its own entity gate). Rendering here anyway leaks an audible
-  // chime out of a background window.
-  if (!isDocumentFocused()) return;
   // A focused window can receive the same occurrence twice - its own feed
   // display racing another window's foreground relay. Whichever rendered
   // first wins; the sonner id already coalesces the visual, this collapses
@@ -225,6 +220,16 @@ function renderNotificationToast(
     id: content.replaceKey,
   });
   rememberDisplayedDeliveryKey(deliveryKey);
+  // Only the CHIME is focus-gated, never the toast. The main process treats a
+  // focused sender as already-delivered and relays nothing back to it, so a
+  // renderer that skipped its own toast on an independent focus read would
+  // leave the arrival with no surface at all whenever focus landed between
+  // the two checks - and the burnt delivery key makes that unretryable.
+  // Rendering unconditionally keeps delivery a single decision (the main
+  // process picks banner or relay) and leaves the renderer only this one,
+  // which is never the sole delivery: an unseen toast is harmless, while a
+  // chime from a window nobody is looking at is not.
+  if (!isDocumentFocused()) return;
   target.playChime();
 }
 
