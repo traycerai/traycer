@@ -22,6 +22,13 @@ export type EpicActivityStatus = "idle" | "turn" | "background";
 /**
  * Aggregates this epic's live chat sessions into the activity tier rendered
  * by task-level surfaces. A turn wins over background work across chats.
+ *
+ * Coverage is WARM-session-only for managed commands: a chat whose session
+ * store is live contributes its shell-aware indicator, but an evicted or
+ * never-opened chat falls back to the host-published activity tier, which
+ * does not know shells exist. A running shell in a cold chat therefore shows
+ * nothing here until the host's activity plane learns about managed commands
+ * (a host-side follow-up, deliberately not faked client-side).
  */
 export function useEpicActivityStatus(
   epicId: string | null,

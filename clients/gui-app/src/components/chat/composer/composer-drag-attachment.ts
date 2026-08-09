@@ -218,8 +218,8 @@ export function mentionAttachmentFromDragSource(
     case TERMINAL_TILE_DND_TYPE:
     case MANAGED_COMMAND_OUTPUT_DND_TYPE:
     case LEFT_PANEL_RAIL_ITEM_DND_TYPE:
-      // Tabs, raw terminals, monitor rows, and panel chrome are not message
-      // context. A monitor's output reaches the agent through the host's own
+      // Tabs, raw terminals, shell rows, and panel chrome are not message
+      // context. A shell's output reaches the agent through the host's own
       // delivery, so mentioning the window would be a second, weaker path to
       // the same bytes.
       return null;

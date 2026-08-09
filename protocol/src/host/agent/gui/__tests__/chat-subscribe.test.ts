@@ -1613,9 +1613,9 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
 });
 
 describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
-  const monitor = {
+  const shell = {
     id: "command-1",
-    kind: "monitor" as const,
+    monitoring: true,
     description: "deploy watcher",
     status: {
       state: "running" as const,
@@ -1657,15 +1657,15 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
     hasBinaryPayload: false,
     epicId: "epic-1",
     chatId: "chat-1",
-    managedCommands: [monitor],
+    managedCommands: [shell],
   };
 
   it("carries the chat's commands on a live snapshot", () => {
     const parsed = chatSubscribeV16.serverFrameSchema.parse(
-      snapshotFrameWithManagedCommands([monitor]),
+      snapshotFrameWithManagedCommands([shell]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    expect(parsed.snapshot.managedCommands).toEqual([monitor]);
+    expect(parsed.snapshot.managedCommands).toEqual([shell]);
   });
 
   // Optional on the wire, always present after parsing: no consumer ever
@@ -1693,7 +1693,7 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
 
   it("drops the field on the frozen 1.5 line", () => {
     const parsed = chatSubscribeV15.serverFrameSchema.parse(
-      snapshotFrameWithManagedCommands([monitor]),
+      snapshotFrameWithManagedCommands([shell]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
     expect(parsed.snapshot).not.toHaveProperty("managedCommands");
@@ -1706,7 +1706,7 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
     if (parsed.kind !== "managedCommandsChanged") {
       throw new Error("expected managedCommandsChanged");
     }
-    expect(parsed.managedCommands).toEqual([monitor]);
+    expect(parsed.managedCommands).toEqual([shell]);
   });
 
   // The frame and the field arrive together or not at all - a 1.5 peer has no

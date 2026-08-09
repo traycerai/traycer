@@ -28,7 +28,7 @@ export function isReceivedAgentResponse(
 }
 
 /**
- * A pending delivery of a managed command's output (a Monitor's log digest, a
+ * A pending delivery of a shell's output (a watcher's log digest, a
  * backgrounded shell's completion digest). Content-free: the chip renders from
  * `description`, and the host renders the digest itself from the command's log
  * at dispatch. The user may reorder or cancel it; it is never editable or

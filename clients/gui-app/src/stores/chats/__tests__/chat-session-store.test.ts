@@ -5902,7 +5902,7 @@ describe("the chat's managed commands", () => {
   function monitor(over: Partial<ManagedCommand>): ManagedCommand {
     return {
       id: "cmd-1",
-      kind: "monitor",
+      monitoring: true,
       description: "deploy watcher",
       status: { state: "running", pid: 4410, startedAtMs: 10 },
       chatId: CHAT_ID,
