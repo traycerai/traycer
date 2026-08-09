@@ -1,0 +1,311 @@
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import {
+  findAdditivityViolation,
+  findBreakingChange,
+  toJsonSchemaFingerprint,
+} from "../json-schema-fingerprint";
+
+function fingerprint(schema: z.ZodType) {
+  return toJsonSchemaFingerprint(schema, "test");
+}
+
+/**
+ * Additivity = projection feasibility: the newer shape's payloads must
+ * strip down through the older schema (unconditionally for old-form
+ * payloads; new capabilities may refuse by design). Strict where
+ * projection breaks unconditionally (removals, incompatible
+ * replacements - at ANY depth), lenient where stripping or a designed
+ * refusal handles it (additions and widenings - at ANY depth).
+ */
+describe("findAdditivityViolation - projection-feasibility semantics", () => {
+  describe("additions are legal at any depth", () => {
+    it("accepts a new top-level optional field", () => {
+      const previous = fingerprint(z.object({ id: z.string() }));
+      const next = fingerprint(
+        z.object({ id: z.string(), note: z.string().optional() }),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("accepts a new field nested inside an object property", () => {
+      const previous = fingerprint(
+        z.object({ agents: z.array(z.object({ id: z.string() })) }),
+      );
+      const next = fingerprint(
+        z.object({
+          agents: z.array(z.object({ id: z.string(), model: z.string() })),
+        }),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("accepts a new field inside a discriminated-union arm (array root)", () => {
+      // The agent.listRunConfigs shape: array-of-union at the root. An
+      // optional field added to one arm strips at projection, exactly
+      // like a nested object addition - the old exact-fingerprint rule
+      // wrongly priced this as breaking.
+      const previous = fingerprint(
+        z.array(
+          z.discriminatedUnion("surface", [
+            z.object({ surface: z.literal("gui"), model: z.string() }),
+            z.object({ surface: z.literal("tui") }),
+          ]),
+        ),
+      );
+      const next = fingerprint(
+        z.array(
+          z.discriminatedUnion("surface", [
+            z.object({
+              surface: z.literal("gui"),
+              model: z.string(),
+              provenance: z.string().optional(),
+            }),
+            z.object({ surface: z.literal("tui") }),
+          ]),
+        ),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("accepts a brand-new union variant", () => {
+      const previous = fingerprint(
+        z.union([z.object({ kind: z.literal("a"), value: z.string() })]),
+      );
+      const next = fingerprint(
+        z.union([
+          z.object({ kind: z.literal("a"), value: z.string() }),
+          z.object({ kind: z.literal("b"), other: z.number() }),
+        ]),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("accepts new enum values", () => {
+      const previous = fingerprint(z.object({ role: z.enum(["owner"]) }));
+      const next = fingerprint(
+        z.object({ role: z.enum(["owner", "editor"]) }),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("treats the same addition identically under an object root and an array-union root", () => {
+      // The old checker's strictness depended on the ROOT shape (objects
+      // got a depth-1 check, array/union roots a full-depth one). The
+      // walk is now uniform: both placements of the same addition pass.
+      const objectRootPrevious = fingerprint(
+        z.object({ rows: z.array(z.object({ id: z.string() })) }),
+      );
+      const objectRootNext = fingerprint(
+        z.object({
+          rows: z.array(z.object({ id: z.string(), extra: z.boolean() })),
+        }),
+      );
+      const arrayRootPrevious = fingerprint(
+        z.array(z.union([z.object({ id: z.string() })])),
+      );
+      const arrayRootNext = fingerprint(
+        z.array(z.union([z.object({ id: z.string(), extra: z.boolean() })])),
+      );
+      expect(
+        findAdditivityViolation(objectRootPrevious, objectRootNext),
+      ).toBeNull();
+      expect(
+        findAdditivityViolation(arrayRootPrevious, arrayRootNext),
+      ).toBeNull();
+    });
+  });
+
+  describe("removals are violations at any depth", () => {
+    it("flags a top-level field removal (unchanged behavior)", () => {
+      const previous = fingerprint(
+        z.object({ id: z.string(), trim: z.boolean() }),
+      );
+      const next = fingerprint(z.object({ id: z.string() }));
+      expect(findAdditivityViolation(previous, next)).toEqual({
+        kind: "field",
+        detail: "trim",
+      });
+    });
+
+    it("flags a field removal nested inside an array of objects", () => {
+      // The hole the shallow checker had: this passed validation while
+      // breaking every old-peer projection at runtime.
+      const previous = fingerprint(
+        z.object({
+          agents: z.array(z.object({ id: z.string(), model: z.string() })),
+        }),
+      );
+      const next = fingerprint(
+        z.object({ agents: z.array(z.object({ id: z.string() })) }),
+      );
+      // The array branch preserves the historical wrapping: violations
+      // beneath an array surface as `array-items`, with the inner
+      // violation (and its dotted path) in the description.
+      expect(findAdditivityViolation(previous, next)).toEqual({
+        kind: "array-items",
+        detail: "drops field 'agents.items.model'",
+      });
+    });
+
+    it("flags a nested enum-value removal", () => {
+      const previous = fingerprint(
+        z.object({ settings: z.object({ role: z.enum(["owner", "viewer"]) }) }),
+      );
+      const next = fingerprint(
+        z.object({ settings: z.object({ role: z.enum(["owner"]) }) }),
+      );
+      expect(findAdditivityViolation(previous, next)).toEqual({
+        kind: "enum-value",
+        detail: "viewer",
+      });
+    });
+
+    it("flags a dropped union variant with no compatible successor", () => {
+      const previous = fingerprint(
+        z.union([
+          z.object({ kind: z.literal("circle"), radius: z.number() }),
+          z.object({ kind: z.literal("square"), side: z.number() }),
+        ]),
+      );
+      const next = fingerprint(
+        z.union([z.object({ kind: z.literal("circle"), radius: z.number() })]),
+      );
+      const violation = findAdditivityViolation(previous, next);
+      expect(violation?.kind).toBe("union-variant");
+    });
+
+    it("flags a variant whose replacement removed a field (not a compatible successor)", () => {
+      const previous = fingerprint(
+        z.union([
+          z.object({ kind: z.literal("a"), value: z.string() }),
+          z.object({ kind: z.literal("b") }),
+        ]),
+      );
+      const next = fingerprint(
+        z.union([
+          z.object({ kind: z.literal("a") }),
+          z.object({ kind: z.literal("b") }),
+        ]),
+      );
+      const violation = findAdditivityViolation(previous, next);
+      expect(violation?.kind).toBe("union-variant");
+    });
+  });
+
+  describe("widening lever", () => {
+    it("accepts a nested field widening into a union that retains the old form", () => {
+      // The sanctioned prepareLaunch@1.1 forkSource evolution: object ->
+      // union-with-old-form. Previously legal only because the checker
+      // could not see it; now legal because it is verified safe.
+      const previous = fingerprint(
+        z.object({ forkSource: z.object({ chatId: z.string() }) }),
+      );
+      const next = fingerprint(
+        z.object({
+          forkSource: z.union([
+            z.object({ tuiAgentId: z.string() }),
+            z.object({ chatId: z.string() }),
+          ]),
+        }),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("flags a widening that abandons the old form", () => {
+      const previous = fingerprint(
+        z.object({ forkSource: z.object({ chatId: z.string() }) }),
+      );
+      const next = fingerprint(
+        z.object({
+          forkSource: z.union([
+            z.object({ tuiAgentId: z.string() }),
+            z.object({ sessionId: z.string() }),
+          ]),
+        }),
+      );
+      const violation = findAdditivityViolation(previous, next);
+      expect(violation?.kind).toBe("union-variant");
+    });
+  });
+
+  describe("incompatible replacements", () => {
+    it("flags a nested leaf type change", () => {
+      const previous = fingerprint(z.object({ count: z.string() }));
+      const next = fingerprint(z.object({ count: z.number() }));
+      const violation = findAdditivityViolation(previous, next);
+      expect(violation?.kind).toBe("schema-kind");
+      expect(violation?.detail).toContain("at 'count'");
+    });
+
+    it("flags a nested kind change from object to enum", () => {
+      const previous = fingerprint(
+        z.object({ mode: z.object({ id: z.string() }) }),
+      );
+      const next = fingerprint(z.object({ mode: z.enum(["fast", "slow"]) }));
+      const violation = findAdditivityViolation(previous, next);
+      expect(violation?.kind).toBe("schema-kind");
+    });
+
+    it("still flags a root kind change", () => {
+      const previous = fingerprint(z.object({ id: z.string() }));
+      const next = fingerprint(z.array(z.object({ id: z.string() })));
+      expect(findAdditivityViolation(previous, next)).toEqual({
+        kind: "schema-kind",
+        detail: "object -> array",
+      });
+    });
+  });
+
+  describe("nullable and identical-leaf tolerance", () => {
+    it("accepts unchanged nullable leaves (anyOf with null variant)", () => {
+      const shape = z.object({ effort: z.string().nullable() });
+      expect(
+        findAdditivityViolation(fingerprint(shape), fingerprint(shape)),
+      ).toBeNull();
+    });
+
+    it("accepts adding a field beside an untouched nullable field", () => {
+      const previous = fingerprint(
+        z.object({ effort: z.string().nullable() }),
+      );
+      const next = fingerprint(
+        z.object({ effort: z.string().nullable(), fast: z.boolean() }),
+      );
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+
+    it("accepts widening a plain leaf to nullable (old form retained)", () => {
+      const previous = fingerprint(z.object({ effort: z.string() }));
+      const next = fingerprint(z.object({ effort: z.string().nullable() }));
+      expect(findAdditivityViolation(previous, next)).toBeNull();
+    });
+  });
+});
+
+describe("findBreakingChange - major-justification interplay", () => {
+  it("still justifies a major for nested enum growth (shipped agent.list precedent)", () => {
+    // agent.list v1->v7 majors are justified purely by nested harnessId
+    // enum growth through the per-property structural comparison; the
+    // additivity rework must not invalidate that shipped history.
+    const previous = fingerprint(
+      z.object({ agents: z.array(z.object({ harness: z.enum(["a"]) })) }),
+    );
+    const next = fingerprint(
+      z.object({ agents: z.array(z.object({ harness: z.enum(["a", "b"]) })) }),
+    );
+    expect(findAdditivityViolation(previous, next)).toBeNull();
+    expect(findBreakingChange(previous, next)).not.toBeNull();
+  });
+
+  it("reports a nested removal as a removed-field breaking change", () => {
+    const previous = fingerprint(
+      z.object({ agents: z.array(z.object({ id: z.string(), m: z.string() })) }),
+    );
+    const next = fingerprint(
+      z.object({ agents: z.array(z.object({ id: z.string() })) }),
+    );
+    const breaking = findBreakingChange(previous, next);
+    expect(breaking?.reason).toBe("removed");
+  });
+});

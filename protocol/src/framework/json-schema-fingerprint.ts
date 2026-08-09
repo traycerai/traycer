@@ -227,64 +227,261 @@ export type AdditivityViolation =
 
 /**
  * First non-additive change between two fingerprints, or null when
- * `next` is purely additive over `previous`. Used to enforce the
- * within-major-line additivity invariant - minor bumps may add but
- * never remove or change the kind of a field, enum value, or union
- * variant.
+ * `next` is purely additive over `previous`.
+ *
+ * "Additive" is defined by projection feasibility, matching what the
+ * transport actually does on a same-major version skew: the newer peer
+ * re-parses its latest-shape payload through the older installed
+ * schema (`prepareRequestPayload` Zod-strip on requests, the frozen
+ * response reparse on responses), where a failed parse surfaces as a
+ * typed `DOWNGRADE_UNSUPPORTED` refusal. Under that mechanism:
+ *
+ * - Additions are legal at ANY depth, but by two different mechanisms
+ *   with different obligations. Added object keys strip - unconditional,
+ *   nothing to own. Added enum values / union variants / widened forms
+ *   REFUSE at projection when a payload actually carries the new
+ *   capability; that refusal is only acceptable when the value's
+ *   occurrence is under the emitting caller's control (request-side
+ *   opt-in). Where shared state decides the value - a response field
+ *   reflecting replicated data - a single new-valued record poisons
+ *   every old peer's projection with no opt-out, so growth there must
+ *   ship as version-gated emission (the chat-frame-projection pattern)
+ *   or a major with a bridge that filters/maps the new values (the
+ *   agent.list harness-growth pattern). This validator cannot see which
+ *   case applies; that judgment is the reviewer's.
+ * - Removals are illegal at ANY depth - a removed field/value/variant
+ *   makes the projection of ordinary payloads fail unconditionally,
+ *   which is a de facto major shipped under a minor number.
+ * - A field may widen into a union (`z.object` -> `z.union([...])`)
+ *   only when some variant of the union remains additively compatible
+ *   with the previous form, so old-form payloads still project.
+ *
+ * The check therefore recurses through object properties (as raw JSON
+ * Schema nodes - leaf shapes like plain strings are compared
+ * structurally), matches union variants by additive compatibility
+ * rather than byte equality, and applies the same rules uniformly
+ * regardless of the root schema's shape.
  */
 export function findAdditivityViolation(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
 ): AdditivityViolation | null {
-  if (previous.type !== next.type) {
+  return findNodeAdditivityViolation(previous, next, []);
+}
+
+/**
+ * Classifier over schema nodes for the additivity walk. Accepts both
+ * normalized fingerprints (what the exported entry points receive) and
+ * raw JSON Schema subtrees (what `ObjectJsonSchema.properties` holds),
+ * because the walk crosses from the former into the latter the moment
+ * it descends into an object property. Anything that is neither an
+ * object, enum, union, nor array - scalar leaves, `{}` from
+ * unrepresentable types, records, tuples - is `opaque` and compared
+ * structurally.
+ */
+type ClassifiedSchemaNode =
+  | {
+      readonly kind: "object";
+      readonly properties: Readonly<Record<string, unknown>>;
+    }
+  | {
+      readonly kind: "enum";
+      readonly representation: EnumJsonSchema["representation"];
+      readonly values: readonly (string | number | boolean)[];
+    }
+  | { readonly kind: "anyOf"; readonly variants: readonly unknown[] }
+  | { readonly kind: "array"; readonly items: unknown }
+  | { readonly kind: "opaque"; readonly node: unknown };
+
+function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
+  if (typeof node !== "object" || node === null) {
+    return { kind: "opaque", node };
+  }
+
+  const shape = node as {
+    type?: unknown;
+    properties?: Record<string, unknown>;
+    values?: unknown;
+    representation?: unknown;
+    variants?: unknown;
+    enum?: readonly unknown[];
+    anyOf?: readonly unknown[];
+    oneOf?: readonly unknown[];
+    items?: unknown;
+  };
+
+  // Normalized-fingerprint forms first: `type: "enum"` / `type: "anyOf"`
+  // never occur in raw JSON Schema, so these branches are unambiguous.
+  if (shape.type === "enum" && Array.isArray(shape.values)) {
+    return {
+      kind: "enum",
+      representation:
+        shape.representation === "string" ||
+        shape.representation === "number" ||
+        shape.representation === "boolean"
+          ? shape.representation
+          : "mixed",
+      values: shape.values as readonly (string | number | boolean)[],
+    };
+  }
+  if (shape.type === "anyOf" && Array.isArray(shape.variants)) {
+    return { kind: "anyOf", variants: shape.variants };
+  }
+
+  // Raw JSON Schema forms, mirroring `convertJsonSchemaShape`'s branch
+  // order (a normalized object/array fingerprint is shape-identical to
+  // its raw form, so these cover both).
+  if (shape.type === "object" && shape.properties !== undefined) {
+    return { kind: "object", properties: shape.properties };
+  }
+  if (Array.isArray(shape.enum)) {
+    return {
+      kind: "enum",
+      representation: classifyEnumRepresentation(shape.type, shape.enum),
+      values: shape.enum as readonly (string | number | boolean)[],
+    };
+  }
+  const unionVariants = Array.isArray(shape.anyOf)
+    ? shape.anyOf
+    : Array.isArray(shape.oneOf)
+      ? shape.oneOf
+      : null;
+  if (unionVariants !== null) {
+    const literalEnum = tryFoldAnyOfLiteralsToEnum(unionVariants);
+    if (literalEnum !== null) {
+      return {
+        kind: "enum",
+        representation: literalEnum.representation,
+        values: literalEnum.values,
+      };
+    }
+    return { kind: "anyOf", variants: unionVariants };
+  }
+  if (
+    "const" in shape &&
+    (typeof (shape as { const?: unknown }).const === "string" ||
+      typeof (shape as { const?: unknown }).const === "number" ||
+      typeof (shape as { const?: unknown }).const === "boolean")
+  ) {
+    const value = (shape as { const: string | number | boolean }).const;
+    return {
+      kind: "enum",
+      representation: classifyEnumRepresentation(shape.type, [value]),
+      values: [value],
+    };
+  }
+  if (shape.type === "array" && shape.items !== undefined) {
+    return { kind: "array", items: shape.items };
+  }
+
+  return { kind: "opaque", node };
+}
+
+function dottedPath(path: readonly string[]): string {
+  return path.join(".");
+}
+
+function snippet(node: unknown): string {
+  return JSON.stringify(node).slice(0, 80);
+}
+
+function findNodeAdditivityViolation(
+  previous: unknown,
+  next: unknown,
+  path: readonly string[],
+): AdditivityViolation | null {
+  const previousNode = classifySchemaNode(previous);
+  const nextNode = classifySchemaNode(next);
+
+  if (previousNode.kind !== nextNode.kind) {
+    // Widening lever: any previous form may become a union on a minor,
+    // provided some variant still accepts old-form payloads additively -
+    // payloads using a genuinely new form refuse by design at projection.
+    if (nextNode.kind === "anyOf") {
+      const oldFormRetained = nextNode.variants.some(
+        (variant) => findNodeAdditivityViolation(previous, variant, path) === null,
+      );
+      return oldFormRetained
+        ? null
+        : { kind: "union-variant", detail: snippet(previous) };
+    }
+    // Union collapse: only additive when every previous variant's payloads
+    // still project onto the replacement schema.
+    if (previousNode.kind === "anyOf") {
+      for (const variant of previousNode.variants) {
+        if (findNodeAdditivityViolation(variant, next, path) !== null) {
+          return { kind: "union-variant", detail: snippet(variant) };
+        }
+      }
+      return null;
+    }
     return {
       kind: "schema-kind",
-      detail: `${previous.type} -> ${next.type}`,
+      detail:
+        path.length === 0
+          ? `${previousNode.kind} -> ${nextNode.kind}`
+          : `${previousNode.kind} -> ${nextNode.kind} at '${dottedPath(path)}'`,
     };
   }
 
-  if (previous.type === "object" && next.type === "object") {
-    for (const field of Object.keys(previous.properties)) {
-      if (!(field in next.properties)) {
-        return { kind: "field", detail: field };
+  if (previousNode.kind === "object" && nextNode.kind === "object") {
+    for (const field of Object.keys(previousNode.properties)) {
+      if (!(field in nextNode.properties)) {
+        return {
+          kind: "field",
+          detail: dottedPath([...path, field]),
+        };
       }
+      const nested = findNodeAdditivityViolation(
+        previousNode.properties[field],
+        nextNode.properties[field],
+        [...path, field],
+      );
+      if (nested !== null) return nested;
     }
     return null;
   }
 
-  if (previous.type === "enum" && next.type === "enum") {
-    if (previous.representation !== next.representation) {
+  if (previousNode.kind === "enum" && nextNode.kind === "enum") {
+    if (previousNode.representation !== nextNode.representation) {
       return {
         kind: "schema-kind",
-        detail: `enum representation ${previous.representation} -> ${next.representation}`,
+        detail: `enum representation ${previousNode.representation} -> ${nextNode.representation}`,
       };
     }
-    for (const value of previous.values) {
-      if (!next.values.includes(value)) {
+    for (const value of previousNode.values) {
+      if (!nextNode.values.includes(value)) {
         return { kind: "enum-value", detail: String(value) };
       }
     }
     return null;
   }
 
-  if (previous.type === "anyOf" && next.type === "anyOf") {
-    const nextFingerprints = new Set(
-      next.variants.map((variant) => JSON.stringify(variant)),
-    );
-    for (const previousVariant of previous.variants) {
-      const previousFingerprint = JSON.stringify(previousVariant);
-      if (!nextFingerprints.has(previousFingerprint)) {
-        return {
-          kind: "union-variant",
-          detail: previousFingerprint.slice(0, 80),
-        };
+  if (previousNode.kind === "anyOf" && nextNode.kind === "anyOf") {
+    // A previous variant survives when SOME next variant is additively
+    // compatible with it - byte-identical is the trivial case, an
+    // extended variant (added optional keys) the intended one. Matching
+    // by compatibility instead of equality is what lets union arms grow
+    // on minors exactly like object properties do.
+    for (const previousVariant of previousNode.variants) {
+      const survives = nextNode.variants.some(
+        (nextVariant) =>
+          findNodeAdditivityViolation(previousVariant, nextVariant, path) ===
+          null,
+      );
+      if (!survives) {
+        return { kind: "union-variant", detail: snippet(previousVariant) };
       }
     }
     return null;
   }
 
-  if (previous.type === "array" && next.type === "array") {
-    const itemsViolation = findAdditivityViolation(previous.items, next.items);
+  if (previousNode.kind === "array" && nextNode.kind === "array") {
+    const itemsViolation = findNodeAdditivityViolation(
+      previousNode.items,
+      nextNode.items,
+      [...path, "items"],
+    );
     if (itemsViolation !== null) {
       return {
         kind: "array-items",
@@ -292,6 +489,19 @@ export function findAdditivityViolation(
       };
     }
     return null;
+  }
+
+  if (previousNode.kind === "opaque" && nextNode.kind === "opaque") {
+    if (JSON.stringify(previousNode.node) === JSON.stringify(nextNode.node)) {
+      return null;
+    }
+    return {
+      kind: "schema-kind",
+      detail:
+        path.length === 0
+          ? `${snippet(previousNode.node)} -> ${snippet(nextNode.node)}`
+          : `${snippet(previousNode.node)} -> ${snippet(nextNode.node)} at '${dottedPath(path)}'`,
+    };
   }
 
   return null;

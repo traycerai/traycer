@@ -170,9 +170,13 @@ export function defineFloorAwareVersionedRpcRegistry(
  *    - direct downgrades originate at the latest installed version of the source
  *      major and target the latest installed version of an older major
  * 2. Zod-schema-level:
- *    - minors within a major line only add request/response fields; no minor
- *      may drop a field that an earlier minor in the same line had (changing
- *      a field's own schema within a line is allowed)
+ *    - minors within a major line are additive under projection-feasibility
+ *      semantics at ANY depth: fields, enum values, and union variants may be
+ *      added (including inside nested objects and union arms), and a field
+ *      may widen into a union that retains an additively-compatible variant
+ *      of its old form; no minor may remove or incompatibly replace anything
+ *      an earlier minor in the same line had, nested or not (see
+ *      `findAdditivityViolation`)
  *    - major bumps carry at least one breaking change on the latest minor of
  *      each side (a removed field or a changed field schema); purely additive
  *      bumps should ship as a minor
