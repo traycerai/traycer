@@ -443,6 +443,26 @@ describe("the states that are not failures", () => {
     expect(port.partCalls).toEqual([]);
   });
 
+  it("a chat with NO cloud row at all reads as unpublished, with no summary and no part calls", async () => {
+    // The resolve's `missing` arm: doc-era chats that predate publication,
+    // guessed ids, and rows this viewer may not read all land here. To a
+    // reader they are all the same fact - nothing published to show - and
+    // must never surface as a transport error.
+    const port = recordingPort({
+      resolve: () => ({
+        chat: null,
+        outcome: { status: "missing" },
+      }),
+      part: () => ({ outcome: { status: "not-found" } }),
+    });
+
+    const result = await read(port, new InMemoryChatPartCache());
+
+    expect(result.outcome.kind).toBe("unpublished");
+    expect(result.chat).toBeNull();
+    expect(port.partCalls).toEqual([]);
+  });
+
   it("a row owned by somebody else is refused rather than rendered", async () => {
     const port = recordingPort({
       resolve: () => ({

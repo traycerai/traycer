@@ -153,7 +153,12 @@ export type CloudChatCorruptionReason =
   | "part-missing";
 
 export type CloudChatRead = {
-  readonly chat: CloudChatSummary;
+  /**
+   * Null exactly when the cloud holds NO ROW for the identity (the resolve's
+   * `missing` outcome) - there is no summary to carry. Every other outcome,
+   * refusals included, has the row's summary.
+   */
+  readonly chat: CloudChatSummary | null;
   readonly outcome: CloudChatReadOutcome;
 };
 
@@ -183,6 +188,21 @@ export async function readCloudChat(
 
   if (outcome.status === "unpublished") {
     return { chat, outcome: { kind: "unpublished" } };
+  }
+  // Row-absent reads the same as row-without-head to a READER: there is
+  // nothing published to show. The distinction (no row vs no head) matters
+  // to publishers and to the server's RBAC shape, not to this surface - and
+  // the server deliberately answers "absent" and "not readable" identically,
+  // so inventing a third user-facing state here would claim knowledge the
+  // wire does not carry.
+  if (outcome.status === "missing") {
+    return { chat: null, outcome: { kind: "unpublished" } };
+  }
+  // The wire contract pins `chat: null` to the `missing` arm alone; a
+  // response that violates it is malformed, and reading it as unpublished is
+  // the arm that promises nothing.
+  if (chat === null) {
+    return { chat: null, outcome: { kind: "unpublished" } };
   }
   if (outcome.status === "ambiguous-identity") {
     return {

@@ -188,6 +188,16 @@ export const resolveCloudChatHeadOutcomeSchema = z.discriminatedUnion(
     }),
     /** The owning host has never published this chat. Not an error. */
     z.object({ status: z.literal("unpublished") }),
+    /**
+     * The cloud holds NO ROW for this identity at all - not even metadata.
+     * Distinct from `unpublished` (row exists, head absent) because there is
+     * no summary to return alongside it: `chat` is null exactly and only in
+     * this arm. Doc-era chats that predate v2 publication land here, and so
+     * does any identity the caller guessed. Deliberately identical for
+     * "absent" and "not readable" - the server's own RBAC rule (a chat you
+     * may not see is NOT FOUND, never forbidden) carries through unchanged.
+     */
+    z.object({ status: z.literal("missing") }),
     /** `(task, chat)` resolved to a row owned by someone else - see the identity note. */
     z.object({
       status: z.literal("ambiguous-identity"),
@@ -200,7 +210,8 @@ export type ResolveCloudChatHeadOutcome = z.infer<
 >;
 
 export const resolveCloudChatHeadResponseSchema = z.object({
-  chat: cloudChatSummarySchema,
+  /** Null exactly when `outcome.status === "missing"` - no row, no summary. */
+  chat: cloudChatSummarySchema.nullable(),
   outcome: resolveCloudChatHeadOutcomeSchema,
 });
 export type ResolveCloudChatHeadResponse = z.infer<
@@ -335,6 +346,13 @@ export const listCloudChatPayloadsOutcomeSchema = z.discriminatedUnion(
      * attachments" for a chat that has them.
      */
     z.object({ status: z.literal("ambiguous-identity") }),
+    /**
+     * The cloud holds no row for this identity (never published, or not
+     * readable - the server does not distinguish). An answer, not a throw,
+     * for the same reason as the head resolve's `missing` arm: the copy
+     * surface must say "never published", not "could not reach the cloud".
+     */
+    z.object({ status: z.literal("not-found") }),
   ],
 );
 export type ListCloudChatPayloadsOutcome = z.infer<

@@ -98,6 +98,11 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   const handle = useMemo(() => {
     if (state.kind !== "ready" || conversion === null) return null;
     const row = state.read.chat;
+    // `ready` implies an `ok` read, and `ok` always carries the row - `chat`
+    // is null only on the `missing` outcome, which lands in the refused
+    // state. A violation falls through to the notice rather than rendering
+    // a transcript with fabricated metadata.
+    if (row === null) return null;
     return createPublishedChatSessionHandle({
       epicId: props.epicId,
       chatId: node.chatId,
