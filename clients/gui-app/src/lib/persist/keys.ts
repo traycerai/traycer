@@ -165,6 +165,9 @@ export const projectProfilesRegistryKey = (email: string | null): string =>
 export const activeProjectProfileKey = (email: string | null): string =>
   scopedPersistKey("active-project-profile", scopeBucket(email));
 
+export const profileTabWorkspacesKey = (email: string | null): string =>
+  scopedPersistKey("profile-tab-workspaces", scopeBucket(email));
+
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
 //   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
@@ -228,6 +231,11 @@ export const PERSIST_STORES = [
   {
     camelName: "activeProjectProfile",
     leaf: "active-project-profile",
+    kind: "scoped",
+  },
+  {
+    camelName: "profileTabWorkspaces",
+    leaf: "profile-tab-workspaces",
     kind: "scoped",
   },
 

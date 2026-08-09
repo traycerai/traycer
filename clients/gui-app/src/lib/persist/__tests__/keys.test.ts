@@ -26,6 +26,7 @@ import {
   worktreeListingCacheKey,
   projectProfilesRegistryKey,
   activeProjectProfileKey,
+  profileTabWorkspacesKey,
 } from "@/lib/persist/keys";
 
 // CRITICAL: every literal below is HAND-TRANSCRIBED from the current store
@@ -276,6 +277,13 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(activeProjectProfileKey(null)).toBe(
       "traycer-gui-app:active-project-profile:anon",
+    );
+    // Source: src/stores/profiles/profile-tab-workspaces-store.ts
+    expect(profileTabWorkspacesKey("a@b.c")).toBe(
+      "traycer-gui-app:profile-tab-workspaces:a@b.c",
+    );
+    expect(profileTabWorkspacesKey(null)).toBe(
+      "traycer-gui-app:profile-tab-workspaces:anon",
     );
   });
 

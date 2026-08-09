@@ -28,6 +28,7 @@ export {
   worktreeListingCacheKey,
   projectProfilesRegistryKey,
   activeProjectProfileKey,
+  profileTabWorkspacesKey,
   type PersistStoreEntry,
   type PersistStoreKind,
 } from "@/lib/persist/keys";
