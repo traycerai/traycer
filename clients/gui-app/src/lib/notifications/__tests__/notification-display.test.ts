@@ -603,6 +603,33 @@ describe("forwarded foreground display gate", () => {
     expect(playChime).not.toHaveBeenCalled();
   });
 
+  it("ignores a relayed feed display whose payload degraded to null", () => {
+    // `payloadFromHostEntry` degrades an unrecognized payload - a newer
+    // host's shape, a cross-kind row - to null while the row's durable
+    // epicId/chatId stay authoritative. Those relays carry no route to gate
+    // on, so treating them as unattributable would hand exactly the rows the
+    // gate cannot inspect straight past it. They are feed rows: this window
+    // receives its own copy, gated on the durable columns.
+    focusChatTile("chat-1");
+    connectedCloudFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:id:n-9",
+        deliveryKey: null,
+        foregroundAppLocal: null,
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
   it("renders a relayed feed display when our own feed is not delivering", () => {
     // A feed stream can go terminal without the window noticing. Then the
     // relay is the only copy of the row this window will ever see, so
@@ -678,10 +705,12 @@ describe("forwarded foreground display gate", () => {
     expect(playChime).toHaveBeenCalledOnce();
   });
 
-  it("renders a legacy relay it cannot attribute to a feed", () => {
-    // A legacy payload carries no feed identity, so it cannot be proven to be
-    // a host-feed row. Displaying a redundant toast beats swallowing an error.
-    focusChatTile("chat-1");
+  it("treats a legacy relay as a feed row rather than rendering it blind", () => {
+    // A legacy payload carries no feed identity. It is still not app-local -
+    // only `foregroundAppLocal` and an app-local envelope say that - so it is
+    // a feed row this window already receives itself.
+    focusChatTile("chat-2");
+    connectedCloudFeed();
     const playChime = vi.fn();
 
     displayForwardedForegroundNotification(
@@ -696,28 +725,8 @@ describe("forwarded foreground display gate", () => {
       { playChime, onToastClick: vi.fn() },
     );
 
-    expect(toastCalls).toHaveLength(1);
-    expect(playChime).toHaveBeenCalledOnce();
-  });
-
-  it("renders a payload-less relayed display unchanged", () => {
-    focusChatTile("chat-1");
-    const playChime = vi.fn();
-
-    displayForwardedForegroundNotification(
-      {
-        title: "Traycer",
-        body: "Something happened",
-        payload: null,
-        replaceKey: null,
-        deliveryKey: null,
-        foregroundAppLocal: null,
-      },
-      { playChime, onToastClick: vi.fn() },
-    );
-
-    expect(toastCalls).toHaveLength(1);
-    expect(playChime).toHaveBeenCalledOnce();
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
   });
 });
 

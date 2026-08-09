@@ -31,7 +31,6 @@ import {
 import {
   buildNotificationActivationEnvelope,
   parseNotificationActivationPayload,
-  type ParsedNotificationActivationPayload,
 } from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
 
@@ -77,9 +76,8 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
-  const feedSource = relayedFeedSource(display);
-  if (feedSource !== null) {
-    if (ownFeedIsDelivering(feedSource)) return;
+  if (isFeedRelay(display)) {
+    if (ownFeedIsDelivering()) return;
     if (suppressedByFocusedEntity(display)) return;
   }
   const actionable = display.payload !== null;
@@ -115,30 +113,39 @@ export function displayForwardedForegroundNotification(
   target.playChime();
 }
 
-/** The feed a relayed display came from, or `null` when it is an app-local
- * row or a payload with no feed identity. */
-function relayedFeedSource(
-  display: NotificationForegroundDisplay,
-): "host" | "cloud" | null {
-  if (display.foregroundAppLocal !== null) return null;
-  if (display.payload === null) return null;
+/**
+ * Whether a relayed display is a feed row, which every window receives on its
+ * own subscription.
+ *
+ * Only app-local displays are excluded, and they are identified POSITIVELY -
+ * by `foregroundAppLocal`, which their path always sets, or by an app-local
+ * envelope. Everything else counts as a feed row, deliberately including a
+ * display whose activation payload is `null`: `payloadFromHostEntry` degrades
+ * an unrecognized payload (a newer host's shape, a cross-kind row) to null
+ * while the row's durable `epicId`/`chatId` stay authoritative. Treating
+ * those as unattributable would hand precisely the rows the entity gate
+ * cannot inspect straight past it - and the receiving window's own feed
+ * copy, which IS gated on the durable columns, would be the one suppressed.
+ */
+function isFeedRelay(display: NotificationForegroundDisplay): boolean {
+  if (display.foregroundAppLocal !== null) return false;
+  if (display.payload === null) return true;
   const parsed = parseNotificationActivationPayload(display.payload);
-  if (parsed.kind !== "v1") return null;
-  const source = parsed.envelope.feed.source;
-  return source === "host" || source === "cloud" ? source : null;
+  return !(parsed.kind === "v1" && parsed.envelope.feed.source === "app-local");
 }
 
 /**
- * Whether this window's own subscription to that feed is live. A stream can
- * go terminal without the window noticing, and then the relay is the only
- * copy of the row this window will ever see - dropping it as "redundant"
- * would make a broken feed silently swallow notifications too.
+ * Whether this window's own feed subscription is live - the cloud one or the
+ * v1 local one, whichever this window opened (the other store never reaches a
+ * delivering state, so this needs no separate feed-mode read).
+ *
+ * A stream can go terminal without the window noticing, and then the relay is
+ * the only copy of the row this window will ever see - dropping it as
+ * "redundant" would make a broken feed silently swallow notifications too.
  */
-function ownFeedIsDelivering(source: "host" | "cloud"): boolean {
-  if (source === "cloud") {
-    const cloud = useCloudNotificationsStore.getState();
-    return cloud.connectionState === "connected" && cloud.hasSnapshot;
-  }
+function ownFeedIsDelivering(): boolean {
+  const cloud = useCloudNotificationsStore.getState();
+  if (cloud.connectionState === "connected" && cloud.hasSnapshot) return true;
   return useHostNotificationsStore.getState().connectionStatus === "open";
 }
 
@@ -273,27 +280,19 @@ function renderNotificationToast(
 }
 
 /**
- * Whether a relayed display is a host-feed row addressed to the entity this
- * window is looking at.
- *
- * Deliberately scoped to host/cloud FEED rows. App-local rows (terminal
- * closed/crashed, stream transport errors, routed host errors) carry
- * entity-bearing payloads too, but their own display path is never
- * entity-suppressed - and the emission controller records their display
- * receipt BEFORE handing the display here, so a drop is permanent rather
- * than retried. Gating them would silently swallow exactly the failures a
- * user must see. Anything we cannot positively identify as a host-feed
- * relay - a legacy payload with no feed identity, an unparseable one -
- * displays: a redundant toast is a nuisance, a swallowed error is data loss.
+ * Whether a FALLBACK relay - one this window is rendering because its own
+ * feed is not delivering - is addressed to the entity currently in focus.
+ * Reached only on that path; when our feed is live the relay is ignored
+ * outright. A payload that names no entity (degraded or unparseable) cannot
+ * be gated and therefore renders: on a broken feed, a redundant toast beats
+ * silence.
  */
 function suppressedByFocusedEntity(
   display: NotificationForegroundDisplay,
 ): boolean {
-  if (display.foregroundAppLocal !== null) return false;
-  if (display.payload === null) return false;
-  const parsed = parseNotificationActivationPayload(display.payload);
-  if (!isHostFeedRelay(parsed)) return false;
-  const entity = notificationEntityFromPayload(parsed.envelope.route);
+  const route = activationRoute(display.payload);
+  if (route === null) return false;
+  const entity = notificationEntityFromPayload(route);
   if (entity === null) return false;
   const focusedEntity = readFocusedHostNotificationPresenceEntity();
   return (
@@ -302,17 +301,17 @@ function suppressedByFocusedEntity(
   );
 }
 
-function isHostFeedRelay(
-  parsed: ParsedNotificationActivationPayload,
-): parsed is Extract<
-  ParsedNotificationActivationPayload,
-  { readonly kind: "v1" }
-> {
-  return (
-    parsed.kind === "v1" &&
-    (parsed.envelope.feed.source === "host" ||
-      parsed.envelope.feed.source === "cloud")
-  );
+function activationRoute(payload: unknown): NotificationPayload | null {
+  if (payload === null) return null;
+  const parsed = parseNotificationActivationPayload(payload);
+  switch (parsed.kind) {
+    case "v1":
+      return parsed.envelope.route;
+    case "legacy":
+      return parsed.payload;
+    case "unknown":
+      return null;
+  }
 }
 
 /**
