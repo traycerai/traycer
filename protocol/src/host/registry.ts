@@ -250,6 +250,7 @@ import {
   epicGetTaskContextsV10,
   epicGrantAccessV10,
   epicChatBackupStatusV10,
+  epicChatReplicaReadV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -4946,6 +4947,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicChatBackupStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Doc-replica fallback for the unreachable-owner view (chat-sync-v2 ticket
+  // 34A). Local-only, same reasoning as `epic.chatBackupStatus` immediately
+  // above: an older host omits it and the client keeps the notice it already
+  // renders.
+  "epic.chatReplicaRead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicChatReplicaReadV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -111,6 +111,10 @@ import {
   chatBackupStatusRequestSchema,
   chatBackupStatusResponseSchema,
 } from "@traycer/protocol/host/epic/chat-backup-status";
+import {
+  chatReplicaReadRequestSchema,
+  chatReplicaReadResponseSchema,
+} from "@traycer/protocol/host/epic/chat-replica-read";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -608,6 +612,17 @@ export const epicChatBackupStatusV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatBackupStatusRequestSchema,
   responseSchema: chatBackupStatusResponseSchema,
+});
+
+// Doc-replica fallback for a chat with no cloud publication and an
+// unreachable owner. Optional, like the publication-identity read above: an
+// older host answers `E_HOST_UNSUPPORTED` and the client keeps today's
+// "Not published yet" notice.
+export const epicChatReplicaReadV10 = defineRpcContract({
+  method: "epic.chatReplicaRead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatReplicaReadRequestSchema,
+  responseSchema: chatReplicaReadResponseSchema,
 });
 
 export { epicSubscribeV10, epicSubscribeV11 };

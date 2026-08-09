@@ -745,6 +745,9 @@ export const HOST_METHOD_POLL_TABLE = {
   // fork's own notification is the signal that something changed, and a
   // reopened task picks the new mapping up.
   "epic.listChatPublicationTargets": { ...LATEST_SCHEDULING, poll: null },
+  // One-shot read: the doc content of an unreachable owner's chat cannot
+  // change while its owner is away.
+  "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
   "epic.chatBackupStatus": {

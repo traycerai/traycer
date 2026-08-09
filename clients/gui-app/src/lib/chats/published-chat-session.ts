@@ -157,6 +157,75 @@ function placeholderBlockRaw(blockId: string, index: number): JsonObject {
   };
 }
 
+/**
+ * Re-parse a doc-replica read's raw rows through the live schemas.
+ *
+ * Mirrors `convertPublishedChat`'s per-block tolerance and returns the same
+ * `PublishedChatConversion` shape, so `createPublishedChatSessionHandle`
+ * cannot tell the two sources apart. The rows differ from the published
+ * path's, though: there is no separate `blocks` array tracked alongside each
+ * message (a published chat's presenter splits head from shards; a doc row
+ * is already the reconstructed, inline-blocks `Message`), so the screening
+ * step reads `blocks` off the raw record itself rather than a parallel list.
+ */
+export function convertReplicaChat(
+  rawMessages: readonly Record<string, unknown>[],
+  rawEvents: readonly Record<string, unknown>[],
+): PublishedChatConversion {
+  const messages: Message[] = [];
+  let unreadableCount = 0;
+  for (const raw of rawMessages) {
+    const rebuilt = rebuildReplicaMessage(raw);
+    if (rebuilt === null) {
+      unreadableCount += 1;
+      continue;
+    }
+    messages.push(rebuilt.message);
+    unreadableCount += rebuilt.replacedBlockCount;
+  }
+  const events: ChatEvent[] = [];
+  for (const raw of rawEvents) {
+    const parsed = chatEventSchema.safeParse(raw);
+    if (parsed.success) events.push(parsed.data);
+    else unreadableCount += 1;
+  }
+  return { messages, events, unreadableCount };
+}
+
+/**
+ * One doc-replica message row, with every block this build understands
+ * preserved. Returns `null` only when the ENVELOPE itself is unrepresentable
+ * (an unknown role, or no `blocks` array to screen), which the caller counts
+ * - see `rebuildMessage` above for the published-copy sibling this mirrors.
+ */
+function rebuildReplicaMessage(
+  raw: Record<string, unknown>,
+): { readonly message: Message; readonly replacedBlockCount: number } | null {
+  const parsed = messageSchema.safeParse(raw);
+  if (parsed.success) {
+    return { message: parsed.data, replacedBlockCount: 0 };
+  }
+  const rawBlocks = raw["blocks"];
+  if (!Array.isArray(rawBlocks)) return null;
+  let replacedBlockCount = 0;
+  const blocks = rawBlocks.map((block: unknown, index: number) => {
+    const blockParsed = contentBlockSchema.safeParse(block);
+    if (blockParsed.success) return block;
+    replacedBlockCount += 1;
+    const blockId =
+      typeof block === "object" &&
+      block !== null &&
+      typeof (block as Record<string, unknown>)["blockId"] === "string"
+        ? ((block as Record<string, unknown>)["blockId"] as string)
+        : `unreadable-${index}`;
+    return placeholderBlockRaw(blockId, index);
+  });
+  const reparsed = messageSchema.safeParse({ ...raw, blocks });
+  return reparsed.success
+    ? { message: reparsed.data, replacedBlockCount }
+    : null;
+}
+
 export interface PublishedChatSessionInput {
   readonly epicId: string;
   readonly chatId: string;

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
-import { convertPublishedChat } from "@/lib/chats/published-chat-session";
+import {
+  convertPublishedChat,
+  convertReplicaChat,
+} from "@/lib/chats/published-chat-session";
 
 /**
  * The forward-compatibility guarantee, at the granularity it has to hold.
@@ -168,5 +171,76 @@ describe("convertPublishedChat", () => {
     if (message.role !== "assistant") throw new Error("expected assistant");
     expect(message.blocks).toHaveLength(1);
     expect(message.blocks[0].type).toBe("text");
+  });
+});
+
+/**
+ * `convertReplicaChat`'s rows are raw doc records, not the split
+ * head/shard shape `PresentedChat` produces - a doc row's `blocks` sit
+ * inline on the message itself, exactly as `readMessages()` reconstructs
+ * them. The screening rule is the one `convertPublishedChat` uses, applied
+ * to that inline array instead of a parallel presented list.
+ */
+function replicaAssistantRow(
+  blocks: readonly JsonObject[],
+): Record<string, unknown> {
+  return {
+    role: "assistant",
+    messageId: "m1",
+    timestamp: 1,
+    turnId: null,
+    usage: null,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [...blocks],
+  };
+}
+
+describe("convertReplicaChat", () => {
+  it("keeps a wholly ordinary doc row untouched", () => {
+    const converted = convertReplicaChat(
+      [replicaAssistantRow([textBlock("b1", "known text")])],
+      [],
+    );
+    expect(converted.unreadableCount).toBe(0);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
+  });
+
+  it("swaps an unknown block for a placeholder instead of dropping the whole row", () => {
+    const converted = convertReplicaChat(
+      [replicaAssistantRow([textBlock("b1", "known text"), futureBlock("b2")])],
+      [],
+    );
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(2);
+    const placeholder = message.blocks.filter(
+      (block) =>
+        block.type === "text" && /needs a newer version/.test(block.text),
+    );
+    expect(placeholder).toHaveLength(1);
+    expect(converted.unreadableCount).toBe(1);
+  });
+
+  it("drops and counts a row whose envelope cannot be represented at all", () => {
+    // No `blocks` array to screen, so there is nothing to rebuild through -
+    // this is the ENVELOPE failure, not a block failure.
+    const converted = convertReplicaChat(
+      [{ role: "from-the-future", messageId: "m2", timestamp: 1 }],
+      [],
+    );
+    expect(converted.messages).toHaveLength(0);
+    expect(converted.unreadableCount).toBe(1);
   });
 });

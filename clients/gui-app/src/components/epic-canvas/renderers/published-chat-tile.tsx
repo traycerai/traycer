@@ -3,9 +3,11 @@ import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
+import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
 import {
   convertPublishedChat,
+  convertReplicaChat,
   createPublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatTileSessionView } from "./chat-tile";
@@ -34,6 +36,16 @@ import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source";
  * on the ref; it must not follow the app's active host afterwards. Nothing here
  * binds the OWNING host, so the tab-host-for-life rule is not bent; the owner is
  * row metadata that the notice names and nothing addresses.
+ *
+ * ## The doc-replica fallback (unreachable-owner view, ticket 34A)
+ *
+ * A chat this host neither owns nor has ever published still syncs into the
+ * epic Y.Doc through ordinary collaboration, so when the cloud read settles
+ * `unpublished` - and only then, no other refusal is masked - the tile asks
+ * the SAME serving host to read its own doc replica. Doc content has no
+ * content-addressed shards to redirect (it is already the full, inline-blocks
+ * transcript), so this branch renders straight into `ChatTileSessionView`
+ * without `PublishedChatSourceProvider`.
  */
 
 export interface PublishedChatTileProps {
@@ -121,10 +133,77 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.name,
   ]);
 
+  // The doc-replica fallback: enabled ONLY once the cloud read has settled
+  // `unpublished` - every other refusal (needs-newer-app, ambiguous-identity,
+  // corrupt) keeps its own notice, unmasked.
+  const cloudUnpublished =
+    state.kind === "refused" && state.read.outcome.kind === "unpublished";
+  const replicaQuery = useChatReplicaRead({
+    client,
+    epicId: props.epicId,
+    chatId: node.chatId,
+    enabled: cloudUnpublished,
+  });
+  const replicaOutcome = replicaQuery.data?.outcome;
+  const replicaConversion = useMemo(
+    () =>
+      replicaOutcome?.status === "ok"
+        ? convertReplicaChat(replicaOutcome.messages, replicaOutcome.events)
+        : null,
+    [replicaOutcome],
+  );
+  const replicaHandle = useMemo(() => {
+    // Gated on `cloudUnpublished` explicitly, not just on the query having
+    // data: a stale cache entry from an EARLIER unpublished read must not
+    // render once the cloud read settles on a different refusal (or on
+    // `ready`) - the "only then" in this branch's whole reason for existing.
+    if (
+      !cloudUnpublished ||
+      replicaOutcome?.status !== "ok" ||
+      replicaConversion === null
+    ) {
+      return null;
+    }
+    return createPublishedChatSessionHandle({
+      epicId: props.epicId,
+      chatId: node.chatId,
+      ownerUserId: replicaOutcome.chat.userId,
+      title: replicaOutcome.chat.title,
+      createdAt: replicaOutcome.chat.createdAt,
+      updatedAt: replicaOutcome.chat.updatedAt,
+      conversion: replicaConversion,
+    });
+  }, [
+    cloudUnpublished,
+    replicaOutcome,
+    replicaConversion,
+    props.epicId,
+    node.chatId,
+  ]);
+
   if (state.kind === "loading") {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
         <ChatTileLoading />
+      </div>
+    );
+  }
+
+  if (replicaHandle !== null && replicaConversion !== null) {
+    return (
+      <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        <ChatTileSessionView
+          handle={replicaHandle}
+          node={{
+            id: node.chatId,
+            instanceId: node.instanceId,
+            name: node.name,
+          }}
+          viewTabId={props.viewTabId}
+          isActive={props.isActive}
+          currentEpicId={props.epicId}
+          readOnlyNotice={replicaChatLockReason(ownerLabel)}
+        />
       </div>
     );
   }
@@ -218,4 +297,17 @@ export function publishedChatLockReason(input: {
   }
   if (input.fidelityNotice !== null) return `${base} ${input.fidelityNotice}`;
   return base;
+}
+
+/**
+ * The doc-replica branch's composer lock reason.
+ *
+ * One sentence, not three: unlike `publishedChatLockReason` this branch is
+ * only ever reached when the owner is unreachable (the cloud read refused
+ * `unpublished` AND the doc replica had content) - "showing this device's
+ * synced copy" is honest about the source in every case that reaches here,
+ * so there is no reachable/unreachable split to make.
+ */
+export function replicaChatLockReason(ownerLabel: string): string {
+  return `This agent lives on ${ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
 }
