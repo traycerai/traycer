@@ -211,7 +211,7 @@ describe("agent fork", () => {
 
     await buildAgentForkCommand({
       ...createOpts(null),
-      cwd: "/Users/tgill/.traycer/worktrees/traycerai__traycer/report",
+      cwd: "/tmp/traycer-test/worktrees/report",
     })(makeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith(
@@ -220,7 +220,7 @@ describe("agent fork", () => {
         workspace: {
           entries: [
             {
-              path: "/Users/tgill/.traycer/worktrees/traycerai__traycer/report",
+              path: "/tmp/traycer-test/worktrees/report",
               workspacePath: null,
             },
           ],
