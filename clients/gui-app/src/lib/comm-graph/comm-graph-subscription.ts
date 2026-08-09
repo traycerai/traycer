@@ -168,6 +168,7 @@ export class CommGraphSubscriptionManager {
   private snapshot: CommGraphSnapshot = {
     events: [],
     hosts: [],
+    initialHistoryCaughtUp: false,
     lastArrival: null,
   };
   private merged: ReadonlyArray<CommGraphEvent> = [];
@@ -627,6 +628,17 @@ export class CommGraphSubscriptionManager {
     this.snapshot = {
       events: this.merged,
       hosts,
+      initialHistoryCaughtUp:
+        hosts.length > 0 &&
+        hosts.every((host) => {
+          if (host.status === "unsupported") return true;
+          const boundary = host.snapshotBoundary;
+          return (
+            boundary !== null &&
+            (boundary.highestId === null ||
+              (host.cursor !== null && host.cursor >= boundary.highestId))
+          );
+        }),
       lastArrival: this.lastArrival,
     };
     for (const listener of Array.from(this.listeners)) listener();

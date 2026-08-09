@@ -95,6 +95,7 @@ describe("CommGraphSubscriptionManager", () => {
     // history is, so nothing from it can be classed as an arrival.
     const before = manager.getSnapshot().hosts;
     expect(before.every((host) => host.snapshotBoundary === null)).toBe(true);
+    expect(manager.getSnapshot().initialHistoryCaughtUp).toBe(false);
 
     opened[0].handlers.onSnapshot(
       [
@@ -103,6 +104,8 @@ describe("CommGraphSubscriptionManager", () => {
       ],
       4,
     );
+    // A visible row from A does not prove that B's initial history is done.
+    expect(manager.getSnapshot().initialHistoryCaughtUp).toBe(false);
     // A fresh epic legitimately has nothing - still a boundary, just an empty
     // one, which is what lets its FIRST row read as new.
     opened[1].handlers.onSnapshot([], null);
@@ -112,6 +115,7 @@ describe("CommGraphSubscriptionManager", () => {
     const hostB = hosts.find((host) => host.hostId === "host-b");
     expect(hostA?.snapshotBoundary).toEqual({ highestId: 4 });
     expect(hostB?.snapshotBoundary).toEqual({ highestId: null });
+    expect(manager.getSnapshot().initialHistoryCaughtUp).toBe(true);
     manager.dispose();
   });
 
@@ -413,6 +417,7 @@ describe("CommGraphSubscriptionManager", () => {
       ["host-b", "live"],
     ]);
     expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.initialHistoryCaughtUp).toBe(true);
     manager.dispose();
   });
 

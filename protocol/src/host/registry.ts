@@ -427,6 +427,8 @@ import {
   worktreeListByWorkspacePathsResponseSchemaV12,
   worktreeListByWorkspacePathsRequestSchemaV13,
   worktreeListByWorkspacePathsResponseSchemaV13,
+  worktreeListByWorkspacePathsRequestSchemaV14,
+  worktreeListByWorkspacePathsResponseSchemaV14,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
@@ -439,6 +441,8 @@ import {
   worktreeSetEntryModeResponseSchema,
   worktreeSetRepoScriptsRequestSchema,
   worktreeSetRepoScriptsResponseSchema,
+  worktreeSetRepoBranchPrefixRequestSchema,
+  worktreeSetRepoBranchPrefixResponseSchema,
   worktreeGetBindingRequestSchema,
   worktreeGetBindingResponseSchema,
   LEGACY_HOST_RESOLVED_AT,
@@ -707,6 +711,38 @@ export const worktreeListByWorkspacePathsUpgradeV12ToV13 = defineUpgradePath<
   }),
 });
 
+// v1.4 adds per-summary `repoBranchPrefix`, the resolved repository-local
+// worktree branch-prefix override read from `.traycer/environment.json`.
+// Request is unchanged from v1.3.
+export const worktreeListByWorkspacePathsV14 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV14,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV14,
+});
+
+// A v1.3 host predates the repository branch-prefix override entirely and
+// never emits one, so its rows bridge to `{ status: "absent" }` - the same
+// answer a git-eligible workspace with no override gets on a current host -
+// so the client silently falls back to the global default rather than
+// surfacing a false "malformed" warning for a host that simply doesn't know
+// about the feature yet.
+export const worktreeListByWorkspacePathsUpgradeV13ToV14 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV13,
+  typeof worktreeListByWorkspacePathsV14
+>({
+  from: worktreeListByWorkspacePathsV13.schemaVersion,
+  to: worktreeListByWorkspacePathsV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    workspaces: response.workspaces.map((workspace) => ({
+      ...workspace,
+      repoBranchPrefix: { status: "absent" as const },
+    })),
+  }),
+});
+
 export const worktreeListBranchesV10 = defineRpcContract({
   method: "worktree.listBranches",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -928,6 +964,21 @@ export const worktreeSetRepoScriptsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeSetRepoScriptsRequestSchema,
   responseSchema: worktreeSetRepoScriptsResponseSchema,
+});
+
+// `worktree.setRepoBranchPrefix@1.0` - a brand-new method (not a version bump
+// of an existing one: there is no floor method this naturally extends), added
+// AFTER the released floor was frozen. Registered with
+// `degrade: { kind: "unsupported" }` in the version table below, so it rides
+// the optional-capabilities channel rather than the floor: an old host that
+// predates it negotiates the method away (the GUI gates the affordance with
+// `useHostSupportsMethod`) instead of failing the whole `/rpc` handshake -
+// the exact failure class `released-surface-compat.test.ts` guards against.
+export const worktreeSetRepoBranchPrefixV10 = defineRpcContract({
+  method: "worktree.setRepoBranchPrefix",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeSetRepoBranchPrefixRequestSchema,
+  responseSchema: worktreeSetRepoBranchPrefixResponseSchema,
 });
 
 // `worktree.getBinding@1.0` - owner-scoped binding read used by GUI surfaces
@@ -4989,7 +5040,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listByWorkspacePaths": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: worktreeListByWorkspacePathsV10,
@@ -5009,6 +5060,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: worktreeListByWorkspacePathsV13,
           upgradeFromPreviousVersion:
             worktreeListByWorkspacePathsUpgradeV12ToV13,
+        },
+        4: {
+          contract: worktreeListByWorkspacePathsV14,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -5144,6 +5200,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: worktreeSetRepoScriptsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.setRepoBranchPrefix": {
+    // Not on the released floor (added after it was frozen) and has no
+    // sensible fallback target, so an old host simply lacks the affordance -
+    // the GUI gates it with `useHostSupportsMethod` before offering the edit.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeSetRepoBranchPrefixV10,
           upgradeFromPreviousVersion: null,
         },
       },
