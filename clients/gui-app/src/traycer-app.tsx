@@ -38,6 +38,7 @@ import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-term
 import { ProjectProfilesPersistLifecycleBridge } from "@/providers/project-profiles-persist-lifecycle-bridge";
 import { ActiveProjectProfilePersistLifecycleBridge } from "@/providers/active-project-profile-persist-lifecycle-bridge";
 import { ProfileAutoSwitchBridge } from "@/providers/profile-auto-switch-bridge";
+import { HistoryMembershipCacheWarmer } from "@/components/profiles/history-membership-cache-warmer";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
@@ -215,6 +216,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                         <ActiveProjectProfilePersistLifecycleBridge />
                         <EpicTabExistenceReconciler />
                         <ProfileAutoSwitchBridge router={props.router} />
+                        <HistoryMembershipCacheWarmer />
                         <HostStreamProvider>
                           <HostScopeReady scope="default-host">
                             <WorktreeChangedStreamMount />

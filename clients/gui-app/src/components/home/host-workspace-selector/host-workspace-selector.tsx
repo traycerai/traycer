@@ -126,7 +126,10 @@ import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner"
 import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
-import { ProjectProfileBadge } from "@/components/profiles/project-profile-badge";
+import {
+  profileColorHex,
+  profileIcon,
+} from "@/components/profiles/profile-options";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import { cn } from "@/lib/utils";
 
@@ -1002,19 +1005,22 @@ function ProfileLockedWorkspaceChip(props: {
         </div>
       )}
       <div className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1">
-        <ProjectProfileBadge
-          profile={activeProfile}
-          className="min-w-0"
-          trailing={undefined}
-        />
-        {primaryName === null ? null : (
-          <span
-            className="min-w-0 truncate text-ui-sm text-muted-foreground"
-            title={props.primaryPath ?? undefined}
-          >
-            {primaryName}
-          </span>
-        )}
+        {(() => {
+          const ProfileIcon = profileIcon(activeProfile.icon);
+          return (
+            <ProfileIcon
+              className="size-3.5 shrink-0"
+              style={{ color: profileColorHex(activeProfile.color) }}
+              aria-hidden
+            />
+          );
+        })()}
+        <span
+          className="min-w-0 truncate text-ui-sm text-muted-foreground"
+          title={props.primaryPath ?? undefined}
+        >
+          {primaryName ?? activeProfile.name}
+        </span>
       </div>
     </div>
   );

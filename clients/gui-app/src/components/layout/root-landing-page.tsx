@@ -1,4 +1,5 @@
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
+import { ProfileLaunchLanding } from "@/components/profiles/profile-launch-landing";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -16,5 +17,7 @@ export function RootLandingPage() {
     return <AuthLandingPage />;
   }
 
-  return null;
+  // Signed-in home: the launch-landing bridge may immediately redirect into
+  // the active project profile's most recent epic (once per launch).
+  return <ProfileLaunchLanding />;
 }

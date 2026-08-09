@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Check, Layers, Pencil, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,10 +9,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { buildProfileLandingEpicIntent } from "@/lib/profiles/profile-landing";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import type { ProjectProfile } from "@/lib/profiles/types";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import { profileColorHex, profileIcon } from "./profile-options";
 import { ProjectProfileBadge } from "./project-profile-badge";
@@ -23,12 +27,29 @@ type DialogMode =
   | { readonly mode: "edit"; readonly profile: ProjectProfile };
 
 export function ProjectProfileSwitcher(): ReactNode {
+  const navigate = useNavigate();
   const activeProfile = useActiveProjectProfile();
   const profiles = useProjectProfilesStore((s) => s.profiles);
   const setActiveProfile = useActiveProjectProfileStore(
     (s) => s.setActiveProfile,
   );
   const [dialog, setDialog] = useState<DialogMode>({ mode: "closed" });
+
+  // Entering a project jumps straight to its working surface: the most
+  // recently updated epic the project owns. Projects with no owned epic yet
+  // stay on the current surface (the locked composer is the right start).
+  const selectProfile = (profile: ProjectProfile): void => {
+    setActiveProfile(profile.id);
+    const intent = buildProfileLandingEpicIntent(
+      profile,
+      Array.from(
+        useHistoryMembershipCacheStore.getState().itemsByEpicId.values(),
+      ),
+    );
+    if (intent !== null) {
+      activateTabIntent(navigate, intent, undefined);
+    }
+  };
 
   const TriggerIcon =
     activeProfile === null ? Layers : profileIcon(activeProfile.icon);
@@ -86,7 +107,7 @@ export function ProjectProfileSwitcher(): ReactNode {
             return (
               <DropdownMenuItem
                 key={profile.id}
-                onSelect={() => setActiveProfile(profile.id)}
+                onSelect={() => selectProfile(profile)}
                 className="group/profile-row pr-1"
                 data-testid={`project-profile-option-${profile.id}`}
               >
