@@ -210,6 +210,9 @@ export function useHistoryQuery(
         : collectHistoryWorkspaces(allItems);
     return {
       items: visibleItems,
+      // Unfiltered list for membership lookups (tab strip, auto-switch).
+      // Display surfaces must use `items` only.
+      membershipItems: items,
       availableRepos:
         facets.repos.length > 0
           ? facets.repos.map((repo) => repo.label)
@@ -261,6 +264,12 @@ export function useHistoryQuery(
 
 export interface HistoryFetchResult {
   items: ReadonlyArray<HistoryItem>;
+  /**
+   * Pre-profile-filter history rows. Tab membership and auto-switch need the
+   * full set so a foreign epic is known-foreign (hidden) rather than unknown
+   * (fail-open visible). List UIs must keep using `items`.
+   */
+  membershipItems: ReadonlyArray<HistoryItem>;
   availableRepos: ReadonlyArray<string>;
   availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   totalCount: number;

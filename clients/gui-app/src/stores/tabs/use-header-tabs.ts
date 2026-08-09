@@ -1,5 +1,11 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
+import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import { itemVisibleInProfile } from "@/lib/profiles/profile-membership";
+import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
+import type { ProjectProfile } from "@/lib/profiles/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
@@ -27,6 +33,10 @@ import {
  * the kind module's `build()` factory flattens the source record into
  * the self-contained `HeaderTab` variant. Refs whose source no longer
  * exists are filtered out (reconciliation should keep them in sync).
+ *
+ * Profile scoping (D2) is a display-level filter only: foreign epic tabs are
+ * dropped from the returned array while the tabs store / strip indexes stay
+ * intact so drag/drop and layout math keep using unfiltered authority.
  */
 export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   const structuralLockRevision = useSyncExternalStore(
@@ -45,6 +55,8 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   );
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
+  const activeProfile = useActiveProjectProfile();
+  const historyByEpicId = useHistoryMembershipByEpicId();
 
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((t) => [t.tabId, t])),
@@ -58,17 +70,23 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
 
   return useMemo<ReadonlyArray<HeaderTab>>(
     () =>
-      stripOrder.flatMap<HeaderTab>((ref) =>
-        resolveRef(ref, {
-          epicTabsById,
-          draftTabsById,
-          systemTabs,
-          structuralLockRevision,
-        }),
-      ),
+      stripOrder
+        .flatMap<HeaderTab>((ref) =>
+          resolveRef(ref, {
+            epicTabsById,
+            draftTabsById,
+            systemTabs,
+            structuralLockRevision,
+          }),
+        )
+        .filter((tab) =>
+          headerTabVisibleInProfile(tab, activeProfile, historyByEpicId),
+        ),
     [
+      activeProfile,
       draftTabsById,
       epicTabsById,
+      historyByEpicId,
       stripOrder,
       structuralLockRevision,
       systemTabs,
@@ -120,6 +138,8 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
   );
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
+  const activeProfile = useActiveProjectProfile();
+  const historyByEpicId = useHistoryMembershipByEpicId();
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((tab) => [tab.tabId, tab])),
     [epicTabs],
@@ -132,15 +152,38 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
 
   return useMemo(
     () =>
-      items.flatMap((item) =>
-        projectHeaderStripItem(item, {
-          epicTabsById,
-          draftTabsById,
-          systemTabs,
-          structuralLockRevision,
+      items
+        .flatMap((item) =>
+          projectHeaderStripItem(item, {
+            epicTabsById,
+            draftTabsById,
+            systemTabs,
+            structuralLockRevision,
+          }),
+        )
+        .flatMap((item) => {
+          if (item.kind === "tab") {
+            return headerTabVisibleInProfile(
+              item.tab,
+              activeProfile,
+              historyByEpicId,
+            )
+              ? [item]
+              : [];
+          }
+          // Split groups keep their authority shape; foreign members render as
+          // fillable via useHeaderStripItem so strip indexes stay stable.
+          return [item];
         }),
-      ),
-    [draftTabsById, epicTabsById, items, structuralLockRevision, systemTabs],
+    [
+      activeProfile,
+      draftTabsById,
+      epicTabsById,
+      historyByEpicId,
+      items,
+      structuralLockRevision,
+      systemTabs,
+    ],
   );
 }
 
@@ -204,25 +247,39 @@ export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
   const tab = useHeaderTabForRef(tabRef);
   const left = useHeaderTabForRef(leftRef);
   const right = useHeaderTabForRef(rightRef);
+  const activeProfile = useActiveProjectProfile();
+  const historyByEpicId = useHistoryMembershipByEpicId();
   return useMemo(() => {
     if (item === null) return null;
     if (item.kind === "tab") {
-      return tab === null ? null : { kind: "tab", id: item.id, tab };
+      if (tab === null) return null;
+      // Display-level hide: strip item ids stay in the store so index math for
+      // drag/drop is unfiltered; foreign epic tabs simply omit themselves here.
+      if (
+        !headerTabVisibleInProfile(tab, activeProfile, historyByEpicId)
+      ) {
+        return null;
+      }
+      return { kind: "tab", id: item.id, tab };
     }
     return {
       kind: "split",
       id: item.id,
       focusedSide: item.focusedSide,
       left:
-        item.left.kind === "tab" && left !== null
+        item.left.kind === "tab" &&
+        left !== null &&
+        headerTabVisibleInProfile(left, activeProfile, historyByEpicId)
           ? { kind: "tab", tab: left }
           : { kind: "fillable", slot: fillableSide(item.left) },
       right:
-        item.right.kind === "tab" && right !== null
+        item.right.kind === "tab" &&
+        right !== null &&
+        headerTabVisibleInProfile(right, activeProfile, historyByEpicId)
           ? { kind: "tab", tab: right }
           : { kind: "fillable", slot: fillableSide(item.right) },
     } satisfies HeaderStripItem;
-  }, [item, left, right, tab]);
+  }, [activeProfile, historyByEpicId, item, left, right, tab]);
 }
 
 function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
@@ -404,6 +461,8 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabsById = new Map<string, LandingDraftTab>(
     draftTabs.map((t) => [t.id, t]),
   );
+  // Imperative path has no React profile/history subscription; keep full
+  // strip for close/neighbor math (display hide is hook-only).
   return stripOrder.flatMap((ref) =>
     resolveRef(ref, {
       epicTabsById,
@@ -412,4 +471,32 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
       structuralLockRevision: getTabStructuralLockRevision(),
     }),
   );
+}
+
+function useHistoryMembershipByEpicId(): ReadonlyMap<string, HistoryItem> {
+  const history = useHistoryQuery({
+    search: DEFAULT_HISTORY_SEARCH,
+    nowMs: null,
+  });
+  const membershipItems = history.data?.membershipItems;
+  return useMemo(() => {
+    const map = new Map<string, HistoryItem>();
+    for (const item of membershipItems ?? []) {
+      map.set(item.epicId, item);
+    }
+    return map;
+  }, [membershipItems]);
+}
+
+function headerTabVisibleInProfile(
+  tab: HeaderTab,
+  activeProfile: ProjectProfile | null,
+  historyByEpicId: ReadonlyMap<string, HistoryItem>,
+): boolean {
+  if (activeProfile === null) return true;
+  if (tab.kind !== "epic") return true;
+  const historyItem = historyByEpicId.get(tab.epicId);
+  // Unknown membership (not yet in history cache) → fail-open, keep visible.
+  if (historyItem === undefined) return true;
+  return itemVisibleInProfile(activeProfile, historyItem.linkedWorkspaces);
 }

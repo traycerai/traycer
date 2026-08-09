@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { phaseMigrationController } from "@/components/epic-tabs/phase-migration-controller";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
@@ -8,6 +8,30 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import type { TabRef } from "@/stores/tabs/types";
+
+// Header tabs now consult history for project-profile membership. This suite
+// is host-free; stub the query so useHeaderTabs stays renderable.
+vi.mock("@/hooks/home/use-history-query", () => ({
+  useHistoryQuery: () => ({
+    data: {
+      items: [],
+      membershipItems: [],
+      availableRepos: [],
+      availableWorkspaces: [],
+      totalCount: 0,
+      facets: { repos: [], workspaces: [], ownershipScopes: [] },
+      worktreesByEpicId: new Map(),
+    },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    hostId: null,
+    refetch: vi.fn(),
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+  }),
+}));
 
 const PHASE_REF: TabRef = { kind: "epic", id: "phase-tab" };
 const PARTNER_REF: TabRef = { kind: "epic", id: "partner-tab" };
