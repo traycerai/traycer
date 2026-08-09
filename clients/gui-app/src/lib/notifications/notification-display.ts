@@ -15,13 +15,13 @@ import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local
 import type {
   HostNotificationEntryV21,
   HostNotificationsCloudFeedRow,
-  HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
   notificationEntityFromPayload,
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
+import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import {
   isDocumentFocused,
   readFocusedHostNotificationPresenceEntity,
@@ -61,16 +61,7 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
-  const entity = entityFromActivationPayload(display.payload);
-  if (entity !== null) {
-    const focusedEntity = readFocusedHostNotificationPresenceEntity();
-    if (
-      focusedEntity !== null &&
-      notificationEntityMatchesPresence(entity, focusedEntity)
-    ) {
-      return;
-    }
-  }
+  if (suppressedByFocusedEntity(display)) return;
   if (wasDeliveryKeyDisplayed(display.deliveryKey)) return;
   const actionable = display.payload !== null;
   const title = actionable
@@ -126,21 +117,19 @@ export function displayNotificationRows(
  * foreground relays into the focused window (N-1 extra chimes), or a native
  * banner per window. The key collapses that fan-out to one delivery per
  * occurrence app-wide, whichever window reports it first.
+ *
+ * Identity is the feed's own `occurrenceKeyForNotification` - never a
+ * hand-rolled one. A host row reuses its semantic id across occurrences, so
+ * `(feedId, createdAt)` alone would let a prompt reopened inside one
+ * `Date.now()` tick collide with the prompt it superseded and be suppressed;
+ * `sourceRef` is what separates them. The JSON encoding is delimiter-safe,
+ * which is also why a batch nests the keys instead of joining them.
  */
 function feedRowsDeliveryKey(
   rows: ReadonlyArray<MergedNotificationRow>,
 ): string | null {
   if (rows.length === 0) return null;
-  return rows.map(feedRowDeliveryKey).join("|");
-}
-
-function feedRowDeliveryKey(row: MergedNotificationRow): string {
-  // A cloud entry is an immutable occurrence: its entryId alone names the
-  // delivery. A host (v1 local) row reuses its semantic id across
-  // occurrences, so the delivered version must be part of the key -
-  // `createdAt` carries the entry's `updatedAt` (see `rowFromHostEntry`).
-  if (row.source === "cloud") return `cloud:${row.sourceId}`;
-  return `${row.source}:${row.sourceId}:${String(row.createdAt)}`;
+  return JSON.stringify(rows.map(occurrenceKeyForNotification));
 }
 
 async function displayNotificationRowsAwaitNative(
@@ -246,27 +235,47 @@ function rememberDisplayedDeliveryKey(deliveryKey: string | null): void {
   displayedDeliveryKeys.add(deliveryKey);
 }
 
-function entityFromActivationPayload(
-  payload: unknown,
-): HostNotificationsEntityRef | null {
-  if (payload === null) return null;
-  const route = activationRoute(parseNotificationActivationPayload(payload));
-  return route === null ? null : notificationEntityFromPayload(route);
+/**
+ * Whether a relayed display is a host-feed row addressed to the entity this
+ * window is looking at.
+ *
+ * Deliberately scoped to host/cloud FEED rows. App-local rows (terminal
+ * closed/crashed, stream transport errors, routed host errors) carry
+ * entity-bearing payloads too, but their own display path is never
+ * entity-suppressed - and the emission controller records their display
+ * receipt BEFORE handing the display here, so a drop is permanent rather
+ * than retried. Gating them would silently swallow exactly the failures a
+ * user must see. Anything we cannot positively identify as a host-feed
+ * relay - a legacy payload with no feed identity, an unparseable one -
+ * displays: a redundant toast is a nuisance, a swallowed error is data loss.
+ */
+function suppressedByFocusedEntity(
+  display: NotificationForegroundDisplay,
+): boolean {
+  if (display.foregroundAppLocal !== null) return false;
+  if (display.payload === null) return false;
+  const parsed = parseNotificationActivationPayload(display.payload);
+  if (!isHostFeedRelay(parsed)) return false;
+  const entity = notificationEntityFromPayload(parsed.envelope.route);
+  if (entity === null) return false;
+  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  return (
+    focusedEntity !== null &&
+    notificationEntityMatchesPresence(entity, focusedEntity)
+  );
 }
 
-function activationRoute(
+function isHostFeedRelay(
   parsed: ParsedNotificationActivationPayload,
-): NotificationPayload | null {
-  switch (parsed.kind) {
-    case "v1":
-      return parsed.envelope.route;
-    case "legacy":
-      return parsed.payload;
-    // An unrecognized payload names no entity, so it cannot be gated - it
-    // displays, matching how activation itself degrades to opening the center.
-    case "unknown":
-      return null;
-  }
+): parsed is Extract<
+  ParsedNotificationActivationPayload,
+  { readonly kind: "v1" }
+> {
+  return (
+    parsed.kind === "v1" &&
+    (parsed.envelope.feed.source === "host" ||
+      parsed.envelope.feed.source === "cloud")
+  );
 }
 
 /**

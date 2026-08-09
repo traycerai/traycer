@@ -96,7 +96,7 @@ describe("notification display", () => {
         originHostId: "origin-host-1",
       }),
       replaceKey: "host:chat:chat-1",
-      deliveryKey: "host:n-1:10",
+      deliveryKey: JSON.stringify([JSON.stringify(["host:n-1", 10, null])]),
       foregroundAppLocal: null,
     });
     expect(toastCalls).toHaveLength(1);
@@ -144,6 +144,41 @@ describe("notification display", () => {
     );
   });
 
+  it("separates a same-millisecond prompt supersede by source ref", () => {
+    // An approval reopened inside one Date.now() tick keeps its semantic id
+    // and updatedAt and only changes sourceRef. A delivery key without the
+    // source ref would collide with the prompt it superseded, and the dedup
+    // would suppress the new approval's notification entirely.
+    const showNotification = vi.fn(
+      (_input: { readonly deliveryKey: string | null }) => Promise.resolve(),
+    );
+    const prompt: MergedNotificationRow = {
+      ...row("Approval needed"),
+      sourceId: "approval.requested:chat-1",
+      feedId: "host:approval.requested:chat-1",
+      sourceRef: "approval-1",
+    };
+    const reopened: MergedNotificationRow = {
+      ...prompt,
+      sourceRef: "approval-2",
+    };
+
+    displayNotificationRows(
+      [prompt],
+      { showNotification, playChime: vi.fn(), onToastClick: vi.fn() },
+      null,
+    );
+    displayNotificationRows(
+      [reopened],
+      { showNotification, playChime: vi.fn(), onToastClick: vi.fn() },
+      null,
+    );
+
+    const keys = showNotification.mock.calls.map((call) => call[0].deliveryKey);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(toastCalls).toHaveLength(2);
+  });
+
   it("reuses a chat key across prompt and completion entries", () => {
     const prompt: MergedNotificationRow = {
       ...row("Approval needed"),
@@ -171,7 +206,7 @@ describe("notification display", () => {
     const first = row("One");
 
     displayNotificationRows(
-      [first, { ...row("Two"), sourceId: "n-2" }],
+      [first, { ...row("Two"), feedId: "host:n-2", sourceId: "n-2" }],
       {
         showNotification,
         playChime,
@@ -193,7 +228,10 @@ describe("notification display", () => {
         originHostId: "origin-host-1",
       }),
       replaceKey: "notification-batch",
-      deliveryKey: "host:n-1:10|host:n-2:10",
+      deliveryKey: JSON.stringify([
+        JSON.stringify(["host:n-1", 10, null]),
+        JSON.stringify(["host:n-2", 10, null]),
+      ]),
       foregroundAppLocal: null,
     });
 
@@ -271,7 +309,7 @@ describe("notification display", () => {
       body: "New chat • Done",
       payload: null,
       replaceKey: "host:id:n-1",
-      deliveryKey: "host:n-1:10",
+      deliveryKey: JSON.stringify([JSON.stringify(["host:n-1", 10, null])]),
       foregroundAppLocal: null,
     });
   });
@@ -416,7 +454,7 @@ describe("host channel emission focus gate", () => {
         },
       },
       replaceKey: "host:chat:chat-2",
-      deliveryKey: "host:n-2:10",
+      deliveryKey: JSON.stringify([JSON.stringify(["host:n-2", 10, "n-2"])]),
     });
     expect(typeof nativeCall.title).toBe("string");
     expect(typeof nativeCall.body).toBe("string");
@@ -441,6 +479,10 @@ describe("host channel emission focus gate", () => {
     expect(toastCalls).toHaveLength(0);
   });
 });
+
+const HOST_N1_DELIVERY_KEY = JSON.stringify([
+  JSON.stringify(["host:n-1", 10, null]),
+]);
 
 describe("forwarded foreground display gate", () => {
   beforeEach(() => {
@@ -554,7 +596,7 @@ describe("forwarded foreground display gate", () => {
 
     const playChime = vi.fn();
     displayForwardedForegroundNotification(
-      forwardedDisplay("chat-1", "host:n-1:10"),
+      forwardedDisplay("chat-1", HOST_N1_DELIVERY_KEY),
       { playChime, onToastClick: vi.fn() },
     );
 
@@ -566,7 +608,7 @@ describe("forwarded foreground display gate", () => {
     focusChatTile("chat-2");
     const playChime = vi.fn();
     displayForwardedForegroundNotification(
-      forwardedDisplay("chat-1", "host:n-1:10"),
+      forwardedDisplay("chat-1", HOST_N1_DELIVERY_KEY),
       { playChime, onToastClick: vi.fn() },
     );
     expect(toastCalls).toHaveLength(1);
@@ -584,6 +626,56 @@ describe("forwarded foreground display gate", () => {
     expect(target.showNotification).toHaveBeenCalledOnce();
     expect(toastCalls).toHaveLength(1);
     expect(target.playChime).not.toHaveBeenCalled();
+  });
+
+  it("renders an app-local relay addressed to the focused entity", () => {
+    // App-local rows (terminal closed/crashed, transport errors, routed host
+    // errors) are never entity-suppressed on their own path, and the emission
+    // controller records their display receipt BEFORE relaying - so dropping
+    // one here loses it permanently. Only host-feed relays may be gated.
+    focusChatTile("chat-1");
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Terminal closed",
+        body: 'Host "Mac" is unreachable.',
+        payload: buildNotificationActivationEnvelope({
+          route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+          feed: { source: "app-local", id: "terminal.closed:t-1" },
+          originHostId: null,
+        }),
+        replaceKey: "terminal.closed:t-1",
+        deliveryKey: null,
+        foregroundAppLocal: { userId: "user-1", entry: { id: "t-1" } },
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("renders a legacy relay it cannot attribute to a feed", () => {
+    // A legacy payload carries no feed identity, so it cannot be proven to be
+    // a host-feed row. Displaying a redundant toast beats swallowing an error.
+    focusChatTile("chat-1");
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+        replaceKey: "host:chat:chat-1",
+        deliveryKey: null,
+        foregroundAppLocal: null,
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
   });
 
   it("renders a payload-less relayed display unchanged", () => {
