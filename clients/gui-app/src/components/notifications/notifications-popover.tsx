@@ -914,7 +914,7 @@ function RecentRow(props: RecentRowProps): ReactNode {
       {group !== previousGroup && (
         <li
           data-testid="notification-temporal-separator"
-          className="px-4 pt-2 pb-0.5 text-micro text-muted-foreground/60 first:pt-0"
+          className="sticky top-5 z-10 bg-popover px-4 py-1 text-micro text-muted-foreground/60 first:mt-0"
         >
           {TEMPORAL_GROUP_LABEL[group]}
         </li>
@@ -931,7 +931,7 @@ function RecentRow(props: RecentRowProps): ReactNode {
 
 function SectionLabel(props: { readonly children: ReactNode }): ReactNode {
   return (
-    <div className="mb-1 text-overline font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="sticky top-0 z-20 -mx-4 mb-1 bg-popover px-4 py-1 text-overline font-semibold uppercase tracking-wide text-muted-foreground">
       {props.children}
     </div>
   );
