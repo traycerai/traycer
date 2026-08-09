@@ -221,9 +221,34 @@ function classifyEnumRepresentation(
 export type AdditivityViolation =
   | { readonly kind: "field"; readonly detail: string }
   | { readonly kind: "enum-value"; readonly detail: string }
+  | { readonly kind: "enum-value-added"; readonly detail: string }
   | { readonly kind: "union-variant"; readonly detail: string }
+  | { readonly kind: "union-variant-added"; readonly detail: string }
   | { readonly kind: "array-items"; readonly detail: string }
   | { readonly kind: "schema-kind"; readonly detail: string };
+
+/**
+ * How strictly additivity treats VALUE growth (new enum values, new
+ * union variants, widened forms) - growth the older schema validates
+ * rather than strips, so an old peer REFUSES any payload carrying it.
+ *
+ * - `"lenient"`: growth is legal. Correct for request schemas (the
+ *   caller only hits the refusal by opting into the new capability on
+ *   its own call), for streams (whose serverFrame growth is emitted
+ *   behind per-minor capability gates - the chat-frame-projection
+ *   pattern), and for persistence records.
+ * - `"no-value-growth"`: growth is a violation. Correct for unary
+ *   RESPONSE schemas, where the new value's occurrence is typically
+ *   decided by shared state rather than by the receiving peer - one
+ *   new-valued record would poison every old peer's projection with no
+ *   opt-out. A minor whose response growth genuinely is emission-gated
+ *   declares `responseGrowthProjectionGated: true` on its registry
+ *   version entry, which drops that minor back to `"lenient"`.
+ *
+ * Structural safety (no removals, no incompatible replacements, at any
+ * depth) is enforced identically in both modes.
+ */
+export type AdditivityMode = "lenient" | "no-value-growth";
 
 /**
  * First non-additive change between two fingerprints, or null when
@@ -265,8 +290,9 @@ export type AdditivityViolation =
 export function findAdditivityViolation(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
+  mode: AdditivityMode,
 ): AdditivityViolation | null {
-  return findNodeAdditivityViolation(previous, next, []);
+  return findNodeAdditivityViolation(previous, next, [], mode);
 }
 
 /**
@@ -389,6 +415,7 @@ function findNodeAdditivityViolation(
   previous: unknown,
   next: unknown,
   path: readonly string[],
+  mode: AdditivityMode,
 ): AdditivityViolation | null {
   const previousNode = classifySchemaNode(previous);
   const nextNode = classifySchemaNode(next);
@@ -397,9 +424,16 @@ function findNodeAdditivityViolation(
     // Widening lever: any previous form may become a union on a minor,
     // provided some variant still accepts old-form payloads additively -
     // payloads using a genuinely new form refuse by design at projection.
+    // Widening IS value growth (the union's other forms are new values an
+    // old schema refuses), so under no-value-growth it is a violation
+    // regardless of whether the old form is retained.
     if (nextNode.kind === "anyOf") {
+      if (mode === "no-value-growth") {
+        return { kind: "union-variant-added", detail: snippet(next) };
+      }
       const oldFormRetained = nextNode.variants.some(
-        (variant) => findNodeAdditivityViolation(previous, variant, path) === null,
+        (variant) =>
+          findNodeAdditivityViolation(previous, variant, path, mode) === null,
       );
       return oldFormRetained
         ? null
@@ -409,7 +443,7 @@ function findNodeAdditivityViolation(
     // still project onto the replacement schema.
     if (previousNode.kind === "anyOf") {
       for (const variant of previousNode.variants) {
-        if (findNodeAdditivityViolation(variant, next, path) !== null) {
+        if (findNodeAdditivityViolation(variant, next, path, mode) !== null) {
           return { kind: "union-variant", detail: snippet(variant) };
         }
       }
@@ -425,6 +459,9 @@ function findNodeAdditivityViolation(
   }
 
   if (previousNode.kind === "object" && nextNode.kind === "object") {
+    // Only keys the OLD schema knows are walked: a brand-new key's subtree
+    // is invisible to the old schema (stripped on projection), so it is
+    // exempt from value-growth checking in either mode.
     for (const field of Object.keys(previousNode.properties)) {
       if (!(field in nextNode.properties)) {
         return {
@@ -436,6 +473,7 @@ function findNodeAdditivityViolation(
         previousNode.properties[field],
         nextNode.properties[field],
         [...path, field],
+        mode,
       );
       if (nested !== null) return nested;
     }
@@ -454,6 +492,13 @@ function findNodeAdditivityViolation(
         return { kind: "enum-value", detail: String(value) };
       }
     }
+    if (mode === "no-value-growth") {
+      for (const value of nextNode.values) {
+        if (!previousNode.values.includes(value)) {
+          return { kind: "enum-value-added", detail: String(value) };
+        }
+      }
+    }
     return null;
   }
 
@@ -462,15 +507,56 @@ function findNodeAdditivityViolation(
     // compatible with it - byte-identical is the trivial case, an
     // extended variant (added optional keys) the intended one. Matching
     // by compatibility instead of equality is what lets union arms grow
-    // on minors exactly like object properties do.
+    // on minors exactly like object properties do. Under no-value-growth
+    // the survival match runs strict too; when a variant has a lenient
+    // successor whose only sin is value growth, surface that precise
+    // violation instead of a misleading "dropped variant".
     for (const previousVariant of previousNode.variants) {
       const survives = nextNode.variants.some(
         (nextVariant) =>
-          findNodeAdditivityViolation(previousVariant, nextVariant, path) ===
-          null,
+          findNodeAdditivityViolation(
+            previousVariant,
+            nextVariant,
+            path,
+            mode,
+          ) === null,
       );
-      if (!survives) {
-        return { kind: "union-variant", detail: snippet(previousVariant) };
+      if (survives) continue;
+      if (mode === "no-value-growth") {
+        const lenientMatch = nextNode.variants.find(
+          (nextVariant) =>
+            findNodeAdditivityViolation(
+              previousVariant,
+              nextVariant,
+              path,
+              "lenient",
+            ) === null,
+        );
+        if (lenientMatch !== undefined) {
+          return findNodeAdditivityViolation(
+            previousVariant,
+            lenientMatch,
+            path,
+            mode,
+          );
+        }
+      }
+      return { kind: "union-variant", detail: snippet(previousVariant) };
+    }
+    if (mode === "no-value-growth") {
+      for (const nextVariant of nextNode.variants) {
+        const hasPredecessor = previousNode.variants.some(
+          (previousVariant) =>
+            findNodeAdditivityViolation(
+              previousVariant,
+              nextVariant,
+              path,
+              "lenient",
+            ) === null,
+        );
+        if (!hasPredecessor) {
+          return { kind: "union-variant-added", detail: snippet(nextVariant) };
+        }
       }
     }
     return null;
@@ -481,6 +567,7 @@ function findNodeAdditivityViolation(
       previousNode.items,
       nextNode.items,
       [...path, "items"],
+      mode,
     );
     if (itemsViolation !== null) {
       return {
@@ -546,10 +633,20 @@ export function findBreakingChange(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
 ): BreakingChange | null {
-  const additivityViolation = findAdditivityViolation(previous, next);
+  const additivityViolation = findAdditivityViolation(previous, next, "lenient");
   if (additivityViolation !== null) {
     if (additivityViolation.kind === "schema-kind") {
       return { ...additivityViolation, reason: "schema-changed" };
+    }
+    if (
+      additivityViolation.kind === "enum-value-added" ||
+      additivityViolation.kind === "union-variant-added"
+    ) {
+      // Value-growth violations only exist under "no-value-growth" mode;
+      // the lenient call above cannot produce them.
+      throw new Error(
+        "unreachable: lenient additivity produced a value-growth violation",
+      );
     }
     return { ...additivityViolation, reason: "removed" };
   }
@@ -601,8 +698,12 @@ export function describeAdditivityViolation(
       return `drops field '${violation.detail}'`;
     case "enum-value":
       return `drops enum value '${violation.detail}'`;
+    case "enum-value-added":
+      return `adds enum value '${violation.detail}'`;
     case "union-variant":
       return `drops union variant '${violation.detail}'`;
+    case "union-variant-added":
+      return `adds union variant '${violation.detail}'`;
     case "array-items":
       return `array items: ${violation.detail}`;
     case "schema-kind":

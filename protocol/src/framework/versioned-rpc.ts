@@ -419,9 +419,13 @@ function assertSchemaCompatibility(
         const previous = schemas[method][major][previousMinor];
         const current = schemas[method][major][currentMinor];
 
+        // Requests stay lenient on value growth: only a caller that opts
+        // into a new capability on its own call hits the projection
+        // refusal, which is the designed DOWNGRADE_UNSUPPORTED arm.
         const requestViolation = findAdditivityViolation(
           previous.request,
           current.request,
+          "lenient",
         );
         if (requestViolation !== null) {
           throw new Error(
@@ -429,13 +433,33 @@ function assertSchemaCompatibility(
           );
         }
 
+        // Responses are strict on value growth unless the minor declares
+        // its growth emission-gated: response values are typically decided
+        // by shared state, so a new value would poison every old peer's
+        // projection with no opt-out.
+        const responseGrowthGated =
+          line.versions[currentMinor].responseGrowthProjectionGated === true;
         const responseViolation = findAdditivityViolation(
           previous.response,
           current.response,
+          responseGrowthGated ? "lenient" : "no-value-growth",
         );
         if (responseViolation !== null) {
+          // Growth violations may arrive wrapped (an `array-items` violation
+          // carries the inner description), so detect them by description as
+          // well as by kind before offering the annotation escape.
+          const violationDescription =
+            describeAdditivityViolation(responseViolation);
+          const isValueGrowth =
+            responseViolation.kind === "enum-value-added" ||
+            responseViolation.kind === "union-variant-added" ||
+            violationDescription.includes("adds enum value") ||
+            violationDescription.includes("adds union variant");
+          const annotationHint = isValueGrowth
+            ? " (if this growth is genuinely emission-gated on the negotiated version, declare `responseGrowthProjectionGated: true` on the minor's registry entry)"
+            : "";
           throw new Error(
-            `Minor ${major}.${currentMinor} for method '${method}' response ${describeAdditivityViolation(responseViolation)} from ${major}.${previousMinor}`,
+            `Minor ${major}.${currentMinor} for method '${method}' response ${violationDescription} from ${major}.${previousMinor}${annotationHint}`,
           );
         }
       }
