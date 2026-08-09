@@ -158,6 +158,13 @@ export const worktreeActivityCacheKey = (hostId: string): string =>
 // launch while the live listing refetches behind it.
 export const worktreeListingCacheKey = (hostId: string): string =>
   scopedPersistKey("worktree-listing-cache", hostId);
+
+export const projectProfilesRegistryKey = (email: string | null): string =>
+  scopedPersistKey("project-profiles", scopeBucket(email));
+
+export const activeProjectProfileKey = (email: string | null): string =>
+  scopedPersistKey("active-project-profile", scopeBucket(email));
+
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
 //   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
@@ -213,6 +220,16 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
+  {
+    camelName: "projectProfiles",
+    leaf: "project-profiles",
+    kind: "scoped",
+  },
+  {
+    camelName: "activeProjectProfile",
+    leaf: "active-project-profile",
+    kind: "scoped",
+  },
 
   // ── Scoped non-zustand key families (1) ──────────────────────────────────
   {

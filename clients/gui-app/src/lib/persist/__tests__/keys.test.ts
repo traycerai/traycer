@@ -24,6 +24,8 @@ import {
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
   worktreeListingCacheKey,
+  projectProfilesRegistryKey,
+  activeProjectProfileKey,
 } from "@/lib/persist/keys";
 
 // CRITICAL: every literal below is HAND-TRANSCRIBED from the current store
@@ -258,6 +260,23 @@ describe("persist key builders — output-preserving against current source", ()
 
   it("emits the machine-level last-local-host-id localStorage key", () => {
     expect(lastLocalHostIdKey()).toBe("traycer-gui-app:last-local-host-id");
+  });
+
+  it("emits project profile scoped keys", () => {
+    // Source: src/stores/profiles/project-profiles-store.ts
+    expect(projectProfilesRegistryKey("a@b.c")).toBe(
+      "traycer-gui-app:project-profiles:a@b.c",
+    );
+    expect(projectProfilesRegistryKey(null)).toBe(
+      "traycer-gui-app:project-profiles:anon",
+    );
+    // Source: src/stores/profiles/active-project-profile-store.ts
+    expect(activeProjectProfileKey("a@b.c")).toBe(
+      "traycer-gui-app:active-project-profile:a@b.c",
+    );
+    expect(activeProjectProfileKey(null)).toBe(
+      "traycer-gui-app:active-project-profile:anon",
+    );
   });
 
   it("has no two catalog entries sharing a leaf", () => {

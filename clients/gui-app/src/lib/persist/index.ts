@@ -26,6 +26,8 @@ export {
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
   worktreeListingCacheKey,
+  projectProfilesRegistryKey,
+  activeProjectProfileKey,
   type PersistStoreEntry,
   type PersistStoreKind,
 } from "@/lib/persist/keys";
