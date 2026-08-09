@@ -32,27 +32,33 @@ export function sortModelProviderEntries(
 }
 
 /**
- * Where the credential in effect comes from, as a badge.
+ * Where the credential in effect comes from, as a badge - in the upstream app's
+ * own vocabulary, so a row reads the same in both places.
  *
- * `api` is provider-named rather than "Saved in Traycer", and the distinction
- * is factual, not cosmetic: a key entered here is written to the PROVIDER's own
- * credential store (OpenCode's `auth.json`, via `auth.set`) and never mirrored
- * into Traycer's config. That was a deliberate plan decision - it is what keeps
- * `opencode auth login` and this tab interchangeable - so a badge claiming
- * Traycer holds the key would have described the one thing the design went out
- * of its way not to do.
+ * `api` is "API key" rather than "Saved in {provider}". The longer phrasing was
+ * making a true and useful point (a key entered here goes to the PROVIDER's own
+ * store, never Traycer's) but it was making it in the one slot that has to be
+ * scannable at a glance across ~180 rows, and it read as a different fact from
+ * the one the upstream app states for the identical row. The provenance point
+ * survives in {@link sourceBadgeHint}, which is where a sentence belongs.
+ *
+ * `config` splits on `configDeclaredCustom` - the host's copy of upstream's
+ * `T(id)` predicate, true for a provider the user DECLARED in the config file
+ * (`@ai-sdk/openai-compatible` plus a non-empty model map) rather than merely
+ * credentialed there. Same source, two very different rows: one the user owns
+ * end to end, one that just happens to be keyed from a file.
  */
 export function sourceBadgeLabel(
   source: ModelProviderSource,
-  providerLabel: string,
+  configDeclaredCustom: boolean,
 ): string {
   switch (source) {
     case "api":
-      return `Saved in ${providerLabel}`;
+      return "API key";
     case "env":
       return "Environment";
     case "config":
-      return "Config file";
+      return configDeclaredCustom ? "Custom" : "Config";
     case "custom":
       return "Custom";
   }
@@ -61,6 +67,7 @@ export function sourceBadgeLabel(
 export function sourceBadgeHint(
   source: ModelProviderSource,
   providerLabel: string,
+  configDeclaredCustom: boolean,
 ): string {
   switch (source) {
     case "api":
@@ -68,38 +75,11 @@ export function sourceBadgeHint(
     case "env":
       return "This credential comes from an environment variable, so it's managed outside Traycer.";
     case "config":
-      return `This credential comes from a ${providerLabel} config file, so it's managed outside Traycer.`;
+      return configDeclaredCustom
+        ? `You declared this provider in ${providerLabel}'s config file, with its own base URL and models.`
+        : `This credential comes from a ${providerLabel} config file, so it's managed outside Traycer.`;
     case "custom":
       return `This provider is loaded by a custom ${providerLabel} loader.`;
-  }
-}
-
-/**
- * What a read-only row says on its trailing edge, or null for a credential
- * Traycer itself stored (which is not read-only and has buttons instead).
- *
- * It names the CONTROLLING PARTY as a fact, not the restriction that follows
- * from it. The badge beside the name already says where the credential comes
- * from, so a line reading "Managed outside Traycer" spent the row's last words
- * repeating that in the negative - telling the user what they cannot do here
- * rather than who owns it.
- */
-export function readOnlySourceLabel(
-  source: ModelProviderSource,
-): string | null {
-  switch (source) {
-    case "env":
-      return "Set by environment";
-    case "config":
-      return "Set in config file";
-    case "custom":
-      // NOT "Set in config file": a `custom` loader is frequently fed by the
-      // provider's own auth store (xai signs in through OAuth and still reports
-      // `custom`), so naming a file the user should go and edit sends them
-      // somewhere the credential is not.
-      return "Set by a custom loader";
-    case "api":
-      return null;
   }
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Plus, Unplug } from "lucide-react";
+import { Plus } from "lucide-react";
 import type {
   ModelProviderAuthResult,
   ModelProviderEntry,
@@ -31,11 +31,12 @@ import {
   useModelProviderPendingAuthStore,
 } from "@/stores/settings/model-provider-pending-auth-store";
 import {
-  readOnlySourceLabel,
   sortModelProviderEntries,
   sourceBadgeHint,
   sourceBadgeLabel,
 } from "./model-provider-connect-model";
+import type { CustomProviderValues } from "./model-provider-custom-draft";
+import { ProviderCustomModelProviderDialog } from "./provider-custom-model-provider-dialog";
 import {
   filterModelProvidersByMethod,
   MODEL_PROVIDER_METHOD_FILTER,
@@ -110,6 +111,144 @@ function disconnectRowError(
   return null;
 }
 
+/**
+ * What a custom-provider write left behind, or null when it landed.
+ *
+ * Inline in the dialog rather than a toast, and unlike the row paths this one
+ * keeps the form open: everything the user typed is still on screen, and a
+ * rejected base URL is fixed where it was typed.
+ */
+function customSubmitError(result: ModelProviderAuthResult): string | null {
+  if (result.kind === "error") {
+    return redactLogText(
+      modelProviderAuthErrorMessage(result.code, result.detail),
+    );
+  }
+  if (result.kind === "unsupported") {
+    return redactLogText(
+      result.reason ?? "Custom providers aren't available on this host.",
+    );
+  }
+  return null;
+}
+
+/**
+ * What Disconnect actually does to THIS row, which is two different things.
+ *
+ * For a config-declared custom provider it is upstream's disable: the block the
+ * user wrote stays in the config file and the provider stops being offered. For
+ * everything else it removes the stored credential - and that is all it can
+ * promise, because an environment variable or config file underneath can take
+ * over the moment the stored one is gone.
+ */
+function disconnectDescription(
+  entry: ModelProviderEntry,
+  providerLabel: string,
+): string {
+  if (entry.configDeclaredCustom) {
+    return `Disconnect ${entry.name}? Its declaration stays in ${providerLabel}'s config file, so you can turn it back on later.`;
+  }
+  return `Remove the stored ${entry.name} credential from ${providerLabel}? If an environment variable or config file also provides it, ${entry.name} keeps working from that source.`;
+}
+
+/** The catalog a list result carries, sorted, or nothing at all. */
+function entriesOf(
+  result: ModelProvidersListResult | undefined,
+): readonly ModelProviderEntry[] {
+  if (result === undefined || !result.ok) return EMPTY_ENTRIES;
+  return sortModelProviderEntries(result.providers);
+}
+
+/**
+ * The attempt belonging to the row the user OPENED, by its full key.
+ *
+ * Not the auto-adopt candidate: with two live attempts on one host that is the
+ * newer one, and reading it here made the older row's live attempt
+ * restart-only even though its record was in the store and the host was still
+ * holding its server lease.
+ */
+function attemptForTarget(args: {
+  readonly entries: Readonly<Record<string, ModelProviderPendingAuthEntry>>;
+  readonly hostId: string | null;
+  readonly providerId: ProviderId;
+  readonly target: ModelProviderEntry | null;
+}): ModelProviderPendingAuthEntry | null {
+  const { hostId, target } = args;
+  if (target === null || hostId === null) return null;
+  return getModelProviderPendingAuth(args.entries, {
+    hostId,
+    providerId: args.providerId,
+    modelProviderId: target.id,
+  });
+}
+
+/**
+ * The custom-provider form's own state and submit path.
+ *
+ * Its own hook rather than four more `useState`s in the tab: the tab already
+ * carries the list, the search, the filter, the connect target and the
+ * disconnect target, and the form shares nothing with any of them except the
+ * one mutation it borrows.
+ */
+function useCustomProviderForm(providerId: ProviderId): {
+  /** The open form, or null. `initial` is what separates edit from declare. */
+  readonly state: { readonly initial: CustomProviderValues | null } | null;
+  readonly error: string | null;
+  readonly isPending: boolean;
+  readonly open: (initial: CustomProviderValues | null) => void;
+  readonly close: () => void;
+  readonly submit: (values: CustomProviderValues) => void;
+} {
+  const [state, setState] = useState<{
+    readonly initial: CustomProviderValues | null;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Its OWN mutation instance rather than the tab's. They share a key and an
+  // invalidation, and nothing else: a disconnect in flight has no business
+  // spinning this form's submit button, or the other way round.
+  const auth = useProvidersModelProviderAuth();
+
+  const open = useCallback((initial: CustomProviderValues | null) => {
+    setError(null);
+    setState({ initial });
+  }, []);
+  const close = useCallback(() => {
+    setState(null);
+  }, []);
+
+  const submit = useCallback(
+    (values: CustomProviderValues) => {
+      setError(null);
+      auth.mutate(
+        {
+          providerId,
+          action: {
+            // One shape, two verbs - the wire's own split. `updateCustom` is
+            // only reachable for a row the host flagged `configDeclaredCustom`,
+            // which is the same set of rows it will accept an update for.
+            action:
+              state?.initial === null || state === null
+                ? "createCustom"
+                : "updateCustom",
+            ...values,
+            modelIds: [...values.modelIds],
+          },
+        },
+        {
+          onSuccess: (data) => {
+            const failure = customSubmitError(data.result);
+            setError(failure);
+            if (failure === null) setState(null);
+          },
+        },
+      );
+    },
+    [auth, providerId, state],
+  );
+
+  return { state, error, isPending: auth.isPending, open, close, submit };
+}
+
 export function ProviderModelProvidersTab(props: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
@@ -145,16 +284,11 @@ export function ProviderModelProvidersTab(props: {
     enabled: true,
   });
   const auth = useProvidersModelProviderAuth();
+  const customForm = useCustomProviderForm(providerId);
   const pendingAuthEntries = useModelProviderPendingAuthStore((s) => s.entries);
 
   const result: ModelProvidersListResult | undefined = listQuery.data?.result;
-  const entries = useMemo(
-    () =>
-      result !== undefined && result.ok
-        ? sortModelProviderEntries(result.providers)
-        : EMPTY_ENTRIES,
-    [result],
-  );
+  const entries = useMemo(() => entriesOf(result), [result]);
   // Filter first, THEN search: the fuzzy matcher ranks what it is given, so
   // narrowing the candidate set before it runs keeps a query's results inside
   // the bucket the user picked instead of quietly re-widening it.
@@ -188,19 +322,12 @@ export function ProviderModelProvidersTab(props: {
       ? null
       : (entries.find((entry) => entry.id === connectTargetId) ?? null);
 
-  // The attempt belonging to THIS row, looked up by its full key rather than
-  // taken from the auto-adopt candidate. With two live attempts on one host,
-  // the candidate is the newer one - so reading it here made the older row's
-  // live attempt restart-only, even though its record was sitting in the store
-  // and the host was still holding its server lease.
-  const resumedForTarget =
-    connectTarget === null || hostId === null
-      ? null
-      : getModelProviderPendingAuth(pendingAuthEntries, {
-          hostId,
-          providerId,
-          modelProviderId: connectTarget.id,
-        });
+  const resumedForTarget = attemptForTarget({
+    entries: pendingAuthEntries,
+    hostId,
+    providerId,
+    target: connectTarget,
+  });
 
   const handleDisconnect = useCallback(() => {
     const target = disconnectTarget;
@@ -223,6 +350,7 @@ export function ProviderModelProvidersTab(props: {
   }, [auth, disconnectTarget, providerId]);
 
   const canDisconnect = capabilities.actions.includes("disconnect");
+  const canCreateCustom = capabilities.actions.includes("createCustom");
   // Hoisted out of JSX: `eslint --fix` (react/jsx-no-leaked-render) rewrites a
   // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
@@ -238,6 +366,25 @@ export function ProviderModelProvidersTab(props: {
         They are stored by {providerLabel} itself, so its CLI and Traycer see
         the same sign-ins.
       </p>
+
+      {canCreateCustom ? (
+        // ABOVE the search box, not inside the results. It is not a provider
+        // the catalog can match, so a search that filters it away would hide
+        // the one row whose whole purpose is "what you want isn't in this
+        // list" - which is exactly when the user is searching.
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="w-full justify-start gap-2 px-0 text-muted-foreground hover:text-foreground"
+          onClick={() => {
+            customForm.open(null);
+          }}
+        >
+          <Plus className="size-3.5" />
+          Add custom provider
+        </Button>
+      ) : null}
 
       {entries.length > 0 ? (
         <ModelProviderListControls
@@ -308,24 +455,34 @@ export function ProviderModelProvidersTab(props: {
         />
       ) : null}
 
+      {customForm.state !== null ? (
+        <ProviderCustomModelProviderDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) customForm.close();
+          }}
+          providerLabel={providerLabel}
+          takenIds={entries.map((entry) => entry.id)}
+          initial={customForm.state.initial}
+          isPending={customForm.isPending}
+          submitError={customForm.error}
+          onSubmit={customForm.submit}
+        />
+      ) : null}
+
       <ConfirmDestructiveDialog
         open={disconnectTarget !== null}
         onOpenChange={(open) => {
           if (!open) setDisconnectTarget(null);
         }}
-        title="Remove credential"
+        title="Disconnect provider"
         description={
           disconnectTarget === null
             ? ""
-            : // Says what removal GUARANTEES, and no more. It deletes the
-              // stored credential; whether the provider keeps working is not
-              // ours to promise, because an environment variable or config
-              // file underneath can take over the moment the stored one is
-              // gone - the same fact the row's own read-only copy states.
-              `Remove the stored ${disconnectTarget.name} credential from ${providerLabel}? If an environment variable or config file also provides it, ${disconnectTarget.name} keeps working from that source.`
+            : disconnectDescription(disconnectTarget, providerLabel)
         }
         cascadeSummary={null}
-        actionLabel="Remove"
+        actionLabel="Disconnect"
         isPending={disconnectPending}
         onConfirm={handleDisconnect}
       />
@@ -454,7 +611,11 @@ function ModelProvidersBody(props: {
     // this list untestable under jsdom, which reports every element as
     // zero-height and would leave the viewport empty.
     <ul
-      className="flex max-h-[60vh] w-full flex-col gap-2 overflow-y-auto"
+      // One list, hairline-separated - not a card per provider. At ~180 rows a
+      // border around each one turns the surface into a wall of boxes with the
+      // provider names as the smallest thing in it; the separators carry the
+      // same grouping for a fraction of the ink.
+      className="flex max-h-[60vh] w-full flex-col divide-y divide-border/40 overflow-y-auto"
       data-testid="model-provider-list"
     >
       {props.entries.map((entry) => (
@@ -499,37 +660,38 @@ function ModelProviderRow(props: {
   // and a later host may answer the two differently - reading either one for
   // the other is how a button appears that the host will refuse.
   const showDisconnect = props.canDisconnect && entry.canDisconnect;
-  // Where the credential CURRENTLY in effect comes from. This is a status, not
-  // a permission: the row still offers Connect, because setting a provider up
-  // and choosing which credential wins are different decisions (see
-  // `credentialPrecedenceNotice`). Only Remove is gated, and by the host's
-  // `canDisconnect` rather than by this.
-  const externallySourced =
-    entry.connected && entry.source !== null && entry.source !== "api";
-  const readOnlyLabel =
-    entry.source === null ? null : readOnlySourceLabel(entry.source);
+  // Upstream's own rule, and the reason this is not `!entry.connected`: a
+  // connected row the host will NOT let us disconnect (an env-sourced one) must
+  // still offer a way in, or it is a dead end that neither explains itself nor
+  // lets the user put a credential in place for when the variable is gone.
+  // Everywhere else, connected means Disconnect and nothing beside it - which
+  // is what "the same buttons under the same conditions" asks for.
+  const showConnect = props.connectable && !showDisconnect;
   return (
-    <li className="rounded-lg border border-border/60">
-      <div className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5">
+    <li className="w-full">
+      <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 py-1.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span
-            aria-hidden
-            className={cn(
-              "size-1.5 shrink-0 rounded-full",
-              entry.connected
-                ? "bg-emerald-500 dark:bg-emerald-400"
-                : "bg-muted-foreground/40",
-            )}
-          />
-          <span className="truncate text-ui-sm font-medium text-foreground">
+          {entry.connected ? (
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 rounded-full bg-emerald-500 dark:bg-emerald-400"
+            />
+          ) : null}
+          <span className="truncate text-ui-sm text-foreground">
             {entry.name}
           </span>
           <span className="truncate text-ui-xs text-muted-foreground">
             {entry.id}
           </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           {entry.source !== null ? (
             <TooltipWrapper
-              label={sourceBadgeHint(entry.source, props.providerLabel)}
+              label={sourceBadgeHint(
+                entry.source,
+                props.providerLabel,
+                entry.configDeclaredCustom,
+              )}
               side="top"
               sideOffset={undefined}
               align={undefined}
@@ -538,22 +700,12 @@ function ModelProviderRow(props: {
                 variant="outline"
                 className="h-4 rounded-sm border-border/60 px-1.5 text-[10px] font-normal text-muted-foreground"
               >
-                {sourceBadgeLabel(entry.source, props.providerLabel)}
+                {sourceBadgeLabel(entry.source, entry.configDeclaredCustom)}
               </Badge>
             </TooltipWrapper>
           ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
           {props.busy ? <MutedAgentSpinner /> : null}
-          {externallySourced && readOnlyLabel !== null ? (
-            <span
-              className="text-ui-xs text-muted-foreground"
-              data-testid="model-provider-source-label"
-            >
-              {readOnlyLabel}
-            </span>
-          ) : null}
-          {props.connectable ? (
+          {showConnect ? (
             <Button
               type="button"
               size="sm"
@@ -561,50 +713,35 @@ function ModelProviderRow(props: {
               disabled={props.busy}
               onClick={props.onConnect}
             >
-              <Plus className="size-3.5" />
-              {entry.connected ? "Replace" : "Connect"}
+              Connect
             </Button>
           ) : null}
           {showDisconnect ? (
-            // Destructive INTENT on hover, matching the icon-level pattern the
-            // rest of Settings uses for a delete affordance
-            // (`provider-cli-candidates-section`, `env-override-editor`): a
-            // quiet control that turns red only under the pointer, rather than
-            // a permanently-red button sitting in a list of neutral rows.
-            //
-            // The tooltip names what is actually removed - the key in the
-            // provider's store - because "disconnect" is not guaranteed: an
-            // env var or config block underneath can take over the moment the
-            // stored key is gone, and the row would come back connected from
-            // another source.
-            <TooltipWrapper
-              label="Remove saved key"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
+            // Text, not an icon, and upstream's word for it. The icon-only
+            // version was the single thing the user could not read off this
+            // list - an unplug glyph in a row of quiet text says neither what
+            // it removes nor that it is the destructive one. Destructive INTENT
+            // still arrives on hover rather than as permanent red, matching the
+            // rest of Settings.
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={cn(
+                "text-muted-foreground",
+                "hover:bg-destructive/10 hover:text-destructive",
+              )}
+              disabled={props.busy}
+              onClick={props.onDisconnect}
+              aria-label={`Disconnect ${entry.name}`}
             >
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                className={cn(
-                  "text-muted-foreground",
-                  "hover:bg-destructive/10 hover:text-destructive",
-                )}
-                disabled={props.busy}
-                onClick={props.onDisconnect}
-                aria-label={`Remove saved ${entry.name} key`}
-              >
-                <Unplug className="size-3.5" />
-              </Button>
-            </TooltipWrapper>
+              Disconnect
+            </Button>
           ) : null}
         </div>
       </div>
       {props.rowError !== null ? (
-        <p className="border-t border-border/40 px-3 py-2 text-ui-xs text-destructive">
-          {props.rowError}
-        </p>
+        <p className="pb-2 text-ui-xs text-destructive">{props.rowError}</p>
       ) : null}
     </li>
   );

@@ -140,6 +140,7 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
     source: null,
     hasStoredCredential: false,
     canDisconnect: false,
+    configDeclaredCustom: false,
     connected: false,
     // What the host really sends when `/provider/auth` advertises nothing: it
     // synthesizes this generic key method itself, so the client never sees an

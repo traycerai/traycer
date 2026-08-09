@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractConfirmationCode } from "@/components/settings/panels/model-provider-connect-model";
+import {
+  extractConfirmationCode,
+  sourceBadgeHint,
+  sourceBadgeLabel,
+} from "@/components/settings/panels/model-provider-connect-model";
 
 /**
  * Upstream lifts the code with `instructions.split(":").pop().trim()`. We
@@ -41,5 +45,38 @@ describe("extractConfirmationCode", () => {
   it("answers null for absent or empty instructions", () => {
     expect(extractConfirmationCode(null)).toBeNull();
     expect(extractConfirmationCode("   ")).toBeNull();
+  });
+});
+
+describe("source badges", () => {
+  it("speaks the upstream app's vocabulary", () => {
+    // Same row, same word, in both apps - which is the whole point of the
+    // parity pass. "Saved in OpenCode" was true and useful and belonged in a
+    // sentence, not in the one slot that has to be scannable across ~180 rows.
+    expect(sourceBadgeLabel("api", false)).toBe("API key");
+    expect(sourceBadgeLabel("env", false)).toBe("Environment");
+    expect(sourceBadgeLabel("custom", false)).toBe("Custom");
+  });
+
+  it("splits one source into two badges on the host's flag", () => {
+    // `config` covers a provider the user DECLARED as a custom endpoint and one
+    // a config file merely supplies a key for. The difference is not
+    // recoverable from `source`, so the host sends the predicate's answer.
+    expect(sourceBadgeLabel("config", false)).toBe("Config");
+    expect(sourceBadgeLabel("config", true)).toBe("Custom");
+  });
+
+  it("puts the provenance the badge dropped into the hint", () => {
+    expect(sourceBadgeHint("api", "OpenCode", false)).toContain(
+      "OpenCode's own credential store",
+    );
+    // A declared custom row is the user's own work, not something managed away
+    // from them - so it does not get the "managed outside Traycer" line.
+    expect(sourceBadgeHint("config", "OpenCode", true)).toContain(
+      "with its own base URL and models",
+    );
+    expect(sourceBadgeHint("config", "OpenCode", false)).toContain(
+      "managed outside Traycer",
+    );
   });
 });

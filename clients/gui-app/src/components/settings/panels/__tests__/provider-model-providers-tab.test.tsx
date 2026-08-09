@@ -91,6 +91,7 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
     source: null,
     hasStoredCredential: false,
     canDisconnect: false,
+    configDeclaredCustom: false,
     connected: false,
     methods: [],
     ...overrides,
@@ -343,7 +344,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getByText("Saved in OpenCode")).toBeTruthy();
+    expect(screen.getByText("API key")).toBeTruthy();
     expect(screen.queryByText("Environment")).toBeNull();
   });
 
@@ -365,22 +366,24 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     expect(screen.getByText("Environment")).toBeTruthy();
-    // The label names the controlling PARTY as a fact; the badge beside the
-    // name already says where the credential comes from.
-    expect(screen.getByText("Set by environment")).toBeTruthy();
+    // The badge is the ONLY origin marker now. A trailing "Set by environment"
+    // beside a badge reading "Environment" spent the row's last words saying
+    // the same thing twice, on the surface the user asked us to thin out.
+    expect(screen.queryByText("Set by environment")).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Remove saved Groq key" }),
+      screen.queryByRole("button", { name: "Disconnect Groq" }),
     ).toBeNull();
     // Connect STAYS: `source` is a status, not a permission. Setting a
     // provider up and choosing which credential wins are different decisions,
     // and the dialog carries the precedence warning.
-    expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
   });
 
-  it("names the controlling party per source", () => {
-    // `config` and `custom` share a line on purpose - both resolve to something
-    // edited in OpenCode's own files - and the badge is what distinguishes
-    // them.
+  it("splits Config from Custom on the host's flag, not on source alone", () => {
+    // `source: "config"` covers two different rows - a provider the user
+    // DECLARED as a custom endpoint, and one a config file merely supplies a
+    // key for. Upstream badges those "Custom" and "Config", and the difference
+    // is not recoverable from `source`, which is why the host sends the flag.
     renderTab({
       result: {
         ok: true,
@@ -393,27 +396,28 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             canDisconnect: false,
           }),
           entry({
-            id: "poe",
-            name: "Poe",
+            id: "my-gateway",
+            name: "My gateway",
             connected: true,
-            source: "custom",
-            canDisconnect: false,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
           }),
         ],
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getByText("Set in config file")).toBeTruthy();
-    // `custom` gets its OWN line: that loader is frequently fed by the auth
-    // store (xai signs in through OAuth and still reports `custom`), so
-    // pointing at a config file would send the user where the credential isn't.
-    expect(screen.getByText("Set by a custom loader")).toBeTruthy();
-    expect(screen.getByText("Config file")).toBeTruthy();
+    // Same `source`, two badges.
+    expect(screen.getByText("Config")).toBeTruthy();
     expect(screen.getByText("Custom")).toBeTruthy();
+    expect(screen.queryByText("Set in config file")).toBeNull();
     expect(screen.queryByText("Managed outside Traycer")).toBeNull();
   });
 
-  it("still offers Replace for a credential Traycer itself stored", () => {
+  it("shows Disconnect ALONE on a connected row the host will disconnect", () => {
+    // Upstream's rule, and the reason this is not "Connect plus Disconnect":
+    // their app offers exactly one action per row, and replacing a stored key
+    // is disconnect-then-connect there too.
     renderTab({
       result: {
         ok: true,
@@ -430,7 +434,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Disconnect OpenAI" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
   });
 
   it("labels an env-sourced row without taking its Connect away", () => {
@@ -456,11 +463,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getByTestId("model-provider-source-label").textContent).toBe(
-      "Set by environment",
-    );
+    expect(screen.getByText("Environment")).toBeTruthy();
     // Still configurable - the warning belongs in the dialog, not in a block.
-    expect(screen.getByRole("button", { name: /Replace/ })).toBeTruthy();
+    // This is also the ONE case a connected row still shows Connect: the host
+    // will not disconnect it, so parity's "Disconnect only" would leave the row
+    // with no action at all.
+    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
   });
 
   it("gates the disconnect affordance on canDisconnect ALONE", () => {
@@ -484,7 +492,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: FULL_CAPS,
     });
     expect(
-      screen.queryByRole("button", { name: "Remove saved OpenAI key" }),
+      screen.queryByRole("button", { name: "Disconnect OpenAI" }),
     ).toBeNull();
   });
 
@@ -506,7 +514,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       capabilities: { actions: ["connect"] },
     });
     expect(
-      screen.queryByRole("button", { name: "Remove saved OpenAI key" }),
+      screen.queryByRole("button", { name: "Disconnect OpenAI" }),
     ).toBeNull();
   });
 
@@ -531,11 +539,11 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    expect(screen.getByText("Saved in OpenCode")).toBeTruthy();
+    expect(screen.getByText("API key")).toBeTruthy();
     expect(screen.queryByText("Saved in Traycer")).toBeNull();
   });
 
-  it("gives the remove control destructive intent and a tooltip", () => {
+  it("gives the disconnect control a readable word and destructive intent", () => {
     renderTab({
       result: {
         ok: true,
@@ -552,18 +560,15 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    const remove = screen.getByRole("button", {
-      name: "Remove saved OpenAI key",
-    });
-    // The icon-level destructive pattern the rest of Settings uses: quiet until
-    // hovered, rather than a permanently-red button among neutral rows.
+    const remove = screen.getByRole("button", { name: "Disconnect OpenAI" });
+    // TEXT, not a glyph. An unplug icon in a row of quiet text was the one
+    // control the user could not read: it named neither what it removes nor
+    // that it is the destructive one.
+    expect(remove.textContent).toBe("Disconnect");
+    // Destructive intent still arrives on hover rather than as permanent red,
+    // matching the pattern the rest of Settings uses.
     expect(remove.className).toContain("hover:text-destructive");
     expect(remove.className).toContain("hover:bg-destructive/10");
-    // Radix renders tooltip CONTENT only once open, which jsdom's layout-free
-    // environment cannot drive. `TooltipWrapper` renders a bare Slot when its
-    // label is empty and a real `TooltipTrigger` otherwise, so this slot is the
-    // structural proof that a tooltip is wired at all.
-    expect(remove.getAttribute("data-slot")).toBe("tooltip-trigger");
   });
 
   it("confirms before removing a stored credential", () => {
@@ -583,9 +588,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: FULL_CAPS,
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove saved OpenAI key" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect OpenAI" }));
     // Says what removal GUARANTEES and no more: an env var or config file
     // underneath can take over the moment the stored credential is gone, so
     // promising the provider stops working would contradict the row's own
@@ -600,6 +603,94 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       providerId: "opencode",
       action: { action: "disconnect", modelProviderId: "openai" },
     });
+  });
+
+  it("keeps Add custom provider reachable while a search is filtering", () => {
+    // It is not a provider the catalog can match, so a search that filtered it
+    // away would hide the one row whose purpose is "what you want isn't in this
+    // list" - which is exactly when someone is typing in that box.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [entry({}), entry({ id: "openai", name: "OpenAI" })],
+      },
+      capabilities: { actions: ["connect", "createCustom"] },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Search/), {
+      target: { value: "zzzzz" },
+    });
+    expect(
+      screen.getByRole("button", { name: "Add custom provider" }),
+    ).toBeTruthy();
+  });
+
+  it("offers no custom-provider row when the host cannot accept one", () => {
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+    });
+    expect(
+      screen.queryByRole("button", { name: "Add custom provider" }),
+    ).toBeNull();
+  });
+
+  it("declares a custom provider with the wire's createCustom shape", () => {
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: { actions: ["connect", "createCustom"] },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add custom provider" }),
+    );
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "My gateway" },
+    });
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://api.example.test/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("Model ids"), {
+      target: { value: "gpt-4o-mini" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "createCustom",
+        modelProviderId: "my-gateway",
+        name: "My gateway",
+        baseUrl: "https://api.example.test/v1",
+        modelIds: ["gpt-4o-mini"],
+      },
+    });
+  });
+
+  it("says DISABLE, not remove, when disconnecting a declared custom provider", () => {
+    // Upstream's disconnect for a config-declared custom disables the block
+    // rather than deleting a credential it may not even have - so the copy that
+    // promises a credential is removed would describe a different action.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Disconnect My gateway" }),
+    );
+    expect(
+      screen.getByText(/declaration stays in OpenCode's config file/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Remove the stored/)).toBeNull();
   });
 
   it("hides every connect affordance when the host advertises no write action", () => {

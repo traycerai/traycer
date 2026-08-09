@@ -857,20 +857,45 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       that are auth-store-backed in practice, `api` for a key written through
       `auth.set` and `custom` for a provider whose loader is fed by that same
       store (`xai` signs in through OAuth and reports `custom`). `env` and
-      `config` stay read-only: neither is ours to remove, and `auth.remove`
-      cannot touch a config block anyway — OpenCode's own app compensates for
-      that case by ALSO writing `disabled_providers`, which is out of v1 scope
-      here. The control itself is an icon button
-      with hover-only destructive tone (the pattern
-      `provider-cli-candidates-section` and `env-override-editor` already use —
-      quiet among neutral rows, red under the pointer) and a **"Remove saved
-      key"** tooltip. The wording is deliberate: it removes the key from the
-      provider's store, and the row may well come back CONNECTED from an env
-      var or config block underneath, so promising a disconnect would overstate
-      what the button does.
+      `config` stay read-only unless the row is a DECLARED custom provider (see
+      below): neither is ours to remove, and `auth.remove` cannot touch a config
+      block anyway. The control is a **text button reading "Disconnect"** —
+      upstream's own word — with hover-only destructive tone (the pattern
+      `provider-cli-candidates-section` and `env-override-editor` already use:
+      quiet among neutral rows, red under the pointer). It was an unplug ICON
+      with a tooltip until the user's manual pass, and it was the one control on
+      the surface they could not read: a glyph in a row of quiet text names
+      neither what it removes nor that it is the destructive one. The confirm
+      dialog carries the nuance the tooltip used to — for an ordinary row it
+      removes the stored key and the row may come back CONNECTED from an env var
+      or config block underneath, so it promises removal and nothing more.
+    - **A connected row shows ONE action.** Connected and disconnectable ⇒
+      "Disconnect" alone, which is upstream's shape; replacing a stored key is
+      disconnect-then-connect there too. The single exception is a connected row
+      the host will NOT disconnect (an `env`-sourced one): it keeps "Connect",
+      because parity's one-action rule would otherwise leave it with no action
+      at all — a dead end that neither explains itself nor lets the user put a
+      credential in place for when the variable is gone.
+    - **Badges use upstream's vocabulary**: `env` → **Environment**, `api` →
+      **API key**, `custom` → **Custom**, and `config` → **Config** or
+      **Custom** depending on the entry's `configDeclaredCustom` flag. That flag
+      is the host's copy of upstream's `T(id)` predicate (a `provider[id]` block
+      whose `npm` is `@ai-sdk/openai-compatible` with a non-empty model map) and
+      it is not recoverable from `source`, which lumps "the user declared this
+      endpoint" together with "a config file supplies this key". The badge is
+      now the row's ONLY origin marker; the trailing "Set by environment" /
+      "Set in config file" line is gone, because a badge reading "Environment"
+      beside a label reading "Set by environment" spent the row's last words
+      saying one thing twice. The provenance sentence survives in the badge's
+      tooltip, which is where a sentence belongs.
+    - **The list is FLAT.** One `<ul>` with hairline separators, not a bordered
+      card per provider: at ~180 rows a border around each turns the surface
+      into a wall of boxes with the provider names as the smallest thing in it.
+      The user's words were "boxy design is kinda bad, too many items", and the
+      per-row status dot for a DISCONNECTED provider went in the same pass — an
+      absent dot says the same thing as a muted one.
     - **`source` is a STATUS, not a permission.** An `env` / `config` / `custom`
-      row shows where its current credential comes from ("Set by environment",
-      "Set in config file", "Set by a custom loader") and still offers Connect.
+      row shows where its current credential comes from and still offers Connect.
       An earlier pass blocked the write affordance on those rows, reasoning that
       OpenCode resolves env before its own auth store so a key saved here would
       be shadowed and the click would appear to work while changing nothing.
@@ -888,6 +913,29 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       that loader is frequently fed by the auth store — `xai` signs in through
       OAuth and still reports `custom` — so pointing at a file would send the
       user where the credential is not.
+    - **"Add custom provider" sits ABOVE the search box**
+      (`provider-custom-model-provider-dialog.tsx` +
+      `model-provider-custom-draft.ts`), shown when the host advertises
+      `createCustom`. Above rather than as the list's first row because it is
+      not a provider the catalog can match: a search that filtered it away would
+      hide the one affordance whose purpose is "what you want isn't in this
+      list", exactly when the user is typing in that box. The form is name, id,
+      base URL and model ids — `npm` is NOT a field, because the host writes the
+      one constant (`@ai-sdk/openai-compatible`) that upstream's `T(id)` will
+      recognize, and any other value produces a block this tab could never edit
+      again. The id is DERIVED from the name until touched, then left alone;
+      re-deriving after an edit would overwrite what the user typed on the next
+      keystroke. Submit is disabled while the draft is invalid (the wire's
+      `baseUrl` is `z.url()` and `modelIds` is non-empty), so field errors
+      appear as soon as a field is EDITED rather than on a submit attempt that
+      can never happen — a dead button with no visible reason is the failure
+      that pairing those two rules avoids. A host rejection stays INLINE and
+      keeps the form open: everything typed is still there to fix in place.
+    - **Disconnect on a declared custom row is a DISABLE**, and says so. There
+      is no separate remove verb on the wire: upstream's disconnect for a
+      config-declared custom disables the block rather than deleting a
+      credential it may not have, so the confirm dialog promises that the
+      declaration stays in the config file and can be turned back on.
     - **ACCEPTED RESIDUAL: a `custom` row can have nothing to remove.** Upstream
       assigns `custom` from two different passes, and only one of them requires
       a stored credential: a plugin auth loader (guarded on an `auth.json` entry
