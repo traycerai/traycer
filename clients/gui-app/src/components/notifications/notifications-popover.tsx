@@ -462,7 +462,7 @@ export function NotificationsPopover(
               type="button"
               onClick={revealNewArrivals}
               data-testid="notifications-new-arrivals"
-              className="sticky top-2 z-10 mx-auto mb-1 block w-max rounded-full border border-border bg-popover px-2.5 py-1 text-ui-xs font-medium text-foreground shadow-sm"
+              className="sticky top-2 z-30 mx-auto mb-1 block w-max rounded-full border border-border bg-popover px-2.5 py-1 text-ui-xs font-medium text-foreground shadow-sm"
             >
               {newArrivalCount} new notification
               {newArrivalCount === 1 ? "" : "s"}
