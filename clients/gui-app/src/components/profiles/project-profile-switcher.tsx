@@ -137,13 +137,15 @@ export function ProjectProfileSwitcher(): ReactNode {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <ProjectProfileDialog
-        open={dialog.mode !== "closed"}
-        onOpenChange={(open) => {
-          if (!open) setDialog({ mode: "closed" });
-        }}
-        editing={dialog.mode === "edit" ? dialog.profile : null}
-      />
+      {dialog.mode !== "closed" ? (
+        <ProjectProfileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDialog({ mode: "closed" });
+          }}
+          editing={dialog.mode === "edit" ? dialog.profile : null}
+        />
+      ) : null}
     </>
   );
 }

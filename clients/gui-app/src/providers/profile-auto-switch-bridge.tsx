@@ -1,19 +1,38 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { useRouterState } from "@tanstack/react-router";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { toast } from "sonner";
-import { useHistoryQuery } from "@/hooks/home/use-history-query";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { profileOwnsWorkspaceRefs } from "@/lib/profiles/profile-membership";
+import type { AppRouter } from "@/router";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
+
+export interface ProfileAutoSwitchBridgeProps {
+  /**
+   * Live app router. This bridge mounts above `<RouterProvider>` (next to
+   * `EpicTabExistenceReconciler`), so pathname is read imperatively — same
+   * pattern as `SupportContextRegistryBridge` / `HistoryPruneProvider`.
+   */
+  readonly router: AppRouter;
+}
 
 /**
  * When the user opens an epic that belongs to exactly one project profile,
  * auto-switch the active project to that profile (with a toast). Fail-open
  * when membership is unknown, multi-profile, or none.
+ *
+ * Membership comes from the host-free history membership cache (populated by
+ * `useHistoryQuery`).
  */
-export function ProfileAutoSwitchBridge(): ReactNode {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+export function ProfileAutoSwitchBridge(
+  props: ProfileAutoSwitchBridgeProps,
+): ReactNode {
+  const pathname = useRouterPathname(props.router);
   const profiles = useProjectProfilesStore((s) => s.profiles);
   const activeProfileId = useActiveProjectProfileStore(
     (s) => s.activeProfileId,
@@ -21,10 +40,7 @@ export function ProfileAutoSwitchBridge(): ReactNode {
   const setActiveProfile = useActiveProjectProfileStore(
     (s) => s.setActiveProfile,
   );
-  const history = useHistoryQuery({
-    search: DEFAULT_HISTORY_SEARCH,
-    nowMs: null,
-  });
+  const itemsByEpicId = useHistoryMembershipCacheStore((s) => s.itemsByEpicId);
   const handledEpicIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -34,8 +50,7 @@ export function ProfileAutoSwitchBridge(): ReactNode {
     if (handledEpicIdsRef.current.has(epicId)) return;
     handledEpicIdsRef.current.add(epicId);
 
-    const membershipItems = history.data?.membershipItems ?? [];
-    const item = membershipItems.find((row) => row.epicId === epicId);
+    const item = itemsByEpicId.get(epicId);
     if (item === undefined) return;
 
     const owners = profiles.filter((profile) =>
@@ -47,13 +62,22 @@ export function ProfileAutoSwitchBridge(): ReactNode {
 
     setActiveProfile(owner.id);
     toast.info(`Switched to project "${owner.name}"`);
-  }, [
-    activeProfileId,
-    history.data?.membershipItems,
-    pathname,
-    profiles,
-    setActiveProfile,
-  ]);
+  }, [activeProfileId, itemsByEpicId, pathname, profiles, setActiveProfile]);
 
   return null;
+}
+
+function useRouterPathname(router: AppRouter): string {
+  const subscribe = useCallback(
+    (callback: () => void) =>
+      router.subscribe("onResolved", () => {
+        callback();
+      }),
+    [router],
+  );
+  const getSnapshot = useCallback(
+    () => router.state.location.pathname,
+    [router],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => "");
 }

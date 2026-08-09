@@ -214,7 +214,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                           <ActiveProjectProfilePersistLifecycleBridge>
                             <LandingTerminalTombstoneRecoveryBridge />
                             <EpicTabExistenceReconciler />
-                            <ProfileAutoSwitchBridge />
+                            <ProfileAutoSwitchBridge router={props.router} />
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />
