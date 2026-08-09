@@ -2902,13 +2902,13 @@ function buildResourceSearchProjection(input: {
       ).map(ownerRowKey),
     ),
   );
-  const visibleKillKeys = buildSearchVisibleKillKeys(
+  const visibleKillKeys = buildSearchVisibleKillKeys({
     taskRows,
     other,
-    input.searchQuery,
-    input.liveOwnerTitleByKey,
-    input.expandedOwners,
-  );
+    searchQuery: input.searchQuery,
+    liveOwnerTitleByKey: input.liveOwnerTitleByKey,
+    expandedOwners: input.expandedOwners,
+  });
   const active = normalizeResourceSearch(input.searchQuery).length > 0;
   const hasResults =
     desktopApp !== null ||
@@ -2927,13 +2927,15 @@ function buildResourceSearchProjection(input: {
   };
 }
 
-function buildSearchVisibleKillKeys(
-  taskRows: readonly TaskDisplayRow[],
-  other: OtherResourceUsage | null,
-  searchQuery: string,
-  liveOwnerTitleByKey: ReadonlyMap<string, string | null>,
-  expandedOwners: ReadonlySet<string>,
-): ReadonlySet<string> {
+function buildSearchVisibleKillKeys(input: {
+  readonly taskRows: readonly TaskDisplayRow[];
+  readonly other: OtherResourceUsage | null;
+  readonly searchQuery: string;
+  readonly liveOwnerTitleByKey: ReadonlyMap<string, string | null>;
+  readonly expandedOwners: ReadonlySet<string>;
+}): ReadonlySet<string> {
+  const { taskRows, other, searchQuery, liveOwnerTitleByKey, expandedOwners } =
+    input;
   const visibleKeys = new Set<string>();
   for (const task of taskRows) {
     const taskMatches = taskRowMatchesSearch(task, searchQuery);
