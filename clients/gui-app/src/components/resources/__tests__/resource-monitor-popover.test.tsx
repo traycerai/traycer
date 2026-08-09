@@ -123,6 +123,20 @@ vi.mock("@/hooks/resources/use-resources-kill-mutation", () => ({
   }),
 }));
 
+// Same reason as the kill stub: a shell row drives `managedCommand.stop`,
+// whose hook resolves a per-host client through providers this harness does
+// not mount. `managedCommandStopMock.mutate` captures the stops.
+const managedCommandStopMock = vi.hoisted(() => ({ mutate: vi.fn() }));
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStop: () => ({
+      mutate: managedCommandStopMock.mutate,
+      isPending: false,
+    }),
+  }),
+);
+
 const tabNavigationMock = vi.hoisted(() => ({
   resourceEpicTabIntent: vi.fn(
     (input: MockEpicIntentInput): MockEpicIntent => ({
@@ -449,6 +463,8 @@ function renderPopover(): void {
 
 afterEach(() => {
   cleanup();
+  resourcesKillMock.mutate.mockClear();
+  managedCommandStopMock.mutate.mockClear();
   Reflect.deleteProperty(globalThis, "runnerHost");
   routerMock.navigate.mockReset();
   routerMock.pathname = "/epics/epic-1/tab-1";
@@ -2934,9 +2950,7 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     expect(
       screen.getByRole("button", { name: "Kill 1 selected" }),
     ).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Deselect all" }),
-    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Deselect all" })).not.toBeNull();
 
     // Expanded, the shell is on screen and Select all reaches it.
     fireEvent.click(screen.getByRole("button", { name: "Cancel selection" }));
@@ -2947,8 +2961,205 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
       screen.getByRole("button", { name: "Select processes to kill" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    // One chat and one shell: two rows, two different verbs.
     expect(
-      screen.getByRole("button", { name: "Kill 2 selected" }),
+      screen.getByRole("button", { name: "Stop 1 shell, kill 1 process" }),
     ).not.toBeNull();
+  });
+});
+
+/**
+ * A shell is SUPERVISED, so the monitor must not signal it the way it signals
+ * an ordinary process tree: `resources.kill` would land as `exited (signal
+ * SIGTERM)`, which reads as a crash, lights the chat's attention badge, and
+ * gets the agent to start the shell the human just asked it to stop. The shell
+ * row therefore carries the supervisor's Stop - the same button the Shells
+ * surfaces use - while everything underneath it keeps the raw kill, because
+ * killing one pid out of a shell's tree really is process-level intent.
+ */
+describe("ResourceMonitorPopover · stopping a shell rather than killing it", () => {
+  const MiB = 1024 * 1024;
+
+  function shellOwner(
+    processes: readonly ResourceProcessSnapshotWire[],
+  ): OwnerResourceSnapshotWireV14 {
+    return owner({
+      owner: {
+        kind: "managed-command",
+        hostId: "host-1",
+        epicId: "epic-1",
+        ownerId: "cmd-1",
+      },
+      harnessId: null,
+      activeProcessName: "bash",
+      rootPids: [300],
+      processCount: processes.length,
+      cpuPercent: 6,
+      rssBytes: 30 * MiB,
+      processes: [...processes],
+      managedCommand: {
+        commandId: "cmd-1",
+        monitoring: true,
+        description: "deploy watcher",
+        createdByAgentId: "chat-1",
+      },
+    });
+  }
+
+  function bash(): ResourceProcessSnapshotWire {
+    return resourceProcess({
+      pid: 300,
+      rootPid: 300,
+      name: "bash",
+      command: "bash deploy.sh",
+      cpuPercent: 6,
+      rssBytes: 30 * MiB,
+    });
+  }
+
+  function chatOwner(): OwnerResourceSnapshotWireV14 {
+    return owner({
+      owner: {
+        kind: "chat",
+        hostId: "host-1",
+        epicId: "epic-1",
+        ownerId: "chat-1",
+      },
+      harnessId: "claude",
+      activeProcessName: "claude",
+      rootPids: [200],
+      processCount: 1,
+      cpuPercent: 4,
+      rssBytes: 20 * MiB,
+      processes: [
+        resourceProcess({
+          pid: 200,
+          rootPid: 200,
+          name: "claude",
+          command: "claude",
+          cpuPercent: 4,
+          rssBytes: 20 * MiB,
+        }),
+      ],
+    });
+  }
+
+  function openWith(owners: readonly OwnerResourceSnapshotWireV14[]): void {
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [...owners] }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+  }
+
+  /** Reveals the shell tucked behind its creator's chevron. */
+  function expandCreator(): void {
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Expand process tree" })[0],
+    );
+  }
+
+  it("offers Stop, not Kill, on a shell row", () => {
+    openWith([chatOwner(), shellOwner([bash()])]);
+    expandCreator();
+
+    expect(
+      screen.queryByRole("button", { name: "Kill Monitor · deploy watcher" }),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stop Monitor · deploy watcher" }),
+    );
+
+    expect(managedCommandStopMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: "epic-1",
+      commandId: "cmd-1",
+    });
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the raw kill on one process nested under a shell", () => {
+    openWith([
+      chatOwner(),
+      shellOwner([
+        bash(),
+        resourceProcess({
+          pid: 301,
+          parentPid: 300,
+          rootPid: 300,
+          name: "npm",
+          command: "npm run deploy",
+          cpuPercent: 1,
+          rssBytes: 4 * MiB,
+        }),
+      ]),
+    ]);
+    expandCreator();
+    // The creator's chevron now reads "Collapse", so the only "Expand" left is
+    // the shell's own - the process tree the raw kill has to stay reachable in.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Kill npm run deploy" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm kill npm run deploy" }),
+    );
+
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [301],
+    });
+    expect(managedCommandStopMock.mutate).not.toHaveBeenCalled();
+  });
+
+  it("stops the shells and kills the processes in one mixed selection", () => {
+    openWith([chatOwner(), shellOwner([bash()])]);
+    expandCreator();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stop 1 shell, kill 1 process" }),
+    );
+
+    expect(managedCommandStopMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: "epic-1",
+      commandId: "cmd-1",
+    });
+    // The shell's pids are NOT folded into the kill: the chat's are the only
+    // ones signalled.
+    expect(resourcesKillMock.mutate).toHaveBeenCalledTimes(1);
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [200],
+    });
+  });
+
+  it("names only the stop verb when the selection is shells alone", () => {
+    openWith([shellOwner([bash()])]);
+    expandCreator();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    // The Synthetic Agent Row standing in for the chat owns no process, so the
+    // shell is the only selectable row here.
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop 1 selected" }));
+
+    expect(managedCommandStopMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      epicId: "epic-1",
+      commandId: "cmd-1",
+    });
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
   });
 });

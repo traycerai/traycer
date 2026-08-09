@@ -48,6 +48,8 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
+import { ManagedCommandStopButton } from "@/components/managed-commands/managed-command-action-buttons";
+import { useManagedCommandStop } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import {
   MANAGED_COMMAND_NOUN,
   managedCommandNoun,
@@ -145,6 +147,9 @@ const STICKY_SECTION_HEADER =
  * process rows. Icon-button sized, so hardcoding the track width is correct.
  */
 const ROW_ACTION_SLOT = "flex w-10 shrink-0 items-center justify-center";
+/** Row actions stay out of the way until the row is hovered or focused. */
+const ROW_HOVER_REVEAL =
+  "opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
 const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
@@ -280,7 +285,7 @@ interface ResourceSearchProjection {
   readonly noResults: boolean;
 }
 
-interface KillTargetIndexInput {
+interface RowActionTargetIndexInput {
   readonly owners: readonly OwnerResourceUsage[];
   readonly other: OtherResourceUsage | null;
   readonly defaultHostId: string | null;
@@ -341,10 +346,13 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 }
 
 /**
- * Owns the resource monitor's kill + multi-select state. Groups selected
- * targets by host and merges their pids into one `resources.kill` per host, so
- * a bulk kill is one RPC per host rather than one per row. The host validates
- * every pid against its live tracked set, so an already-dead pid is harmless.
+ * Owns the resource monitor's row-action + multi-select state. Groups selected
+ * kill targets by host and merges their pids into one `resources.kill` per
+ * host, so a bulk kill is one RPC per host rather than one per row. The host
+ * validates every pid against its live tracked set, so an already-dead pid is
+ * harmless. Shells are stopped one call each: `managedCommand.stop` names a
+ * single command and is idempotent, so a shell already on its way down costs
+ * nothing.
  */
 function sameResourceKeySet(
   left: ReadonlySet<string>,
@@ -353,35 +361,39 @@ function sameResourceKeySet(
   return left.size === right.size && [...left].every((key) => right.has(key));
 }
 
-function useResourceKillSelection(
-  // Keys of every row currently rendered as killable. Selection is pruned
+function useResourceRowActions(
+  // Keys of every row currently rendered as actionable. Selection is pruned
   // against this LIVE set at read time (never via an effect), so a selected
   // process that exits on its own stops counting the moment its row drops
   // out of the projection.
   liveKeys: ReadonlySet<string>,
-  // Top-level kill targets (owner rows + Other roots) for "Select all".
-  // Deliberately excludes descendant process rows: selecting an owner already
-  // kills its whole tree, and counting children would double-count.
-  topLevelTargets: ReadonlyMap<string, KillTarget>,
+  // Top-level targets (owner rows + Other roots) for "Select all".
+  // Deliberately excludes descendant process rows: acting on an owner already
+  // takes its whole tree, and counting children would double-count.
+  topLevelTargets: ReadonlyMap<string, RowActionTarget>,
 ): {
-  readonly api: ResourceKillApi;
+  readonly api: ResourceRowActionApi;
   readonly selectionMode: boolean;
   readonly selectedCount: number;
+  readonly selectedStopCount: number;
+  readonly selectedKillCount: number;
   readonly allVisibleSelected: boolean;
   readonly enterSelection: () => void;
   readonly cancelSelection: () => void;
   readonly selectAllVisible: () => void;
   readonly deselectAllVisible: () => void;
   readonly clearSelection: () => void;
-  readonly killSelected: () => void;
-  readonly isKilling: boolean;
+  readonly runSelected: () => void;
+  readonly isPending: boolean;
 } {
   const killMutation = useResourcesKill();
-  const { mutate } = killMutation;
+  const stopMutation = useManagedCommandStop();
+  const killPids = killMutation.mutate;
+  const stopShell = stopMutation.mutate;
   const [selectionMode, setSelectionMode] = useState(false);
-  const [selected, setSelected] = useState<ReadonlyMap<string, KillTarget>>(
-    () => new Map(),
-  );
+  const [selected, setSelected] = useState<
+    ReadonlyMap<string, RowActionTarget>
+  >(() => new Map());
   const [previousLiveKeys, setPreviousLiveKeys] =
     useState<ReadonlySet<string>>(liveKeys);
   const liveSelected = new Map(
@@ -391,18 +403,27 @@ function useResourceKillSelection(
     setPreviousLiveKeys(liveKeys);
     if (liveSelected.size !== selected.size) setSelected(liveSelected);
   }
-  const killTargets = (targets: readonly KillTarget[]): void => {
+  const runTargets = (targets: readonly RowActionTarget[]): void => {
     const pidsByHost = new Map<string, number[]>();
     for (const target of targets) {
+      if (target.kind === "stop") {
+        stopShell({
+          hostId: target.hostId,
+          epicId: target.epicId,
+          commandId: target.commandId,
+        });
+        continue;
+      }
       const existing = pidsByHost.get(target.hostId) ?? [];
       existing.push(...target.pids);
       pidsByHost.set(target.hostId, existing);
     }
     for (const [hostId, pids] of pidsByHost) {
-      if (pids.length > 0) mutate({ hostId, pids });
+      if (pids.length > 0) killPids({ hostId, pids });
     }
   };
-  const api: ResourceKillApi = {
+  const isPending = killMutation.isPending || stopMutation.isPending;
+  const api: ResourceRowActionApi = {
     selectionMode,
     isSelected: (key) => liveSelected.has(key),
     toggleSelection: (target) =>
@@ -412,13 +433,18 @@ function useResourceKillSelection(
         else next.set(target.key, target);
         return next;
       }),
-    killOne: (target) => killTargets([target]),
-    isKilling: killMutation.isPending,
+    runOne: (target) => runTargets([target]),
+    isPending,
   };
+  const selectedStopCount = [...liveSelected.values()].filter(
+    (target) => target.kind === "stop",
+  ).length;
   return {
     api,
     selectionMode,
     selectedCount: liveSelected.size,
+    selectedStopCount,
+    selectedKillCount: liveSelected.size - selectedStopCount,
     allVisibleSelected:
       topLevelTargets.size > 0 &&
       [...topLevelTargets.keys()].every((key) => liveSelected.has(key)),
@@ -430,12 +456,53 @@ function useResourceKillSelection(
     selectAllVisible: () => setSelected(new Map(topLevelTargets)),
     deselectAllVisible: () => setSelected(new Map()),
     clearSelection: () => setSelected(new Map()),
-    killSelected: () => {
-      killTargets([...liveSelected.values()]);
+    runSelected: () => {
+      runTargets([...liveSelected.values()]);
       setSelectionMode(false);
       setSelected(new Map());
     },
-    isKilling: killMutation.isPending,
+    isPending,
+  };
+}
+
+interface SelectionActionCopy {
+  readonly text: string;
+  readonly ariaLabel: string;
+  readonly destructive: boolean;
+}
+
+function countedNoun(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * What the bulk action button says. A mixed selection has to name BOTH verbs:
+ * the button would otherwise promise one act and perform another on half the
+ * rows. A shells-only selection also drops the destructive styling, because
+ * stopping a shell destroys nothing - it stays listed and restartable.
+ */
+function selectionActionCopy(
+  stopCount: number,
+  killCount: number,
+): SelectionActionCopy {
+  if (stopCount === 0) {
+    return {
+      text: killCount > 0 ? `Kill ${killCount}` : "Kill",
+      ariaLabel: `Kill ${killCount} selected`,
+      destructive: true,
+    };
+  }
+  if (killCount === 0) {
+    return {
+      text: `Stop ${stopCount}`,
+      ariaLabel: `Stop ${stopCount} selected`,
+      destructive: false,
+    };
+  }
+  return {
+    text: `Stop ${stopCount} · Kill ${killCount}`,
+    ariaLabel: `Stop ${countedNoun(stopCount, "shell", "shells")}, kill ${countedNoun(killCount, "process", "processes")}`,
+    destructive: true,
   };
 }
 
@@ -562,9 +629,9 @@ function ResourceMonitorContent(props: {
       taskRows,
     ],
   );
-  const killTargetIndex = useMemo(
+  const actionTargetIndex = useMemo(
     () =>
-      buildKillTargetIndex({
+      buildRowActionTargetIndex({
         owners: projection.owners,
         other: search.other,
         defaultHostId,
@@ -581,12 +648,16 @@ function ResourceMonitorContent(props: {
       searchQuery,
     ],
   );
-  const killSelection = useResourceKillSelection(
-    killTargetIndex.live,
-    killTargetIndex.topLevel,
+  const rowActions = useResourceRowActions(
+    actionTargetIndex.live,
+    actionTargetIndex.topLevel,
+  );
+  const selectionCopy = selectionActionCopy(
+    rowActions.selectedStopCount,
+    rowActions.selectedKillCount,
   );
   const updateSearchQuery = (value: string): void => {
-    killSelection.clearSelection();
+    rowActions.clearSelection();
     props.onSearchQueryChange(value);
   };
 
@@ -692,15 +763,15 @@ function ResourceMonitorContent(props: {
               Resources
             </h4>
             <div className="flex shrink-0 items-center gap-1">
-              {killSelection.selectionMode ? (
+              {rowActions.selectionMode ? (
                 // Selection mode replaces the header controls wholesale (the
                 // sort dropdown included), mirroring the chat navigator's
                 // Select all / Cancel / destructive-action toolbar.
                 <div className="flex items-center gap-0.5">
                   <SelectAllToggle
-                    allSelected={killSelection.allVisibleSelected}
-                    onSelectAll={killSelection.selectAllVisible}
-                    onDeselectAll={killSelection.deselectAllVisible}
+                    allSelected={rowActions.allVisibleSelected}
+                    onSelectAll={rowActions.selectAllVisible}
+                    onDeselectAll={rowActions.deselectAllVisible}
                   />
                   <Button
                     type="button"
@@ -708,7 +779,7 @@ function ResourceMonitorContent(props: {
                     size="xs"
                     className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
                     aria-label="Cancel selection"
-                    onClick={killSelection.cancelSelection}
+                    onClick={rowActions.cancelSelection}
                   >
                     <X className="mr-1 size-3.5" />
                     Cancel
@@ -717,19 +788,20 @@ function ResourceMonitorContent(props: {
                     type="button"
                     variant="ghost"
                     size="xs"
-                    className="h-6 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    className={cn(
+                      "h-6 px-1.5",
+                      selectionCopy.destructive
+                        ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
                     disabled={
-                      killSelection.selectedCount === 0 ||
-                      killSelection.isKilling
+                      rowActions.selectedCount === 0 || rowActions.isPending
                     }
-                    aria-label={`Kill ${killSelection.selectedCount} selected`}
-                    onClick={killSelection.killSelected}
+                    aria-label={selectionCopy.ariaLabel}
+                    onClick={rowActions.runSelected}
                   >
-                    Kill{" "}
-                    {killSelection.selectedCount > 0
-                      ? killSelection.selectedCount
-                      : ""}
-                    {killSelection.isKilling ? (
+                    {selectionCopy.text}
+                    {rowActions.isPending ? (
                       <AgentSpinningDots
                         className="ml-1"
                         testId={undefined}
@@ -746,7 +818,7 @@ function ResourceMonitorContent(props: {
                     size="icon-sm"
                     className="text-muted-foreground hover:text-foreground"
                     aria-label="Select processes to kill"
-                    onClick={killSelection.enterSelection}
+                    onClick={rowActions.enterSelection}
                   >
                     <ListChecks className="size-3.5" />
                   </Button>
@@ -870,7 +942,7 @@ function ResourceMonitorContent(props: {
                     onToggleOwner={toggleOwner}
                     onToggleProcess={toggleProcess}
                     onOpenOwner={openOwner}
-                    kill={killSelection.api}
+                    actions={rowActions.api}
                   />
                 ))
               )}
@@ -881,7 +953,7 @@ function ResourceMonitorContent(props: {
                   expandedProcesses={expandedProcesses}
                   sortOption={sortOption}
                   onToggleProcess={toggleProcess}
-                  kill={killSelection.api}
+                  actions={rowActions.api}
                   killHostId={defaultHostId}
                 />
               )}
@@ -1148,7 +1220,7 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
           stickyTop={0}
           labelMode="full"
           onToggleExpand={noProcessToggle}
-          kill={null}
+          actions={null}
           killHostId={null}
         />
       )}
@@ -1250,7 +1322,7 @@ function TaskResourceSection(props: {
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
-  readonly kill: ResourceKillApi;
+  readonly actions: ResourceRowActionApi;
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -1303,7 +1375,7 @@ function TaskResourceSection(props: {
           onToggleOwner={props.onToggleOwner}
           onToggleProcess={props.onToggleProcess}
           onOpenOwner={props.onOpenOwner}
-          kill={props.kill}
+          actions={props.actions}
         />
       ))}
     </div>
@@ -1316,7 +1388,7 @@ function OtherResourceSection(props: {
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
   readonly onToggleProcess: (key: string) => void;
-  readonly kill: ResourceKillApi;
+  readonly actions: ResourceRowActionApi;
   readonly killHostId: string | null;
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
@@ -1407,7 +1479,7 @@ function OtherResourceSection(props: {
               stickyTop={headerHeight}
               labelMode="compact-root"
               onToggleExpand={props.onToggleProcess}
-              kill={props.kill}
+              actions={props.actions}
               killHostId={props.killHostId}
             />
           ))}
@@ -1417,22 +1489,46 @@ function OtherResourceSection(props: {
 
 /** A concrete kill target: a host and the root pids whose trees to terminate. */
 interface KillTarget {
+  readonly kind: "kill";
   readonly key: string;
   readonly hostId: string;
   readonly pids: readonly number[];
 }
 
 /**
- * Kill controls threaded down to killable rows. `selectionMode` toggles the
- * multi-select affordance; the rest drive per-row and bulk kills. `null` for
- * rows that are not killable (the app/host sections never receive it).
+ * A shell to hand back to its supervisor. Named by command id rather than by
+ * pid because that is what the stop acts on - the supervised object, not the
+ * process currently standing in for it.
  */
-interface ResourceKillApi {
+interface StopTarget {
+  readonly kind: "stop";
+  readonly key: string;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly commandId: string;
+}
+
+/**
+ * What acting on one row means. The two verbs are not interchangeable: a raw
+ * process tree is killed, but a SUPERVISED shell is stopped through its
+ * supervisor. Signalling a shell directly would be recorded as
+ * `exited (signal SIGTERM)` - a crash, as far as every reader of that status is
+ * concerned - which lights the chat's attention badge and invites the agent to
+ * restart the very shell a human just asked it to stop.
+ */
+type RowActionTarget = KillTarget | StopTarget;
+
+/**
+ * Row action controls threaded down to actionable rows. `selectionMode` toggles
+ * the multi-select affordance; the rest drive per-row and bulk actions. `null`
+ * for rows that can't be acted on (the app/host sections never receive it).
+ */
+interface ResourceRowActionApi {
   readonly selectionMode: boolean;
   readonly isSelected: (key: string) => boolean;
-  readonly toggleSelection: (target: KillTarget) => void;
-  readonly killOne: (target: KillTarget) => void;
-  readonly isKilling: boolean;
+  readonly toggleSelection: (target: RowActionTarget) => void;
+  readonly runOne: (target: RowActionTarget) => void;
+  readonly isPending: boolean;
 }
 
 /**
@@ -1503,7 +1599,10 @@ function KillRowButton(props: {
       type="button"
       variant="ghost"
       size="xs"
-      className="h-6 shrink-0 px-1.5 text-destructive opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+      className={cn(
+        "h-6 shrink-0 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive",
+        ROW_HOVER_REVEAL,
+      )}
       aria-label={`Kill ${props.label}`}
       onClick={(event) => {
         event.stopPropagation();
@@ -1516,30 +1615,31 @@ function KillRowButton(props: {
 }
 
 /**
- * The owner row's leading cell: a select checkbox when the row is killable and
- * selection mode is on, otherwise the expand chevron (or a spacer when the tree
- * has no descendants). Owns the selection branching so `OwnerTreeRow` stays flat.
+ * The owner row's leading cell: a select checkbox when the row can be acted on
+ * and selection mode is on, otherwise the expand chevron (or a spacer when the
+ * tree has no descendants). Owns the selection branching so `OwnerTreeRow`
+ * stays flat.
  */
 function OwnerRowLeadingCell(props: {
-  readonly kill: ResourceKillApi | null;
-  readonly canKill: boolean;
-  readonly target: KillTarget;
+  readonly actions: ResourceRowActionApi | null;
+  readonly target: RowActionTarget | null;
   readonly label: string;
   readonly canExpand: boolean;
   readonly expanded: boolean;
   readonly forcedExpanded: boolean;
   readonly onToggle: () => void;
 }) {
-  const kill = props.kill ?? null;
-  if (kill !== null && props.canKill && kill.selectionMode) {
+  const actions = props.actions ?? null;
+  const target = props.target;
+  if (actions !== null && target !== null && actions.selectionMode) {
     return (
       <span className="ml-3 flex size-6 shrink-0 items-center justify-center">
         <input
           type="checkbox"
           className="size-3.5 accent-destructive"
-          checked={kill.isSelected(props.target.key)}
+          checked={actions.isSelected(target.key)}
           aria-label={`Select ${props.label}`}
-          onChange={() => kill.toggleSelection(props.target)}
+          onChange={() => actions.toggleSelection(target)}
         />
       </span>
     );
@@ -1571,42 +1671,90 @@ function OwnerRowLeadingCell(props: {
   );
 }
 
-/** Trailing kill affordance for an owner row (hidden in selection mode). */
-function OwnerRowKillCell(props: {
-  readonly kill: ResourceKillApi | null;
-  readonly canKill: boolean;
-  readonly target: KillTarget;
+/**
+ * Trailing action affordance for an owner row (hidden in selection mode). A
+ * shell gets the supervisor's Stop - the same button the Shells surfaces
+ * carry - so the row that ends a shell looks the same wherever it appears, and
+ * never like the "Kill" beside it.
+ */
+function OwnerRowActionCell(props: {
+  readonly actions: ResourceRowActionApi | null;
+  readonly target: RowActionTarget | null;
   readonly label: string;
 }) {
-  const kill = props.kill ?? null;
-  if (kill === null || !props.canKill || kill.selectionMode) {
+  const actions = props.actions ?? null;
+  const target = props.target;
+  if (actions === null || target === null || actions.selectionMode) {
     return <span className={ROW_ACTION_SLOT} />;
+  }
+  if (target.kind === "stop") {
+    return (
+      <span className={ROW_ACTION_SLOT}>
+        <ManagedCommandStopButton
+          commandId={target.commandId}
+          ariaLabel={`Stop ${props.label}`}
+          isPending={actions.isPending}
+          className={ROW_HOVER_REVEAL}
+          onStop={() => actions.runOne(target)}
+        />
+      </span>
+    );
   }
   return (
     <span className={ROW_ACTION_SLOT}>
       <KillRowButton
-        target={props.target}
+        target={target}
         label={props.label}
-        onKill={kill.killOne}
-        isKilling={kill.isKilling}
+        onKill={actions.runOne}
+        isKilling={actions.isPending}
       />
     </span>
   );
 }
 
 /**
- * Index of currently-killable rows. `live` holds every selectable key so a
+ * What acting on this owner row means, or `null` when there is nothing to act
+ * on - a Synthetic Agent Row, which owns no process of its own.
+ *
+ * A shell is stopped rather than killed regardless of how it is nested, so this
+ * reads the snapshot rather than the row's position in the tree.
+ */
+function ownerSnapshotActionTarget(
+  snapshot: OwnerResourceSnapshotWireV14,
+  key: string,
+): RowActionTarget | null {
+  const managedCommand = snapshot.managedCommand;
+  if (managedCommand !== null) {
+    return {
+      kind: "stop",
+      key,
+      hostId: snapshot.owner.hostId,
+      epicId: snapshot.owner.epicId,
+      commandId: managedCommand.commandId,
+    };
+  }
+  if (snapshot.rootPids.length === 0) return null;
+  return {
+    kind: "kill",
+    key,
+    hostId: snapshot.owner.hostId,
+    pids: snapshot.rootPids,
+  };
+}
+
+/**
+ * Index of currently-actionable rows. `live` holds every selectable key so a
  * selection whose process exited on its own is pruned at read time; `topLevel`
  * holds the owner-row / Other-root targets "Select all" operates on
- * (descendant process rows are excluded - killing an owner already takes its
+ * (descendant process rows are excluded - acting on an owner already takes its
  * whole tree, and counting children would double-count).
  */
-function buildKillTargetIndex(input: KillTargetIndexInput): {
+function buildRowActionTargetIndex(input: RowActionTargetIndexInput): {
   readonly live: ReadonlySet<string>;
-  readonly topLevel: ReadonlyMap<string, KillTarget>;
+  readonly topLevel: ReadonlyMap<string, RowActionTarget>;
 } {
   const live = new Set<string>();
-  const topLevel = new Map<string, KillTarget>();
+  const topLevel = new Map<string, RowActionTarget>();
   for (const owner of input.owners) {
     const key = ownerKey(
       owner.owner.epicId,
@@ -1614,12 +1762,9 @@ function buildKillTargetIndex(input: KillTargetIndexInput): {
       owner.owner.ownerId,
     );
     if (input.visibleKillKeys.has(key)) live.add(key);
-    if (owner.rootPids.length > 0 && input.visibleOwnerKeys.has(key)) {
-      topLevel.set(key, {
-        key,
-        hostId: owner.owner.hostId,
-        pids: owner.rootPids,
-      });
+    const ownerTarget = ownerSnapshotActionTarget(owner, key);
+    if (ownerTarget !== null && input.visibleOwnerKeys.has(key)) {
+      topLevel.set(key, ownerTarget);
     }
     for (const process of owner.processes) {
       const processKey = processRowKey(process);
@@ -1639,6 +1784,7 @@ function buildKillTargetIndex(input: KillTargetIndexInput): {
         matchingRootPids.has(process.pid)
       ) {
         topLevel.set(key, {
+          kind: "kill",
           key,
           hostId: input.defaultHostId,
           pids: [process.pid],
@@ -1673,12 +1819,12 @@ function SelectAllToggle(props: {
  */
 function ownerRowClickHandler(
   selecting: boolean,
-  kill: ResourceKillApi | null,
-  target: KillTarget,
+  actions: ResourceRowActionApi | null,
+  target: RowActionTarget | null,
   onOpen: () => void,
 ): () => void {
-  if (!selecting || kill === null) return onOpen;
-  return () => kill.toggleSelection(target);
+  if (!selecting || actions === null || target === null) return onOpen;
+  return () => actions.toggleSelection(target);
 }
 
 /**
@@ -1740,7 +1886,7 @@ function OwnerTreeRow(props: {
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
-  readonly kill: ResourceKillApi | null;
+  readonly actions: ResourceRowActionApi | null;
 }) {
   const owner = props.row.snapshot.owner;
   const rowKey = ownerRowKey(props.row);
@@ -1768,16 +1914,12 @@ function OwnerTreeRow(props: {
   // Shells and OS processes hang off the same chevron, so either one is reason
   // enough to offer it.
   const canExpand = visibleProcessRows.canExpand || shells.length > 0;
-  const killTarget: KillTarget = {
-    key: rowKey,
-    hostId: owner.hostId,
-    pids: props.row.snapshot.rootPids,
-  };
-  const kill = props.kill ?? null;
-  const canKill = kill !== null && killTarget.pids.length > 0;
-  const selecting = kill !== null && canKill && kill.selectionMode;
-  const selected = selecting && kill.isSelected(killTarget.key);
-  const rowClick = ownerRowClickHandler(selecting, kill, killTarget, () =>
+  const actionTarget = ownerSnapshotActionTarget(props.row.snapshot, rowKey);
+  const actions = props.actions ?? null;
+  const canAct = actions !== null && actionTarget !== null;
+  const selecting = canAct && actions.selectionMode;
+  const selected = selecting && actions.isSelected(actionTarget.key);
+  const rowClick = ownerRowClickHandler(selecting, actions, actionTarget, () =>
     props.onOpenOwner(props.row),
   );
   return (
@@ -1794,9 +1936,8 @@ function OwnerTreeRow(props: {
         }}
       >
         <OwnerRowLeadingCell
-          kill={kill}
-          canKill={canKill}
-          target={killTarget}
+          actions={actions}
+          target={actionTarget}
           label={label}
           canExpand={canExpand}
           expanded={visibleExpanded}
@@ -1839,10 +1980,9 @@ function OwnerTreeRow(props: {
             hasDescendants={canExpand}
           />
         </button>
-        <OwnerRowKillCell
-          kill={kill}
-          canKill={canKill}
-          target={killTarget}
+        <OwnerRowActionCell
+          actions={actions}
+          target={actionTarget}
           label={label}
         />
       </div>
@@ -1863,7 +2003,7 @@ function OwnerTreeRow(props: {
               onToggleOwner={props.onToggleOwner}
               onToggleProcess={props.onToggleProcess}
               onOpenOwner={props.onOpenOwner}
-              kill={props.kill}
+              actions={props.actions}
             />
           ))}
       {!visibleExpanded
@@ -1876,7 +2016,7 @@ function OwnerTreeRow(props: {
               stickyTop={props.stickyTop}
               labelMode="full"
               onToggleExpand={props.onToggleProcess}
-              kill={props.kill}
+              actions={props.actions}
               killHostId={owner.hostId}
             />
           ))}
@@ -1961,7 +2101,7 @@ function ProcessRowMarker(props: {
  * renders nothing (a spacer), keeping the row width stable.
  */
 function ProcessRowKillCell(props: {
-  readonly kill: ResourceKillApi | null;
+  readonly actions: ResourceRowActionApi | null;
   readonly killHostId: string | null;
   readonly process: ResourceProcessSnapshotWire;
   readonly label: string;
@@ -1969,17 +2109,18 @@ function ProcessRowKillCell(props: {
   // `?? null` collapses undefined to null: a partial HMR update can transiently
   // render this row before a parent passes `kill`, and a hover affordance must
   // never crash the whole popover.
-  const kill = props.kill ?? null;
+  const actions = props.actions ?? null;
   const killHostId = props.killHostId ?? null;
-  if (kill === null || killHostId === null) {
+  if (actions === null || killHostId === null) {
     return <span className={ROW_ACTION_SLOT} />;
   }
   const target: KillTarget = {
+    kind: "kill",
     key: processRowKey(props.process),
     hostId: killHostId,
     pids: [props.process.pid],
   };
-  if (kill.selectionMode) {
+  if (actions.selectionMode) {
     // The selection checkbox lives on the row's LEFT (matching the chat /
     // artifact selection convention); keep the trailing gutter as a spacer.
     return <span className={ROW_ACTION_SLOT} />;
@@ -1988,8 +2129,8 @@ function ProcessRowKillCell(props: {
     <KillRowButton
       target={target}
       label={props.label}
-      onKill={kill.killOne}
-      isKilling={kill.isKilling}
+      onKill={actions.runOne}
+      isKilling={actions.isPending}
     />
   );
 }
@@ -2048,7 +2189,7 @@ function ProcessTreeRow(props: {
   readonly stickyTop: number;
   readonly labelMode: "full" | "compact-root";
   readonly onToggleExpand: (key: string) => void;
-  readonly kill: ResourceKillApi | null;
+  readonly actions: ResourceRowActionApi | null;
   readonly killHostId: string | null;
 }) {
   const {
@@ -2061,11 +2202,12 @@ function ProcessTreeRow(props: {
     treeCpuPercent,
     treeRssBytes,
   } = props.processRow;
-  const kill = props.kill ?? null;
+  const actions = props.actions ?? null;
   const killHostId = props.killHostId ?? null;
-  const selecting = kill !== null && killHostId !== null && kill.selectionMode;
+  const selecting =
+    actions !== null && killHostId !== null && actions.selectionMode;
   const rowKey = processRowKey(process);
-  const selected = selecting && kill.isSelected(rowKey);
+  const selected = selecting && actions.isSelected(rowKey);
   const rowClassName =
     "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-muted/40";
   const rowStyle = {
@@ -2111,7 +2253,8 @@ function ProcessTreeRow(props: {
         aria-pressed={selected}
         aria-label={`Select ${processLabel(process)}`}
         onClick={() =>
-          kill.toggleSelection({
+          actions.toggleSelection({
+            kind: "kill",
             key: rowKey,
             hostId: killHostId,
             pids: [process.pid],
@@ -2167,7 +2310,8 @@ function ProcessTreeRow(props: {
           onToggle={
             selecting
               ? () =>
-                  kill.toggleSelection({
+                  actions.toggleSelection({
+                    kind: "kill",
                     key: rowKey,
                     hostId: killHostId,
                     pids: [process.pid],
@@ -2177,7 +2321,7 @@ function ProcessTreeRow(props: {
         />
         {row}
         <ProcessRowKillCell
-          kill={props.kill}
+          actions={props.actions}
           killHostId={props.killHostId}
           process={process}
           label={processLabel(process)}
@@ -2193,7 +2337,7 @@ function ProcessTreeRow(props: {
               stickyTop={props.stickyTop}
               labelMode="full"
               onToggleExpand={props.onToggleExpand}
-              kill={props.kill}
+              actions={props.actions}
               killHostId={props.killHostId}
             />
           ))}
@@ -2502,7 +2646,10 @@ function visibleOwnerRowsForTask(
     const key = ownerRowKey(row);
     let shellsVisible = expandedOwners.has(key);
     if (!shellsVisible && searchActive) {
-      const label = resolvedOwnerLabel(row, liveOwnerTitleByKey.get(key) ?? null);
+      const label = resolvedOwnerLabel(
+        row,
+        liveOwnerTitleByKey.get(key) ?? null,
+      );
       shellsVisible = !matchesResourceSearch(effectiveQuery, [
         ...taskSearchTerms(task),
         ...ownerMetadataSearchTerms(row, label),
