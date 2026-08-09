@@ -19,6 +19,10 @@ import { cn } from "@/lib/utils";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import {
+  profileTabBucket,
+  useProfileTabWorkspacesStore,
+} from "@/stores/profiles/profile-tab-workspaces-store";
+import {
   PROFILE_COLORS,
   PROFILE_ICONS,
   profileColorHex,
@@ -134,10 +138,14 @@ function ProjectProfileDialogBody(props: {
 
   const handleDelete = (): void => {
     if (props.editing === null) return;
-    if (activeProfileId === props.editing.id) {
+    const deletedId = props.editing.id;
+    if (activeProfileId === deletedId) {
       setActiveProfile(null);
     }
-    deleteProfile(props.editing.id);
+    deleteProfile(deletedId);
+    useProfileTabWorkspacesStore
+      .getState()
+      .dropBucket(profileTabBucket(deletedId));
     props.onOpenChange(false);
   };
 

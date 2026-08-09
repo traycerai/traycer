@@ -37,7 +37,9 @@ import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-termi
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { ProjectProfilesPersistLifecycleBridge } from "@/providers/project-profiles-persist-lifecycle-bridge";
 import { ActiveProjectProfilePersistLifecycleBridge } from "@/providers/active-project-profile-persist-lifecycle-bridge";
+import { ProfileTabWorkspacesPersistLifecycleBridge } from "@/providers/profile-tab-workspaces-persist-lifecycle-bridge";
 import { ProfileAutoSwitchBridge } from "@/providers/profile-auto-switch-bridge";
+import { ProfileTabWorkspaceBridge } from "@/providers/profile-tab-workspace-bridge";
 import { HistoryMembershipCacheWarmer } from "@/components/profiles/history-membership-cache-warmer";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
@@ -214,8 +216,10 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                         <LandingTerminalTombstoneRecoveryBridge />
                         <ProjectProfilesPersistLifecycleBridge />
                         <ActiveProjectProfilePersistLifecycleBridge />
+                        <ProfileTabWorkspacesPersistLifecycleBridge />
                         <EpicTabExistenceReconciler />
                         <ProfileAutoSwitchBridge router={props.router} />
+                        <ProfileTabWorkspaceBridge />
                         <HistoryMembershipCacheWarmer />
                         <HostStreamProvider>
                           <HostScopeReady scope="default-host">
