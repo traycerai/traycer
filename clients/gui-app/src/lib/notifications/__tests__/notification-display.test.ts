@@ -105,6 +105,7 @@ describe("notification display", () => {
       }),
       replaceKey: "host:chat:chat-1",
       deliveryKey: JSON.stringify([JSON.stringify(["host:n-1", 10, null])]),
+      feedSource: "host",
       foregroundAppLocal: null,
     });
     expect(toastCalls).toHaveLength(1);
@@ -243,6 +244,7 @@ describe("notification display", () => {
         JSON.stringify(["host:n-1", 10, null]),
         JSON.stringify(["host:n-2", 10, null]),
       ]),
+      feedSource: "host",
       foregroundAppLocal: null,
     });
 
@@ -325,6 +327,7 @@ describe("notification display", () => {
       payload: null,
       replaceKey: "host:id:n-1",
       deliveryKey: JSON.stringify([JSON.stringify(["host:n-1", 10, null])]),
+      feedSource: "host",
       foregroundAppLocal: null,
     });
   });
@@ -712,6 +715,7 @@ describe("forwarded foreground display gate", () => {
       }),
       replaceKey: "host:chat:chat-1",
       deliveryKey,
+      feedSource: "cloud",
       foregroundAppLocal: null,
     };
   }
@@ -751,6 +755,7 @@ describe("forwarded foreground display gate", () => {
         payload: null,
         replaceKey: "host:id:n-9",
         deliveryKey: null,
+        feedSource: "host",
         foregroundAppLocal: null,
       },
       { playChime, onToastClick: vi.fn() },
@@ -782,6 +787,7 @@ describe("forwarded foreground display gate", () => {
   ): NotificationForegroundDisplay {
     return {
       ...forwardedDisplay(chatId, null),
+      feedSource: "host",
       payload: buildNotificationActivationEnvelope({
         route: { kind: "chat", epicId: "epic-1", chatId },
         feed: { source: "host", id: "n-1" },
@@ -841,6 +847,33 @@ describe("forwarded foreground display gate", () => {
     expect(playChime).toHaveBeenCalledOnce();
   });
 
+  it("renders a payload-less cloud relay when only the local feed is delivering", () => {
+    // A cloud row with an unrecognized payload ships a null activation
+    // envelope, so provenance must ride the display's feedSource field: the
+    // local feed cannot reproduce a remote host's occurrence, and without
+    // the field this relay would be dropped as redundant - then land inside
+    // this window's later silent baseline snapshot, permanently unheard.
+    focusChatTile("chat-2");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(
+      {
+        title: "Agent",
+        body: "Agent • Stopped",
+        payload: null,
+        replaceKey: "host:id:remote-1",
+        deliveryKey: null,
+        feedSource: "cloud",
+        foregroundAppLocal: null,
+      },
+      { playChime, onToastClick: vi.fn() },
+    );
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
   it("still gates a fallback relay on the focused entity", () => {
     // The original repro, on the fallback path: even when the relay is our
     // only copy, it must not toast about the chat we are looking at.
@@ -890,6 +923,7 @@ describe("forwarded foreground display gate", () => {
         }),
         replaceKey: "terminal.closed:t-1",
         deliveryKey: null,
+        feedSource: "app-local",
         foregroundAppLocal: { userId: "user-1", entry: { id: "t-1" } },
       },
       { playChime, onToastClick: vi.fn() },
@@ -914,6 +948,7 @@ describe("forwarded foreground display gate", () => {
         payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
         replaceKey: "host:chat:chat-1",
         deliveryKey: null,
+        feedSource: null,
         foregroundAppLocal: null,
       },
       { playChime, onToastClick: vi.fn() },

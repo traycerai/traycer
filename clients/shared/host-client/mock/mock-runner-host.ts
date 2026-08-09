@@ -9,6 +9,7 @@ import type {
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationFeedSource,
   NotificationShowOutcome,
   NotificationForegroundDisplay,
   NotificationForegroundAppLocal,
@@ -138,6 +139,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly payload: unknown;
     readonly replaceKey: string | null;
     readonly deliveryKey: string | null;
+    readonly feedSource: NotificationFeedSource | null;
     readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
@@ -548,6 +550,7 @@ export class MockRunnerHost implements IRunnerHost {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      feedSource: NotificationFeedSource | null,
       foregroundAppLocal: NotificationForegroundAppLocal | null,
     ): Promise<NotificationShowOutcome> => {
       this.notificationsSent.push({
@@ -556,6 +559,7 @@ export class MockRunnerHost implements IRunnerHost {
         payload,
         replaceKey,
         deliveryKey,
+        feedSource,
         foregroundAppLocal,
       });
       return "presented";

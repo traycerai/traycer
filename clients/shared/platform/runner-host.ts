@@ -920,6 +920,16 @@ export interface ITokenStore {
 export type NotificationShowOutcome =
   "presented" | "duplicate" | "undeliverable";
 
+/**
+ * Which feed produced the notification being shown - delivery provenance,
+ * carried SEPARATELY from the activation payload on purpose. The payload is
+ * click routing and degrades to `null` for unrecognized/cross-kind rows, so
+ * anything derived from it loses provenance exactly on the rows that need it
+ * most; the foreground relay's receive-side gates key redundancy decisions
+ * off this field instead.
+ */
+export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
+
 export interface INotificationHost {
   show(
     title: string,
@@ -927,6 +937,7 @@ export interface INotificationHost {
     payload: unknown,
     replaceKey: string | null,
     deliveryKey: string | null,
+    feedSource: NotificationFeedSource | null,
     foregroundAppLocal: NotificationForegroundAppLocal | null,
   ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
@@ -953,6 +964,7 @@ export interface NotificationForegroundDisplay {
   readonly payload: unknown;
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 

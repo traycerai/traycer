@@ -368,6 +368,7 @@ describe("NotificationEmissionController", () => {
         body: backgroundEntry.detail,
         payload: null,
         replaceKey: `app-local:${backgroundEntry.id}`,
+        feedSource: "app-local",
         deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
         foregroundAppLocal: {
           userId: version.userId,
@@ -430,6 +431,7 @@ describe("NotificationEmissionController", () => {
           body: foreignEntry.detail ?? "",
           payload: null,
           replaceKey: `app-local:${foreignEntry.id}`,
+          feedSource: "app-local",
           deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
           foregroundAppLocal: {
             userId: version.userId,

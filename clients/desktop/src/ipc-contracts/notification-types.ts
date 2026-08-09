@@ -9,6 +9,15 @@
 export type DesktopNotificationShowOutcome =
   "presented" | "duplicate" | "undeliverable";
 
+/**
+ * IPC mirror of the shared `NotificationFeedSource`: which feed produced the
+ * row. Carried on the relay separately from the activation payload, which
+ * degrades to `null` for unrecognized rows and would erase provenance exactly
+ * where the receive-side gates need it.
+ */
+export type DesktopNotificationFeedSource =
+  "host" | "cloud" | "app-local" | "global";
+
 /** Plain-data notification projection relayed main -> focused renderer. */
 export interface DesktopNotificationForegroundAppLocal {
   readonly userId: string;
@@ -21,5 +30,6 @@ export interface DesktopNotificationForegroundDisplay {
   readonly payload: unknown;
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
+  readonly feedSource: DesktopNotificationFeedSource | null;
   readonly foregroundAppLocal: DesktopNotificationForegroundAppLocal | null;
 }

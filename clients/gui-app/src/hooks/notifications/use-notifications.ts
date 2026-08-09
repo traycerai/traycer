@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
+  NotificationFeedSource,
   NotificationForegroundAppLocal,
   NotificationForegroundDisplay,
   NotificationShowOutcome,
@@ -12,6 +13,7 @@ export interface NotificationShowRequest {
   readonly payload: unknown;
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
@@ -27,13 +29,22 @@ export type NotificationShow = (
 export function useNotificationShow(): NotificationShow {
   const runnerHost = useRunnerHost();
   return useCallback<NotificationShow>(
-    ({ title, body, payload, replaceKey, deliveryKey, foregroundAppLocal }) =>
+    ({
+      title,
+      body,
+      payload,
+      replaceKey,
+      deliveryKey,
+      feedSource,
+      foregroundAppLocal,
+    }) =>
       runnerHost.notifications.show(
         title,
         body,
         payload,
         replaceKey,
         deliveryKey,
+        feedSource,
         foregroundAppLocal,
       ),
     [runnerHost],

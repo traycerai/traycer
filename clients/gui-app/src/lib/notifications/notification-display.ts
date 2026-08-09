@@ -1,5 +1,6 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 import type {
+  NotificationFeedSource,
   NotificationForegroundAppLocal,
   NotificationForegroundDisplay,
   NotificationShowOutcome,
@@ -83,7 +84,7 @@ export function displayForwardedForegroundNotification(
       ? null
       : parseNotificationActivationPayload(display.payload);
   if (isFeedRelay(display, parsed)) {
-    if (ownFeedIsDelivering(parsed)) return;
+    if (ownFeedIsDelivering(relayedFeedSource(display, parsed))) return;
     if (suppressedByFocusedEntity(parsed)) return;
   }
   const actionable = display.payload !== null;
@@ -138,8 +139,26 @@ function isFeedRelay(
   parsed: ParsedNotificationActivationPayload | null,
 ): boolean {
   if (display.foregroundAppLocal !== null) return false;
+  if (display.feedSource !== null) return display.feedSource !== "app-local";
   if (parsed === null) return true;
   return !(parsed.kind === "v1" && parsed.envelope.feed.source === "app-local");
+}
+
+/**
+ * The feed that produced a relayed display. The display's own `feedSource`
+ * field is authoritative: it is stamped from the row at send time and
+ * survives payload degradation, which the activation envelope does not - a
+ * row whose payload degraded to null ships a null envelope, and deriving
+ * provenance from it would erase "cloud" exactly on the rows the coverage
+ * check below must not hand to the local feed. The envelope is kept as a
+ * fallback for a display minted without the field.
+ */
+function relayedFeedSource(
+  display: NotificationForegroundDisplay,
+  parsed: ParsedNotificationActivationPayload | null,
+): NotificationFeedSource | null {
+  if (display.feedSource !== null) return display.feedSource;
+  return parsed?.kind === "v1" ? parsed.envelope.feed.source : null;
 }
 
 /**
@@ -160,14 +179,10 @@ function isFeedRelay(
  * host's occurrence the local feed will never emit - and once this window
  * upgrades, that occurrence lands inside its silent baseline snapshot.
  */
-function ownFeedIsDelivering(
-  parsed: ParsedNotificationActivationPayload | null,
-): boolean {
+function ownFeedIsDelivering(source: NotificationFeedSource | null): boolean {
   const cloud = useCloudNotificationsStore.getState();
   if (cloud.connectionState === "connected" && cloud.hasSnapshot) return true;
-  if (parsed?.kind === "v1" && parsed.envelope.feed.source === "cloud") {
-    return false;
-  }
+  if (source === "cloud") return false;
   const host = useHostNotificationsStore.getState();
   // Transport `open` is not usability: the host stream reports open before its
   // first snapshot lands, and a baseline snapshot never calls the channel
@@ -251,6 +266,11 @@ async function displayNotificationRowsAwaitNative(
       payload: nativePayload,
       replaceKey: content.replaceKey,
       deliveryKey: options.deliveryKey,
+      // Provenance for the receive-side relay gates, independent of the
+      // activation payload: the payload degrades to null for unrecognized
+      // rows, and a batch's rows share one source (batches only come from
+      // the v1 host emission).
+      feedSource: content.row.source,
       foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
