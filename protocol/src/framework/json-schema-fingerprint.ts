@@ -75,6 +75,71 @@ export function toJsonSchemaFingerprint(
   );
 }
 
+/**
+ * Dotted paths of every object in `schema` that REJECTS unknown keys rather
+ * than stripping them (`z.strictObject` / `.strict()`).
+ *
+ * This is load-bearing for additivity: "an added field just strips on
+ * projection" is only true of a stripping object. A strict older schema
+ * rejects the whole payload instead, so growing a strict object on a minor
+ * breaks projection for every payload, not just ones using the new field -
+ * the repo relies on exactly this distinction (see the `.strict()` note on
+ * `rateLimitUsageRequestSchemaV10`).
+ *
+ * The default `io: "output"` rendering cannot express it - it emits
+ * `additionalProperties: false` for stripping AND strict objects alike.
+ * The `io: "input"` rendering can: it describes what the schema ACCEPTS, so
+ * only a genuinely strict object carries `additionalProperties: false`.
+ * Paths use the same dotted form the additivity walk threads, so a violation
+ * can be located without a second parallel tree.
+ */
+export function collectStrictObjectPaths(schema: z.ZodType): Set<string> {
+  const strictPaths = new Set<string>();
+  collectStrictPaths(
+    z.toJSONSchema(schema, { unrepresentable: "any", io: "input" }),
+    [],
+    strictPaths,
+  );
+  return strictPaths;
+}
+
+function collectStrictPaths(
+  node: unknown,
+  path: readonly string[],
+  out: Set<string>,
+): void {
+  if (typeof node !== "object" || node === null) return;
+  const shape = node as {
+    type?: unknown;
+    properties?: Record<string, unknown>;
+    additionalProperties?: unknown;
+    anyOf?: readonly unknown[];
+    oneOf?: readonly unknown[];
+    items?: unknown;
+  };
+  if (shape.type === "object" && shape.properties !== undefined) {
+    if (shape.additionalProperties === false) out.add(dottedPath(path));
+    for (const [key, value] of Object.entries(shape.properties)) {
+      collectStrictPaths(value, [...path, key], out);
+    }
+    return;
+  }
+  const variants = Array.isArray(shape.anyOf)
+    ? shape.anyOf
+    : Array.isArray(shape.oneOf)
+      ? shape.oneOf
+      : null;
+  if (variants !== null) {
+    // Union arms share their parent's path: an arm is selected, not nested,
+    // so a strict arm makes additions at that path unsafe.
+    for (const variant of variants) collectStrictPaths(variant, path, out);
+    return;
+  }
+  if (shape.items !== undefined) {
+    collectStrictPaths(shape.items, [...path, "items"], out);
+  }
+}
+
 function convertJsonSchemaShape(
   raw: unknown,
   context: string,
@@ -221,6 +286,7 @@ function classifyEnumRepresentation(
 export type AdditivityViolation =
   | { readonly kind: "field"; readonly detail: string }
   | { readonly kind: "required-field"; readonly detail: string }
+  | { readonly kind: "strict-object-growth"; readonly detail: string }
   | { readonly kind: "enum-value"; readonly detail: string }
   | { readonly kind: "enum-value-added"; readonly detail: string }
   | { readonly kind: "union-variant"; readonly detail: string }
@@ -313,8 +379,9 @@ export function findAdditivityViolation(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
   mode: AdditivityMode,
+  previousStrictPaths: ReadonlySet<string>,
 ): AdditivityViolation | null {
-  return findNodeAdditivityViolation(previous, next, [], mode);
+  return findNodeAdditivityViolation(previous, next, [], mode, previousStrictPaths);
 }
 
 /**
@@ -487,6 +554,7 @@ function findNodeAdditivityViolation(
   next: unknown,
   path: readonly string[],
   mode: AdditivityMode,
+  previousStrictPaths: ReadonlySet<string>,
 ): AdditivityViolation | null {
   const previousNode = classifySchemaNode(previous);
   const nextNode = classifySchemaNode(next);
@@ -504,7 +572,7 @@ function findNodeAdditivityViolation(
       }
       const oldFormRetained = nextNode.variants.some(
         (variant) =>
-          findNodeAdditivityViolation(previous, variant, path, mode) === null,
+          findNodeAdditivityViolation(previous, variant, path, mode, previousStrictPaths) === null,
       );
       return oldFormRetained
         ? null
@@ -514,7 +582,15 @@ function findNodeAdditivityViolation(
     // still project onto the replacement schema.
     if (previousNode.kind === "anyOf") {
       for (const variant of previousNode.variants) {
-        if (findNodeAdditivityViolation(variant, next, path, mode) !== null) {
+        if (
+          findNodeAdditivityViolation(
+            variant,
+            next,
+            path,
+            mode,
+            previousStrictPaths,
+          ) !== null
+        ) {
           return { kind: "union-variant", detail: snippet(variant) };
         }
       }
@@ -549,8 +625,23 @@ function findNodeAdditivityViolation(
         nextNode.properties[field],
         [...path, field],
         mode,
+        previousStrictPaths,
       );
       if (nested !== null) return nested;
+    }
+    // "An added field just strips" holds only when the OLDER object strips.
+    // A strict object rejects the whole payload instead, so growing one on a
+    // minor breaks projection for every payload - not just those exercising
+    // the new field.
+    if (previousStrictPaths.has(dottedPath(path))) {
+      for (const field of Object.keys(nextNode.properties)) {
+        if (!Object.hasOwn(previousNode.properties, field)) {
+          return {
+            kind: "strict-object-growth",
+            detail: dottedPath([...path, field]),
+          };
+        }
+      }
     }
     // Relaxing required -> optional is not additive: the newer peer may omit
     // the field, and the older schema rejects the payload outright. (A field
@@ -604,6 +695,7 @@ function findNodeAdditivityViolation(
             nextVariant,
             path,
             mode,
+            previousStrictPaths,
           ) === null,
       );
       if (survives) continue;
@@ -615,6 +707,7 @@ function findNodeAdditivityViolation(
               nextVariant,
               path,
               "lenient",
+              previousStrictPaths,
             ) === null,
         );
         if (lenientMatch !== undefined) {
@@ -623,6 +716,7 @@ function findNodeAdditivityViolation(
             lenientMatch,
             path,
             mode,
+            previousStrictPaths,
           );
         }
       }
@@ -642,6 +736,7 @@ function findNodeAdditivityViolation(
               nextVariant,
               path,
               mode,
+              previousStrictPaths,
             ) === null,
         );
         if (!hasPredecessor) {
@@ -658,6 +753,7 @@ function findNodeAdditivityViolation(
       nextNode.items,
       [...path, "items"],
       mode,
+      previousStrictPaths,
     );
     if (itemsViolation !== null) {
       return {
@@ -687,6 +783,8 @@ function findNodeAdditivityViolation(
 
   return null;
 }
+
+const EMPTY_STRICT_PATHS: ReadonlySet<string> = new Set<string>();
 
 export type BreakingChange =
   | {
@@ -727,7 +825,14 @@ export function findBreakingChange(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
 ): BreakingChange | null {
-  const additivityViolation = findAdditivityViolation(previous, next, "lenient");
+  // Major justification only asks "is this breaking"; strictness-aware
+  // growth detection is an additivity concern, so no strict paths here.
+  const additivityViolation = findAdditivityViolation(
+    previous,
+    next,
+    "lenient",
+    EMPTY_STRICT_PATHS,
+  );
   if (additivityViolation !== null) {
     if (additivityViolation.kind === "schema-kind") {
       return { ...additivityViolation, reason: "schema-changed" };
@@ -741,6 +846,14 @@ export function findBreakingChange(
       throw new Error(
         "unreachable: lenient additivity produced a value-growth violation",
       );
+    }
+    if (additivityViolation.kind === "strict-object-growth") {
+      // Growing a strict object changes what the schema accepts.
+      return {
+        kind: "field",
+        detail: additivityViolation.detail,
+        reason: "schema-changed",
+      };
     }
     if (additivityViolation.kind === "required-field") {
       // Relaxing required -> optional does not remove the field, it changes
@@ -802,6 +915,8 @@ export function describeAdditivityViolation(
       return `drops field '${violation.detail}'`;
     case "required-field":
       return `makes required field '${violation.detail}' optional`;
+    case "strict-object-growth":
+      return `adds field '${violation.detail}' to a strict object (an older strict schema rejects the extra key instead of stripping it)`;
     case "enum-value":
       return `drops enum value '${violation.detail}'`;
     case "enum-value-added":

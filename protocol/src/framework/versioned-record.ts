@@ -265,7 +265,12 @@ function assertSchemaCompatibility(
         // Records stay lenient on value growth: readers are versioned
         // through the same upgrade-chain discipline, and record history
         // predates the response-lane strictness.
-        const violation = findAdditivityViolation(previous, current, "lenient");
+        const violation = findAdditivityViolation(
+          previous,
+          current,
+          "lenient",
+          collectStrictObjectPaths(line.versions[previousMinor].contract.schema),
+        );
         if (violation !== null) {
           throw new Error(
             `Minor ${major}.${currentMinor} for record '${name}' ${describeAdditivityViolation(violation)} from ${major}.${previousMinor}`,
@@ -308,6 +313,7 @@ export type {
   ObjectJsonSchema,
 } from "./json-schema-fingerprint";
 import {
+  collectStrictObjectPaths,
   describeAdditivityViolation,
   findAdditivityViolation,
   findBreakingChange,

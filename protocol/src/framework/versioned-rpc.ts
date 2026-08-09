@@ -5,6 +5,7 @@
 // contract a consumer depends on). Do not conflate the two. See README.md.
 import { z } from "zod";
 import {
+  collectStrictObjectPaths,
   describeAdditivityViolation,
   findAdditivityViolation,
   rootAdditivityViolation,
@@ -423,10 +424,17 @@ function assertSchemaCompatibility(
         // Requests stay lenient on value growth: only a caller that opts
         // into a new capability on its own call hits the projection
         // refusal, which is the designed DOWNGRADE_UNSUPPORTED arm.
+        const previousRequestStrictPaths = collectStrictObjectPaths(
+          line.versions[previousMinor].contract.requestSchema,
+        );
+        const previousResponseStrictPaths = collectStrictObjectPaths(
+          line.versions[previousMinor].contract.responseSchema,
+        );
         const requestViolation = findAdditivityViolation(
           previous.request,
           current.request,
           "lenient",
+          previousRequestStrictPaths,
         );
         if (requestViolation !== null) {
           throw new Error(
@@ -444,6 +452,7 @@ function assertSchemaCompatibility(
           previous.response,
           current.response,
           "no-value-growth",
+          previousResponseStrictPaths,
         );
         // The annotation is a reviewed claim about the EMITTER, so it must
         // never outlive the growth it was granted for: a minor that carries
@@ -460,6 +469,7 @@ function assertSchemaCompatibility(
               previous.response,
               current.response,
               "lenient",
+              previousResponseStrictPaths,
             )
           : strictResponseViolation;
         if (responseViolation !== null) {
