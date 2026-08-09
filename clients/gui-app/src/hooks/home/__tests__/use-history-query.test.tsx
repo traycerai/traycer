@@ -13,6 +13,8 @@ import {
 } from "@/lib/history-search";
 import type { HistorySearchState } from "@/lib/history-search";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
+import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 
 const testState = vi.hoisted(() => {
   const tasks: ListTaskLight[] = [];
@@ -129,11 +131,15 @@ describe("useHistoryQuery", () => {
     testState.taskContextsError = null;
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    useProjectProfilesStore.getState().resetForTests();
+    useActiveProjectProfileStore.getState().resetForTests();
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    useProjectProfilesStore.getState().resetForTests();
+    useActiveProjectProfileStore.getState().resetForTests();
   });
 
   it("locally narrows existing rows while a new search query is debouncing", () => {
@@ -485,6 +491,60 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("error").textContent).toBe(
       "Task contexts failed",
     );
+  });
+
+  it("filters history items by the active project profile (owned + unscoped)", () => {
+    const owned = taskLight("epic-owned", "Owned epic", "traycer/gui-app");
+    owned.epic = {
+      ...owned.epic!,
+      workspaces: [
+        {
+          hostId: "h1",
+          workspacePath: "/Users/x/Acme",
+        },
+      ],
+    };
+    const foreign = taskLight("epic-foreign", "Foreign epic", "traycer/server");
+    foreign.epic = {
+      ...foreign.epic!,
+      workspaces: [
+        {
+          hostId: "h1",
+          workspacePath: "/Users/x/Other",
+        },
+      ],
+    };
+    const unscoped = taskLight(
+      "epic-unscoped",
+      "Unscoped epic",
+      "traycer/gui-app",
+    );
+
+    testState.tasks = [owned, foreign, unscoped];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    const profile = useProjectProfilesStore.getState().createProfile({
+      name: "Acme",
+      icon: "rocket",
+      color: "blue",
+      folders: [{ path: "/Users/x/Acme", hostId: "h1" }],
+    });
+    useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
+
+    const { rerender } = render(
+      <HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Owned epic|Unscoped epic");
+
+    useActiveProjectProfileStore.getState().setActiveProfile(null);
+    rerender(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Owned epic|Foreign epic|Unscoped epic");
   });
 });
 

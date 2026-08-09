@@ -32,6 +32,8 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
+import { itemVisibleInProfile } from "@/lib/profiles/profile-membership";
+import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useCallback, useMemo, useState } from "react";
 
@@ -70,6 +72,7 @@ export interface UseHistoryQueryResult {
 export function useHistoryQuery(
   params: UseHistoryQueryParams,
 ): UseHistoryQueryResult {
+  const activeProfile = useActiveProjectProfile();
   const trimmedQuery = params.search.query.trim();
   const debouncedQuery = useDebouncedValue(trimmedQuery, SEARCH_DEBOUNCE_MS);
   const [fallbackNowMs] = useState(() => Date.now());
@@ -187,6 +190,15 @@ export function useHistoryQuery(
           params.search.sort,
           debouncedQuery,
         );
+    // Client-side post-filter only: the host query stays profile-unaware so
+    // hasNextPage/fetchNextPage keep working against unfiltered pages. The
+    // filter narrows the rendered list (acceptable for v1).
+    const visibleItems =
+      activeProfile === null
+        ? items
+        : items.filter((item) =>
+            itemVisibleInProfile(activeProfile, item.linkedWorkspaces),
+          );
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
     const facets = canUseServerFacets
@@ -197,17 +209,18 @@ export function useHistoryQuery(
         ? facets.workspaces.map((workspace) => workspace.workspace)
         : collectHistoryWorkspaces(allItems);
     return {
-      items,
+      items: visibleItems,
       availableRepos:
         facets.repos.length > 0
           ? facets.repos.map((repo) => repo.label)
           : collectHistoryRepos(allItems),
       availableWorkspaces,
-      totalCount: items.length,
+      totalCount: visibleItems.length,
       facets,
       worktreesByEpicId,
     };
   }, [
+    activeProfile,
     allItems,
     contextExtrasCount,
     debouncedQuery,
