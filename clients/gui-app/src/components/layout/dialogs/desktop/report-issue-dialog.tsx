@@ -111,6 +111,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings": "Settings",
   "/settings/": "Settings",
   "/settings/agents": "Settings - Agents",
+  "/settings/orchestrations": "Settings - Orchestrations",
   "/settings/appearance": "Settings - Appearance",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Diagnostics",

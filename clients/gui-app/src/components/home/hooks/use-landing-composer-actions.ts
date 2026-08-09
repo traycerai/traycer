@@ -74,6 +74,8 @@ import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { maybeInjectOrchestrationPreludeAtCreate } from "@/lib/orchestration/inject-orchestration-prelude";
 import {
   orderFoldersPrimaryFirst,
   resolvePrimaryPath,
@@ -157,6 +159,7 @@ interface FinalizeLandingSubmissionInput {
 export function useLandingComposerActions(): LandingComposerActions {
   const navigate = useNavigate();
   const client = useHostClient();
+  const runnerHost = useRunnerHostOrNull();
   const queryClient = useQueryClient();
   const createEpic = useEpicCreate();
   const terminalAgentCreate = useCreateTuiAgent();
@@ -272,8 +275,11 @@ export function useLandingComposerActions(): LandingComposerActions {
   // content (cached images, no await) or the IndexedDB-resolved content
   // (restored draft) while the sync local-state/nav block stays byte-identical
   // across both paths.
+  //
+  // Async solely so orchestration prelude can be fetched for the create-time
+  // initialMessage (never on later sends). Callers fire-and-forget with void.
   const finalizeSubmission = useCallback(
-    (input: FinalizeLandingSubmissionInput) => {
+    async (input: FinalizeLandingSubmissionInput) => {
       const { resolvedContent, text, args, workspaceContext, attempt } = input;
       const { editor, toolbar } = args;
       if (editor === null) {
@@ -286,9 +292,15 @@ export function useLandingComposerActions(): LandingComposerActions {
         return;
       }
 
-      const submittedContent = buildSubmittedChatJSONContent(
+      const submittedUserContent = buildSubmittedChatJSONContent(
         resolvedContent,
         args.slashCatalog,
+      );
+      // One-shot at chat creation only — identity/responsibility for the role.
+      const submittedContent = await maybeInjectOrchestrationPreludeAtCreate(
+        submittedUserContent,
+        runnerHost?.traycerCli ?? null,
+        null,
       );
       const profile = useAuthStore.getState().profile;
 
@@ -486,7 +498,7 @@ export function useLandingComposerActions(): LandingComposerActions {
           draftRuntimeRegistry.complete(attempt);
         });
     },
-    [client, createLandingEpic, navigate],
+    [client, createLandingEpic, navigate, runnerHost],
   );
 
   const dispatchSubmission = useCallback(
@@ -533,7 +545,7 @@ export function useLandingComposerActions(): LandingComposerActions {
       // with no bytes (manual wipe) blocks the send with a toast.
       const hashes = imageHashesFromContent(editorContent);
       if (hashes.length === 0) {
-        finalizeSubmission({
+        void finalizeSubmission({
           resolvedContent: editorContent,
           text,
           args: exactArgs,
@@ -544,7 +556,7 @@ export function useLandingComposerActions(): LandingComposerActions {
       }
       const sessionBytes = readSessionImageBytes(hashes);
       if (sessionBytes !== null) {
-        finalizeSubmission({
+        void finalizeSubmission({
           resolvedContent: inlineImageHashes(editorContent, sessionBytes),
           text,
           args: exactArgs,
@@ -589,7 +601,7 @@ export function useLandingComposerActions(): LandingComposerActions {
             draftRuntimeRegistry.complete(attempt);
             return;
           }
-          finalizeSubmission({
+          void finalizeSubmission({
             resolvedContent: inlineImageHashes(editorContent, bytesByHash),
             text,
             args: exactArgs,

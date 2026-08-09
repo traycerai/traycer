@@ -253,4 +253,146 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
       });
     },
   );
+
+  // ─── Orchestrations ─────────────────────────────────────────────────────
+  // Read-only orchestration queries via `traycer orchestration *` CLI
+  // subcommands. Host-independent (local filesystem under ~/.traycer/).
+
+  bridge.handleInvoke(RunnerHostInvoke.traycerOrchestrationList, async () => {
+    return runTraycerCliJson(["orchestration", "list"]);
+  });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationShow,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationShow");
+      return runTraycerCliJson(["orchestration", "show", "--name", name]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationRoles,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationRoles");
+      return runTraycerCliJson(["orchestration", "roles", "--name", name]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationModels,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationModels");
+      const roleId = requireString(raw, "roleId", "traycerOrchestrationModels");
+      const group = optionalString(raw, "group");
+      const cliArgs = [
+        "orchestration",
+        "models",
+        "--name",
+        name,
+        "--role",
+        roleId,
+      ];
+      if (group !== null) cliArgs.push("--group", group);
+      return runTraycerCliJson(cliArgs);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationResponsibility,
+    async (_event, raw: unknown) => {
+      const name = requireString(
+        raw,
+        "name",
+        "traycerOrchestrationResponsibility",
+      );
+      const roleId = requireString(
+        raw,
+        "roleId",
+        "traycerOrchestrationResponsibility",
+      );
+      return runTraycerCliJson([
+        "orchestration",
+        "responsibility",
+        "--name",
+        name,
+        "--role",
+        roleId,
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(RunnerHostInvoke.traycerOrchestrationGroups, async () => {
+    return runTraycerCliJson(["orchestration", "groups"]);
+  });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationCreate,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationCreate");
+      const description = optionalString(raw, "description");
+      const from = optionalString(raw, "from");
+      const cliArgs = ["orchestration", "create", "--name", name];
+      if (description !== null) cliArgs.push("--description", description);
+      if (from !== null) cliArgs.push("--from", from);
+      return runTraycerCliJson(cliArgs);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationDelete,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationDelete");
+      return runTraycerCliJson(["orchestration", "delete", "--name", name]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationGroupShow,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationGroupShow");
+      return runTraycerCliJson([
+        "orchestration",
+        "group",
+        "show",
+        "--name",
+        name,
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationGroupSave,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationGroupSave");
+      const group = requireString(raw, "group", "traycerOrchestrationGroupSave");
+      return runTraycerCliJson([
+        "orchestration",
+        "group",
+        "save",
+        "--name",
+        name,
+        "--data",
+        group,
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationPrelude,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationPrelude");
+      const roleId = requireString(raw, "roleId", "traycerOrchestrationPrelude");
+      const group = optionalString(raw, "group");
+      const cliArgs = [
+        "orchestration",
+        "prelude",
+        "--name",
+        name,
+        "--role",
+        roleId,
+      ];
+      if (group !== null) cliArgs.push("--group", group);
+      return runTraycerCliJson(cliArgs);
+    },
+  );
 }

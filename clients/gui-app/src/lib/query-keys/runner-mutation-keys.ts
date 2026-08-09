@@ -146,6 +146,40 @@ export const runnerQueryKeys = {
     ["runner.traycer.shellProbe", traycerCli, path] as const,
   traycerEnvOverrideList: (traycerCli: object) =>
     ["runner.traycer.envOverrideList", traycerCli] as const,
+  // Orchestration queries — agent team templates read via CLI. Scoped to the
+  // runner-host instance like the other traycer queries.
+  traycerOrchestrationList: (traycerCli: object) =>
+    ["runner.traycer.orchestrationList", traycerCli] as const,
+  traycerOrchestrationShow: (traycerCli: object, name: string) =>
+    ["runner.traycer.orchestrationShow", traycerCli, name] as const,
+  traycerOrchestrationRoles: (traycerCli: object, name: string) =>
+    ["runner.traycer.orchestrationRoles", traycerCli, name] as const,
+  traycerOrchestrationModels: (
+    traycerCli: object,
+    name: string,
+    roleId: string,
+    group: string | undefined,
+  ) =>
+    [
+      "runner.traycer.orchestrationModels",
+      traycerCli,
+      name,
+      roleId,
+      group,
+    ] as const,
+  traycerOrchestrationResponsibility: (
+    traycerCli: object,
+    name: string,
+    roleId: string,
+  ) =>
+    [
+      "runner.traycer.orchestrationResponsibility",
+      traycerCli,
+      name,
+      roleId,
+    ] as const,
+  traycerOrchestrationGroups: (traycerCli: object) =>
+    ["runner.traycer.orchestrationGroups", traycerCli] as const,
   // Host-management queries are scoped by the `IHostManagement`
   // instance identity so a host swap invalidates them cleanly.
   hostAvailableVersionsScope: (management: object) =>

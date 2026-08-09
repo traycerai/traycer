@@ -32,6 +32,8 @@ function settingsRouteOptions(section: SettingsSectionId) {
       return { to: "/settings/notifications" } as const;
     case "agents":
       return { to: "/settings/agents" } as const;
+    case "orchestrations":
+      return { to: "/settings/orchestrations" } as const;
     case "keybindings":
       return { to: "/settings/keybindings" } as const;
     case "shell":

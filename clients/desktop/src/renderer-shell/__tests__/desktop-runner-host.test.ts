@@ -286,7 +286,7 @@ function buildFakeBridge(
     },
     support: {
       getSnapshot: async () => ({
-        appName: "Traycer",
+        appName: "Thanos",
         appVersion: "0.0.0",
         platform: "darwin",
         arch: "arm64",
@@ -394,6 +394,17 @@ function buildFakeBridge(
       envOverrideList: async () => [],
       envOverrideSet: async () => undefined,
       envOverrideDelete: async () => undefined,
+      orchestrationList: async () => [],
+      orchestrationShow: async () => null,
+      orchestrationRoles: async () => [],
+      orchestrationModels: async () => null,
+      orchestrationResponsibility: async () => null,
+      orchestrationGroups: async () => [],
+      orchestrationCreate: async () => null,
+      orchestrationDelete: async () => false,
+      orchestrationGroupShow: async () => null,
+      orchestrationGroupSave: async () => false,
+      orchestrationPrelude: async () => null,
     },
     migration: {
       announceRunning: async () => undefined,

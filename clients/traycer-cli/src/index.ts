@@ -36,6 +36,19 @@ import {
   buildAgentRoleRelinquishCommand,
 } from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
+import {
+  buildOrchestrationCreateCommand,
+  buildOrchestrationDeleteCommand,
+  buildOrchestrationGroupsCommand,
+  buildOrchestrationGroupSaveCommand,
+  buildOrchestrationGroupShowCommand,
+  buildOrchestrationListCommand,
+  buildOrchestrationModelsCommand,
+  buildOrchestrationPreludeCommand,
+  buildOrchestrationResponsibilityCommand,
+  buildOrchestrationRolesCommand,
+  buildOrchestrationShowCommand,
+} from "./commands/orchestration";
 import { buildAgentSendCommand } from "./commands/agent-send";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
@@ -311,6 +324,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
+  registerOrchestrationCommands(program);
   registerMonitorCommand(program);
 }
 
@@ -1284,6 +1298,151 @@ function registerConfigCommands(program: Command): void {
       buildConfigEnvDeleteCommand({
         key: typeof opts.key === "string" ? opts.key : "",
       })(ctx),
+  );
+}
+
+function registerOrchestrationCommands(program: Command): void {
+  const orch = program
+    .command("orchestration")
+    .description(
+      "Manage orchestrations (agent team templates with roles, responsibilities, and model bindings)",
+    );
+
+  withRunner(
+    orch.command("list").description("List available orchestrations"),
+    () => buildOrchestrationListCommand(),
+  );
+
+  withRunner(
+    orch
+      .command("show")
+      .description("Show orchestration details")
+      .requiredOption("--name <name>", "Orchestration name"),
+    (opts) =>
+      buildOrchestrationShowCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+      }),
+  );
+
+  withRunner(
+    orch
+      .command("roles")
+      .description("List roles in an orchestration")
+      .requiredOption("--name <name>", "Orchestration name"),
+    (opts) =>
+      buildOrchestrationRolesCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+      }),
+  );
+
+  withRunner(
+    orch
+      .command("models")
+      .description("List available models for a role in an orchestration")
+      .requiredOption("--name <name>", "Orchestration name")
+      .requiredOption("--role <roleId>", "Role ID")
+      .option(
+        "--group <group>",
+        "Model group override (default: orchestration default)",
+      ),
+    (opts) =>
+      buildOrchestrationModelsCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        role: typeof opts.role === "string" ? opts.role : null,
+        group: typeof opts.group === "string" ? opts.group : null,
+      }),
+  );
+
+  withRunner(
+    orch
+      .command("responsibility")
+      .description(
+        "Print the responsibility MD content for a role (for contextPrelude injection)",
+      )
+      .requiredOption("--name <name>", "Orchestration name")
+      .requiredOption("--role <roleId>", "Role ID"),
+    (opts) =>
+      buildOrchestrationResponsibilityCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        role: typeof opts.role === "string" ? opts.role : null,
+      }),
+  );
+
+  withRunner(
+    orch
+      .command("prelude")
+      .description(
+        "Build the one-shot orchestration context block for chat creation (initialMessage only)",
+      )
+      .requiredOption("--name <name>", "Orchestration name")
+      .requiredOption("--role <roleId>", "Role ID")
+      .option("--group <group>", "Model group override"),
+    (opts) =>
+      buildOrchestrationPreludeCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        role: typeof opts.role === "string" ? opts.role : null,
+        group: typeof opts.group === "string" ? opts.group : null,
+      }),
+  );
+
+  withRunner(
+    orch.command("groups").description("List available model groups"),
+    () => buildOrchestrationGroupsCommand(),
+  );
+
+  withRunner(
+    orch
+      .command("create")
+      .description("Create a new orchestration (optionally cloned from an existing one)")
+      .requiredOption("--name <name>", "Orchestration name")
+      .option("--description <desc>", "Orchestration description")
+      .option("--from <existing>", "Clone from an existing orchestration"),
+    (opts) =>
+      buildOrchestrationCreateCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        description:
+          typeof opts.description === "string" ? opts.description : null,
+        from: typeof opts.from === "string" ? opts.from : null,
+      }),
+  );
+
+  withRunner(
+    orch
+      .command("delete")
+      .description("Delete an orchestration")
+      .requiredOption("--name <name>", "Orchestration name"),
+    (opts) =>
+      buildOrchestrationDeleteCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+      }),
+  );
+
+  const group = orch
+    .command("group")
+    .description("Manage model groups");
+
+  withRunner(
+    group
+      .command("show")
+      .description("Show a model group (full JSON)")
+      .requiredOption("--name <name>", "Model group name"),
+    (opts) =>
+      buildOrchestrationGroupShowCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+      }),
+  );
+
+  withRunner(
+    group
+      .command("save")
+      .description("Save a model group (JSON via --data arg or stdin)")
+      .requiredOption("--name <name>", "Model group name")
+      .option("--data <json>", "Model group JSON string"),
+    (opts) =>
+      buildOrchestrationGroupSaveCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        json: typeof opts.data === "string" ? opts.data : null,
+      }),
   );
 }
 

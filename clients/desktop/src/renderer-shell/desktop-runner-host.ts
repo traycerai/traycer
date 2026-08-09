@@ -48,6 +48,11 @@ import type {
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
+  TraycerModelGroup,
+  TraycerOrchestration,
+  TraycerOrchestrationPrelude,
+  TraycerOrchestrationRole,
+  TraycerRoleModelInfo,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
   TraycerShellProbeResult,
@@ -442,6 +447,43 @@ export interface DesktopTraycerCliBridge {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
+
+  // ─── Orchestrations ─────────────────────────────────────────────────────
+  orchestrationList(): Promise<readonly string[]>;
+  orchestrationShow(input: {
+    readonly name: string;
+  }): Promise<TraycerOrchestration | null>;
+  orchestrationRoles(input: {
+    readonly name: string;
+  }): Promise<readonly TraycerOrchestrationRole[]>;
+  orchestrationModels(input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<TraycerRoleModelInfo | null>;
+  orchestrationResponsibility(input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<string | null>;
+  orchestrationGroups(): Promise<readonly string[]>;
+  orchestrationCreate(input: {
+    readonly name: string;
+    readonly description: string | undefined;
+    readonly from: string | undefined;
+  }): Promise<TraycerOrchestration | null>;
+  orchestrationDelete(input: { readonly name: string }): Promise<boolean>;
+  orchestrationGroupShow(input: {
+    readonly name: string;
+  }): Promise<TraycerModelGroup | null>;
+  orchestrationGroupSave(input: {
+    readonly name: string;
+    readonly group: TraycerModelGroup;
+  }): Promise<boolean>;
+  orchestrationPrelude(input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<TraycerOrchestrationPrelude | null>;
 }
 
 export interface DesktopServiceBridge {
@@ -719,6 +761,28 @@ export class DesktopRunnerHost implements IRunnerHost {
       envOverrideSet: (input) => this.bridge.traycerCli.envOverrideSet(input),
       envOverrideDelete: (input) =>
         this.bridge.traycerCli.envOverrideDelete(input),
+      // ─── Orchestrations ───────────────────────────────────────────────
+      orchestrationList: () => this.bridge.traycerCli.orchestrationList(),
+      orchestrationShow: (input) =>
+        this.bridge.traycerCli.orchestrationShow(input),
+      orchestrationRoles: (input) =>
+        this.bridge.traycerCli.orchestrationRoles(input),
+      orchestrationModels: (input) =>
+        this.bridge.traycerCli.orchestrationModels(input),
+      orchestrationResponsibility: (input) =>
+        this.bridge.traycerCli.orchestrationResponsibility(input),
+      orchestrationGroups: () =>
+        this.bridge.traycerCli.orchestrationGroups(),
+      orchestrationCreate: (input) =>
+        this.bridge.traycerCli.orchestrationCreate(input),
+      orchestrationDelete: (input) =>
+        this.bridge.traycerCli.orchestrationDelete(input),
+      orchestrationGroupShow: (input) =>
+        this.bridge.traycerCli.orchestrationGroupShow(input),
+      orchestrationGroupSave: (input) =>
+        this.bridge.traycerCli.orchestrationGroupSave(input),
+      orchestrationPrelude: (input) =>
+        this.bridge.traycerCli.orchestrationPrelude(input),
     };
     this.migration = {
       announceRunning: (snapshot) =>

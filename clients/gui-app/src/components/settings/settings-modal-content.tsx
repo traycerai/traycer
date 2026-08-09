@@ -12,6 +12,7 @@ import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessi
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
+import { OrchestrationsSettingsPanel } from "@/components/settings/panels/orchestrations-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -62,6 +63,8 @@ export function SettingsPanelForSection(props: {
       return <NotificationsSettingsPanel />;
     case "agents":
       return <AgentsSettingsPanel />;
+    case "orchestrations":
+      return <OrchestrationsSettingsPanel />;
     case "keybindings":
       return <KeybindingsSettingsPanel />;
     case "shell":

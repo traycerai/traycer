@@ -544,6 +544,78 @@ export interface TraycerEnvOverride {
   readonly value: string | null;
 }
 
+// ─── Orchestrations ─────────────────────────────────────────────────────────
+
+export interface TraycerOrchestrationRole {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly responsibilityFile: string;
+  readonly tier: string;
+  readonly isRoot: boolean;
+  readonly lifecycle: string;
+  readonly canCreateAgents: boolean;
+  readonly canWriteArtifacts: readonly string[];
+  readonly neverImplements: boolean;
+  readonly excludeFamilyOf: string | null;
+  readonly modelPreference: readonly string[];
+}
+
+export interface TraycerArtifactStep {
+  readonly path: string;
+  readonly kind: string;
+  readonly author: string;
+  readonly conditional: string | null;
+  readonly note: string | null;
+}
+
+export interface TraycerOrchestration {
+  readonly name: string;
+  readonly description: string;
+  readonly version: string;
+  readonly defaultModelGroup: string;
+  readonly roles: readonly TraycerOrchestrationRole[];
+  readonly artifactChain: readonly TraycerArtifactStep[];
+  readonly globalRules: readonly string[];
+}
+
+export interface TraycerModelEntry {
+  readonly harnessId: string;
+  readonly model: string;
+  readonly effort: string | null;
+  readonly family: string;
+  readonly note: string;
+}
+
+export interface TraycerModelTier {
+  readonly description: string;
+  readonly models: readonly TraycerModelEntry[];
+}
+
+export interface TraycerModelGroup {
+  readonly name: string;
+  readonly description: string;
+  readonly rules: readonly string[];
+  readonly tiers: Readonly<Record<string, TraycerModelTier>>;
+}
+
+export interface TraycerRoleModelInfo {
+  readonly role: TraycerOrchestrationRole;
+  readonly modelGroup: string;
+  readonly tier: string;
+  readonly models: readonly TraycerModelEntry[];
+  readonly rules: readonly string[];
+}
+
+export interface TraycerOrchestrationPrelude {
+  readonly orchestration: string;
+  readonly roleId: string;
+  readonly roleLabel: string;
+  readonly modelGroup: string;
+  readonly tier: string;
+  readonly text: string;
+}
+
 export interface TraycerShellConfigSetInput {
   /** New shell path; null preserves the stored value (or default). */
   readonly path: string | null;
@@ -599,6 +671,47 @@ export interface ITraycerCli {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
+
+  // ─── Orchestrations ─────────────────────────────────────────────────────
+  orchestrationList(): Promise<readonly string[]>;
+  orchestrationShow(input: {
+    readonly name: string;
+  }): Promise<TraycerOrchestration | null>;
+  orchestrationRoles(input: {
+    readonly name: string;
+  }): Promise<readonly TraycerOrchestrationRole[]>;
+  orchestrationModels(input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<TraycerRoleModelInfo | null>;
+  orchestrationResponsibility(input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<string | null>;
+  orchestrationGroups(): Promise<readonly string[]>;
+  orchestrationCreate(input: {
+    readonly name: string;
+    readonly description: string | undefined;
+    readonly from: string | undefined;
+  }): Promise<TraycerOrchestration | null>;
+  orchestrationDelete(input: { readonly name: string }): Promise<boolean>;
+  orchestrationGroupShow(input: {
+    readonly name: string;
+  }): Promise<TraycerModelGroup | null>;
+  orchestrationGroupSave(input: {
+    readonly name: string;
+    readonly group: TraycerModelGroup;
+  }): Promise<boolean>;
+  /**
+   * One-shot context block for chat creation (`initialMessage` only).
+   * Not used on subsequent sends.
+   */
+  orchestrationPrelude(input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<TraycerOrchestrationPrelude | null>;
 }
 
 /**

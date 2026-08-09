@@ -145,6 +145,20 @@ export const RunnerHostInvoke = {
   traycerConfigEnvList: "runnerHost:traycer:config:env:list",
   traycerConfigEnvSet: "runnerHost:traycer:config:env:set",
   traycerConfigEnvDelete: "runnerHost:traycer:config:env:delete",
+  // Orchestrations (agent team templates) — read via `traycer orchestration *`
+  // CLI subcommands. Host-independent: works whether the host is up or down.
+  traycerOrchestrationList: "runnerHost:traycer:orchestration:list",
+  traycerOrchestrationShow: "runnerHost:traycer:orchestration:show",
+  traycerOrchestrationRoles: "runnerHost:traycer:orchestration:roles",
+  traycerOrchestrationModels: "runnerHost:traycer:orchestration:models",
+  traycerOrchestrationResponsibility:
+    "runnerHost:traycer:orchestration:responsibility",
+  traycerOrchestrationGroups: "runnerHost:traycer:orchestration:groups",
+  traycerOrchestrationCreate: "runnerHost:traycer:orchestration:create",
+  traycerOrchestrationDelete: "runnerHost:traycer:orchestration:delete",
+  traycerOrchestrationGroupShow: "runnerHost:traycer:orchestration:group:show",
+  traycerOrchestrationGroupSave: "runnerHost:traycer:orchestration:group:save",
+  traycerOrchestrationPrelude: "runnerHost:traycer:orchestration:prelude",
   recentDocumentAdd: "runnerHost:recentDocuments:add",
   windowFlashFrame: "runnerHost:window:flashFrame",
   windowSetProgressBar: "runnerHost:window:setProgressBar",

@@ -1,0 +1,389 @@
+import { mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
+// ~/.traycer/orchestrations/<name>/orchestration.json + roles/*.md
+// ~/.traycer/model-groups/<name>.json
+
+const TRAYCER_HOME = join(homedir(), ".traycer");
+const ORCHESTRATIONS_DIR = join(TRAYCER_HOME, "orchestrations");
+const MODEL_GROUPS_DIR = join(TRAYCER_HOME, "model-groups");
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+export interface ModelEntry {
+  readonly harnessId: string;
+  readonly model: string;
+  readonly effort: string | null;
+  readonly family: string;
+  readonly note: string;
+}
+
+export interface ModelTier {
+  readonly description: string;
+  readonly models: readonly ModelEntry[];
+}
+
+export interface ModelGroup {
+  readonly name: string;
+  readonly description: string;
+  readonly rules: readonly string[];
+  readonly tiers: Readonly<Record<string, ModelTier>>;
+}
+
+export interface OrchestrationRole {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly responsibilityFile: string;
+  readonly tier: string;
+  readonly isRoot: boolean;
+  readonly lifecycle: string;
+  readonly canCreateAgents: boolean;
+  readonly canWriteArtifacts: readonly string[];
+  readonly neverImplements: boolean;
+  readonly excludeFamilyOf?: string;
+  readonly modelPreference: readonly string[];
+}
+
+export interface ArtifactStep {
+  readonly path: string;
+  readonly kind: string;
+  readonly author: string;
+  readonly conditional?: string;
+  readonly note?: string;
+}
+
+export interface Orchestration {
+  readonly name: string;
+  readonly description: string;
+  readonly version: string;
+  readonly defaultModelGroup: string;
+  readonly roles: readonly OrchestrationRole[];
+  readonly artifactChain: readonly ArtifactStep[];
+  readonly globalRules: readonly string[];
+}
+
+// ─── Model Groups ───────────────────────────────────────────────────────────
+
+export async function listModelGroups(): Promise<readonly string[]> {
+  try {
+    const entries = await readdir(MODEL_GROUPS_DIR);
+    return entries
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.replace(/\.json$/, ""))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export async function readModelGroup(name: string): Promise<ModelGroup | null> {
+  try {
+    const raw = await readFile(join(MODEL_GROUPS_DIR, `${name}.json`), "utf-8");
+    return JSON.parse(raw) as ModelGroup;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Orchestrations ─────────────────────────────────────────────────────────
+
+export async function listOrchestrations(): Promise<readonly string[]> {
+  try {
+    const entries = await readdir(ORCHESTRATIONS_DIR, {
+      withFileTypes: true,
+    });
+    return entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export async function readOrchestration(
+  name: string,
+): Promise<Orchestration | null> {
+  try {
+    const raw = await readFile(
+      join(ORCHESTRATIONS_DIR, name, "orchestration.json"),
+      "utf-8",
+    );
+    return JSON.parse(raw) as Orchestration;
+  } catch {
+    return null;
+  }
+}
+
+export async function readResponsibility(
+  orchestrationName: string,
+  roleId: string,
+): Promise<string | null> {
+  const orch = await readOrchestration(orchestrationName);
+  if (!orch) return null;
+  const role = orch.roles.find((r) => r.id === roleId);
+  if (!role) return null;
+  try {
+    return await readFile(
+      join(ORCHESTRATIONS_DIR, orchestrationName, role.responsibilityFile),
+      "utf-8",
+    );
+  } catch {
+    return null;
+  }
+}
+
+// ─── Models for a role ──────────────────────────────────────────────────────
+
+export interface RoleModelInfo {
+  readonly role: OrchestrationRole;
+  readonly modelGroup: string;
+  readonly tier: string;
+  readonly models: readonly ModelEntry[];
+  readonly rules: readonly string[];
+}
+
+export async function getModelsForRole(
+  orchestrationName: string,
+  roleId: string,
+  modelGroupName: string | undefined,
+): Promise<RoleModelInfo | null> {
+  const orch = await readOrchestration(orchestrationName);
+  if (!orch) return null;
+
+  const role = orch.roles.find((r) => r.id === roleId);
+  if (!role) return null;
+
+  const groupName = modelGroupName ?? orch.defaultModelGroup;
+  const group = await readModelGroup(groupName);
+  if (!group) return null;
+
+  const tier = group.tiers[role.tier];
+  if (!tier) return null;
+
+  return {
+    role,
+    modelGroup: groupName,
+    tier: role.tier,
+    models: tier.models,
+    rules: group.rules,
+  };
+}
+
+// ─── Prelude for chat creation injection ────────────────────────────────────
+
+export interface OrchestrationPrelude {
+  readonly orchestration: string;
+  readonly roleId: string;
+  readonly roleLabel: string;
+  readonly modelGroup: string;
+  readonly tier: string;
+  readonly text: string;
+}
+
+/**
+ * Builds the one-shot context block injected into a chat's initialMessage at
+ * creation time (not on every subsequent send). The open client cannot set
+ * host-internal `contextPrelude`; this text is prepended to the create-time
+ * user content instead.
+ */
+export async function buildOrchestrationPrelude(
+  orchestrationName: string,
+  roleId: string,
+  modelGroupName: string | undefined,
+): Promise<OrchestrationPrelude | null> {
+  const orch = await readOrchestration(orchestrationName);
+  if (!orch) return null;
+
+  const role = orch.roles.find((r) => r.id === roleId);
+  if (!role) return null;
+
+  const responsibility = await readResponsibility(orchestrationName, roleId);
+  if (responsibility === null) return null;
+
+  const modelInfo = await getModelsForRole(
+    orchestrationName,
+    roleId,
+    modelGroupName,
+  );
+  const groupName =
+    modelInfo?.modelGroup ?? modelGroupName ?? orch.defaultModelGroup;
+
+  const roleLines = orch.roles.map((r) => {
+    const root = r.isRoot ? " ★ root" : "";
+    return `- ${r.id} (${r.label}) — tier=${r.tier}${root}: ${r.description}`;
+  });
+
+  const modelLines =
+    modelInfo === null
+      ? ["(no models resolved for this role/group)"]
+      : modelInfo.models.map((m, i) => {
+          const effort = m.effort !== null ? ` effort=${m.effort}` : "";
+          const note = m.note.length > 0 ? ` — ${m.note}` : "";
+          return `${i + 1}. ${m.harnessId}/${m.model}${effort} [${m.family}]${note}`;
+        });
+
+  const rules = [...orch.globalRules, ...(modelInfo?.rules ?? [])];
+
+  const text = [
+    "<!-- traycer-orchestration-prelude -->",
+    "# Orchestration context (injected once at chat creation)",
+    "",
+    "You are bound to a fixed role in an agent team template. Treat the block",
+    "below as standing instructions for this entire chat. Do not restate it",
+    "verbatim to the user unless asked.",
+    "",
+    `## Binding`,
+    `- Orchestration: \`${orchestrationName}\``,
+    `- Role: \`${role.id}\` (${role.label})`,
+    `- Tier: \`${role.tier}\``,
+    `- Model group: \`${groupName}\``,
+    role.isRoot
+      ? `- Root role: yes (orchestrator — assign work, do not implement)`
+      : `- Root role: no`,
+    "",
+    "## How to discover teammates and models (CLI)",
+    "Use these when you need live roster data:",
+    "```",
+    `traycer orchestration roles --name ${orchestrationName}`,
+    `traycer orchestration models --name ${orchestrationName} --role <roleId> --group ${groupName}`,
+    `traycer orchestration responsibility --name ${orchestrationName} --role <roleId>`,
+    "```",
+    "",
+    "## Team roster",
+    ...roleLines,
+    "",
+    "## Preferred models for THIS role (rotation order)",
+    ...modelLines,
+    "",
+    "## Global rules",
+    ...rules.map((r) => `- ${r}`),
+    "",
+    "## Responsibility",
+    responsibility.trim(),
+    "",
+    "<!-- /traycer-orchestration-prelude -->",
+    "",
+  ].join("\n");
+
+  return {
+    orchestration: orchestrationName,
+    roleId: role.id,
+    roleLabel: role.label,
+    modelGroup: groupName,
+    tier: role.tier,
+    text,
+  };
+}
+
+// ─── Write operations ───────────────────────────────────────────────────────
+
+export async function createOrchestration(
+  name: string,
+  description: string,
+  fromExisting: string | undefined,
+): Promise<Orchestration | null> {
+  const dir = join(ORCHESTRATIONS_DIR, name);
+  await mkdir(join(dir, "roles"), { recursive: true });
+
+  let orch: Orchestration;
+  if (fromExisting !== undefined) {
+    const existing = await readOrchestration(fromExisting);
+    if (!existing) return null;
+    // Clone without the name/description
+    const { name: _n, description: _d, ...rest } = existing;
+    orch = { name, description, ...rest } as Orchestration;
+    // Copy responsibility files
+    for (const role of existing.roles) {
+      const content = await readResponsibility(fromExisting, role.id);
+      if (content !== null) {
+        const destPath = join(dir, role.responsibilityFile);
+        await mkdir(join(destPath, ".."), { recursive: true });
+        await writeFile(destPath, content, "utf-8");
+      }
+    }
+  } else {
+    orch = {
+      name,
+      description,
+      version: "1.0.0",
+      defaultModelGroup: "default",
+      roles: [],
+      artifactChain: [],
+      globalRules: [],
+    };
+  }
+
+  await writeFile(
+    join(dir, "orchestration.json"),
+    JSON.stringify(orch, null, 2) + "\n",
+    "utf-8",
+  );
+  return orch;
+}
+
+export async function deleteOrchestration(name: string): Promise<boolean> {
+  try {
+    await rm(join(ORCHESTRATIONS_DIR, name), { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function writeOrchestration(
+  orch: Orchestration,
+): Promise<boolean> {
+  try {
+    await mkdir(join(ORCHESTRATIONS_DIR, orch.name, "roles"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(ORCHESTRATIONS_DIR, orch.name, "orchestration.json"),
+      JSON.stringify(orch, null, 2) + "\n",
+      "utf-8",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function writeResponsibility(
+  orchestrationName: string,
+  roleId: string,
+  content: string,
+): Promise<boolean> {
+  const orch = await readOrchestration(orchestrationName);
+  if (!orch) return false;
+  const role = orch.roles.find((r) => r.id === roleId);
+  if (!role) return false;
+  try {
+    const filePath = join(
+      ORCHESTRATIONS_DIR,
+      orchestrationName,
+      role.responsibilityFile,
+    );
+    await mkdir(join(filePath, ".."), { recursive: true });
+    await writeFile(filePath, content, "utf-8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function writeModelGroup(group: ModelGroup): Promise<boolean> {
+  try {
+    await mkdir(MODEL_GROUPS_DIR, { recursive: true });
+    await writeFile(
+      join(MODEL_GROUPS_DIR, `${group.name}.json`),
+      JSON.stringify(group, null, 2) + "\n",
+      "utf-8",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}

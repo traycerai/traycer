@@ -913,6 +913,78 @@ export class MockTraycerCli implements ITraycerCli {
       (row) => row.key !== input.key,
     );
   }
+
+  // ─── Orchestrations ─────────────────────────────────────────────────────
+
+  async orchestrationList(): Promise<readonly string[]> {
+    return [];
+  }
+
+  async orchestrationShow(_input: {
+    readonly name: string;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationRoles(_input: {
+    readonly name: string;
+  }): Promise<readonly never[]> {
+    return [];
+  }
+
+  async orchestrationModels(_input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationResponsibility(_input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationGroups(): Promise<readonly string[]> {
+    return [];
+  }
+
+  async orchestrationCreate(_input: {
+    readonly name: string;
+    readonly description: string | undefined;
+    readonly from: string | undefined;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationDelete(_input: {
+    readonly name: string;
+  }): Promise<boolean> {
+    return false;
+  }
+
+  async orchestrationGroupShow(_input: {
+    readonly name: string;
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationGroupSave(_input: {
+    readonly name: string;
+    readonly group: unknown;
+  }): Promise<boolean> {
+    return false;
+  }
+
+  async orchestrationPrelude(_input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<null> {
+    return null;
+  }
 }
 
 /**

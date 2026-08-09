@@ -61,6 +61,7 @@ export type AnalyticsSettingsSection =
   | "host"
   | "keybindings"
   | "notifications"
+  | "orchestrations"
   | "providers"
   | "shell"
   | "usage"

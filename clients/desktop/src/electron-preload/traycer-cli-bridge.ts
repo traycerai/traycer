@@ -4,6 +4,11 @@ import type {
   TraycerDetectedShell,
   TraycerEnvOverride,
   TraycerHostStatusSnapshot,
+  TraycerModelGroup,
+  TraycerOrchestration,
+  TraycerOrchestrationPrelude,
+  TraycerOrchestrationRole,
+  TraycerRoleModelInfo,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
   TraycerShellProbeResult,
@@ -36,6 +41,43 @@ export interface TraycerCliBridgeSurface {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
+
+  // ─── Orchestrations ─────────────────────────────────────────────────────
+  orchestrationList(): Promise<readonly string[]>;
+  orchestrationShow(input: {
+    readonly name: string;
+  }): Promise<TraycerOrchestration | null>;
+  orchestrationRoles(input: {
+    readonly name: string;
+  }): Promise<readonly TraycerOrchestrationRole[]>;
+  orchestrationModels(input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<TraycerRoleModelInfo | null>;
+  orchestrationResponsibility(input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<string | null>;
+  orchestrationGroups(): Promise<readonly string[]>;
+  orchestrationCreate(input: {
+    readonly name: string;
+    readonly description: string | undefined;
+    readonly from: string | undefined;
+  }): Promise<TraycerOrchestration | null>;
+  orchestrationDelete(input: { readonly name: string }): Promise<boolean>;
+  orchestrationGroupShow(input: {
+    readonly name: string;
+  }): Promise<TraycerModelGroup | null>;
+  orchestrationGroupSave(input: {
+    readonly name: string;
+    readonly group: TraycerModelGroup;
+  }): Promise<boolean>;
+  orchestrationPrelude(input: {
+    readonly name: string;
+    readonly roleId: string;
+    readonly group: string | undefined;
+  }): Promise<TraycerOrchestrationPrelude | null>;
 }
 
 export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
@@ -99,5 +141,60 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
         RunnerHostInvoke.traycerConfigEnvDelete,
         input,
       ) as Promise<void>,
+
+    // ─── Orchestrations ─────────────────────────────────────────────────
+    orchestrationList: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerOrchestrationList) as Promise<
+        readonly string[]
+      >,
+    orchestrationShow: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationShow,
+        input,
+      ) as Promise<TraycerOrchestration | null>,
+    orchestrationRoles: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationRoles,
+        input,
+      ) as Promise<readonly TraycerOrchestrationRole[]>,
+    orchestrationModels: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationModels,
+        input,
+      ) as Promise<TraycerRoleModelInfo | null>,
+    orchestrationResponsibility: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationResponsibility,
+        input,
+      ) as Promise<string | null>,
+    orchestrationGroups: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationGroups,
+      ) as Promise<readonly string[]>,
+    orchestrationCreate: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationCreate,
+        input,
+      ) as Promise<TraycerOrchestration | null>,
+    orchestrationDelete: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationDelete,
+        input,
+      ) as Promise<boolean>,
+    orchestrationGroupShow: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationGroupShow,
+        input,
+      ) as Promise<TraycerModelGroup | null>,
+    orchestrationGroupSave: (input) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerOrchestrationGroupSave, {
+        name: input.name,
+        group: JSON.stringify(input.group),
+      }) as Promise<boolean>,
+    orchestrationPrelude: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationPrelude,
+        input,
+      ) as Promise<TraycerOrchestrationPrelude | null>,
   };
 }

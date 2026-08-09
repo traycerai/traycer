@@ -84,6 +84,7 @@ import {
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import { maybeInjectOrchestrationPreludeAtCreate } from "@/lib/orchestration/inject-orchestration-prelude";
 import {
   deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
@@ -714,7 +715,7 @@ export function NewConversationModalBody(props: {
       }),
     [draftWorkspace, latestWorkspaceSeed, stagingKey],
   );
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
     const editor = editorRef.current;
     if (editor === null) return;
@@ -751,9 +752,15 @@ export function NewConversationModalBody(props: {
       );
       return;
     }
-    const content = buildSubmittedChatJSONContent(
+    const userContent = buildSubmittedChatJSONContent(
       editor.getJSON(),
       pickerStore.getState().knownSlashCommands,
+    );
+    // One-shot at chat creation only — never on later sends in this chat.
+    const content = await maybeInjectOrchestrationPreludeAtCreate(
+      userContent,
+      runnerHost.traycerCli,
+      null,
     );
     const chatId = uuidv4();
     const messageId = uuidv4();
@@ -846,6 +853,7 @@ export function NewConversationModalBody(props: {
     parentId,
     placement,
     rememberEpicIntent,
+    runnerHost,
     setEpicRunSettings,
     setGlobalRunSettings,
     toolbarStore,
@@ -919,7 +927,9 @@ export function NewConversationModalBody(props: {
       workspaceCanStart,
     ],
   );
-  usePrimaryActionShortcut(chatComposerActive, handleSubmit);
+  usePrimaryActionShortcut(chatComposerActive, () => {
+    void handleSubmit();
+  });
   const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       setContent(epicId, content);
@@ -975,7 +985,9 @@ export function NewConversationModalBody(props: {
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={null}
       onEditorReady={null}
-      onSubmit={handleSubmit}
+      onSubmit={() => {
+        void handleSubmit();
+      }}
       onStartTerminal={handleStartTerminal}
       onDocumentChange={handleDocumentChange}
       onSelectionChange={handleSelectionChange}
