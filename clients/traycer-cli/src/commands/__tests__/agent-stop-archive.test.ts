@@ -190,7 +190,11 @@ describe("agent archive command function", () => {
     expect(result.human).toBe("agent_1 unarchived");
   });
 
-  it("reports an idempotent repeat as already archived/unarchived", async () => {
+  // `updated: false` is not proof the record exists: the @1.0 response contract
+  // also permits it for an id that matched nothing, so the copy stays
+  // noncommittal rather than claiming success for a mistyped id (PR #1076
+  // review).
+  it("reports updated:false noncommittally, without asserting the record exists", async () => {
     rpcMock.mockResolvedValue({ updated: false });
 
     const archived = await buildAgentArchiveCommand({
@@ -198,7 +202,9 @@ describe("agent archive command function", () => {
       agentId: "agent_1",
       unarchive: false,
     })(makeCtx());
-    expect(archived.human).toBe("agent_1 already archived");
+    expect(archived.human).toBe(
+      "agent_1: no change (already archived, or no such record)",
+    );
 
     rpcMock.mockResolvedValue({ updated: false });
     const unarchived = await buildAgentArchiveCommand({
@@ -206,7 +212,30 @@ describe("agent archive command function", () => {
       agentId: "agent_1",
       unarchive: true,
     })(makeCtx());
-    expect(unarchived.human).toBe("agent_1 already unarchived");
+    expect(unarchived.human).toBe(
+      "agent_1: no change (already unarchived, or no such record)",
+    );
+  });
+
+  it("remaps a TARGET_NOT_LOCAL: refusal to E_AGENT_NOT_LOCAL with owning-host guidance", async () => {
+    rpcMock.mockRejectedValue(
+      rpcError(
+        "RPC_ERROR",
+        "TARGET_NOT_LOCAL: epic.setChatArchived refused to archive agent 'agent_1' - it runs on host 'host_other'.",
+      ),
+    );
+
+    const error = await buildAgentArchiveCommand({
+      epicId: "epic_1",
+      agentId: "agent_1",
+      unarchive: false,
+    })(makeCtx()).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error("unreachable");
+    expect(error.code).toBe(CLI_ERROR_CODES.AGENT_NOT_LOCAL);
+    expect(error.message).toContain("runs on another host");
+    expect(error.message).not.toContain("TARGET_NOT_LOCAL");
   });
 
   it("remaps a running-turn AGENT_BUSY: message to E_AGENT_ARCHIVE_BUSY, keeping the host's stop remedy", async () => {
