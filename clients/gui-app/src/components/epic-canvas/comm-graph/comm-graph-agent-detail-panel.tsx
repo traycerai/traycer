@@ -28,6 +28,7 @@ export interface CommGraphAgentDetailPanelProps {
   readonly agentNames: ReadonlyMap<string, string>;
   /** Already filtered to this agent, in merged-array order. */
   readonly events: ReadonlyArray<CommGraphEvent>;
+  readonly initialHistoryCaughtUp: boolean;
   readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
@@ -54,6 +55,7 @@ export function CommGraphAgentDetailPanel(
     canJumpToCreated,
     canJumpToSender,
     epicId,
+    initialHistoryCaughtUp,
     events,
     onClose,
     onJump,
@@ -107,6 +109,7 @@ export function CommGraphAgentDetailPanel(
         </TooltipWrapper>
       }
       events={events}
+      initialHistoryCaughtUp={initialHistoryCaughtUp}
       epicId={epicId}
       agentNames={agentNames}
       emptyLabel="No captured activity for this agent yet. The graph records messages between agents and broker notices."

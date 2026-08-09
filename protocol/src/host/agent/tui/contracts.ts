@@ -13,6 +13,8 @@ import {
   recordTuiAgentActivityRequestSchema,
   recordTuiAgentActivityRequestSchemaV11,
   recordTuiAgentActivityResponseSchema,
+  tuiAgentPromptSubmittedRequestSchema,
+  tuiAgentPromptSubmittedResponseSchema,
   tuiAgentTurnEndedRequestSchema,
   tuiAgentTurnEndedResponseSchema,
   validateTuiForkProfileRequestSchema,
@@ -132,4 +134,20 @@ export const agentTuiRecordActivityUpgradeV10ToV11 = defineUpgradePath<
     observedHarnessSessionId: null,
   }),
   upgradeResponse: (response) => response,
+});
+
+/**
+ * Optional (non-floor) capability: the `UserPromptSubmit` hook's combined
+ * activity-edge + roles-digest-pull call (roles-snapshot-delivery pull point
+ * 1). Registered with a `degrade: unsupported` strategy in `registry.ts` so
+ * an old host that lacks it fails only this call and the CLI hook falls back
+ * to plain `recordActivity` - it must never enter the released floor, which
+ * would be handshake-fatal for existing peers. See the schema doc in
+ * `unary-schemas.ts`.
+ */
+export const agentTuiPromptSubmittedV10 = defineRpcContract({
+  method: "agent.tui.promptSubmitted",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: tuiAgentPromptSubmittedRequestSchema,
+  responseSchema: tuiAgentPromptSubmittedResponseSchema,
 });

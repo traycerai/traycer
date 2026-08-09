@@ -81,8 +81,10 @@ describe("CommGraphCloudSubscriptionManager", () => {
     handlers.onAvailability("available");
     handlers.onSnapshot([cloudEvent({})], 10, null);
     expect(manager.isInitialHistoryCaughtUp()).toBe(false);
+    expect(manager.getSnapshot().initialHistoryCaughtUp).toBe(false);
     handlers.onCaughtUp({ ingestVersion: 10, eventId: "event-1" }, 10);
     expect(manager.isInitialHistoryCaughtUp()).toBe(true);
+    expect(manager.getSnapshot().initialHistoryCaughtUp).toBe(true);
     // A changed head/snapshot may replay the retained cursor; it is never a
     // bootstrap replacement and cannot duplicate or clear the first row.
     handlers.onSnapshot(
@@ -202,6 +204,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     const local = {
       events: [{ ...localRow, id: 1, timestamp: 1, hostId: "local" }],
       hosts: [],
+      initialHistoryCaughtUp: false,
       lastArrival: null,
     } satisfies CommGraphSnapshot;
     const cloud = {
@@ -214,6 +217,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
           snapshotBoundary: null,
         },
       ],
+      initialHistoryCaughtUp: true,
       lastArrival: null,
     } satisfies CommGraphSnapshot;
 

@@ -260,7 +260,7 @@ describe("WorktreeBranchPrefixSection", () => {
     if (!(card instanceof HTMLElement)) return;
     // Control row (label + input) is present before the error.
     expect(card.querySelector("input")).toBe(input);
-    expect(card.textContent).toContain("Branch prefix");
+    expect(card.textContent).toContain("Default branch prefix");
 
     typePrefix(input, "bad prefix");
 
@@ -268,7 +268,7 @@ describe("WorktreeBranchPrefixSection", () => {
     expect(card.contains(error)).toBe(true);
     // Error is additive: the control row (input + label) remains inside the same card.
     expect(card.querySelector("input")).toBe(input);
-    expect(card.textContent).toContain("Branch prefix");
+    expect(card.textContent).toContain("Default branch prefix");
     // Error sits as a sibling below the main control row, not replacing it.
     const controlRow = input.closest(".flex.items-center");
     expect(controlRow instanceof HTMLElement).toBe(true);

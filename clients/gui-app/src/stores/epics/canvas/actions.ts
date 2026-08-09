@@ -1010,13 +1010,21 @@ function reorderTabInPane(
   const adjustedIndex = targetIndex > fromIndex ? targetIndex - 1 : targetIndex;
   if (adjustedIndex === fromIndex) {
     const wantsActive = state.activePaneId !== pane.id;
+    const wantsTabActive = pane.activeTabId !== tabId;
     const wantsPromote = pane.previewTabId === tabId;
-    if (!wantsActive && !wantsPromote) return state;
+    if (!wantsActive && !wantsTabActive && !wantsPromote) return state;
     const root =
       state.root === null
         ? null
         : replacePane(state.root, pane.id, (current) =>
-            wantsPromote ? { ...current, previewTabId: null } : current,
+            recordPaneActivation(
+              {
+                ...current,
+                activeTabId: tabId,
+                previewTabId: wantsPromote ? null : current.previewTabId,
+              },
+              tabId,
+            ),
           );
     return { ...state, root, activePaneId: pane.id };
   }

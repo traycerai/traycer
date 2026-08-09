@@ -352,3 +352,49 @@ export const recordTuiAgentActivityRequestSchemaV11 =
 export type RecordTuiAgentActivityRequestV11 = z.infer<
   typeof recordTuiAgentActivityRequestSchemaV11
 >;
+
+// ─── `agent.tui.promptSubmitted@1.0` - prompt-submit activity + roles pull ─
+//
+// New optional unary method (roles-snapshot-delivery pull point 1): the
+// `UserPromptSubmit` hook chain's one call, replacing the start-edge
+// `recordActivity` call for peers that support it. Request shape mirrors the
+// `recordActivity@1.1` prompt-submit payload (epicId, tuiAgentId,
+// harnessSessionId, harnessId, observedHarnessSessionId) - same fields, same
+// resync semantics on `observedHarnessSessionId` - but drops `event` (this
+// method IS the start/prompt-submit edge, never stop/resync).
+//
+// Adding a response field to unary `recordActivity` would be a breaking
+// change (new major + bridges); this new method is the sanctioned
+// evolution instead. Host side: record the activity edge, then run the
+// role-registry digest-cursor check (`lastDeliveredRolesDigest`) - behind
+// renders the snapshot and stamps the new digest; current returns `null`.
+// Degrade story: method absent on an older host, or an older CLI against a
+// newer host, both fall back to plain `recordActivity` - roles then only
+// reachable via the static prompt's `role list` instruction.
+
+export const tuiAgentPromptSubmittedRequestSchema = z.object({
+  epicId: z.string().nullable().default(null),
+  tuiAgentId: z.string().nullable().default(null),
+  harnessSessionId: z.string().nullable().default(null),
+  harnessId: tuiHarnessIdSchema,
+  observedHarnessSessionId: z.string().nullable().default(null),
+});
+export type TuiAgentPromptSubmittedRequest = z.infer<
+  typeof tuiAgentPromptSubmittedRequestSchema
+>;
+
+export const tuiAgentPromptSubmittedResponseSchema = z.object({
+  // Mirrors `recordActivity`'s `accepted` semantics: true when the resolver
+  // recorded the activity edge; false for a benign no-op (record missing,
+  // ownership/harness mismatch).
+  accepted: z.boolean(),
+  // Non-null only when the agent's `lastDeliveredRolesDigest` cursor was
+  // behind the current claims registry at call time: a rendered snapshot
+  // block for the CLI hook to emit as the `UserPromptSubmit`
+  // `additionalContext` envelope. `null` when current (nothing to deliver)
+  // or on a benign no-op.
+  pendingPromptContext: z.string().nullable(),
+});
+export type TuiAgentPromptSubmittedResponse = z.infer<
+  typeof tuiAgentPromptSubmittedResponseSchema
+>;

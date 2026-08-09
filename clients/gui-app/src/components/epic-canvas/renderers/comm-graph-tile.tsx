@@ -81,6 +81,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
           agentIds={projection.visibleAgentIds}
           events={projection.asOfEvents}
           hosts={snapshot.hosts}
+          initialHistoryCaughtUp={snapshot.initialHistoryCaughtUp}
           pulse={projection.pulse}
           view={node.view}
           onViewChange={handleViewChange}

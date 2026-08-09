@@ -1670,6 +1670,97 @@ describe("ChatTurnMinimap mouse interaction", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the active row visible while rail hover advances through an overflowing expanded list", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    onTestFinished(() => scrollIntoView.mockRestore());
+    const messages = Array.from({ length: 8 }, (_, index) =>
+      makeUser(index, `Turn ${index + 1}`),
+    );
+    const { viewport } = renderMinimap({ messages });
+    await flushMinimapFrames(2);
+
+    const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
+    mockRailGeometry(hitStrip, { top: 0, height: 100 });
+    fireEvent.mouseMove(hitStrip, { clientY: 0 });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Expand all messages" }),
+    );
+    scrollIntoView.mockClear();
+    const listScroller = document.querySelector<HTMLElement>(
+      "[data-chat-turn-minimap-list-scroll]",
+    );
+    if (listScroller === null) {
+      throw new Error("Expected expanded minimap list scroller");
+    }
+    vi.spyOn(listScroller, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 300,
+      height: 100,
+      top: 0,
+      left: 0,
+      right: 300,
+      bottom: 100,
+      toJSON: () => ({}),
+    });
+    const lastCard = screen.getByRole("button", {
+      name: "Jump to message: Turn 8",
+    });
+    const firstCard = screen.getByRole("button", {
+      name: "Jump to message: Turn 1",
+    });
+    vi.spyOn(lastCard, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 160,
+      width: 300,
+      height: 40,
+      top: 160,
+      left: 0,
+      right: 300,
+      bottom: 200,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(firstCard, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: -100,
+      width: 300,
+      height: 40,
+      top: -100,
+      left: 0,
+      right: 300,
+      bottom: -60,
+      toJSON: () => ({}),
+    });
+
+    for (const clientY of [30, 60, 100]) {
+      act(() => {
+        dispatchViewportPointer(viewport, "pointermove", {
+          buttons: 0,
+          clientX: 40,
+          clientY,
+        });
+      });
+      await flushMinimapFrames(1);
+    }
+
+    expect(lastCard.getAttribute("data-active")).toBe("true");
+    expect(listScroller.scrollTop).toBe(100);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    act(() => {
+      dispatchViewportPointer(viewport, "pointermove", {
+        buttons: 0,
+        clientX: 40,
+        clientY: 0,
+      });
+    });
+    await flushMinimapFrames(1);
+
+    expect(firstCard.getAttribute("data-active")).toBe("true");
+    expect(listScroller.scrollTop).toBe(0);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("shows expanded user queries for up to three intrinsic lines", async () => {
     const longQuery =
       "Explain how the inactive pane activation contract should preserve a newly opened portalled control while route synchronization catches up";

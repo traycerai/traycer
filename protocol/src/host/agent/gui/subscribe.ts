@@ -22,6 +22,7 @@ import {
   chatSchema,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
+  chatSchemaV15,
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
@@ -1744,8 +1745,14 @@ export const chatSubscribeV14 = defineStreamRpcContract({
 // nothing else it holds, so it reuses the live frame - retro-pin it here if a
 // later minor touches background items again (that is exactly what happened to
 // `1.3` and `1.4`).
+//
+// `chat: chatSchemaV15` (not live `chatSchema`) for the same reason `1.4`
+// uses `chatSchemaV14`: a released line must not follow the persistence
+// schema by reference, or every later field addition to `chatSchema` (e.g.
+// `pinnedUserProviderHandle`, `lastDeliveredRolesDigest`) silently leaks onto
+// this frozen wire shape. Caught by `released-baseline-compat.test.ts`.
 const chatSnapshotSchemaV15 = z.object({
-  chat: chatSchema,
+  chat: chatSchemaV15,
   access: chatAccessSchema,
   queue: chatQueueStateSchemaPreManagedCommand,
   runStatus: chatRunStatusSchema,

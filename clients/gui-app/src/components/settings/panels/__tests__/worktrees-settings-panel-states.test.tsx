@@ -216,34 +216,18 @@ afterEach(() => {
   });
 });
 
-function documentPosition(
-  earlier: HTMLElement,
-  later: HTMLElement,
-): "before" | "after" | "unrelated" {
-  const relation = earlier.compareDocumentPosition(later);
-  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
-  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
-  return "unrelated";
-}
-
 /**
- * Client-wide branch-prefix strip - must render regardless of host state.
- * Section headings ("New worktrees" / "Existing worktrees" / "Applies on every
- * host") were removed in the presentation redesign; the strip itself remains.
+ * The panel is inventory-only: no branch-prefix strip, in any host state.
+ * The global default moved to General settings; a per-repository override
+ * lives in that repo's Environment dialog.
  */
-function assertBranchPrefixStripPresent(): void {
+function assertBranchPrefixStripAbsent(): void {
   expect(screen.queryByText("New worktrees")).toBeNull();
   expect(screen.queryByText("Existing worktrees")).toBeNull();
   expect(screen.queryByText("Applies on every host")).toBeNull();
-
-  const label = screen.getByText("Branch prefix");
-  const scope = screen.getByText("All hosts");
-  const prefixInput = screen.getByRole("textbox", { name: "Branch prefix" });
-  const example = screen.getByText(/New branches start like/);
-
-  expect(documentPosition(label, scope)).toBe("before");
-  expect(documentPosition(label, prefixInput)).toBe("before");
-  expect(documentPosition(label, example)).toBe("before");
+  expect(screen.queryByText("All hosts")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Branch prefix" })).toBeNull();
+  expect(screen.queryByText(/New branches start like/)).toBeNull();
 }
 
 describe("WorktreesSettingsPanel host-scoped states", () => {
@@ -263,8 +247,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       screen.queryByText("Select a host to manage its worktrees."),
     ).toBeNull();
     screen.getByTestId("host-scope-empty");
-    // Branch prefix defaults are client-wide - not gated on host selection.
-    assertBranchPrefixStripPresent();
+    // Inventory-only: no branch-prefix strip regardless of host selection.
+    assertBranchPrefixStripAbsent();
   });
 
   it("shows a reachability check while the host is being probed", () => {
@@ -541,34 +525,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
     screen.getByRole("button", { name: "Refresh worktrees" });
-    // Same branch-prefix strip as the no-host empty state - host-scoped UI
-    // does not own or gate creation defaults.
-    assertBranchPrefixStripPresent();
-    // Prefix strip still precedes the host-scoped inventory toolbar.
-    expect(
-      documentPosition(
-        screen.getByRole("textbox", { name: "Branch prefix" }),
-        screen.getByTestId("worktrees-toolbar-actions"),
-      ),
-    ).toBe("before");
-  });
-
-  it("wires the store's worktreeBranchPrefix into the branch prefix input and live example", () => {
-    useSettingsStore.setState({ worktreeBranchPrefix: "anurag/" });
-    state.hosts = [host({ hostId: "host-a" })];
-    state.activeHostId = null;
-
-    renderPanel();
-
-    assertBranchPrefixStripPresent();
-    expect(
-      screen.getByRole<HTMLInputElement>("textbox", {
-        name: "Branch prefix",
-      }).value,
-    ).toBe("anurag/");
-    // Live example uses the current draft (seeded from the store) + a stable
-    // per-mount suffix - don't hardcode the random slug, only the prefix.
-    const example = screen.getByText(/New branches start like/);
-    expect(example.textContent).toMatch(/anurag\/\S+/);
+    // Same as the no-host empty state - host-scoped UI carries no
+    // branch-prefix strip; that control lives in General settings now.
+    assertBranchPrefixStripAbsent();
   });
 });
