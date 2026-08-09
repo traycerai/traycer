@@ -16,7 +16,7 @@ import {
 
 const RUNNING_COMMAND = {
   id: "cmd-deploy",
-  notifying: true,
+  monitoring: true,
   description: "deploy watcher",
   status: {
     state: "running" as const,

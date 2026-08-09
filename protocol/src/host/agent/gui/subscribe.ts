@@ -377,14 +377,14 @@ export const chatQueuedManagedCommandItemSchema = z.object({
   // The command's human label (the shell's description), shown on the queue
   // chip.
   description: z.string(),
-  // Whether the shell this delivery came from is notifying, so the chip can
+  // Whether the shell this delivery came from is monitoring, so the chip can
   // carry the same watcher glyph its row does.
   //
   // Nullable and defaulted rather than required even though this line is
   // unshipped: the queue is DURABLE, so an item written by an earlier build of
   // this same line must still rehydrate. Absent means "not recorded", which the
   // chip renders generically - it never stands in for a guessed flag.
-  notifying: z.boolean().nullable().default(null),
+  monitoring: z.boolean().nullable().default(null),
   // Whether this digest opens its own turn or lands inside the turn already
   // running. Defaulted `next_turn` so a row written by an earlier build of this
   // line - and every delivery that has no eligible turn to join - rehydrates as
@@ -1796,7 +1796,7 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 // it - see the re-entry note in `host/managed-command/subscribe.ts`.
 //
 // The live serverFrame's queue is the `prompt | managed-command` union: a
-// pending managed-command delivery (a notifying shell's log digest, a shell's
+// pending managed-command delivery (a monitoring shell's log digest, a shell's
 // completion) is a first-class, content-free queue item the user can see,
 // reorder, and cancel - and, on a harness that confirms it consumed a mid-turn
 // steer, one that can be injected into the running turn rather than waiting for

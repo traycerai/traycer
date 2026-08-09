@@ -348,7 +348,7 @@ export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
 
 /**
  * What a `managed-command` owner row needs beyond the generic owner fields: the
- * human description the command was created with, and whether it is notifying -
+ * human description the command was created with, and whether it is monitoring -
  * the same state its row in the Shells list renders, so one process tree is not
  * labelled two different ways. `commandId` repeats `owner.ownerId` - the same
  * value by construction - so a client joining this row to the managed-command
@@ -356,7 +356,7 @@ export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
  */
 export const managedCommandOwnerSchema = z.object({
   commandId: z.string(),
-  notifying: z.boolean(),
+  monitoring: z.boolean(),
   description: z.string(),
 });
 export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;

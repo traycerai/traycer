@@ -617,7 +617,7 @@ export const autonomousResumeTriggerSchema = z.object({
   // stays `"monitor"` for every shell, and the id the divider needs to open the
   // output window on click rides here.
   //
-  // `notifying` is defaulted rather than required because this key is READ BACK
+  // `monitoring` is defaulted rather than required because this key is READ BACK
   // from chats written before it existed (and from ones written while it was
   // still `kind`, whose value strips on parse): a trigger that cannot say
   // whether its shell was watching renders as a plain shell rather than failing
@@ -625,7 +625,7 @@ export const autonomousResumeTriggerSchema = z.object({
   managedCommand: z
     .object({
       commandId: z.string(),
-      notifying: z.boolean().default(false),
+      monitoring: z.boolean().default(false),
     })
     .nullable()
     .default(null),

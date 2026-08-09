@@ -85,7 +85,7 @@ const SEED_TILE: EpicNodeRef = {
 
 const MONITOR: ManagedCommand = {
   id: "cmd-1",
-  notifying: true,
+  monitoring: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: CHAT_ID,

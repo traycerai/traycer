@@ -4,7 +4,7 @@ import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epi
 
 /**
  * The chat-side doors into the managed-command UI: the queue chip and the
- * resume divider. Both name ONE entity - a shell - and carry `notifying` as the
+ * resume divider. Both name ONE entity - a shell - and carry `monitoring` as the
  * state that decides its glyph, never as a second sort of thing.
  *
  * On BOTH shapes the name `kind` is taken by a discriminant (the queue item's
@@ -13,17 +13,17 @@ import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epi
  */
 
 describe("managed-command queue chip", () => {
-  it("carries whether the shell is notifying", () => {
+  it("carries whether the shell is monitoring", () => {
     const parsed = chatQueuedManagedCommandItemSchema.parse({
       kind: "managed-command",
       queueItemId: "q-1",
       commandId: "cmd-1",
-      notifying: true,
+      monitoring: true,
       description: "db migration",
       createdAt: 1,
       updatedAt: 1,
     });
-    expect(parsed.notifying).toBe(true);
+    expect(parsed.monitoring).toBe(true);
   });
 
   it("reads an item persisted before the field existed as unrecorded", () => {
@@ -38,7 +38,7 @@ describe("managed-command queue chip", () => {
       createdAt: 1,
       updatedAt: 1,
     });
-    expect(parsed.notifying).toBeNull();
+    expect(parsed.monitoring).toBeNull();
   });
 });
 
@@ -51,16 +51,16 @@ describe("resume divider trigger", () => {
       title: "db migration",
       status: "completed",
       summary: "exited with code 0",
-      managedCommand: { commandId: "cmd-1", notifying: true },
+      managedCommand: { commandId: "cmd-1", monitoring: true },
     });
     // `commandId` is what a divider click opens the output window on.
     expect(parsed.managedCommand).toEqual({
       commandId: "cmd-1",
-      notifying: true,
+      monitoring: true,
     });
   });
 
-  it("reads a divider persisted before `notifying` existed as not watching", () => {
+  it("reads a divider persisted before `monitoring` existed as not watching", () => {
     // Chats written while this key still carried a monitor/shell `kind` lose
     // that value on parse. The trigger must survive it: a shell whose watching
     // state is unrecorded renders as a plain one rather than failing the chat.
@@ -73,7 +73,7 @@ describe("resume divider trigger", () => {
     });
     expect(parsed.managedCommand).toEqual({
       commandId: "cmd-1",
-      notifying: false,
+      monitoring: false,
     });
   });
 

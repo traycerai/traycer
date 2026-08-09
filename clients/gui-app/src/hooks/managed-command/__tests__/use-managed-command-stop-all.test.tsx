@@ -56,7 +56,7 @@ let queryClient: QueryClient;
 function stoppedCommand(commandId: string): ManagedCommand {
   return {
     id: commandId,
-    notifying: true,
+    monitoring: true,
     description: "deploy watcher",
     status: { state: "stopped", stoppedAtMs: 5 },
     chatId: "chat-1",

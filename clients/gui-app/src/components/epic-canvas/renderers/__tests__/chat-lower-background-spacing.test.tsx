@@ -89,7 +89,7 @@ const RESTORE_CONTEXT: ChatRestoreContextValue = {
 
 const RUNNING_MONITOR: ManagedCommand = {
   id: "cmd-monitor",
-  notifying: true,
+  monitoring: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: CHAT_ID,

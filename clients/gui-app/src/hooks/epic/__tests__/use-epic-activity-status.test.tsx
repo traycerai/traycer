@@ -94,7 +94,7 @@ function registerChatSession(
 function runningShell(chatId: string): ManagedCommand {
   return {
     id: `cmd-${chatId}`,
-    notifying: false,
+    monitoring: false,
     description: "dev server",
     status: { state: "running", pid: 4242, startedAtMs: 1 },
     chatId,

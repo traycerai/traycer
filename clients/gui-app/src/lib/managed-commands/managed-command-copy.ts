@@ -5,7 +5,7 @@ import type {
 
 /**
  * Copy for the Shells surface (root `CONTEXT.md`). There is ONE entity here -
- * a shell - and "monitor" is prose for a shell with notifications on, never a
+ * a shell - and "monitor" is prose for a shell with monitoring on, never a
  * second noun the UI names. "Commands" stays banned as a UI term, because it
  * collides with the command palette and with terminal commands.
  */
@@ -53,7 +53,7 @@ export function managedCommandStatusLabel(
  * Whether this shell's ending is news - the one thing that turns the chat's
  * badge from quiet to attention.
  *
- * A failure and nothing else, whether or not the shell was notifying. A stop is
+ * A failure and nothing else, whether or not the shell was monitoring. A stop is
  * something a human or an agent asked for, so it is never news no matter how it
  * reads afterwards; a clean exit is a shell doing what it was made to do, and a
  * watcher that means to keep running says so through its own output rather than

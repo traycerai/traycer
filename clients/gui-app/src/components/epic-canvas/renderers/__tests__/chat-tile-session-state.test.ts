@@ -528,7 +528,7 @@ describe("chatActivityIndicator", () => {
   function shell(status: ManagedCommand["status"]): ManagedCommand {
     return {
       id: "cmd-1",
-      notifying: false,
+      monitoring: false,
       description: "dev server",
       status,
       chatId: "chat-1",

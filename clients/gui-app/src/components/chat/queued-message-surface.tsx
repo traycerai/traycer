@@ -67,7 +67,7 @@ import {
   MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   MANAGED_COMMAND_QUEUED_CHIP_TOOLTIP,
 } from "@/lib/managed-commands/managed-command-copy";
-import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
@@ -602,7 +602,7 @@ function QueuedMessageRowContent(props: {
         <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
           <ManagedCommandBadge
             commandId={item.commandId}
-            notifying={item.notifying}
+            monitoring={item.monitoring}
           />
         </div>
       ) : null}
@@ -664,13 +664,13 @@ function QueuedMessageRowContent(props: {
  * Also a door (`UI.md` §5): clicking it opens or focuses that shell's output
  * window, so a human who wants to see what the agent is about to read does not
  * have to find the row in the sidebar first. The label names the shell either
- * way; only the glyph waits on the notify flag, which a delivery queued by an
+ * way; only the glyph waits on the monitor flag, which a delivery queued by an
  * older build does not carry - it gets the neutral terminal glyph rather than a
  * guessed one.
  */
 export function ManagedCommandBadge(props: {
   readonly commandId: string;
-  readonly notifying: boolean | null;
+  readonly monitoring: boolean | null;
 }) {
   const openOutput = useManagedCommandDoor();
 
@@ -692,10 +692,10 @@ export function ManagedCommandBadge(props: {
       >
         {/* An unrecorded flag renders NO glyph: the label already names the
             shell, and the terminal glyph is reserved for the Terminals
-            surface (see managed-command-notify-icon.tsx). */}
-        {props.notifying === null ? null : (
-          <ManagedCommandNotifyIcon
-            notifying={props.notifying}
+            surface (see managed-command-monitor-icon.tsx). */}
+        {props.monitoring === null ? null : (
+          <ManagedCommandMonitorIcon
+            monitoring={props.monitoring}
             className={undefined}
           />
         )}

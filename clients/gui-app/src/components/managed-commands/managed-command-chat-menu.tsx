@@ -26,7 +26,7 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
-import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
@@ -342,8 +342,8 @@ function ManagedCommandMenuRow(props: {
         }}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <ManagedCommandNotifyIcon
-          notifying={command.notifying}
+        <ManagedCommandMonitorIcon
+          monitoring={command.monitoring}
           className={undefined}
         />
         <ManagedCommandStatusDot

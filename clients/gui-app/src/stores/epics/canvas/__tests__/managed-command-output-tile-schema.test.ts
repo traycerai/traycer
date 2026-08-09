@@ -76,7 +76,7 @@ describe("managed-command output tile schema", () => {
       instanceId: "tab-1",
       type: "managed-command-output",
       hostId: HOST,
-      notifying: true,
+      monitoring: true,
       description: "deploy watcher",
       status: { state: "running", pid: 4410, startedAtMs: 1 },
       name: "Shell · deploy watcher",

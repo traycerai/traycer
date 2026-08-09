@@ -46,7 +46,7 @@ import {
 } from "@/components/ui/input-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { MANAGED_COMMAND_NOUN } from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
@@ -1685,8 +1685,8 @@ function OwnerProviderIcon(props: {
 }) {
   if (props.managedCommand !== null) {
     return (
-      <ManagedCommandNotifyIcon
-        notifying={props.managedCommand.notifying}
+      <ManagedCommandMonitorIcon
+        monitoring={props.managedCommand.monitoring}
         className={undefined}
       />
     );

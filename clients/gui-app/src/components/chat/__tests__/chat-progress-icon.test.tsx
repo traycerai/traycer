@@ -29,7 +29,7 @@ const MONITOR_ITEM = {
 // A shell outlives the turn that started it, so the chat around it reads idle.
 const RUNNING_SHELL: ManagedCommand = {
   id: "cmd-1",
-  notifying: false,
+  monitoring: false,
   description: "dev server",
   status: { state: "running", pid: 4242, startedAtMs: 1 },
   chatId: CHAT_ID,

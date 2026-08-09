@@ -143,7 +143,7 @@ function connectedWire(): OutputWire {
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: COMMAND_ID,
-    notifying: true,
+    monitoring: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: "chat-owner",

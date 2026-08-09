@@ -24,7 +24,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ManagedCommandChatBacklink } from "@/components/managed-commands/managed-command-chat-backlink";
 import { ManagedCommandLifecycleActions } from "@/components/managed-commands/managed-command-lifecycle-actions";
-import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStatusDot } from "@/components/managed-commands/managed-command-status-dot";
 import { ManagedCommandConnectionNotice } from "@/components/managed-commands/managed-command-connection-notice";
 import { ManagedCommandDeletedBanner } from "@/components/epic-canvas/renderers/dead-tile-banner";
@@ -411,8 +411,8 @@ function ManagedCommandOutputTileBody(props: {
       <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5">
         {command === null ? null : (
           <>
-            <ManagedCommandNotifyIcon
-              notifying={command.notifying}
+            <ManagedCommandMonitorIcon
+              monitoring={command.monitoring}
               className={undefined}
             />
             <ManagedCommandStatusDot

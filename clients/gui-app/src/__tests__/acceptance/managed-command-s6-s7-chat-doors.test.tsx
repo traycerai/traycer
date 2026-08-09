@@ -107,7 +107,7 @@ function chatSession(chatId: string): ManagedCommandChatSessionStub {
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: "cmd-default",
-    notifying: true,
+    monitoring: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: CHAT_A,
@@ -244,7 +244,7 @@ describe("S6 · running work in the chat's Background panel", () => {
         makeCommand({ id: "cmd-mine-running", description: "deploy watcher" }),
         makeCommand({
           id: "cmd-mine-done",
-          notifying: false,
+          monitoring: false,
           description: "db migration",
           status: {
             state: "exited",
@@ -329,7 +329,7 @@ describe("S6 · running work in the chat's Background panel", () => {
 describe("S7 · doors", () => {
   it("S7a: the queued-delivery chip names the shell and opens the output window", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-chip" notifying={false} />,
+      <ManagedCommandBadge commandId="cmd-chip" monitoring={false} />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
@@ -338,17 +338,17 @@ describe("S7 · doors", () => {
     expect(findOpenArtifactInTab(TAB_ID, "cmd-chip")).not.toBeNull();
   });
 
-  it("S7b: a chip from a build that recorded no notify flag still names the shell", () => {
+  it("S7b: a chip from a build that recorded no monitor flag still names the shell", () => {
     renderInChatContext(
-      <ManagedCommandBadge commandId="cmd-old" notifying={null} />,
+      <ManagedCommandBadge commandId="cmd-old" monitoring={null} />,
     );
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toContain("Shell output");
     // Only the glyph waits on the flag - it is not guessed either way.
-    expect(badge.querySelector("[data-notify-icon]")).toBeNull();
+    expect(badge.querySelector("[data-monitor-icon]")).toBeNull();
   });
 
-  it("S7c: the divider says Shell whether or not the shell was notifying", () => {
+  it("S7c: the divider says Shell whether or not the shell was monitoring", () => {
     renderInChatContext(
       <AutonomousResumeSegment
         triggers={[
@@ -356,13 +356,13 @@ describe("S7 · doors", () => {
             blockId: "blk-quiet",
             title: "db migration",
             status: "completed",
-            managedCommand: { commandId: "cmd-quiet", notifying: false },
+            managedCommand: { commandId: "cmd-quiet", monitoring: false },
           }),
           makeTrigger({
             blockId: "blk-watcher",
             title: "deploy watcher",
             status: "failed",
-            managedCommand: { commandId: "cmd-watcher", notifying: true },
+            managedCommand: { commandId: "cmd-watcher", monitoring: true },
           }),
         ]}
       />,
@@ -378,7 +378,7 @@ describe("S7 · doors", () => {
         triggers={[
           makeTrigger({
             blockId: "blk-door",
-            managedCommand: { commandId: "cmd-divider", notifying: true },
+            managedCommand: { commandId: "cmd-divider", monitoring: true },
           }),
         ]}
       />,
@@ -411,7 +411,7 @@ describe("S7 · doors", () => {
           makeTrigger({
             blockId: "blk-live",
             live: true,
-            managedCommand: { commandId: "cmd-live", notifying: true },
+            managedCommand: { commandId: "cmd-live", monitoring: true },
           }),
         ]}
       />,
@@ -425,7 +425,7 @@ describe("S7 · doors", () => {
 
   it("S7g: one window per shell — every door and a second press converge on a single pane", () => {
     renderBackgroundPanelInChat(
-      <ManagedCommandBadge commandId="cmd-one" notifying />,
+      <ManagedCommandBadge commandId="cmd-one" monitoring />,
     );
     emitCommands(
       [makeCommand({ id: "cmd-one", description: "solo watcher" })],

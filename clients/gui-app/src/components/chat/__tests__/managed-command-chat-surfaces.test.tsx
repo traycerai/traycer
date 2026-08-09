@@ -97,7 +97,7 @@ const HARNESS_ITEM: BackgroundItem = {
 function command(over: Partial<ManagedCommand>): ManagedCommand {
   return {
     id: "cmd-1",
-    notifying: true,
+    monitoring: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: 10 },
     chatId: CHAT_ID,
@@ -205,9 +205,9 @@ afterEach(() => {
 });
 
 describe("queued-delivery chip", () => {
-  it("names the shell whose output is waiting, notifying or not", () => {
+  it("names the shell whose output is waiting, monitoring or not", () => {
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" notifying={false} />,
+      <ManagedCommandBadge commandId="cmd-1" monitoring={false} />,
     );
 
     expect(screen.getByTestId("queued-managed-command-badge").textContent).toBe(
@@ -215,29 +215,29 @@ describe("queued-delivery chip", () => {
     );
   });
 
-  it("still names the shell when the item predates the notify flag", () => {
+  it("still names the shell when the item predates the monitor flag", () => {
     // The entity is known even when the flag is not, so only the glyph falls
     // back - the label never says "command".
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" notifying={null} />,
+      <ManagedCommandBadge commandId="cmd-1" monitoring={null} />,
     );
 
     const badge = screen.getByTestId("queued-managed-command-badge");
     expect(badge.textContent).toBe("Shell output");
-    expect(badge.querySelector("[data-notify-icon]")).toBeNull();
+    expect(badge.querySelector("[data-monitor-icon]")).toBeNull();
   });
 
-  it("shows the notify glyph rather than a terminal one", () => {
+  it("shows the monitor glyph rather than a terminal one", () => {
     renderInChatTile(
-      <ManagedCommandBadge commandId="cmd-1" notifying={false} />,
+      <ManagedCommandBadge commandId="cmd-1" monitoring={false} />,
     );
 
     const badge = screen.getByTestId("queued-managed-command-badge");
-    expect(badge.querySelector("[data-notify-icon='off']")).not.toBeNull();
+    expect(badge.querySelector("[data-monitor-icon='off']")).not.toBeNull();
   });
 
   it("describes what is waiting in shell words, not 'background command'", () => {
-    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" notifying />);
+    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" monitoring />);
 
     fireEvent.focus(screen.getByTestId("queued-managed-command-badge"));
 
@@ -247,7 +247,7 @@ describe("queued-delivery chip", () => {
   });
 
   it("is a door into the shell's output window", () => {
-    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" notifying />);
+    renderInChatTile(<ManagedCommandBadge commandId="cmd-1" monitoring />);
 
     fireEvent.click(screen.getByTestId("queued-managed-command-badge"));
 
@@ -263,7 +263,7 @@ describe("resume divider", () => {
           trigger({
             blockId: "block-live-shell",
             live: true,
-            managedCommand: { commandId: "cmd-2", notifying: true },
+            managedCommand: { commandId: "cmd-2", monitoring: true },
           }),
         ]}
       />,
@@ -296,7 +296,7 @@ describe("resume divider", () => {
         triggers={[
           trigger({
             status: "completed",
-            managedCommand: { commandId: "cmd-1", notifying: false },
+            managedCommand: { commandId: "cmd-1", monitoring: false },
           }),
         ]}
       />,
@@ -326,7 +326,7 @@ describe("resume divider", () => {
       <AutonomousResumeSegment
         triggers={[
           trigger({
-            managedCommand: { commandId: "cmd-1", notifying: true },
+            managedCommand: { commandId: "cmd-1", monitoring: true },
           }),
         ]}
       />,
@@ -457,7 +457,7 @@ describe("running commands in the Background panel", () => {
         [
           command({
             id: "mine-running",
-            notifying: false,
+            monitoring: false,
             status: {
               state: "running",
               pid: 4410,
@@ -475,7 +475,7 @@ describe("running commands in the Background panel", () => {
     );
     // The glyph is what keeps a supervised shell apart from the harness's own
     // background kinds; the pill names it in the panel's existing grammar.
-    expect(row.querySelector("[data-notify-icon='off']")).not.toBeNull();
+    expect(row.querySelector("[data-monitor-icon='off']")).not.toBeNull();
     expect(row.textContent).toContain("Shell");
     // Same clock format the harness rows use, so two rows side by side read
     // as one list rather than two conventions.
@@ -517,7 +517,7 @@ describe("running commands in the Background panel", () => {
         [
           command({ id: "m1" }),
           command({ id: "m2" }),
-          command({ id: "s1", notifying: false }),
+          command({ id: "s1", monitoring: false }),
         ],
         CHAT_ID,
       );
@@ -545,7 +545,7 @@ describe("running commands in the Background panel", () => {
     const panel = renderPanel([HARNESS_ITEM]);
     act(() => {
       setCommands(
-        [command({ id: "m1" }), command({ id: "m2", notifying: false })],
+        [command({ id: "m1" }), command({ id: "m2", monitoring: false })],
         CHAT_ID,
       );
     });
@@ -711,7 +711,7 @@ describe("the chat's Shells menu", () => {
       setCommands(
         [
           command({ id: "r1" }),
-          command({ id: "r2", notifying: false }),
+          command({ id: "r2", monitoring: false }),
           command({
             id: "done",
             status: { state: "stopped", stoppedAtMs: 30 },
@@ -731,7 +731,7 @@ describe("the chat's Shells menu", () => {
           command({ id: "r1", status: { state: "stopped", stoppedAtMs: 31 } }),
           command({
             id: "r2",
-            notifying: false,
+            monitoring: false,
             status: { state: "stopped", stoppedAtMs: 31 },
           }),
           command({
@@ -751,14 +751,14 @@ describe("the chat's Shells menu", () => {
     ).toBeNull();
   });
 
-  it("lights attention for a failure only - never a clean exit, notifying or not", () => {
+  it("lights attention for a failure only - never a clean exit, monitoring or not", () => {
     renderMenu();
     act(() => {
       setCommands(
         [
           // Failed: its ending is not the one it promised.
-          exited({ id: "shell-failed", notifying: false }),
-          // A notifying shell that exited cleanly stopped watching, which its
+          exited({ id: "shell-failed", monitoring: false }),
+          // A monitoring shell that exited cleanly stopped watching, which its
           // own final digest already says. The badge is for failures.
           exited({
             id: "watcher-clean-exit",
@@ -777,7 +777,7 @@ describe("the chat's Shells menu", () => {
           // A clean run ended the way it said it would.
           exited({
             id: "shell-clean",
-            notifying: false,
+            monitoring: false,
             status: {
               state: "exited",
               exitCode: 0,
@@ -799,7 +799,7 @@ describe("the chat's Shells menu", () => {
     renderMenu();
     act(() => {
       setCommands(
-        [command({ id: "live" }), exited({ id: "failed", notifying: false })],
+        [command({ id: "live" }), exited({ id: "failed", monitoring: false })],
         CHAT_ID,
       );
     });
@@ -843,9 +843,9 @@ describe("the chat's Shells menu", () => {
       </DndContext>,
     );
     act(() => {
-      setCommands([exited({ id: "a-failed", notifying: false })], CHAT_ID);
+      setCommands([exited({ id: "a-failed", monitoring: false })], CHAT_ID);
       setCommands(
-        [exited({ id: "b-failed", notifying: false, chatId: "chat-2" })],
+        [exited({ id: "b-failed", monitoring: false, chatId: "chat-2" })],
         "chat-2",
       );
     });
@@ -869,7 +869,7 @@ describe("the chat's Shells menu", () => {
   it("treats an ending that arrives while the menu is open as seen", () => {
     renderMenu();
     act(() => {
-      setCommands([command({ id: "flaky", notifying: false })], CHAT_ID);
+      setCommands([command({ id: "flaky", monitoring: false })], CHAT_ID);
     });
     openMenu();
 
@@ -880,7 +880,7 @@ describe("the chat's Shells menu", () => {
         [
           exited({
             id: "flaky",
-            notifying: false,
+            monitoring: false,
             status: {
               state: "exited",
               exitCode: 2,
@@ -908,7 +908,7 @@ describe("the chat's Shells menu", () => {
   it("re-arms when an acknowledged command fails again after the menu closes", () => {
     renderMenu();
     act(() => {
-      setCommands([exited({ id: "flaky", notifying: false })], CHAT_ID);
+      setCommands([exited({ id: "flaky", monitoring: false })], CHAT_ID);
     });
     openMenu();
     expect(
@@ -922,7 +922,7 @@ describe("the chat's Shells menu", () => {
         [
           exited({
             id: "flaky",
-            notifying: false,
+            monitoring: false,
             status: {
               state: "exited",
               exitCode: 2,
@@ -960,27 +960,27 @@ describe("the chat's Shells menu", () => {
     ).toBe("No shells left");
   });
 
-  it("swaps a live row's glyph when its notify flag is turned off", () => {
+  it("swaps a live row's glyph when its monitor flag is turned off", () => {
     renderMenu();
     act(() => {
-      setCommands([command({ id: "watcher", notifying: true })], CHAT_ID);
+      setCommands([command({ id: "watcher", monitoring: true })], CHAT_ID);
     });
     openMenu();
 
     const row = () => screen.getByTestId("managed-command-menu-row-watcher");
-    expect(row().querySelector("[data-notify-icon='on']")).not.toBeNull();
+    expect(row().querySelector("[data-monitor-icon='on']")).not.toBeNull();
 
     // Muting is applied live by the host - no restart, same record - so the
     // row stays where it is and only the glyph reports the change.
     act(() => {
       setCommands(
-        [command({ id: "watcher", notifying: false, updatedAtMs: 40 })],
+        [command({ id: "watcher", monitoring: false, updatedAtMs: 40 })],
         CHAT_ID,
       );
     });
 
-    expect(row().querySelector("[data-notify-icon='on']")).toBeNull();
-    expect(row().querySelector("[data-notify-icon='off']")).not.toBeNull();
+    expect(row().querySelector("[data-monitor-icon='on']")).toBeNull();
+    expect(row().querySelector("[data-monitor-icon='off']")).not.toBeNull();
     // The noun never moved with the flag: it is a shell either way.
     expect(row().textContent).toContain("Shell · deploy watcher");
   });
@@ -1047,7 +1047,7 @@ describe("the chat's Shells menu", () => {
     renderMenu();
     act(() => {
       setCommands(
-        [command({ id: "live" }), exited({ id: "over", notifying: false })],
+        [command({ id: "live" }), exited({ id: "over", monitoring: false })],
         CHAT_ID,
       );
     });

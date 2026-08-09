@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { ManagedCommandNotifyIcon } from "@/components/managed-commands/managed-command-notify-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
 import {
   useManagedCommandStopAll,
@@ -430,8 +430,8 @@ function ManagedCommandRow(props: {
             }}
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
-            <ManagedCommandNotifyIcon
-              notifying={command.notifying}
+            <ManagedCommandMonitorIcon
+              monitoring={command.monitoring}
               className="size-3.5 text-primary/80"
             />
             <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">

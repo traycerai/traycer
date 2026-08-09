@@ -4416,7 +4416,7 @@ export const epicSchemaSurfaceBaseline = {
                                               commandId: {
                                                 type: "string",
                                               },
-                                              notifying: {
+                                              monitoring: {
                                                 default: false,
                                                 type: "boolean",
                                               },
@@ -11379,14 +11379,14 @@ export const epicSchemaSurfaceBaseline = {
                                               commandId: {
                                                 type: "string",
                                               },
-                                              notifying: {
+                                              monitoring: {
                                                 default: false,
                                                 type: "boolean",
                                               },
                                             },
                                             required: [
                                               "commandId",
-                                              "notifying",
+                                              "monitoring",
                                             ],
                                             additionalProperties: false,
                                           },

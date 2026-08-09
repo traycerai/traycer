@@ -2557,9 +2557,9 @@ describe("ResourceMonitorPopover", () => {
   });
 
   // A managed command reads as the shell it is (CONTEXT.md), never as the
-  // umbrella term, and the notify flag only ever moves the glyph.
+  // umbrella term, and the monitor flag only ever moves the glyph.
   function managedCommandOwner(
-    notifying: boolean,
+    monitoring: boolean,
     description: string,
   ): OwnerResourceSnapshotWireV14 {
     return owner({
@@ -2570,11 +2570,11 @@ describe("ResourceMonitorPopover", () => {
         ownerId: "cmd-1",
       },
       activeProcessName: "node",
-      managedCommand: { commandId: "cmd-1", notifying, description },
+      managedCommand: { commandId: "cmd-1", monitoring, description },
     });
   }
 
-  it("names a notifying owner row Shell, by its description", () => {
+  it("names a monitoring owner row Shell, by its description", () => {
     const stub = installStubFactory();
     renderPopover();
 

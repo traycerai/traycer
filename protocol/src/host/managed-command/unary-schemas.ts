@@ -3,7 +3,7 @@
  * subsystem whose agent half is the `traycer_*_shell` tool set. A managed
  * command is a supervised shell command owned by the host. There is ONE entity
  * and no kinds: a shell either notifies its owning agent as it prints
- * (`notifying`) or only when it dies, and that flag is live-tunable, so it is
+ * (`monitoring`) or only when it dies, and that flag is live-tunable, so it is
  * state to render rather than a second sort of thing.
  *
  * These schemas are shared by the unary lifecycle contracts in `./contracts.ts`
@@ -52,14 +52,14 @@ export type ManagedCommandStatus = z.infer<typeof managedCommandStatusSchema>;
  * than off the filesystem, so carrying the spec would only widen what a viewer
  * learns about the host's disk.
  *
- * `notifying` is the flag, never its tuning: the debounce/max-wait/throttle
- * timings that pace a notifying shell's digests are the agent's business, and a
+ * `monitoring` is the flag, never its tuning: the debounce/max-wait/throttle
+ * timings that pace a monitoring shell's digests are the agent's business, and a
  * viewer renders what the shell IS, not the policy behind it.
  */
 export const managedCommandSchema = z.object({
   id: z.string(),
   /** Output is delivered to the owning agent as it prints, not only at death. */
-  notifying: z.boolean(),
+  monitoring: z.boolean(),
   /** The command's human label, shown as the row title. */
   description: z.string(),
   status: managedCommandStatusSchema,

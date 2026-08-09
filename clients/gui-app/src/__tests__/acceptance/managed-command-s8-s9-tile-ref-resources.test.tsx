@@ -118,7 +118,7 @@ let epicHandle: OpenEpicStoreHandle | null = null;
 function makeCommand(over: Partial<ManagedCommand>): ManagedCommand {
   return managedCommandSchema.parse({
     id: "cmd-res",
-    notifying: true,
+    monitoring: true,
     description: "deploy watcher",
     status: { state: "running", pid: 4410, startedAtMs: T0 },
     chatId: CHAT_ID,
@@ -170,7 +170,7 @@ function managedCommandOwnerRow(commandId: string): Record<string, unknown> {
     harnessId: null,
     managedCommand: {
       commandId,
-      notifying: true,
+      monitoring: true,
       description: "deploy watcher",
     },
   };
@@ -378,7 +378,7 @@ describe("S8 · tile-ref minimalism", () => {
       type: TILE_KIND_MANAGED_COMMAND_OUTPUT,
       hostId: HOST_ID,
       // The creep §9a rules out — none of it may survive a round-trip.
-      notifying: true,
+      monitoring: true,
       description: "deploy watcher",
       status: { state: "running", pid: 4410 },
       name: "Shell · deploy watcher",

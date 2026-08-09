@@ -327,7 +327,7 @@ describe("ResourcesStreamClient", () => {
           owner: { ...OWNER.owner, kind: "managed-command", ownerId: "cmd-1" },
           managedCommand: {
             commandId: "cmd-1",
-            notifying: true,
+            monitoring: true,
             description: "deploy watcher",
           },
         },
@@ -341,7 +341,7 @@ describe("ResourcesStreamClient", () => {
     expect(snapshots[0].owners[0].owner.kind).toBe("managed-command");
     expect(snapshots[0].owners[0].managedCommand).toEqual({
       commandId: "cmd-1",
-      notifying: true,
+      monitoring: true,
       description: "deploy watcher",
     });
     client.close();

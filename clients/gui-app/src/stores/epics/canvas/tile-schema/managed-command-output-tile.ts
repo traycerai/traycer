@@ -4,7 +4,7 @@
  * The persisted tile is a pointer: the command id (as the tile's content id,
  * which is what makes "open again focuses the existing window" fall out of the
  * canvas's own dedup) plus the host that owns it. Nothing about the shell
- * itself is written down - description, status and the notify flag are live
+ * itself is written down - description, status and the monitor flag are live
  * state carried by the owning chat's stream, and a window rehydrated days later
  * has to read them fresh rather than replay a snapshot from disk.
  */

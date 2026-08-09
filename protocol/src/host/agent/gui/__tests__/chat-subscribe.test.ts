@@ -1615,7 +1615,7 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
 describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
   const shell = {
     id: "command-1",
-    notifying: true,
+    monitoring: true,
     description: "deploy watcher",
     status: {
       state: "running" as const,

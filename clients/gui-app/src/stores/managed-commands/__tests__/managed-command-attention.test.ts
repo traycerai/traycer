@@ -13,15 +13,15 @@ import {
  * The chat badge's whole rule, and the acknowledgement that quiets it.
  *
  * Unifying monitors and shells collapsed two rules into one: a failure is the
- * only ending worth a badge, and `notifying` has NO say in it. The old model
+ * only ending worth a badge, and `monitoring` has NO say in it. The old model
  * badged any exit from a monitor - including a clean one - which is exactly
- * what these cases pin shut, since `notifying` is now live-mutable and a rule
+ * what these cases pin shut, since `monitoring` is now live-mutable and a rule
  * that read it would make the badge depend on when the flag was last flipped.
  */
 
 const BASE: ManagedCommand = {
   id: "cmd-1",
-  notifying: true,
+  monitoring: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
@@ -61,12 +61,12 @@ describe("managedCommandNeedsAttention", () => {
   it("badges a non-zero exit", () => {
     expect(
       managedCommandNeedsAttention(
-        withStatus(FAILED_EXIT, { notifying: true }),
+        withStatus(FAILED_EXIT, { monitoring: true }),
       ),
     ).toBe(true);
     expect(
       managedCommandNeedsAttention(
-        withStatus(FAILED_EXIT, { notifying: false }),
+        withStatus(FAILED_EXIT, { monitoring: false }),
       ),
     ).toBe(true);
   });
@@ -87,17 +87,19 @@ describe("managedCommandNeedsAttention", () => {
     );
   });
 
-  it("never badges a clean exit, whether or not the shell was notifying", () => {
-    // The rule that this replaces badged ANY exit from a notifying shell, on
+  it("never badges a clean exit, whether or not the shell was monitoring", () => {
+    // The rule that this replaces badged ANY exit from a monitoring shell, on
     // the theory that a watcher which stopped watching is news. It is not: the
     // shell's own final digest says so, and with a live-mutable flag the badge
     // would otherwise depend on when it was last flipped.
     expect(
-      managedCommandNeedsAttention(withStatus(CLEAN_EXIT, { notifying: true })),
+      managedCommandNeedsAttention(
+        withStatus(CLEAN_EXIT, { monitoring: true }),
+      ),
     ).toBe(false);
     expect(
       managedCommandNeedsAttention(
-        withStatus(CLEAN_EXIT, { notifying: false }),
+        withStatus(CLEAN_EXIT, { monitoring: false }),
       ),
     ).toBe(false);
   });
@@ -111,7 +113,7 @@ describe("managedCommandNeedsAttention", () => {
     for (const status of cases) {
       expect(managedCommandNeedsAttention(withStatus(status, {}))).toBe(false);
       expect(
-        managedCommandNeedsAttention(withStatus(status, { notifying: false })),
+        managedCommandNeedsAttention(withStatus(status, { monitoring: false })),
       ).toBe(false);
     }
   });
@@ -128,7 +130,7 @@ describe("the attention store", () => {
   const failed = withStatus(FAILED_EXIT, { id: "failed", updatedAtMs: 20 });
   const cleanWatcher = withStatus(CLEAN_EXIT, {
     id: "clean-watcher",
-    notifying: true,
+    monitoring: true,
     updatedAtMs: 20,
   });
 
@@ -183,7 +185,7 @@ describe("the attention store", () => {
     useManagedCommandAttentionStore.getState().acknowledge([failed]);
     const mutedAfterFailure: ManagedCommand = {
       ...failed,
-      notifying: false,
+      monitoring: false,
       updatedAtMs: 99,
     };
 
