@@ -419,7 +419,15 @@ export type ProviderSkillsCapabilities = z.infer<
  * - `connect` — write a credential (plain API key, or the prompted fields an
  *   advertised method asks for)
  * - `oauth` — run an advertised OAuth method (authorize → callback)
- * - `disconnect` — remove a stored credential
+ * - `disconnect` — stop using this provider. Not "delete the API key": for a
+ *   config-declared custom provider there may be no stored credential at all,
+ *   and the host disables the provider in its config instead. One verb because
+ *   it is one user intention; which mechanism serves it is the host's to know.
+ * - `createCustom` / `updateCustom` — declare or edit an OpenAI-compatible
+ *   provider block (name, base URL, model ids) in the user's OpenCode config.
+ *   There is no `removeCustom`: removing one IS disconnecting it, and a second
+ *   verb would have let a client remove the block while leaving the provider
+ *   enabled.
  *
  * There is deliberately no `list` member and no action→scope table (the shape
  * `mcp`/`plugins`/`skills` use). Listing is what a non-null capability block
@@ -432,6 +440,8 @@ export const providerModelProvidersCapabilityActionSchema = z.enum([
   "connect",
   "oauth",
   "disconnect",
+  "createCustom",
+  "updateCustom",
 ]);
 export type ProviderModelProvidersCapabilityAction = z.infer<
   typeof providerModelProvidersCapabilityActionSchema
@@ -1290,27 +1300,27 @@ export type ModelProviderSource = z.infer<typeof modelProviderSourceSchema>;
 /**
  * One upstream provider row.
  *
- * `connected` is the server's own verdict, and it is NOT `source === "api"`.
- * A provider counts as connected when its effective credential comes from
- * Traycer-manageable storage - `api` (OpenCode's auth store) or `custom` (a
- * loader/plugin that supplied one) - while `env` and `config` describe a
- * credential that exists outside anything this tab can write.
+ * `connected` is the server's own verdict about whether this provider is
+ * usable right now. It is not derivable from `source`, and a renderer must not
+ * try.
  *
- * `hasStoredCredential` and `canDisconnect` are separate fields, and they are
- * separate because they answer different questions: "does Traycer hold a
- * credential for this?" versus "will Remove actually do something?" The
- * `custom` source is exactly where those diverge. A provider can be autoloaded
- * `custom` with nothing in the auth store to delete, so `auth.remove` is a
- * no-op and the row stays connected afterwards - offering a disconnect button
- * there means offering a click that reports success and changes nothing.
+ * `hasStoredCredential` and `canDisconnect` are separate fields because they
+ * answer different questions: "does Traycer hold a credential for this?"
+ * versus "will Disconnect actually change something?" Those come apart in both
+ * directions. A provider can be usable with nothing in the auth store to
+ * delete - declared in a config file, or autoloaded by a plugin - and
+ * disconnecting it still means something, because the host disables it in
+ * config instead. And a provider whose credential lives in the environment has
+ * nothing this tab can do at all: the value is not ours to remove, so no
+ * affordance should be drawn.
  *
  * So a renderer gates its disconnect affordance on `canDisconnect` ALONE -
  * never on `connected`, never on `source`, and never on
- * `hasStoredCredential`. The host owns the rule that decides these (it is the
- * only side that can see the auth store and the loader set); this schema only
- * fixes what each field MEANS, so the rule can sharpen - a host that learns to
- * read the store answers the first question better - without a protocol
- * change.
+ * `hasStoredCredential`. This schema fixes what each field MEANS and leaves
+ * the rule that computes them to the host, which is the only side that can see
+ * the auth store, the config files and the loader set. That rule has already
+ * widened once during this feature; nothing here had to change with it, which
+ * is the property the split is for.
  *
  * No secret ever appears here. Credentials are write-only on this surface
  * (`connect` carries plaintext once), and the read side reports presence and
@@ -1324,6 +1334,26 @@ export const modelProviderEntrySchema = z.object({
   canDisconnect: z.boolean(),
   connected: z.boolean(),
   methods: z.array(modelProviderAuthMethodSchema),
+  /**
+   * This provider is declared in the user's own OpenCode config AS an
+   * OpenAI-compatible custom provider - upstream's `T(id)` predicate: a
+   * `provider[id]` block whose `npm` is `@ai-sdk/openai-compatible` with a
+   * non-empty model map.
+   *
+   * It exists to split one badge into two. `source: "config"` covers both a
+   * provider the user hand-wrote as a custom endpoint and one a config file
+   * merely supplies a key for; upstream shows those as "Custom" and "Config"
+   * respectively, and the difference is not recoverable from `source` alone.
+   *
+   * It is also what tells a client the row is EDITABLE: `updateCustom` applies
+   * to exactly the rows this flag is true for, because those are the ones
+   * whose name / base URL / model ids Traycer wrote and can rewrite.
+   *
+   * The predicate is upstream's and stays host-side - a client that re-derived
+   * it from a config file would be guessing at `npm` strings and model-map
+   * emptiness, and would drift the first time upstream tightened either.
+   */
+  configDeclaredCustom: z.boolean(),
 });
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 
@@ -1475,12 +1505,57 @@ export type ModelProviderAuthInputs = z.infer<
  * any other - one rule, not a special case. `startOauth` requires an index
  * because an OAuth flow only ever exists as an advertised method.
  *
+ * `createCustom` / `updateCustom` declare and edit an OpenAI-compatible
+ * provider block in the user's config. There is deliberately no `removeCustom`
+ * arm: removing a custom provider IS disconnecting it (upstream's disconnect
+ * for a config-declared custom disables the block rather than deleting a
+ * credential it may not have), and a separate verb would have let a client
+ * delete the declaration while leaving the provider enabled - two ways to
+ * reach one state, one of which nothing would clean up.
+ *
  * `submitCode` carries `attemptId` rather than re-identifying the flow by
  * provider: attempts are single-flight per `(providerId, modelProviderId)` and
  * a new one SUPERSEDES the pending one, so a code arriving for a superseded
  * attempt has to be discardable. Without the id it would be applied to
  * whatever attempt happens to be pending.
  */
+/**
+ * The declarable half of a custom provider. Shared by `createCustom` and
+ * `updateCustom` because the two differ only in whether the block already
+ * exists - upstream's own dialog is the same form either way, and letting the
+ * shapes drift would be a bug the type system could not see.
+ *
+ * `npm` is NOT here. Every provider this surface can declare is an
+ * OpenAI-compatible endpoint (`@ai-sdk/openai-compatible`), the host writes
+ * that constant, and putting it on the wire would offer a choice the rest of
+ * the feature cannot honour - upstream's `T(id)` only recognizes that one
+ * value, so any other would produce a block this tab could never edit again.
+ */
+const customProviderShape = {
+  /** Config key for the block, and the id every other action addresses it by. */
+  modelProviderId: z.string().min(1),
+  /** Display name. Upstream's `provider[id].name`. */
+  name: z.string().min(1),
+  /**
+   * `options.baseURL`. Parsed as a URL at the boundary rather than left to the
+   * host: a scheme-less host is the paste people actually make, it is
+   * objectively wrong, and catching it here turns a provider that silently
+   * never works into a form error next to the field.
+   */
+  baseUrl: z.url(),
+  /**
+   * Model ids for the block's model map. NON-EMPTY, and that is upstream's
+   * constraint rather than tidiness: `T(id)` requires a non-empty model map,
+   * so a custom provider declared with none would not be recognized as custom
+   * by the very predicate that decides whether this row is editable - it would
+   * be created and then immediately unreachable.
+   *
+   * Order is the user's. Duplicates are the host's to collapse, since it owns
+   * the map this becomes.
+   */
+  modelIds: z.array(z.string().min(1)).min(1),
+};
+
 export const modelProviderAuthActionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("connect"),
@@ -1505,6 +1580,14 @@ export const modelProviderAuthActionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("disconnect"),
     modelProviderId: z.string().min(1),
+  }),
+  z.object({
+    action: z.literal("createCustom"),
+    ...customProviderShape,
+  }),
+  z.object({
+    action: z.literal("updateCustom"),
+    ...customProviderShape,
   }),
 ]);
 export type ModelProviderAuthAction = z.infer<

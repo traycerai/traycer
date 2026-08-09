@@ -230,7 +230,13 @@ describe("modelProviders tab id and capability block", () => {
     ).toEqual([]);
     expect(
       providerModelProvidersCapabilitiesSchema.safeParse({
-        actions: ["connect", "oauth", "disconnect"],
+        actions: [
+          "connect",
+          "oauth",
+          "disconnect",
+          "createCustom",
+          "updateCustom",
+        ],
       }).success,
     ).toBe(true);
     expect(
@@ -585,6 +591,7 @@ describe("providers.listModelProviders payloads", () => {
       hasStoredCredential: true,
       canDisconnect: true,
       connected: true,
+      configDeclaredCustom: false,
       methods: [
         {
           type: "api",
@@ -608,10 +615,73 @@ describe("providers.listModelProviders payloads", () => {
       hasStoredCredential: false,
       canDisconnect: false,
       connected: true,
+      configDeclaredCustom: false,
       methods: [],
     });
     expect(entry.canDisconnect).toBe(false);
     expect(entry.connected).toBe(true);
+  });
+
+  it("splits Config from Custom with configDeclaredCustom, which source cannot", () => {
+    // Both rows are `source: "config"`. Upstream shows one as "Config" and the
+    // other as "Custom", and the difference is not recoverable from `source`
+    // alone - which is the whole reason this flag is on the wire.
+    const plainConfig = modelProviderEntrySchema.parse({
+      id: "openai",
+      name: "OpenAI",
+      source: "config",
+      hasStoredCredential: false,
+      canDisconnect: true,
+      connected: true,
+      configDeclaredCustom: false,
+      methods: [],
+    });
+    const declaredCustom = modelProviderEntrySchema.parse({
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: "config",
+      hasStoredCredential: false,
+      canDisconnect: true,
+      connected: true,
+      configDeclaredCustom: true,
+      methods: [],
+    });
+    expect(plainConfig.source).toBe(declaredCustom.source);
+    expect(plainConfig.configDeclaredCustom).toBe(false);
+    expect(declaredCustom.configDeclaredCustom).toBe(true);
+  });
+
+  it("keeps a disconnected custom provider visible as a custom row", () => {
+    // The round trip's resting state: created, then disconnected. The block is
+    // still declared, so the row is still editable and still badges as Custom
+    // - `connected: false` with `configDeclaredCustom: true` says exactly that
+    // without a separate "disabled" field.
+    const entry = modelProviderEntrySchema.parse({
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: null,
+      hasStoredCredential: false,
+      canDisconnect: false,
+      connected: false,
+      configDeclaredCustom: true,
+      methods: [],
+    });
+    expect(entry.connected).toBe(false);
+    expect(entry.configDeclaredCustom).toBe(true);
+  });
+
+  it("requires configDeclaredCustom rather than defaulting it", () => {
+    const { configDeclaredCustom: _omitted, ...withoutFlag } = {
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: null,
+      hasStoredCredential: false,
+      canDisconnect: false,
+      connected: false,
+      configDeclaredCustom: true,
+      methods: [],
+    };
+    expect(modelProviderEntrySchema.safeParse(withoutFlag).success).toBe(false);
   });
 
   it("can say connected-but-not-removable, which is why the two flags are separate", () => {
@@ -628,6 +698,7 @@ describe("providers.listModelProviders payloads", () => {
       hasStoredCredential: false,
       canDisconnect: false,
       connected: true,
+      configDeclaredCustom: false,
       methods: [],
     });
     expect(entry.connected).toBe(true);
@@ -647,6 +718,7 @@ describe("providers.listModelProviders payloads", () => {
       hasStoredCredential: true,
       canDisconnect: true,
       connected: true,
+      configDeclaredCustom: false,
       methods: [],
     });
     expect(entry.canDisconnect).toBe(true);
@@ -661,6 +733,7 @@ describe("providers.listModelProviders payloads", () => {
         hasStoredCredential: false,
         canDisconnect: false,
         connected: false,
+        configDeclaredCustom: false,
         methods: [],
       }).success,
     ).toBe(true);
@@ -672,6 +745,7 @@ describe("providers.listModelProviders payloads", () => {
         hasStoredCredential: false,
         canDisconnect: false,
         connected: false,
+        configDeclaredCustom: false,
         methods: [],
       }).success,
     ).toBe(false);
@@ -780,6 +854,123 @@ describe("providers.modelProviderAuth actions", () => {
     if (parsed.action !== "connect") return;
     expect(Object.keys(parsed)).not.toContain("credentialKey");
     expect(parsed.inputs).toEqual({ resourceName: "my-resource" });
+  });
+
+  it("declares a custom provider with name, base URL and model ids", () => {
+    const parsed = modelProviderAuthActionSchema.parse({
+      action: "createCustom",
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      modelIds: ["gpt-4o-mini", "gpt-4o"],
+    });
+    expect(parsed.action).toBe("createCustom");
+    if (parsed.action !== "createCustom") return;
+    expect(parsed.modelIds).toEqual(["gpt-4o-mini", "gpt-4o"]);
+  });
+
+  it("takes the same shape for create and update", () => {
+    // Upstream's dialog is one form either way, so the two arms are built from
+    // one shared shape; this pins that they cannot drift apart.
+    const fields = {
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      modelIds: ["gpt-4o"],
+    };
+    for (const action of ["createCustom", "updateCustom"] as const) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({ action, ...fields }).success,
+        action,
+      ).toBe(true);
+    }
+  });
+
+  it("carries no npm field - the host writes the only value that works", () => {
+    // `T(id)` only recognizes `@ai-sdk/openai-compatible`, so any other value
+    // would declare a block this tab could never edit again. An unknown key is
+    // stripped by the parse rather than honoured.
+    const parsed = modelProviderAuthActionSchema.parse({
+      action: "createCustom",
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      modelIds: ["gpt-4o"],
+      npm: "@ai-sdk/anthropic",
+    });
+    expect(Object.keys(parsed)).not.toContain("npm");
+  });
+
+  it("rejects a base URL that is not a URL", () => {
+    // The paste people actually make. Caught at the boundary so it is a form
+    // error next to the field, not a provider that silently never works.
+    for (const baseUrl of ["api.example.com", "", "   "]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "createCustom",
+          modelProviderId: "my-endpoint",
+          name: "My Endpoint",
+          baseUrl,
+          modelIds: ["gpt-4o"],
+        }).success,
+        baseUrl,
+      ).toBe(false);
+    }
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "createCustom",
+        modelProviderId: "local",
+        name: "Local",
+        baseUrl: "http://localhost:1234/v1",
+        modelIds: ["llama"],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a custom provider with no models", () => {
+    // Not tidiness: upstream's `T(id)` requires a non-empty model map, so a
+    // block declared with none would fail the very predicate that decides
+    // whether the row is editable - created, then immediately unreachable.
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "createCustom",
+        modelProviderId: "my-endpoint",
+        name: "My Endpoint",
+        baseUrl: "https://api.example.com/v1",
+        modelIds: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("has no removeCustom arm - removing a custom provider IS disconnecting it", () => {
+    // Two verbs would have let a client delete the declaration while leaving
+    // the provider enabled: one state, reachable two ways, with nothing to
+    // clean up the difference.
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "removeCustom",
+        modelProviderId: "my-endpoint",
+      }).success,
+    ).toBe(false);
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "disconnect",
+        modelProviderId: "my-endpoint",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("has no separate disabled-providers toggle either", () => {
+    // Disabling is what disconnect DOES for a row with no credential to
+    // remove. A toggle beside it would be a second spelling of the same
+    // intention, and the two could disagree.
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "setDisabled",
+        modelProviderId: "my-endpoint",
+        disabled: true,
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects a connect with no credential value", () => {
