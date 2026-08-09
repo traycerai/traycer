@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   findAdditivityViolation,
   findBreakingChange,
+  rootAdditivityViolation,
   toJsonSchemaFingerprint,
 } from "../json-schema-fingerprint";
 
@@ -145,6 +146,7 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
       expect(findAdditivityViolation(previous, next, "lenient")).toEqual({
         kind: "array-items",
         detail: "drops field 'agents.items.model'",
+        inner: { kind: "field", detail: "agents.items.model" },
       });
     });
 
@@ -390,7 +392,114 @@ describe("findAdditivityViolation - no-value-growth mode (response lane)", () =>
     ).toEqual({
       kind: "array-items",
       detail: "drops field 'agents.items.m'",
+      inner: { kind: "field", detail: "agents.items.m" },
     });
+  });
+});
+
+describe("findAdditivityViolation - review-hardening cases", () => {
+  it("flags relaxing a required field to optional inside a union arm", () => {
+    // Compatibility-based variant matching must not lose requiredness: both
+    // arms keep identical `properties`, so only the `required` arrays differ,
+    // and a newer peer omitting the field fails the older schema outright.
+    const previous = fingerprint(
+      z.union([z.object({ kind: z.literal("a"), value: z.string() })]),
+    );
+    const next = fingerprint(
+      z.union([
+        z.object({ kind: z.literal("a"), value: z.string().optional() }),
+      ]),
+    );
+    const violation = findAdditivityViolation(previous, next, "lenient");
+    expect(violation?.kind).toBe("union-variant");
+  });
+
+  it("flags relaxing a required field to optional on a plain object", () => {
+    const previous = fingerprint(z.object({ id: z.string() }));
+    const next = fingerprint(z.object({ id: z.string().optional() }));
+    expect(findAdditivityViolation(previous, next, "lenient")).toEqual({
+      kind: "required-field",
+      detail: "id",
+    });
+  });
+
+  it("accepts annotation-only leaf changes (default/description)", () => {
+    // `default` and friends annotate a leaf without changing the value set
+    // it accepts, so a newer peer's payloads still project. Zod keeps a
+    // defaulted field in `required` (it emits the output shape), so this is
+    // purely a leaf-annotation question, not a requiredness one.
+    const previous = fingerprint(z.object({ id: z.string() }));
+    const next = fingerprint(
+      z.object({ id: z.string().default("x").describe("the id") }),
+    );
+    expect(findAdditivityViolation(previous, next, "lenient")).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "no-value-growth"),
+    ).toBeNull();
+  });
+
+  it("still flags a constraining leaf change", () => {
+    const previous = fingerprint(z.object({ id: z.string() }));
+    const next = fingerprint(z.object({ id: z.number() }));
+    const violation = findAdditivityViolation(previous, next, "lenient");
+    expect(violation?.kind).toBe("schema-kind");
+  });
+
+  it("flags an added arm that differs from an existing one only by value growth", () => {
+    // previous [A]; next [A, A'] where A' is A plus an enum value. A survives
+    // strictly, so the added-arm probe must also run strictly or A' escapes.
+    const previous = fingerprint(
+      z.union([z.object({ kind: z.literal("a"), mode: z.enum(["x"]) })]),
+    );
+    const next = fingerprint(
+      z.union([
+        z.object({ kind: z.literal("a"), mode: z.enum(["x"]) }),
+        z.object({ kind: z.literal("a"), mode: z.enum(["x", "y"]) }),
+      ]),
+    );
+    expect(findAdditivityViolation(previous, next, "lenient")).toBeNull();
+    const strict = findAdditivityViolation(previous, next, "no-value-growth");
+    expect(strict?.kind).toBe("union-variant-added");
+  });
+
+  it("accepts a union collapse where every old arm still projects", () => {
+    const previous = fingerprint(
+      z.union([z.object({ id: z.string() }), z.object({ id: z.string() })]),
+    );
+    const next = fingerprint(z.object({ id: z.string() }));
+    expect(findAdditivityViolation(previous, next, "lenient")).toBeNull();
+  });
+
+  it("flags a union collapse that abandons an arm", () => {
+    const previous = fingerprint(
+      z.union([
+        z.object({ kind: z.literal("a"), value: z.string() }),
+        z.object({ kind: z.literal("b"), other: z.number() }),
+      ]),
+    );
+    const next = fingerprint(
+      z.object({ kind: z.literal("a"), value: z.string() }),
+    );
+    const violation = findAdditivityViolation(previous, next, "lenient");
+    expect(violation?.kind).toBe("union-variant");
+  });
+
+  it("preserves the inner violation structurally under array-items", () => {
+    const previous = fingerprint(
+      z.object({ rows: z.array(z.object({ status: z.enum(["queued"]) })) }),
+    );
+    const next = fingerprint(
+      z.object({
+        rows: z.array(z.object({ status: z.enum(["queued", "running"]) })),
+      }),
+    );
+    const violation = findAdditivityViolation(previous, next, "no-value-growth");
+    expect(violation?.kind).toBe("array-items");
+    expect(
+      violation !== null && violation.kind === "array-items"
+        ? rootAdditivityViolation(violation)
+        : null,
+    ).toEqual({ kind: "enum-value-added", detail: "running" });
   });
 });
 

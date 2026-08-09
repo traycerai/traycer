@@ -862,4 +862,49 @@ describe("response-lane value-growth strictness", () => {
 
     expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
   });
+
+  it("keeps the annotation hint when response growth is nested under an array", () => {
+    const nestedV10 = defineRpcContract({
+      method: "nested",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        rows: z.array(z.object({ status: z.enum(["queued"]) })),
+      }),
+    });
+    const nestedV11 = defineRpcContract({
+      method: "nested",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        rows: z.array(z.object({ status: z.enum(["queued", "running"]) })),
+      }),
+    });
+    const nestedUpgrade = defineUpgradePath<typeof nestedV10, typeof nestedV11>({
+      from: nestedV10.schemaVersion,
+      to: nestedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ rows: response.rows }),
+    });
+
+    const registry = {
+      nested: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: nestedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: nestedV11,
+              upgradeFromPreviousVersion: nestedUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      /array items: adds enum value 'running'.*responseGrowthProjectionGated/s,
+    );
+  });
 });

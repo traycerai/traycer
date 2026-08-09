@@ -220,12 +220,34 @@ function classifyEnumRepresentation(
 
 export type AdditivityViolation =
   | { readonly kind: "field"; readonly detail: string }
+  | { readonly kind: "required-field"; readonly detail: string }
   | { readonly kind: "enum-value"; readonly detail: string }
   | { readonly kind: "enum-value-added"; readonly detail: string }
   | { readonly kind: "union-variant"; readonly detail: string }
   | { readonly kind: "union-variant-added"; readonly detail: string }
-  | { readonly kind: "array-items"; readonly detail: string }
+  | {
+      readonly kind: "array-items";
+      readonly detail: string;
+      /**
+       * The violation found beneath the array, preserved structurally so
+       * callers can classify it (e.g. distinguish value growth from a
+       * removal) without re-parsing `detail`'s prose.
+       */
+      readonly inner: AdditivityViolation;
+    }
   | { readonly kind: "schema-kind"; readonly detail: string };
+
+/**
+ * Unwraps `array-items` nesting to the violation that actually occurred, so
+ * classification does not depend on how deeply it was found.
+ */
+export function rootAdditivityViolation(
+  violation: AdditivityViolation,
+): AdditivityViolation {
+  return violation.kind === "array-items"
+    ? rootAdditivityViolation(violation.inner)
+    : violation;
+}
 
 /**
  * How strictly additivity treats VALUE growth (new enum values, new
@@ -309,6 +331,13 @@ type ClassifiedSchemaNode =
   | {
       readonly kind: "object";
       readonly properties: Readonly<Record<string, unknown>>;
+      /**
+       * Carried because requiredness is part of what an older peer's schema
+       * ENFORCES: relaxing a required field to optional lets a newer peer
+       * emit a payload the older schema rejects, which the property walk
+       * alone cannot see (both sides keep identical `properties`).
+       */
+      readonly required: readonly string[];
     }
   | {
       readonly kind: "enum";
@@ -327,6 +356,7 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
   const shape = node as {
     type?: unknown;
     properties?: Record<string, unknown>;
+    required?: unknown;
     values?: unknown;
     representation?: unknown;
     variants?: unknown;
@@ -335,6 +365,9 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     oneOf?: readonly unknown[];
     items?: unknown;
   };
+  const requiredFields = Array.isArray(shape.required)
+    ? shape.required.filter((field): field is string => typeof field === "string")
+    : [];
 
   // Normalized-fingerprint forms first: `type: "enum"` / `type: "anyOf"`
   // never occur in raw JSON Schema, so these branches are unambiguous.
@@ -358,7 +391,11 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
   // order (a normalized object/array fingerprint is shape-identical to
   // its raw form, so these cover both).
   if (shape.type === "object" && shape.properties !== undefined) {
-    return { kind: "object", properties: shape.properties };
+    return {
+      kind: "object",
+      properties: shape.properties,
+      required: requiredFields,
+    };
   }
   if (Array.isArray(shape.enum)) {
     return {
@@ -408,7 +445,41 @@ function dottedPath(path: readonly string[]): string {
 }
 
 function snippet(node: unknown): string {
-  return JSON.stringify(node).slice(0, 80);
+  return JSON.stringify(node)?.slice(0, 80) ?? String(node);
+}
+
+/**
+ * JSON Schema keywords that annotate a leaf without constraining the values
+ * it accepts. Two leaves differing only in these describe the same accepted
+ * value set, so a newer peer's payloads still project onto the older schema
+ * and the change is additive. `default` belongs here: it affects how an
+ * absent input is filled, never which emitted values are valid.
+ */
+const NON_CONSTRAINING_SCHEMA_KEYS = new Set([
+  "default",
+  "description",
+  "title",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "$comment",
+]);
+
+/**
+ * Structural identity of a leaf, ignoring annotation-only keywords. Keys are
+ * sorted so declaration order never reads as a change.
+ */
+function constrainingShape(node: unknown): string {
+  if (typeof node !== "object" || node === null) return JSON.stringify(node) ?? String(node);
+  if (Array.isArray(node)) {
+    return `[${node.map(constrainingShape).join(",")}]`;
+  }
+  const entries = Object.entries(node as Record<string, unknown>)
+    .filter(([key]) => !NON_CONSTRAINING_SCHEMA_KEYS.has(key))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, value]) => `${JSON.stringify(key)}:${constrainingShape(value)}`);
+  return `{${entries.join(",")}}`;
 }
 
 function findNodeAdditivityViolation(
@@ -463,7 +534,11 @@ function findNodeAdditivityViolation(
     // is invisible to the old schema (stripped on projection), so it is
     // exempt from value-growth checking in either mode.
     for (const field of Object.keys(previousNode.properties)) {
-      if (!(field in nextNode.properties)) {
+      // `Object.hasOwn`, not `in`: a schema property legitimately named
+      // `constructor`/`toString`/`valueOf` would match an inherited
+      // prototype member, silently passing the removal check and then
+      // classifying a function as an `opaque` node.
+      if (!Object.hasOwn(nextNode.properties, field)) {
         return {
           kind: "field",
           detail: dottedPath([...path, field]),
@@ -476,6 +551,16 @@ function findNodeAdditivityViolation(
         mode,
       );
       if (nested !== null) return nested;
+    }
+    // Relaxing required -> optional is not additive: the newer peer may omit
+    // the field, and the older schema rejects the payload outright. (A field
+    // that merely gains a `default` stays in `required` - `z.toJSONSchema`
+    // describes the output shape - so this does not catch that case.)
+    const nextRequired = new Set(nextNode.required);
+    for (const field of previousNode.required) {
+      if (!nextRequired.has(field)) {
+        return { kind: "required-field", detail: dottedPath([...path, field]) };
+      }
     }
     return null;
   }
@@ -545,13 +630,18 @@ function findNodeAdditivityViolation(
     }
     if (mode === "no-value-growth") {
       for (const nextVariant of nextNode.variants) {
+        // Probe in the SAME mode as the survival loop. Under "lenient" a
+        // new arm that differs from an old one only by value growth would
+        // count as "having a predecessor" and escape the gate - e.g.
+        // previous [A], next [A, A'] where A' is A with an extra enum
+        // value: A survives strictly, and A' must still be reported.
         const hasPredecessor = previousNode.variants.some(
           (previousVariant) =>
             findNodeAdditivityViolation(
               previousVariant,
               nextVariant,
               path,
-              "lenient",
+              mode,
             ) === null,
         );
         if (!hasPredecessor) {
@@ -573,13 +663,17 @@ function findNodeAdditivityViolation(
       return {
         kind: "array-items",
         detail: describeAdditivityViolation(itemsViolation),
+        inner: itemsViolation,
       };
     }
     return null;
   }
 
   if (previousNode.kind === "opaque" && nextNode.kind === "opaque") {
-    if (JSON.stringify(previousNode.node) === JSON.stringify(nextNode.node)) {
+    if (
+      constrainingShape(previousNode.node) ===
+      constrainingShape(nextNode.node)
+    ) {
       return null;
     }
     return {
@@ -648,6 +742,16 @@ export function findBreakingChange(
         "unreachable: lenient additivity produced a value-growth violation",
       );
     }
+    if (additivityViolation.kind === "required-field") {
+      // Relaxing required -> optional does not remove the field, it changes
+      // what the schema accepts - which is exactly a breaking field change
+      // for major-justification purposes.
+      return {
+        kind: "field",
+        detail: additivityViolation.detail,
+        reason: "schema-changed",
+      };
+    }
     return { ...additivityViolation, reason: "removed" };
   }
 
@@ -696,6 +800,8 @@ export function describeAdditivityViolation(
   switch (violation.kind) {
     case "field":
       return `drops field '${violation.detail}'`;
+    case "required-field":
+      return `makes required field '${violation.detail}' optional`;
     case "enum-value":
       return `drops enum value '${violation.detail}'`;
     case "enum-value-added":

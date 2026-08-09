@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   describeAdditivityViolation,
   findAdditivityViolation,
+  rootAdditivityViolation,
   findBreakingChange,
   toJsonSchemaFingerprint,
   type JsonSchemaFingerprint,
@@ -445,16 +446,14 @@ function assertSchemaCompatibility(
           responseGrowthGated ? "lenient" : "no-value-growth",
         );
         if (responseViolation !== null) {
-          // Growth violations may arrive wrapped (an `array-items` violation
-          // carries the inner description), so detect them by description as
-          // well as by kind before offering the annotation escape.
+          // Growth violations may arrive wrapped in `array-items`, so
+          // classify the unwrapped root rather than the rendered prose.
           const violationDescription =
             describeAdditivityViolation(responseViolation);
+          const rootViolation = rootAdditivityViolation(responseViolation);
           const isValueGrowth =
-            responseViolation.kind === "enum-value-added" ||
-            responseViolation.kind === "union-variant-added" ||
-            violationDescription.includes("adds enum value") ||
-            violationDescription.includes("adds union variant");
+            rootViolation.kind === "enum-value-added" ||
+            rootViolation.kind === "union-variant-added";
           const annotationHint = isValueGrowth
             ? " (if this growth is genuinely emission-gated on the negotiated version, declare `responseGrowthProjectionGated: true` on the minor's registry entry)"
             : "";
