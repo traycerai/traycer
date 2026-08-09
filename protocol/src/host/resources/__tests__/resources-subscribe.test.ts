@@ -401,8 +401,9 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     harnessId: null,
     managedCommand: {
       commandId: "cmd-1",
-      kind: "monitor" as const,
+      monitoring: true,
       description: "deploy watcher",
+      createdByAgentId: "chat-1",
     },
   };
 
@@ -420,7 +421,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     };
   }
 
-  it("carries the managed-command kind with its command descriptor", () => {
+  it("carries the shell's monitoring state with its command descriptor", () => {
     const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
       frameWithOwners([MANAGED_OWNER]),
     );
@@ -428,9 +429,31 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     expect(parsed.owners[0].owner.kind).toBe("managed-command");
     expect(parsed.owners[0].managedCommand).toEqual({
       commandId: "cmd-1",
-      kind: "monitor",
+      monitoring: true,
       description: "deploy watcher",
+      createdByAgentId: "chat-1",
     });
+  });
+
+  it("defaults an absent creator to the empty string", () => {
+    // A host from before the field exists must degrade to the flat list (the
+    // GUI leaves a creatorless shell at the task level), not fail the whole
+    // frame's parse - a required field here blacks out the entire panel, every
+    // owner row included, the moment fleets skew.
+    const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
+      frameWithOwners([
+        {
+          ...MANAGED_OWNER,
+          managedCommand: {
+            commandId: "cmd-1",
+            monitoring: true,
+            description: "deploy watcher",
+          },
+        },
+      ]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot frame");
+    expect(parsed.owners[0].managedCommand?.createdByAgentId).toBe("");
   });
 
   it("requires managedCommand on every owner, null for the other kinds", () => {
@@ -448,13 +471,19 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
     ).toThrow();
   });
 
-  it("rejects a command kind outside monitor | shell", () => {
+  it("requires `monitoring` to be stated on a managed-command owner", () => {
+    // Not defaulted: this row is projected fresh from the record on every
+    // sampler tick, so an absent flag is a host bug, never an old write.
     expect(() =>
       resourcesSubscribeServerFrameSchemaV14.parse(
         frameWithOwners([
           {
             ...MANAGED_OWNER,
-            managedCommand: { ...MANAGED_OWNER.managedCommand, kind: "task" },
+            managedCommand: {
+              commandId: "cmd-1",
+              description: "deploy watcher",
+              createdByAgentId: "chat-1",
+            },
           },
         ]),
       ),

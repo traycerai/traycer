@@ -8,9 +8,9 @@ export type OpenManagedCommandOutput = (args: {
 }) => void;
 
 /**
- * The one door into a command's output window, shared by every surface that
- * opens one: a "Monitors & Shells" row, a queued-delivery chip, a resume
- * divider, a running-work strip row.
+ * The one door into a shell's output window, shared by every surface that
+ * opens one: a Shells row, a queued-delivery chip, a resume divider, a
+ * running-work strip row.
  *
  * One window per command (`UI.md` §9) falls out of the canvas itself: the
  * tile's content id IS the command id, and `openTileInEpic` focuses an already

@@ -19,7 +19,6 @@ import {
   Pencil,
   Play,
   SendHorizontal,
-  Terminal,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -64,12 +63,11 @@ import {
   useQueuePauseState,
 } from "@/components/chat/queued-message-utils";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
-import type { ManagedCommandKind } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
-  managedCommandOutputWindowTitle,
-  managedCommandQueuedChipTooltip,
+  MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
+  MANAGED_COMMAND_QUEUED_CHIP_TOOLTIP,
 } from "@/lib/managed-commands/managed-command-copy";
-import { ManagedCommandKindIcon } from "@/components/managed-commands/managed-command-kind-icon";
+import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
@@ -604,7 +602,7 @@ function QueuedMessageRowContent(props: {
         <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
           <ManagedCommandBadge
             commandId={item.commandId}
-            commandKind={item.commandKind}
+            monitoring={item.monitoring}
           />
         </div>
       ) : null}
@@ -659,29 +657,26 @@ function QueuedMessageRowContent(props: {
 }
 
 /**
- * Provenance marker for a pending managed-command output delivery (a Monitor's
- * log digest, a backgrounded shell's completion digest). Distinct tone from
+ * Provenance marker for a pending shell output delivery (a watcher's log
+ * digest, a backgrounded shell's completion digest). Distinct tone from
  * `ReceivedAgentBadge` so the two system-owned row kinds stay tellable apart.
  *
- * Also a door (`UI.md` §5): clicking it opens or focuses that command's output
+ * Also a door (`UI.md` §5): clicking it opens or focuses that shell's output
  * window, so a human who wants to see what the agent is about to read does not
- * have to find the row in the sidebar first. The kind is named whenever the
- * host reports one; a delivery queued by an older host has none, and the label
- * stays kind-free rather than guessing.
+ * have to find the row in the sidebar first. The label names the shell either
+ * way; only the glyph waits on the monitor flag, which a delivery queued by an
+ * older build does not carry - it gets the neutral terminal glyph rather than a
+ * guessed one.
  */
 export function ManagedCommandBadge(props: {
   readonly commandId: string;
-  readonly commandKind: ManagedCommandKind | null;
+  readonly monitoring: boolean | null;
 }) {
   const openOutput = useManagedCommandDoor();
-  const label =
-    props.commandKind === null
-      ? "Command output"
-      : managedCommandOutputWindowTitle(props.commandKind);
 
   return (
     <TooltipWrapper
-      label={managedCommandQueuedChipTooltip(props.commandKind)}
+      label={MANAGED_COMMAND_QUEUED_CHIP_TOOLTIP}
       side="top"
       sideOffset={6}
       align={undefined}
@@ -695,15 +690,20 @@ export function ManagedCommandBadge(props: {
           openOutput?.(props.commandId);
         }}
       >
-        {props.commandKind === null ? (
-          <Terminal className="size-3" aria-hidden />
-        ) : (
-          <ManagedCommandKindIcon
-            kind={props.commandKind}
+        {/* An unrecorded flag renders NO glyph: the label already names the
+            shell, and the terminal glyph is reserved for the Terminals
+            surface (see managed-command-monitor-icon.tsx). */}
+        {props.monitoring === null ? null : (
+          // Speaks, unlike every row glyph: this chip's label is the constant
+          // "Shell output", so nothing else here says whether the shell was
+          // watching.
+          <ManagedCommandMonitorIcon
+            monitoring={props.monitoring}
+            decorative={false}
             className={undefined}
           />
         )}
-        <span>{label}</span>
+        <span>{MANAGED_COMMAND_OUTPUT_WINDOW_TITLE}</span>
       </button>
     </TooltipWrapper>
   );
