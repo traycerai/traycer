@@ -68,6 +68,34 @@ export const chatSchema = z.object({
    * before archiving existed parse unchanged.
    */
   archivedAt: z.number().nullable().default(null),
+  /**
+   * The user-facing provider handle, pinned once and rendered from this
+   * record forever (see the prompt-freeze decision log). Tristate, and the
+   * two "unset" states are NOT equivalent: ABSENT (the raw persisted key is
+   * missing - records written before this field existed) means "not pinned
+   * yet", read lazily and pinned on the next prompt build; an explicit
+   * `null` means "resolve failed at creation" and is final - render no
+   * handle sentence for this agent, permanently, never retried. A fork
+   * copies the source record's value rather than re-resolving. Defaulted
+   * (not just nullable) so an absent key still parses.
+   */
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  /**
+   * Digest cursor for the role-registry delivery channel (see
+   * roles-snapshot-delivery): the hash of the canonically-serialized claims
+   * last delivered to this agent. Unlike `pinnedUserProviderHandle`, an
+   * absent key and an explicit `null` are equivalent here - both read as
+   * "never delivered" (a brand-new agent, or a record persisted before this
+   * field existed). Compared against the current registry's digest to
+   * decide whether the next prompt pull owes a fresh snapshot. A third
+   * value is possible: the host may stamp a reserved sentinel string that
+   * can never equal a real content digest, meaning "a push was attempted
+   * but not confirmed delivered" - the next pull must treat the cursor as
+   * behind and deliver a fresh truth snapshot before stamping a clean
+   * digest again. The sentinel's literal value is host-owned, not part of
+   * this contract.
+   */
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
 
@@ -111,4 +139,27 @@ export const chatSchemaV14 = z.object({
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema).default([]),
+});
+
+// Wire-freeze copy with `archivedAt` (the field `1.5` shipped) but without
+// `pinnedUserProviderHandle` / `lastDeliveredRolesDigest`, bound to
+// `chat.subscribe@1.5`'s snapshot serverFrame so that released line stays
+// verbatim. Hand-frozen (every other field reuses the live sub-schemas); NOT
+// derived from the live shape - see `chatSchemaV14`'s comment for why a
+// released line must not follow `chatSchema` by reference.
+export const chatSchemaV15 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  messages: z.array(messageSchema),
+  events: z.array(chatEventSchema).default([]),
+  archivedAt: z.number().nullable().default(null),
 });
