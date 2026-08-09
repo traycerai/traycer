@@ -69,7 +69,10 @@ export function buildAgentForkCommand(opts: {
       response.agentId,
       `Forked from: ${response.sourceAgentId}`,
       `Forked from message: ${response.forkedFromMessageId ?? "(terminal fork - no message boundary)"}`,
-      `Effective profile: ${response.effectiveProfileId ?? "(none)"}`,
+      // `null` is the ambient provider login, NOT the absence of a profile -
+      // see `forkAgentResponseSchema`. Printing "(none)" read as "no profile",
+      // which is exactly wrong for a fork that inherited or selected ambient.
+      `Effective profile: ${response.effectiveProfileId ?? "ambient (provider CLI login)"}`,
       `Profile override applied: ${response.profileOverrideApplied ? "yes" : "no"}`,
     ];
     if (response.warnings.length > 0) {
