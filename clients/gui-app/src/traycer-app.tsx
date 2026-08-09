@@ -219,7 +219,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                         <ProfileTabWorkspacesPersistLifecycleBridge />
                         <EpicTabExistenceReconciler />
                         <ProfileAutoSwitchBridge router={props.router} />
-                        <ProfileTabWorkspaceBridge />
+                        <ProfileTabWorkspaceBridge router={props.router} />
                         <HistoryMembershipCacheWarmer />
                         <HostStreamProvider>
                           <HostScopeReady scope="default-host">

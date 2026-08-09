@@ -1,12 +1,19 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
+import type { AppRouter } from "@/router";
+import { profileOwnsWorkspaceRefs } from "@/lib/profiles/profile-membership";
+import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import {
+  ALL_PROJECTS_TAB_BUCKET,
   profileTabBucket,
   useProfileTabWorkspacesStore,
 } from "@/stores/profiles/profile-tab-workspaces-store";
 import {
   emptyTabStripLayout,
+  flattenLayoutRefs,
+  tabRefKey,
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
@@ -26,13 +33,36 @@ const DEBOUNCE_MS = 100;
  * hydration strip is often empty localStorage residue and would clobber the
  * real bucket for the active profile.
  */
-export function ProfileTabWorkspaceBridge(): ReactNode {
+/** Minimal route seam for the controller (imperative, router-free in tests). */
+export interface ProfileTabRouteSource {
+  readonly pathname: () => string;
+  readonly navigateHome: () => void;
+}
+
+export function ProfileTabWorkspaceBridge(props: {
+  readonly router: AppRouter;
+}): ReactNode {
+  const route = useMemo<ProfileTabRouteSource>(
+    () => ({
+      pathname: () => props.router.state.location.pathname,
+      navigateHome: () => {
+        void props.router.navigate({ to: "/", replace: true });
+      },
+    }),
+    [props.router],
+  );
+  return <ProfileTabWorkspaceBridgeCore route={route} />;
+}
+
+export function ProfileTabWorkspaceBridgeCore(props: {
+  readonly route: ProfileTabRouteSource;
+}): ReactNode {
   const windowsHydrated = useWindowsBridgeHydrated();
 
   useEffect(() => {
     if (!windowsHydrated) return;
-    return startProfileTabWorkspaceController();
-  }, [windowsHydrated]);
+    return startProfileTabWorkspaceController(props.route);
+  }, [windowsHydrated, props.route]);
 
   return null;
 }
@@ -42,7 +72,9 @@ export function ProfileTabWorkspaceBridge(): ReactNode {
  * so they can drive the controller without mounting the full provider tree.
  * Returns a disposer.
  */
-export function startProfileTabWorkspaceController(): () => void {
+export function startProfileTabWorkspaceController(
+  route: ProfileTabRouteSource,
+): () => void {
   let disposed = false;
   let swapping = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -78,6 +110,46 @@ export function startProfileTabWorkspaceController(): () => void {
     const layout: PersistedTabStripLayout =
       saved !== undefined ? saved : emptyTabStripLayout();
     tabCommandCoordinator.restoreHydratedLayout(layout);
+    releaseForeignActiveRoute(bucket, layout);
+  };
+
+  /**
+   * After a swap, the live route must not pin a tab the incoming profile does
+   * not own — an open /epics/<id> or /draft/<id> route re-materializes its tab
+   * on the next route commit and leaks it into the freshly restored strip.
+   * Epic routes release home unless the epic is KNOWN to belong to the
+   * incoming profile (unknown membership fails open: keep the user's context).
+   * Draft routes release only when the draft is not part of the restored
+   * strip. Switching to "all-projects" never releases.
+   */
+  const releaseForeignActiveRoute = (
+    bucket: string,
+    restoredLayout: PersistedTabStripLayout,
+  ): void => {
+    if (bucket === ALL_PROJECTS_TAB_BUCKET) return;
+    const pathname = route.pathname();
+    const epicMatch = pathname.match(/^\/epics\/([^/]+)/);
+    if (epicMatch !== null) {
+      const epicId = epicMatch[1];
+      const profiles = useProjectProfilesStore.getState().profiles;
+      const incoming = profiles.find((p) => profileTabBucket(p.id) === bucket);
+      if (incoming === undefined) return;
+      const item = useHistoryMembershipCacheStore
+        .getState()
+        .itemsByEpicId.get(epicId);
+      if (item === undefined) return; // unknown membership → keep context
+      if (profileOwnsWorkspaceRefs(incoming, item.linkedWorkspaces)) return;
+      route.navigateHome();
+      return;
+    }
+    const draftMatch = pathname.match(/^\/draft\/([^/]+)/);
+    if (draftMatch !== null) {
+      const draftKey = tabRefKey({ kind: "draft", id: draftMatch[1] });
+      const restoredKeys = new Set(
+        flattenLayoutRefs(restoredLayout).map(tabRefKey),
+      );
+      if (!restoredKeys.has(draftKey)) route.navigateHome();
+    }
   };
 
   const swapToProfile = (nextProfileId: string | null): void => {

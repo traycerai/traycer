@@ -1,14 +1,17 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  ProfileTabWorkspaceBridge,
+  ProfileTabWorkspaceBridgeCore,
   startProfileTabWorkspaceController,
+  type ProfileTabRouteSource,
 } from "@/providers/profile-tab-workspace-bridge";
 import {
   WindowsBridgeContext,
   type WindowsBridgeContextValue,
 } from "@/providers/windows-bridge-context";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
+import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
+import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import {
   ALL_PROJECTS_TAB_BUCKET,
   profileTabBucket,
@@ -27,6 +30,17 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { profileTabWorkspacesKey } from "@/lib/persist/keys";
 
 const WORKSPACES_KEY = profileTabWorkspacesKey(null);
+
+function stubRoute(pathname: string): {
+  readonly route: ProfileTabRouteSource;
+  readonly navigateHome: ReturnType<typeof vi.fn>;
+} {
+  const navigateHome = vi.fn();
+  return {
+    route: { pathname: () => pathname, navigateHome },
+    navigateHome,
+  };
+}
 
 function layoutWithEpic(tabId: string): PersistedTabStripLayout {
   const ref = { kind: "epic" as const, id: tabId };
@@ -55,6 +69,8 @@ function resetAll(): void {
   useProfileTabWorkspacesStore.persist.setOptions({ name: WORKSPACES_KEY });
   useProfileTabWorkspacesStore.getState().resetForTests();
   useActiveProjectProfileStore.getState().resetForTests();
+  useProjectProfilesStore.getState().resetForTests();
+  useHistoryMembershipCacheStore.getState().resetForTests();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({
@@ -88,7 +104,7 @@ describe("profile tab workspaces controller", () => {
 
     useActiveProjectProfileStore.getState().setActiveProfile("profile-a");
     seedStrip(layoutA);
-    dispose = startProfileTabWorkspaceController();
+    dispose = startProfileTabWorkspaceController(stubRoute("/").route);
 
     act(() => {
       useActiveProjectProfileStore.getState().setActiveProfile("profile-b");
@@ -116,7 +132,7 @@ describe("profile tab workspaces controller", () => {
   it("B with no bucket yields an empty strip after switch", () => {
     seedCanvasEpic("tab-a", "epic-a", "Alpha");
     seedStrip(layoutWithEpic("tab-a"));
-    dispose = startProfileTabWorkspaceController();
+    dispose = startProfileTabWorkspaceController(stubRoute("/").route);
 
     act(() => {
       useActiveProjectProfileStore.getState().setActiveProfile("profile-b");
@@ -132,7 +148,7 @@ describe("profile tab workspaces controller", () => {
   it("write-through updates the active bucket after debounce", async () => {
     seedCanvasEpic("tab-a", "epic-a", "Alpha");
     seedStrip(layoutWithEpic("tab-a"));
-    dispose = startProfileTabWorkspaceController();
+    dispose = startProfileTabWorkspaceController(stubRoute("/").route);
 
     // Mutate layout while active (all-projects bucket).
     seedCanvasEpic("tab-c", "epic-c", "Gamma");
@@ -202,7 +218,7 @@ describe("profile tab workspaces controller", () => {
     };
     useProfileTabWorkspacesStore.getState().saveLayout("profile-a", mixed);
     seedStrip(emptyTabStripLayout());
-    dispose = startProfileTabWorkspaceController();
+    dispose = startProfileTabWorkspaceController(stubRoute("/").route);
 
     expect(() => {
       act(() => {
@@ -231,7 +247,7 @@ describe("profile tab workspaces controller", () => {
 
     const { rerender } = render(
       <WindowsBridgeContext.Provider value={pendingValue}>
-        <ProfileTabWorkspaceBridge />
+        <ProfileTabWorkspaceBridgeCore route={stubRoute("/").route} />
       </WindowsBridgeContext.Provider>,
     );
 
@@ -266,7 +282,7 @@ describe("profile tab workspaces controller", () => {
       <WindowsBridgeContext.Provider
         value={{ bridge: null, hasHydrated: true }}
       >
-        <ProfileTabWorkspaceBridge />
+        <ProfileTabWorkspaceBridgeCore route={stubRoute("/").route} />
       </WindowsBridgeContext.Provider>,
     );
 
@@ -281,5 +297,125 @@ describe("profile tab workspaces controller", () => {
         ALL_PROJECTS_TAB_BUCKET
       ],
     ).toEqual(layoutA);
+  });
+});
+
+describe("profile switch releases foreign active routes", () => {
+  let dispose: (() => void) | null = null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetAll();
+    useProjectProfilesStore.getState().createProfile({
+      name: "Buzz",
+      icon: "zap",
+      color: "orange",
+      folders: [{ path: "/Users/x/Buzz", hostId: "h1" }],
+    });
+  });
+
+  afterEach(() => {
+    dispose?.();
+    dispose = null;
+    resetAll();
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  function seedMembership(
+    epicId: string,
+    workspacePaths: ReadonlyArray<string>,
+  ): void {
+    useHistoryMembershipCacheStore.getState().setMembershipItems([
+      {
+        id: epicId,
+        epicId,
+        taskType: "epic",
+        title: epicId,
+        initialUserPrompt: "",
+        updatedAtMs: 100,
+        updatedLabel: "",
+        updatedBucket: "today",
+        linkedRepos: [],
+        linkedWorkspaces: workspacePaths.map((workspacePath) => ({
+          hostId: "h1",
+          workspacePath,
+        })),
+        pullRequestNumbers: [],
+        worktreeBranches: [],
+        worktreePaths: [],
+        ownership: "mine",
+        permissionRole: null,
+        isPinned: false,
+      },
+    ]);
+  }
+
+  function switchFromEpicRoute(epicId: string): ReturnType<typeof vi.fn> {
+    const buzz = useProjectProfilesStore.getState().profiles[0];
+    seedCanvasEpic(`tab-${epicId}`, epicId, epicId);
+    seedStrip(layoutWithEpic(`tab-${epicId}`));
+    const { route, navigateHome } = stubRoute(`/epics/${epicId}`);
+    dispose = startProfileTabWorkspaceController(route);
+    act(() => {
+      useActiveProjectProfileStore.getState().setActiveProfile(buzz.id);
+    });
+    return navigateHome;
+  }
+
+  it("releases an epic route the incoming profile does not own", () => {
+    seedMembership("epic-foreign", ["/Users/x/Acme"]);
+    const navigateHome = switchFromEpicRoute("epic-foreign");
+    expect(navigateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases an unscoped epic route (no linked workspaces)", () => {
+    seedMembership("epic-unscoped", []);
+    const navigateHome = switchFromEpicRoute("epic-unscoped");
+    expect(navigateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an epic route owned by the incoming profile", () => {
+    seedMembership("epic-owned", ["/Users/x/Buzz/packages/app"]);
+    const navigateHome = switchFromEpicRoute("epic-owned");
+    expect(navigateHome).not.toHaveBeenCalled();
+  });
+
+  it("keeps an epic route whose membership is unknown (fail-open)", () => {
+    const navigateHome = switchFromEpicRoute("epic-unknown");
+    expect(navigateHome).not.toHaveBeenCalled();
+  });
+
+  it("never releases when switching to all-projects", () => {
+    const buzz = useProjectProfilesStore.getState().profiles[0];
+    seedMembership("epic-foreign", ["/Users/x/Acme"]);
+    useActiveProjectProfileStore.getState().setActiveProfile(buzz.id);
+    seedCanvasEpic("tab-epic-foreign", "epic-foreign", "epic-foreign");
+    seedStrip(layoutWithEpic("tab-epic-foreign"));
+    const { route, navigateHome } = stubRoute("/epics/epic-foreign");
+    dispose = startProfileTabWorkspaceController(route);
+
+    act(() => {
+      useActiveProjectProfileStore.getState().setActiveProfile(null);
+    });
+    expect(navigateHome).not.toHaveBeenCalled();
+  });
+
+  it("releases a draft route that is not in the restored strip", () => {
+    const { route, navigateHome } = stubRoute("/draft/draft-1");
+    dispose = startProfileTabWorkspaceController(route);
+    act(() => {
+      useActiveProjectProfileStore.getState().setActiveProfile("profile-b");
+    });
+    expect(navigateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a home route untouched on switch", () => {
+    const { route, navigateHome } = stubRoute("/");
+    dispose = startProfileTabWorkspaceController(route);
+    act(() => {
+      useActiveProjectProfileStore.getState().setActiveProfile("profile-b");
+    });
+    expect(navigateHome).not.toHaveBeenCalled();
   });
 });
