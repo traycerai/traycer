@@ -12,6 +12,10 @@ import type { NotificationForegroundDisplay } from "@traycer-clients/shared/plat
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
@@ -526,6 +530,14 @@ describe("forwarded foreground display gate", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // Both feed stores are module-level; without a reset the last test's
+    // connection state leaks into every later test and any suite after this
+    // file, making `ownFeedIsDelivering` order-dependent.
+    useCloudNotificationsStore.setState({
+      connectionState: "unavailable",
+      hasSnapshot: false,
+    });
+    __resetHostNotificationsStoreForTests();
     useEpicCanvasStore.setState({
       tabsById: {},
       canvasByTabId: {},
@@ -563,6 +575,17 @@ describe("forwarded foreground display gate", () => {
       connectionState: "reconnecting",
       hasSnapshot: false,
     });
+  }
+
+  function deliveringHostFeed(): void {
+    useHostNotificationsStore.getState().setConnectionStatus("open");
+    useHostNotificationsStore.setState({
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
+  }
+
+  function openHostFeedAwaitingSnapshot(): void {
+    useHostNotificationsStore.getState().setConnectionStatus("open");
   }
 
   function forwardedDisplay(
@@ -636,6 +659,70 @@ describe("forwarded foreground display gate", () => {
     // dropping it as redundant would swallow it.
     focusChatTile("chat-2");
     disconnectedCloudFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
+      playChime,
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  function forwardedHostFeedDisplay(
+    chatId: string,
+  ): NotificationForegroundDisplay {
+    return {
+      ...forwardedDisplay(chatId, null),
+      payload: buildNotificationActivationEnvelope({
+        route: { kind: "chat", epicId: "epic-1", chatId },
+        feed: { source: "host", id: "n-1" },
+        originHostId: "origin-host-1",
+      }),
+    };
+  }
+
+  it("renders a relay while the host stream is open awaiting its snapshot", () => {
+    // Transport `open` is not usability: the stream reports open before the
+    // first snapshot lands, and that snapshot is a silent baseline - it never
+    // calls the channel emission. A relay dropped in that window would be the
+    // only copy of the occurrence this renderer had.
+    focusChatTile("chat-2");
+    openHostFeedAwaitingSnapshot();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(forwardedHostFeedDisplay("chat-1"), {
+      playChime,
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls).toHaveLength(1);
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a host relay once the host snapshot has landed", () => {
+    focusChatTile("chat-2");
+    deliveringHostFeed();
+    const playChime = vi.fn();
+
+    displayForwardedForegroundNotification(forwardedHostFeedDisplay("chat-1"), {
+      playChime,
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("renders a cloud relay when only the local feed is delivering", () => {
+    // Windows can transiently disagree on feed mode. A cloud arrival relayed
+    // from a cloud-mode window can name a remote host's occurrence, which the
+    // v1 local feed will never emit - and once this window upgrades to cloud,
+    // the occurrence lands inside its silent baseline snapshot. The local
+    // feed therefore never covers a cloud-source relay.
+    focusChatTile("chat-2");
+    deliveringHostFeed();
     const playChime = vi.fn();
 
     displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {

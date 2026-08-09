@@ -31,6 +31,7 @@ import {
 import {
   buildNotificationActivationEnvelope,
   parseNotificationActivationPayload,
+  type ParsedNotificationActivationPayload,
 } from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
 
@@ -76,9 +77,13 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
-  if (isFeedRelay(display)) {
-    if (ownFeedIsDelivering()) return;
-    if (suppressedByFocusedEntity(display)) return;
+  const parsed =
+    display.payload === null
+      ? null
+      : parseNotificationActivationPayload(display.payload);
+  if (isFeedRelay(display, parsed)) {
+    if (ownFeedIsDelivering(parsed)) return;
+    if (suppressedByFocusedEntity(parsed)) return;
   }
   const actionable = display.payload !== null;
   const title = actionable
@@ -127,26 +132,49 @@ export function displayForwardedForegroundNotification(
  * cannot inspect straight past it - and the receiving window's own feed
  * copy, which IS gated on the durable columns, would be the one suppressed.
  */
-function isFeedRelay(display: NotificationForegroundDisplay): boolean {
+function isFeedRelay(
+  display: NotificationForegroundDisplay,
+  parsed: ParsedNotificationActivationPayload | null,
+): boolean {
   if (display.foregroundAppLocal !== null) return false;
-  if (display.payload === null) return true;
-  const parsed = parseNotificationActivationPayload(display.payload);
+  if (parsed === null) return true;
   return !(parsed.kind === "v1" && parsed.envelope.feed.source === "app-local");
 }
 
 /**
- * Whether this window's own feed subscription is live - the cloud one or the
- * v1 local one, whichever this window opened (the other store never reaches a
- * delivering state, so this needs no separate feed-mode read).
+ * Whether this window's own feed subscription can reproduce the relayed row -
+ * meaning ignoring the relay loses nothing, because the row is already
+ * arriving here directly.
  *
  * A stream can go terminal without the window noticing, and then the relay is
  * the only copy of the row this window will ever see - dropping it as
  * "redundant" would make a broken feed silently swallow notifications too.
+ *
+ * Reproducibility is directional across the two feeds. The cloud feed carries
+ * every host row (each host replicates up), so a delivering cloud feed covers
+ * host-source and unattributable relays too. The v1 local feed carries only
+ * THIS machine's rows, so it never covers a cloud-source relay: windows can
+ * transiently disagree on feed mode (capability negotiation is per-window),
+ * and a cloud arrival relayed from a cloud-mode window can name a remote
+ * host's occurrence the local feed will never emit - and once this window
+ * upgrades, that occurrence lands inside its silent baseline snapshot.
  */
-function ownFeedIsDelivering(): boolean {
+function ownFeedIsDelivering(
+  parsed: ParsedNotificationActivationPayload | null,
+): boolean {
   const cloud = useCloudNotificationsStore.getState();
   if (cloud.connectionState === "connected" && cloud.hasSnapshot) return true;
-  return useHostNotificationsStore.getState().connectionStatus === "open";
+  if (parsed?.kind === "v1" && parsed.envelope.feed.source === "cloud") {
+    return false;
+  }
+  const host = useHostNotificationsStore.getState();
+  // Transport `open` is not usability: the host stream reports open before its
+  // first snapshot lands, and a baseline snapshot never calls the channel
+  // emission. Relays dropped in that window would be the only copy of an
+  // occurrence this renderer had. `summary` is the host analogue of the cloud
+  // `hasSnapshot` flag - applied with each snapshot and nulled again whenever
+  // the transport leaves `open`, so it cannot go stale across a reconnect.
+  return host.connectionStatus === "open" && host.summary !== null;
 }
 
 export function displayNotificationRows(
@@ -288,9 +316,9 @@ function renderNotificationToast(
  * silence.
  */
 function suppressedByFocusedEntity(
-  display: NotificationForegroundDisplay,
+  parsed: ParsedNotificationActivationPayload | null,
 ): boolean {
-  const route = activationRoute(display.payload);
+  const route = activationRoute(parsed);
   if (route === null) return false;
   const entity = notificationEntityFromPayload(route);
   if (entity === null) return false;
@@ -301,9 +329,10 @@ function suppressedByFocusedEntity(
   );
 }
 
-function activationRoute(payload: unknown): NotificationPayload | null {
-  if (payload === null) return null;
-  const parsed = parseNotificationActivationPayload(payload);
+function activationRoute(
+  parsed: ParsedNotificationActivationPayload | null,
+): NotificationPayload | null {
+  if (parsed === null) return null;
   switch (parsed.kind) {
     case "v1":
       return parsed.envelope.route;
