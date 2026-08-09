@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { MANAGED_COMMAND_NOUN } from "@/lib/managed-commands/managed-command-copy";
+import { managedCommandNoun } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -195,7 +195,14 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
 }
 
 function resumeNoun(trigger: AutonomousResumeTrigger): string {
-  if (trigger.managedCommand !== null) return MANAGED_COMMAND_NOUN;
+  // A trigger WITH a managed-command block names a Traycer shell, so it is
+  // named the way every other shell surface names one - by its monitor flag. A
+  // divider persisted before the flag existed reads as `false`, so an old chat
+  // says Shell rather than guessing at a watcher.
+  const managedCommand = trigger.managedCommand;
+  if (managedCommand !== null) {
+    return managedCommandNoun(managedCommand.monitoring);
+  }
   if (trigger.mcp !== null) return "MCP tool";
   return resumeKindTitle(trigger.kind);
 }
@@ -218,7 +225,10 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
     // NOT the Traycer shell entity: a trigger with no `managedCommand` block
     // that still says "monitor" is the harness's OWN background task - Claude
     // Code's native Monitor tool - and keeps that tool's real name. Traycer
-    // shells are titled through `resumeNoun`'s `managedCommand` branch.
+    // shells are titled through `resumeNoun`'s `managedCommand` branch, which
+    // now reaches the same word for a watching shell; the two dividers still
+    // differ where it counts, since only a Traycer shell offers a door into
+    // its output window.
     case "monitor":
       return "Monitor";
     case "subagent":

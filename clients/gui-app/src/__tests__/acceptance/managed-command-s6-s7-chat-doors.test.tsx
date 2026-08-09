@@ -271,7 +271,7 @@ describe("S6 · running work in the chat's Background panel", () => {
     const mine = screen.getByTestId(
       "managed-command-background-row-cmd-mine-running",
     );
-    expect(mine.textContent).toContain("Shell · deploy watcher");
+    expect(mine.textContent).toContain("Monitor · deploy watcher");
     expect(
       screen.queryByTestId("managed-command-background-row-cmd-theirs-running"),
     ).toBeNull();
@@ -349,7 +349,7 @@ describe("S7 · doors", () => {
     expect(badge.querySelector("[data-monitor-icon]")).toBeNull();
   });
 
-  it("S7c: the divider says Shell whether or not the shell was monitoring", () => {
+  it("S7c: the divider names the shell by its monitor state", () => {
     renderInChatContext(
       <AutonomousResumeSegment
         triggers={[
@@ -369,8 +369,7 @@ describe("S7 · doors", () => {
       />,
     );
     expect(screen.getByText("Shell completed")).toBeTruthy();
-    expect(screen.getByText("Shell failed")).toBeTruthy();
-    expect(screen.queryByText(/Monitor/)).toBeNull();
+    expect(screen.getByText("Monitor failed")).toBeTruthy();
   });
 
   it("S7d: the divider is a door — 'View output' opens the named shell's window", () => {
@@ -417,10 +416,10 @@ describe("S7 · doors", () => {
         ]}
       />,
     );
-    // Named, like every other state: the trigger identifies a shell, so the
-    // divider says Shell. Only a legacy trigger with no `managedCommand` at
-    // all falls back to the generic "Command still running".
-    expect(screen.getByText("Shell still running")).toBeTruthy();
+    // Named, like every other state: the trigger identifies a watching shell,
+    // so the divider says Monitor. Only a legacy trigger with no
+    // `managedCommand` at all falls back to "Command still running".
+    expect(screen.getByText("Monitor still running")).toBeTruthy();
     expect(screen.queryByText(/completed|failed|stopped/)).toBeNull();
   });
 

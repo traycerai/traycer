@@ -344,6 +344,7 @@ function ManagedCommandMenuRow(props: {
       >
         <ManagedCommandMonitorIcon
           monitoring={command.monitoring}
+          decorative
           className={undefined}
         />
         <ManagedCommandStatusDot

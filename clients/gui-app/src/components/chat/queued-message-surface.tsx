@@ -694,8 +694,12 @@ export function ManagedCommandBadge(props: {
             shell, and the terminal glyph is reserved for the Terminals
             surface (see managed-command-monitor-icon.tsx). */}
         {props.monitoring === null ? null : (
+          // Speaks, unlike every row glyph: this chip's label is the constant
+          // "Shell output", so nothing else here says whether the shell was
+          // watching.
           <ManagedCommandMonitorIcon
             monitoring={props.monitoring}
+            decorative={false}
             className={undefined}
           />
         )}

@@ -394,17 +394,18 @@ function backgroundHeaderSummary(input: {
 
 /**
  * A running shell as an ordinary row of this list, in the same grammar as a
- * harness background row beside it - glyph, title, pill, live elapsed, hover
- * stop. To a human these are the same thing: work running behind the chat. The
- * radar / play glyphs are what keep a host-supervised shell apart from the
- * harness's own "Monitor" kind; no copy carries that load.
+ * harness background row beside it - glyph, title, live elapsed, hover stop.
+ * To a human these are the same thing: work running behind the chat. The radar
+ * / play glyphs are what keep a host-supervised shell apart from the harness's
+ * own "Monitor" kind - more so now that a watching shell's title says Monitor
+ * too, since no copy tells those two apart.
  *
- * The pill slot carries the MONITOR flag rather than the entity noun. A
- * harness row spends it on a kind because its rows differ; every shell row is
- * a shell and says so in its title, so a constant "SHELL" pill there was one
- * more thing to read and nothing more to learn. Monitoring is the only state
- * that separates two shell rows, and it is live-tunable - so the pill appears
- * and disappears under a row that stays put, which is the point.
+ * The pill slot stays EMPTY on a shell row. A harness row spends it on a kind
+ * because its rows differ in kind; a shell row's one distinguishing state -
+ * the monitor flag - is carried by the title's own noun ("Monitor · deploy
+ * watcher" vs "Shell · db migration"), so a pill saying it again would be a
+ * second fact and is none. The noun and the glyph both swap live under a row
+ * that stays put, which is how the flag flipping reads as news.
  *
  * Stop and nothing else. This is a "running right now" surface, so a row here
  * is a passing status rather than a durable object; deleting a shell - which
@@ -485,6 +486,7 @@ function ManagedCommandRow(props: {
           >
             <ManagedCommandMonitorIcon
               monitoring={command.monitoring}
+              decorative
               className="size-3.5 text-primary/80"
             />
             <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
@@ -492,18 +494,6 @@ function ManagedCommandRow(props: {
             </span>
             {command.status.state === "running" ? (
               <LiveElapsed startedAt={command.status.startedAtMs} />
-            ) : null}
-            {command.monitoring ? (
-              // Absent, not dimmed, when the shell isn't monitoring: an empty
-              // slot is what makes the pill mean something wherever it appears.
-              // `aria-hidden` because the row's glyph already announces this
-              // exact state - see `ManagedCommandMonitorIcon`.
-              <span
-                aria-hidden
-                className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground"
-              >
-                Monitoring
-              </span>
             ) : null}
           </button>
         </TooltipWrapper>

@@ -257,7 +257,7 @@ describe("queued-delivery chip", () => {
 });
 
 describe("resume divider", () => {
-  it("says Shell, not Command, for a shell's mid-run output", () => {
+  it("names the shell, not a generic Command, for a shell's mid-run output", () => {
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[
@@ -270,7 +270,7 @@ describe("resume divider", () => {
       />,
     );
 
-    expect(screen.getByText("Shell still running")).not.toBeNull();
+    expect(screen.getByText("Monitor still running")).not.toBeNull();
   });
 
   it("keeps the generic copy for a legacy trigger that names no shell", () => {
@@ -291,19 +291,26 @@ describe("resume divider", () => {
     expect(screen.getByText("Command still running")).not.toBeNull();
   });
 
-  it("names the shell in its terminal copy", () => {
+  it("names the shell in its terminal copy, by whether it was watching", () => {
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[
           trigger({
+            blockId: "block-quiet",
             status: "completed",
             managedCommand: { commandId: "cmd-1", monitoring: false },
+          }),
+          trigger({
+            blockId: "block-watcher",
+            status: "failed",
+            managedCommand: { commandId: "cmd-2", monitoring: true },
           }),
         ]}
       />,
     );
 
     expect(screen.getByText("Shell completed")).not.toBeNull();
+    expect(screen.getByText("Monitor failed")).not.toBeNull();
   });
 
   it("keeps the harness Monitor name for a kind-only trigger, and offers it no door", () => {
@@ -406,7 +413,7 @@ describe("running commands in the Background panel", () => {
     expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
       "managed-command-background-row-mine-running",
     ]);
-    expect(rows[0].textContent).toContain("Shell · deploy watcher");
+    expect(rows[0].textContent).toContain("Monitor · deploy watcher");
   });
 
   it("drops a row the moment its command reaches a terminal state", () => {
@@ -476,15 +483,17 @@ describe("running commands in the Background panel", () => {
       "managed-command-background-row-mine-running",
     );
     // The glyph is what keeps a supervised shell apart from the harness's own
-    // background kinds; the title names the entity.
+    // background kinds; the title names the entity by its monitor state.
     expect(row.querySelector("[data-monitor-icon='off']")).not.toBeNull();
     expect(row.textContent).toContain("Shell · deploy watcher");
-    // The pill slot is EMPTY on a shell that isn't monitoring - no placeholder,
-    // no dimmed variant. A constant "Shell" pill beside a title that already
-    // says Shell was pure repetition, so the slot now carries the one thing
-    // the row cannot otherwise say.
+    // The pill slot is EMPTY on a shell row, whatever the flag says: the
+    // title's own noun is what carries it, so a pill would be a second fact
+    // and is none.
     expect(within(row).queryByText("Shell")).toBeNull();
     expect(within(row).queryByText("Monitoring")).toBeNull();
+    // ...and the glyph doesn't announce it either, or the row would read the
+    // same state out twice.
+    expect(row.querySelector("[aria-label='Not monitoring']")).toBeNull();
     // Same clock format the harness rows use, so two rows side by side read
     // as one list rather than two conventions.
     expect(row.textContent).toContain("1m 5s");
@@ -497,7 +506,7 @@ describe("running commands in the Background panel", () => {
     });
   });
 
-  it("spends the pill on the monitor flag, the one state the row can't otherwise show", () => {
+  it("says a watching shell is a Monitor in the title, and pins no pill beside it", () => {
     renderPanel([]);
     act(() => {
       setCommands([command({ id: "mine-running", monitoring: true })], CHAT_ID);
@@ -507,11 +516,34 @@ describe("running commands in the Background panel", () => {
     const row = screen.getByTestId(
       "managed-command-background-row-mine-running",
     );
-    // Uppercased by the panel's shared pill styling, so the source text stays
-    // title-case like every other pill in this list.
-    const pill = within(row).getByText("Monitoring");
-    expect(pill.className).toContain("uppercase");
+    expect(row.textContent).toContain("Monitor · deploy watcher");
+    expect(within(row).queryByText("Monitoring")).toBeNull();
     expect(row.querySelector("[data-monitor-icon='on']")).not.toBeNull();
+    expect(row.querySelector("[aria-label='Monitoring']")).toBeNull();
+  });
+
+  it("renames a live row when the agent turns its monitor flag off", () => {
+    renderPanel([]);
+    act(() => {
+      setCommands([command({ id: "mine-running", monitoring: true })], CHAT_ID);
+    });
+    expandPanel();
+
+    const row = () =>
+      screen.getByTestId("managed-command-background-row-mine-running");
+    expect(row().textContent).toContain("Monitor · deploy watcher");
+
+    // Muting is applied live by the host - no restart, same record - so the
+    // row stays put and its NAME reports that it stopped being a watcher.
+    act(() => {
+      setCommands(
+        [command({ id: "mine-running", monitoring: false, updatedAtMs: 40 })],
+        CHAT_ID,
+      );
+    });
+
+    expect(row().textContent).toContain("Shell · deploy watcher");
+    expect(row().textContent).not.toContain("Monitor");
   });
 
   it("offers stop and nothing destructive: this is a status, not the object", () => {
@@ -985,7 +1017,7 @@ describe("the chat's Shells menu", () => {
     ).toBe("No shells left");
   });
 
-  it("swaps a live row's glyph when its monitor flag is turned off", () => {
+  it("swaps a live row's glyph and noun when its monitor flag is turned off", () => {
     renderMenu();
     act(() => {
       setCommands([command({ id: "watcher", monitoring: true })], CHAT_ID);
@@ -994,9 +1026,10 @@ describe("the chat's Shells menu", () => {
 
     const row = () => screen.getByTestId("managed-command-menu-row-watcher");
     expect(row().querySelector("[data-monitor-icon='on']")).not.toBeNull();
+    expect(row().textContent).toContain("Monitor · deploy watcher");
 
     // Muting is applied live by the host - no restart, same record - so the
-    // row stays where it is and only the glyph reports the change.
+    // row stays where it is and the change reads off its glyph and its name.
     act(() => {
       setCommands(
         [command({ id: "watcher", monitoring: false, updatedAtMs: 40 })],
@@ -1006,7 +1039,8 @@ describe("the chat's Shells menu", () => {
 
     expect(row().querySelector("[data-monitor-icon='on']")).toBeNull();
     expect(row().querySelector("[data-monitor-icon='off']")).not.toBeNull();
-    // The noun never moved with the flag: it is a shell either way.
+    // The noun moves with the flag: this stopped being a watcher, and the
+    // title is where the product says so.
     expect(row().textContent).toContain("Shell · deploy watcher");
   });
 

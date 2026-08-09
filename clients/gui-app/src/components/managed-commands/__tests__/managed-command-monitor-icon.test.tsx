@@ -18,7 +18,11 @@ function lucideGlyph(Icon: ComponentType): string {
 
 function monitorGlyph(monitoring: boolean): string {
   return glyphOf(
-    <ManagedCommandMonitorIcon monitoring={monitoring} className={undefined} />,
+    <ManagedCommandMonitorIcon
+      monitoring={monitoring}
+      decorative
+      className={undefined}
+    />,
   );
 }
 
@@ -43,12 +47,16 @@ describe("<ManagedCommandMonitorIcon />", () => {
     // without remounting. The swap is the depiction of that, which a glyph
     // chosen once at mount would swallow.
     const { container, rerender } = render(
-      <ManagedCommandMonitorIcon monitoring className={undefined} />,
+      <ManagedCommandMonitorIcon monitoring decorative className={undefined} />,
     );
     expect(container.querySelector("[data-monitor-icon='on']")).not.toBeNull();
 
     rerender(
-      <ManagedCommandMonitorIcon monitoring={false} className={undefined} />,
+      <ManagedCommandMonitorIcon
+        monitoring={false}
+        decorative
+        className={undefined}
+      />,
     );
     expect(container.querySelector("[data-monitor-icon='on']")).toBeNull();
     expect(container.querySelector("[data-monitor-icon='off']")).not.toBeNull();
@@ -57,9 +65,13 @@ describe("<ManagedCommandMonitorIcon />", () => {
     );
   });
 
-  it('speaks the monitor state: the glyph is its only carrier now that every label says just "Shell"', () => {
+  it("speaks the monitor state where no neighbouring copy carries it", () => {
     const { container, rerender } = render(
-      <ManagedCommandMonitorIcon monitoring className={undefined} />,
+      <ManagedCommandMonitorIcon
+        monitoring
+        decorative={false}
+        className={undefined}
+      />,
     );
     const svg = container.querySelector("svg");
     expect(svg?.getAttribute("role")).toBe("img");
@@ -68,10 +80,26 @@ describe("<ManagedCommandMonitorIcon />", () => {
     expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
 
     rerender(
-      <ManagedCommandMonitorIcon monitoring={false} className={undefined} />,
+      <ManagedCommandMonitorIcon
+        monitoring={false}
+        decorative={false}
+        className={undefined}
+      />,
     );
     expect(container.querySelector("svg")?.getAttribute("aria-label")).toBe(
       "Not monitoring",
     );
+  });
+
+  it("stays silent beside a title that already names the state", () => {
+    // Every row/header title now says "Monitor · …" or "Shell · …", so a
+    // speaking glyph there would announce the same fact twice.
+    const { container } = render(
+      <ManagedCommandMonitorIcon monitoring decorative className={undefined} />,
+    );
+    const svg = container.querySelector("svg");
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    expect(svg?.getAttribute("role")).toBeNull();
+    expect(svg?.getAttribute("aria-label")).toBeNull();
   });
 });

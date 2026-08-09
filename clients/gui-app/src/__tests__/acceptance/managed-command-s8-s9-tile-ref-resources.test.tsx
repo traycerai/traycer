@@ -492,7 +492,7 @@ describe("S9 · resource readouts (GUI half)", () => {
 
     // The row still says everything the chat's set knows — only the readout
     // the old host could not express is missing.
-    expect(screen.getByText("Shell · deploy watcher")).toBeTruthy();
+    expect(screen.getByText("Monitor · deploy watcher")).toBeTruthy();
     expect(chipOnRow("cmd-res")).toBeNull();
   });
 });

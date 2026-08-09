@@ -2557,7 +2557,8 @@ describe("ResourceMonitorPopover", () => {
   });
 
   // A managed command reads as the shell it is (CONTEXT.md), never as the
-  // umbrella term, and the monitor flag only ever moves the glyph.
+  // umbrella term, and its noun follows the monitor flag the same way the
+  // chat's Shells list names the very same shell.
   function managedCommandOwner(
     monitoring: boolean,
     description: string,
@@ -2574,7 +2575,7 @@ describe("ResourceMonitorPopover", () => {
     });
   }
 
-  it("names a monitoring owner row Shell, by its description", () => {
+  it("names a monitoring owner row Monitor, by its description", () => {
     const stub = installStubFactory();
     renderPopover();
 
@@ -2587,11 +2588,10 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-    expect(screen.getByText("Shell · deploy watcher")).not.toBeNull();
-    expect(screen.queryByText(/Monitor/)).toBeNull();
+    expect(screen.getByText("Monitor · deploy watcher")).not.toBeNull();
   });
 
-  it("names a quiet owner row the same way", () => {
+  it("names a quiet owner row by the noun a shell that isn't watching gets", () => {
     const stub = installStubFactory();
     renderPopover();
 

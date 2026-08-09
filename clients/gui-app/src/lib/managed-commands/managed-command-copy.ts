@@ -5,23 +5,40 @@ import type {
 
 /**
  * Copy for the Shells surface (root `CONTEXT.md`). There is ONE entity here -
- * a shell - and "monitor" is prose for a shell with monitoring on, never a
- * second noun the UI names. "Commands" stays banned as a UI term, because it
- * collides with the command palette and with terminal commands.
+ * a shell - but what the UI CALLS one follows its monitor state: a shell that
+ * is watching is a "Monitor", a shell that is not is a "Shell". Product
+ * decision, 2026-08-09; it supersedes the earlier rule that the noun stays
+ * "Shell" whatever the flag says.
+ *
+ * The flag is live-tunable, so the noun changes under a row that stays put.
+ * That is the point rather than a cost: the name is the loudest place to tell
+ * the "this stopped being a watcher" story, and it is the one state that
+ * separates two otherwise identical shells.
+ *
+ * "Shells" stays the umbrella, because a monitor IS a shell: the container -
+ * the chat's menu, its chip, the deleted-shell copy - keeps that name.
+ * "Commands" stays banned as a UI term, because it collides with the command
+ * palette and with terminal commands.
  */
 
 /**
- * The entity noun, wherever a bare label is what fits (row title, resource
- * kind label, resume prose). Deliberately NOT a pill anywhere: a pill beside a
- * title that already says Shell reads as a second fact and is none.
+ * The entity in general, for copy that names no particular shell and so has no
+ * flag to follow: the resource monitor's owner-kind column, the output
+ * window's own name, empty states. A title with a command in hand uses
+ * `managedCommandNoun` instead.
  */
 export const MANAGED_COMMAND_NOUN = "Shell";
 
-/** The list row / tab title: "Shell · deploy watcher". */
+/** What to call ONE shell, given whether it is watching. */
+export function managedCommandNoun(monitoring: boolean): string {
+  return monitoring ? "Monitor" : MANAGED_COMMAND_NOUN;
+}
+
+/** The list row / tab title: "Monitor · deploy watcher", "Shell · db migration". */
 export function managedCommandTitle(
-  command: Pick<ManagedCommand, "description">,
+  command: Pick<ManagedCommand, "description" | "monitoring">,
 ): string {
-  return `${MANAGED_COMMAND_NOUN} · ${command.description}`;
+  return `${managedCommandNoun(command.monitoring)} · ${command.description}`;
 }
 
 /**

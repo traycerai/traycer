@@ -320,7 +320,7 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
     expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Shell · deploy watcher",
+      "Monitor · deploy watcher",
     );
 
     act(() => {

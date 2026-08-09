@@ -47,7 +47,10 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
-import { MANAGED_COMMAND_NOUN } from "@/lib/managed-commands/managed-command-copy";
+import {
+  MANAGED_COMMAND_NOUN,
+  managedCommandNoun,
+} from "@/lib/managed-commands/managed-command-copy";
 import { normalizeProviderId } from "@/components/home/data/landing-options";
 import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -1687,6 +1690,7 @@ function OwnerProviderIcon(props: {
     return (
       <ManagedCommandMonitorIcon
         monitoring={props.managedCommand.monitoring}
+        decorative
         className={undefined}
       />
     );
@@ -3082,8 +3086,11 @@ function ownerKindLabel(
   if (kind === "terminal") return "Terminal";
   if (kind === "terminal-agent") return "Agent (Terminal)";
   if (kind === "managed-command") {
-    // The umbrella term is the fallback for a host that sent the owner
-    // without naming it, which nothing does today.
+    // The KIND, not this shell's name: it sits in a column of classes
+    // ("Terminal", "Agent (Chat)"), and a monitor is a shell. The row title
+    // beside it is where the monitor flag speaks. "Managed command" is the
+    // fallback for a host that sent the owner without naming it, which
+    // nothing does today.
     return managedCommand === null ? "Managed command" : MANAGED_COMMAND_NOUN;
   }
   return "Agent (Chat)";
@@ -3093,15 +3100,18 @@ function ownerKindLabel(
  * Row title for a managed command. Its own description is the only name it
  * has - it is not a canvas node, so none of the tile/record fallbacks the
  * other owner kinds walk apply to it.
+ *
+ * Named by the monitor flag, exactly as the Shells list names the same shell:
+ * the owner frame carries `monitoring` precisely so one process tree is not
+ * labelled two different ways.
  */
 function managedCommandLabel(
   managedCommand: ManagedCommandOwnerWire | null,
 ): string {
   if (managedCommand === null) return "Managed command";
+  const noun = managedCommandNoun(managedCommand.monitoring);
   const description = managedCommand.description;
-  return description === ""
-    ? MANAGED_COMMAND_NOUN
-    : `${MANAGED_COMMAND_NOUN} · ${description}`;
+  return description === "" ? noun : `${noun} · ${description}`;
 }
 
 // Subtitle beside the provider icon. Always non-empty so the icon never sits

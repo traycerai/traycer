@@ -14,22 +14,29 @@ import { cn } from "@/lib/utils";
  * The flag is live-tunable, so the glyph swaps under a row that stays put. That
  * is the point: the swap is what depicts "this stopped being a watcher".
  *
- * Under the old model the icon supplemented kind-explicit text and hid from
- * assistive tech. Post-unification every label is the constant "Shell", so
- * this glyph is the ONLY carrier of the monitor state - it must speak, or a
- * screen-reader user cannot tell a watching shell from a silent one anywhere
- * in the product. It stays neutral-toned because colour on this surface means
- * status and nothing else.
+ * Whether it SPEAKS is the caller's call, because it depends on the copy next
+ * to it. Every title now names the state ("Monitor · deploy watcher" vs
+ * "Shell · db migration"), so on a row or a window header the glyph is
+ * `decorative` - announcing "Monitoring" there would read the same fact out
+ * twice. The queued-delivery chip is the exception: its label is the constant
+ * "Shell output", so the glyph is the only carrier and must speak, or a
+ * screen-reader user cannot tell a watcher's digest from a dead shell's.
+ *
+ * It stays neutral-toned because colour on this surface means status and
+ * nothing else.
  */
 export function ManagedCommandMonitorIcon(props: {
   readonly monitoring: boolean;
+  readonly decorative: boolean;
   readonly className: string | undefined;
 }) {
   const Glyph = props.monitoring ? Radar : CirclePlay;
+  const stateLabel = props.monitoring ? "Monitoring" : "Not monitoring";
   return (
     <Glyph
-      role="img"
-      aria-label={props.monitoring ? "Monitoring" : "Not monitoring"}
+      role={props.decorative ? undefined : "img"}
+      aria-hidden={props.decorative ? true : undefined}
+      aria-label={props.decorative ? undefined : stateLabel}
       data-monitor-icon={props.monitoring ? "on" : "off"}
       className={cn(
         "size-3 shrink-0 text-muted-foreground/70",

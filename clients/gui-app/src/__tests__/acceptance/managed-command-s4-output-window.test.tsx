@@ -334,9 +334,10 @@ describe("S4 · output window", () => {
       reachedStart: true,
     });
 
-    // Entity naming: "Shell · <description>", the record's own example copy.
+    // Entity naming: the noun follows the monitor flag, and this fixture is
+    // watching.
     expect(screen.getByTestId("managed-command-output-title").textContent).toBe(
-      "Shell · deploy watcher",
+      "Monitor · deploy watcher",
     );
     expect(
       screen.getByTestId("managed-command-output-status").textContent,
