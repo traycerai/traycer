@@ -188,6 +188,7 @@ function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
         items={[]}
         epicId={EPIC_ID}
         chatId={CHAT_A}
+        viewTabId={TAB_ID}
         canAct
         readOnly={false}
         pendingStopTaskIds={new Set()}

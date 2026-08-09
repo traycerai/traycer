@@ -359,6 +359,7 @@ describe("running commands in the Background panel", () => {
         items={items}
         epicId={EPIC_ID}
         chatId={CHAT_ID}
+        viewTabId={TAB_ID}
         canAct={canAct}
         readOnly={false}
         pendingStopTaskIds={new Set()}

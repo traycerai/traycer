@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import { useDraggable } from "@dnd-kit/core";
 import {
   AlarmClock,
   Bot,
@@ -27,6 +28,13 @@ import {
 } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
+import {
+  MANAGED_COMMAND_OUTPUT_DND_TYPE,
+  getManagedCommandOutputDragId,
+  getPaneScopedDndId,
+  type EpicCanvasManagedCommandOutputDragData,
+} from "@/components/epic-canvas/dnd/dnd";
+import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-commands-for-chat";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { cn } from "@/lib/utils";
@@ -402,21 +410,57 @@ function backgroundHeaderSummary(input: {
  * is a passing status rather than a durable object; deleting a shell - which
  * destroys its whole output history - belongs to the chat's Shells menu and
  * the output window, where the shell itself is the subject.
+ *
+ * The row drags out onto the canvas, on the same payload the Shells menu's
+ * rows use, so the canvas needs to know nothing about where the gesture
+ * started. Clicking still opens the window wherever the door puts it; dragging
+ * is how a person says WHERE, and having to find the same shell in a second
+ * menu to place it deliberately was the only reason to go there.
  */
 function ManagedCommandRow(props: {
   readonly command: ManagedCommand;
   readonly epicId: string;
   readonly hostId: string;
+  readonly viewTabId: string;
   readonly stoppable: boolean;
   readonly onOpen: ((commandId: string) => void) | null;
 }) {
-  const { command, onOpen } = props;
+  const { command, epicId, hostId, viewTabId, onOpen } = props;
   const title = managedCommandTitle(command);
+  const tile = useMemo(
+    () => makeManagedCommandOutputTileRef({ commandId: command.id, hostId }),
+    [command.id, hostId],
+  );
+  const dragData = useMemo<EpicCanvasManagedCommandOutputDragData>(
+    () => ({
+      kind: MANAGED_COMMAND_OUTPUT_DND_TYPE,
+      epicId,
+      viewTabId,
+      tile,
+    }),
+    [epicId, viewTabId, tile],
+  );
+  // The same chat can be open in two tiles of one view, so the command id alone
+  // would register duplicate draggables and let a gesture bind to the other
+  // copy's node. The occurrence key keeps ids unique per mounted row; the drop
+  // reads the payload, never the id.
+  const occurrenceId = useId();
+  const { listeners, setNodeRef, isDragging } = useDraggable({
+    id: getPaneScopedDndId(
+      viewTabId,
+      getManagedCommandOutputDragId(`${command.id}:${occurrenceId}`),
+    ),
+    data: dragData,
+    disabled: false,
+  });
 
   return (
     <li className="m-0">
       <div
-        className="group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-muted/40"
+        className={cn(
+          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-muted/40",
+          isDragging ? "opacity-50" : null,
+        )}
         style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
       >
         <TooltipWrapper
@@ -426,13 +470,18 @@ function ManagedCommandRow(props: {
           align={undefined}
         >
           <button
+            ref={setNodeRef}
+            {...listeners}
             type="button"
             data-testid={`managed-command-background-row-${command.id}`}
             disabled={onOpen === null}
             onClick={() => {
               onOpen?.(command.id);
             }}
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              isDragging ? "cursor-grabbing" : "cursor-grab",
+            )}
           >
             <ManagedCommandMonitorIcon
               monitoring={command.monitoring}
@@ -599,6 +648,8 @@ export function BackgroundItemsPanel(props: {
   readonly items: ReadonlyArray<BackgroundItem>;
   readonly epicId: string;
   readonly chatId: string;
+  /** The canvas view a dragged-out shell window lands in. */
+  readonly viewTabId: string;
   readonly canAct: boolean;
   readonly readOnly: boolean;
   readonly pendingStopTaskIds: ReadonlySet<string>;
@@ -749,6 +800,7 @@ export function BackgroundItemsPanel(props: {
                 command={command}
                 epicId={props.epicId}
                 hostId={hostId}
+                viewTabId={props.viewTabId}
                 stoppable={managedStoppable}
                 onOpen={openManagedCommand}
               />
