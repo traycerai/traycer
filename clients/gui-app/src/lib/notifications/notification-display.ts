@@ -22,6 +22,8 @@ import {
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 import {
   isDocumentFocused,
   readFocusedHostNotificationPresenceEntity,
@@ -47,12 +49,26 @@ interface NativeNotificationDisplayOptions {
 
 /**
  * Renders a notification another window's native pass relayed here because
- * this window holds app focus. The relay is entity-blind: the sending window
- * gates on ITS OWN focused entity (null while it is unfocused, which is
- * exactly when it relays), so the entity check for the entity THIS window is
- * looking at can only happen here, at receive time. Without it, a background
- * window's display of a row for the focused chat lands as a toast over that
- * very chat.
+ * this window holds app focus.
+ *
+ * A relay carries the SENDER's pre-composed display: one title and body built
+ * from the rows that survived the sender's own focus filter, with only the
+ * first row's payload attached. The receiver therefore cannot re-derive what
+ * it should have shown - which is why a batched relay could otherwise land
+ * here describing a sibling chat while silently re-counting the very row this
+ * window suppressed.
+ *
+ * So a FEED relay is not rendered at all. Every window holds its own feed
+ * subscription, so those rows are already arriving here directly, filtered by
+ * THIS window's focus, with per-row content the sender's summary cannot
+ * reproduce. The relay is pure duplication - unless our own feed is not
+ * delivering, in which case it is the only copy we will get and the entity
+ * gate decides it.
+ *
+ * App-local rows are the opposite: they live in the originating renderer's
+ * store and reach no other window, so their relay is the delivery. Legacy and
+ * unparseable payloads render too - a redundant toast is a nuisance, a
+ * swallowed failure is data loss.
  */
 export function displayForwardedForegroundNotification(
   display: NotificationForegroundDisplay,
@@ -61,8 +77,11 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
-  if (suppressedByFocusedEntity(display)) return;
-  if (wasDeliveryKeyDisplayed(display.deliveryKey)) return;
+  const feedSource = relayedFeedSource(display);
+  if (feedSource !== null) {
+    if (ownFeedIsDelivering(feedSource)) return;
+    if (suppressedByFocusedEntity(display)) return;
+  }
   const actionable = display.payload !== null;
   const title = actionable
     ? createElement(
@@ -93,8 +112,34 @@ export function displayForwardedForegroundNotification(
     description: actionable ? undefined : display.body,
     id: display.replaceKey ?? undefined,
   });
-  rememberDisplayedDeliveryKey(display.deliveryKey);
   target.playChime();
+}
+
+/** The feed a relayed display came from, or `null` when it is an app-local
+ * row or a payload with no feed identity. */
+function relayedFeedSource(
+  display: NotificationForegroundDisplay,
+): "host" | "cloud" | null {
+  if (display.foregroundAppLocal !== null) return null;
+  if (display.payload === null) return null;
+  const parsed = parseNotificationActivationPayload(display.payload);
+  if (parsed.kind !== "v1") return null;
+  const source = parsed.envelope.feed.source;
+  return source === "host" || source === "cloud" ? source : null;
+}
+
+/**
+ * Whether this window's own subscription to that feed is live. A stream can
+ * go terminal without the window noticing, and then the relay is the only
+ * copy of the row this window will ever see - dropping it as "redundant"
+ * would make a broken feed silently swallow notifications too.
+ */
+function ownFeedIsDelivering(source: "host" | "cloud"): boolean {
+  if (source === "cloud") {
+    const cloud = useCloudNotificationsStore.getState();
+    return cloud.connectionState === "connected" && cloud.hasSnapshot;
+  }
+  return useHostNotificationsStore.getState().connectionStatus === "open";
 }
 
 export function displayNotificationRows(
@@ -126,11 +171,12 @@ function displayFeedRows(
 }
 
 /**
- * Every window subscribed to a feed displays the same arrival, so without a
- * delivery key the main process treats N windows as N notifications: N-1
- * foreground relays into the focused window (N-1 extra chimes), or a native
- * banner per window. The key collapses that fan-out to one delivery per
- * occurrence app-wide, whichever window reports it first.
+ * Every window subscribed to a feed reports the same arrival to the native
+ * pass, so without a delivery key the main process treats N windows as N
+ * notifications and shows an OS banner per window. The key collapses that to
+ * one banner per occurrence, whichever window reports it first. (Duplicate
+ * in-app toasts are handled upstream instead, by ignoring feed relays - see
+ * `displayForwardedForegroundNotification`.)
  *
  * Identity is the feed's own `occurrenceKeyForNotification` - never a
  * hand-rolled one. A host row reuses its semantic id across occurrences, so
@@ -172,23 +218,17 @@ async function displayNotificationRowsAwaitNative(
       foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
-    renderNotificationToast(content, target, options.deliveryKey);
+    renderNotificationToast(content, target);
     throw error;
   }
-  renderNotificationToast(content, target, options.deliveryKey);
+  renderNotificationToast(content, target);
   await nativeDisplay;
 }
 
 function renderNotificationToast(
   content: NotificationToastContent,
   target: NotificationDisplayTarget,
-  deliveryKey: string | null,
 ): void {
-  // A focused window can receive the same occurrence twice - its own feed
-  // display racing another window's foreground relay. Whichever rendered
-  // first wins; the sonner id already coalesces the visual, this collapses
-  // the chime too.
-  if (wasDeliveryKeyDisplayed(deliveryKey)) return;
   const isActionable = content.row.payload !== null;
   const toastTitle = isActionable
     ? createElement(
@@ -219,7 +259,6 @@ function renderNotificationToast(
     description: isActionable ? undefined : content.body,
     id: content.replaceKey,
   });
-  rememberDisplayedDeliveryKey(deliveryKey);
   // Only the CHIME is focus-gated, never the toast. The main process treats a
   // focused sender as already-delivered and relays nothing back to it, so a
   // renderer that skipped its own toast on an independent focus read would
@@ -231,27 +270,6 @@ function renderNotificationToast(
   // chime from a window nobody is looking at is not.
   if (!isDocumentFocused()) return;
   target.playChime();
-}
-
-const MAX_DISPLAYED_DELIVERY_KEYS = 500;
-const displayedDeliveryKeys = new Set<string>();
-
-export function clearDisplayedDeliveryKeysForTests(): void {
-  displayedDeliveryKeys.clear();
-}
-
-function wasDeliveryKeyDisplayed(deliveryKey: string | null): boolean {
-  return deliveryKey !== null && displayedDeliveryKeys.has(deliveryKey);
-}
-
-function rememberDisplayedDeliveryKey(deliveryKey: string | null): void {
-  if (deliveryKey === null || displayedDeliveryKeys.has(deliveryKey)) return;
-  while (displayedDeliveryKeys.size >= MAX_DISPLAYED_DELIVERY_KEYS) {
-    const oldest = displayedDeliveryKeys.values().next();
-    if (oldest.done) return;
-    displayedDeliveryKeys.delete(oldest.value);
-  }
-  displayedDeliveryKeys.add(deliveryKey);
 }
 
 /**

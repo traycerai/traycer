@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import {
-  clearDisplayedDeliveryKeysForTests,
   displayNotificationRows,
   type NotificationDisplayTarget,
 } from "@/lib/notifications/notification-display";
@@ -46,7 +45,6 @@ describe("notification toast interactions", () => {
     // The in-app toast only renders in a focused window; jsdom reports
     // unfocused by default.
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    clearDisplayedDeliveryKeysForTests();
   });
 
   afterEach(() => {
