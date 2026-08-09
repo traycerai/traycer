@@ -252,17 +252,33 @@ export function resolvedTurnStatus(
  * wakeup / mcp) read `"background"`. This deliberately diverges from
  * {@link resolvedTurnStatus}, which keeps reporting no active turn for the
  * same state: a detached subagent must not surface a Stop-turn affordance.
+ *
+ * A running shell counts as `"background"` too, and it is the one source that
+ * `runStatus` cannot speak for at all: a shell outlives the turn that started
+ * it, so a chat whose only live thing is a shell reads `runStatus: "idle"` and
+ * would otherwise present as fully idle while a process of its own is still
+ * printing. Only `"running"` shells count - a shell that exited, was stopped,
+ * or was interrupted by a host restart is a durable record, not activity.
  */
 export type ChatActivityIndicator = "turn" | "background" | null;
 
 export function chatActivityIndicator(
   state: Pick<
     ChatSessionState,
-    "runStatus" | "activeTurn" | "queue" | "backgroundItems" | "turnInProgress"
+    | "runStatus"
+    | "activeTurn"
+    | "queue"
+    | "backgroundItems"
+    | "turnInProgress"
+    | "managedCommands"
   >,
 ): ChatActivityIndicator {
   const turnStatus = composerTurnStatus(state.runStatus);
-  if (turnStatus === null) return null;
+  if (turnStatus === null) {
+    return hasRunningManagedCommand(state.managedCommands)
+      ? "background"
+      : null;
+  }
   if (resolvedTurnStatus(state, turnStatus) !== null) return "turn";
   const isQueueRunnable =
     state.queue.status !== "paused" && state.queue.items.length > 0;
@@ -272,6 +288,12 @@ export function chatActivityIndicator(
       (item) => item.kind === "subagent" || item.kind === "workflow",
     ) ?? false;
   return hasNativeAgentWork ? "turn" : "background";
+}
+
+function hasRunningManagedCommand(
+  managedCommands: ChatSessionState["managedCommands"],
+): boolean {
+  return managedCommands.some((command) => command.status.state === "running");
 }
 
 export function normalizeInlineEditForSession(

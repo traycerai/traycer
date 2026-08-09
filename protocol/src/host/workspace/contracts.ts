@@ -4,6 +4,8 @@ import {
   prepareWorkspaceFoldersResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  workspaceBrowseFoldersRequestSchema,
+  workspaceBrowseFoldersResponseSchema,
   workspaceFileMentionSuggestionsResponseSchema,
   workspaceFolderMentionSuggestionsResponseSchema,
   workspaceGitBranchMentionSuggestionsResponseSchema,
@@ -118,6 +120,13 @@ export const workspaceListDirectoryV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceListDirectoryRequestSchema,
   responseSchema: workspaceListDirectoryResponseSchema,
+});
+
+export const workspaceBrowseFoldersV10 = defineRpcContract({
+  method: "workspace.browseFolders",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceBrowseFoldersRequestSchema,
+  responseSchema: workspaceBrowseFoldersResponseSchema,
 });
 
 export const workspaceReadFileV10 = defineRpcContract({

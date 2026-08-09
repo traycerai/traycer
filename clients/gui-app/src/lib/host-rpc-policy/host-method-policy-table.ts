@@ -374,8 +374,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Monitor/shell lifecycle from the "Monitors & Shells" list and the output
-  // window header. `fifo` is what buys these three the guarantees the
+  // Shell lifecycle from the Shells list and the output window header.
+  // `fifo` is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
   // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
   // refuses to cancel one. A delete destroys the command's entire output
@@ -455,6 +455,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Optional replacement for the recordActivity start edge: records the
+  // activity edge and pulls the role-registry digest cursor forward when
+  // behind (roles-snapshot-delivery). Same scheduling as its sibling hooks.
+  "agent.tui.promptSubmitted": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Creating an agent persists a new collaboration record.
   "agent.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "agent.selectionGuide": { ...LATEST_SCHEDULING, poll: null },
@@ -516,6 +524,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Forking an agent persists a new collaboration record, like agent.create.
+  "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",
@@ -544,6 +554,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "workspace.listFileTree": { ...LATEST_SCHEDULING, poll: null },
   "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.browseFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
   // Saving a file writes to disk and each attempt carries the revision
   // acknowledged by the previous save, so writes must not be coalesced.
@@ -783,6 +794,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "worktree.listAllForHost": { ...LATEST_SCHEDULING, poll: null },
   // Setting repo scripts persists worktree execution configuration.
   "worktree.setRepoScripts": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Setting the repo branch-prefix override persists worktree naming config.
+  "worktree.setRepoBranchPrefix": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

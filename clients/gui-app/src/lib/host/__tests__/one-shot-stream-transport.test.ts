@@ -52,11 +52,15 @@ describe("openOneShotStreamTransport", () => {
     expect(fakeWs.close).toHaveBeenCalledTimes(1);
   });
 
-  it("throws when buildHostStreamClient returns null (invalid remote public key)", () => {
+  it("throws an honest, cause-inclusive error when buildHostStreamClient returns null", () => {
+    // Two refusals map to null: a corrupt registry public key, or the
+    // transport bearer gate finding no presentable credential (this delete
+    // racing a sign-out / context handoff). The error must not blame the key
+    // for what may be an auth-transition race.
     mocks.buildHostStreamClient.mockReturnValue(null);
 
     expect(() => openOneShotStreamTransport(buildParams())).toThrow(
-      /invalid public key/,
+      /no valid public key or presentable credential/,
     );
   });
 });

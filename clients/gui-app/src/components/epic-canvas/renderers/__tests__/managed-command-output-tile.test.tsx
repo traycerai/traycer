@@ -83,7 +83,7 @@ const COMMAND_ID = "cmd-1";
 
 const COMMAND: ManagedCommand = {
   id: COMMAND_ID,
-  kind: "monitor",
+  monitoring: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",
