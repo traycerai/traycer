@@ -295,7 +295,7 @@ export function ChatTile(props: ChatTileProps) {
     // evidence of a cross-host open - exempting on it would reopen the
     // subscribe-first race for every chat mounted during bootstrap. Only a
     // KNOWN, different active host earns the exemption.
-    const activeHostId = hostBinding?.hostClient?.getActiveHostId() ?? null;
+    const activeHostId = hostBinding?.hostClient.getActiveHostId() ?? null;
     return activeHostId !== null && activeHostId !== tabHostId;
   });
   const handle = useChatSessionHandle(

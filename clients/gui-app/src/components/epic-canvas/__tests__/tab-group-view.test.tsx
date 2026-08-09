@@ -1224,9 +1224,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
       ).not.toBeNull();
     });
     expect(
-      container.querySelector(
-        `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
-      ),
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
     ).toBeNull();
     expect(
       container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
@@ -1245,9 +1243,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
       ).not.toBeNull();
     });
     expect(
-      container.querySelector(
-        `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
-      ),
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
     ).toBeNull();
   });
 
@@ -1263,9 +1259,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
       ).not.toBeNull();
     });
     expect(
-      container.querySelector(
-        `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
-      ),
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
     ).toBeNull();
   });
 

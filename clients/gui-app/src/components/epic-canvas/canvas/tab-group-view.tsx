@@ -472,6 +472,66 @@ interface ActiveTabBodyProps {
   readonly globallyActive: boolean;
 }
 
+/**
+ * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
+ * whose bound host is unreachable renders what a fresh click on its row
+ * renders - the published copy, locked - instead of a dead dial wearing a
+ * live tab's face. The ref itself is untouched (bind-for-life protects DATA
+ * identity: we never show a different host's chat under this tab); only the
+ * SURFACE follows reachability, and it flips back to live the moment the
+ * owner returns. The copy ref binds a LIVE reading host - serving a cloud
+ * read through the dead bound host would just be the same dial with extra
+ * steps - so it needs a resolvable active host that differs from the bound
+ * one, and an owner user id derivable from the projection.
+ */
+function usePublishedChatFallbackRef(args: {
+  readonly activeTab: EpicCanvasTileRef;
+  readonly epicId: string;
+  readonly liveArtifact:
+    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
+  readonly activeHostId: string | null;
+}): {
+  readonly fallbackRef: EpicCanvasTileRef | null;
+  readonly ownerHostLabel: string;
+} {
+  const { activeTab, epicId, liveArtifact, activeHostId } = args;
+  const isChat = activeTab.type === "chat";
+  const reachability = useHostReachability(
+    isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const ownerUserId =
+    isChat && liveArtifact !== null && "userId" in liveArtifact
+      ? liveArtifact.userId
+      : null;
+  const substitute =
+    isChat &&
+    reachability.status === "unreachable" &&
+    activeHostId !== activeTab.hostId;
+  const fallbackRef = useMemo(
+    () =>
+      substitute && ownerUserId !== null && activeHostId !== null
+        ? makePublishedChatTileRef({
+            taskId: epicId,
+            chatId: activeTab.id,
+            ownerUserId,
+            ownerHostId: activeTab.hostId,
+            name: activeTab.name,
+            hostId: activeHostId,
+          })
+        : null,
+    [
+      substitute,
+      activeTab.id,
+      activeTab.name,
+      activeTab.hostId,
+      ownerUserId,
+      activeHostId,
+      epicId,
+    ],
+  );
+  return { fallbackRef, ownerHostLabel: reachability.hostLabel };
+}
+
 function ActiveTabBody(props: ActiveTabBodyProps) {
   const { activeTab, epicId, groupId, tabId } = props;
   const navigateNested = useEpicNestedFocusNavigation();
@@ -486,51 +546,13 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
   // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
   const activeHostIdForRecordGate = useReactiveActiveHostId();
-  // CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat
-  // tab whose bound host is unreachable renders what a fresh click on its
-  // row renders - the published copy, locked - instead of a dead dial
-  // wearing a live tab's face. The ref itself is untouched (bind-for-life
-  // protects DATA identity: we never show a different host's chat under
-  // this tab); only the SURFACE follows reachability, and it flips back to
-  // live the moment the owner returns. The copy ref binds a LIVE reading
-  // host - serving a cloud read through the dead bound host would just be
-  // the same dial with extra steps.
-  const chatOwnerReachability = useHostReachability(
-    activeTab.type === "chat" ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
-  );
-  const chatOwnerUserId =
-    activeTab.type === "chat" &&
-    liveArtifact !== null &&
-    "userId" in liveArtifact
-      ? liveArtifact.userId
-      : null;
-  const publishedFallbackRef = useMemo(
-    () =>
-      activeTab.type === "chat" &&
-      chatOwnerReachability.status === "unreachable" &&
-      chatOwnerUserId !== null &&
-      activeHostIdForRecordGate !== null &&
-      activeHostIdForRecordGate !== activeTab.hostId
-        ? makePublishedChatTileRef({
-            taskId: epicId,
-            chatId: activeTab.id,
-            ownerUserId: chatOwnerUserId,
-            ownerHostId: activeTab.hostId,
-            name: activeTab.name,
-            hostId: activeHostIdForRecordGate,
-          })
-        : null,
-    [
-      activeTab.type,
-      activeTab.id,
-      activeTab.name,
-      activeTab.hostId,
-      chatOwnerReachability.status,
-      chatOwnerUserId,
-      activeHostIdForRecordGate,
+  const { fallbackRef: publishedFallbackRef, ownerHostLabel } =
+    usePublishedChatFallbackRef({
+      activeTab,
       epicId,
-    ],
-  );
+      liveArtifact,
+      activeHostId: activeHostIdForRecordGate,
+    });
   // Per-tab membership selectors: each tab only re-renders when its own
   // entry flips, not when any other tab is marked/unmarked.
   const isSelfDeleted = useEpicCanvasStore((s) =>
@@ -643,7 +665,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           tabId={tabId}
           chatId={activeTab.id}
           sourceHostId={activeTab.hostId}
-          hostLabel={chatOwnerReachability.hostLabel}
+          hostLabel={ownerHostLabel}
           testId={`chat-dead-tile-${activeTab.id}`}
         />
         <EpicNodeTile
