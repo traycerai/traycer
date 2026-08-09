@@ -290,9 +290,14 @@ export function ChatTile(props: ChatTileProps) {
   // never a reactive active-host read - tabs are bound to a host for life
   // and must not change behavior when the active host swaps).
   const hostBinding = useHostBinding();
-  const [isCrossHostOpen] = useState(
-    () => (hostBinding?.hostClient?.getActiveHostId() ?? null) !== tabHostId,
-  );
+  const [isCrossHostOpen] = useState(() => {
+    // A null active host id is ignorance (binding still resolving), not
+    // evidence of a cross-host open - exempting on it would reopen the
+    // subscribe-first race for every chat mounted during bootstrap. Only a
+    // KNOWN, different active host earns the exemption.
+    const activeHostId = hostBinding?.hostClient?.getActiveHostId() ?? null;
+    return activeHostId !== null && activeHostId !== tabHostId;
+  });
   const handle = useChatSessionHandle(
     node.id,
     tabHostId,
@@ -379,7 +384,7 @@ interface ChatDeadTileBannerContainerProps {
   readonly testId: string;
 }
 
-function ChatDeadTileBannerContainer(
+export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);

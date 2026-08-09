@@ -9,6 +9,10 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
 import {
   PaneActivationFocusIntentContext,
   registerHostedPaneActivationClaim,
@@ -482,6 +486,51 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
   // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
   const activeHostIdForRecordGate = useReactiveActiveHostId();
+  // CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat
+  // tab whose bound host is unreachable renders what a fresh click on its
+  // row renders - the published copy, locked - instead of a dead dial
+  // wearing a live tab's face. The ref itself is untouched (bind-for-life
+  // protects DATA identity: we never show a different host's chat under
+  // this tab); only the SURFACE follows reachability, and it flips back to
+  // live the moment the owner returns. The copy ref binds a LIVE reading
+  // host - serving a cloud read through the dead bound host would just be
+  // the same dial with extra steps.
+  const chatOwnerReachability = useHostReachability(
+    activeTab.type === "chat" ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const chatOwnerUserId =
+    activeTab.type === "chat" &&
+    liveArtifact !== null &&
+    "userId" in liveArtifact
+      ? liveArtifact.userId
+      : null;
+  const publishedFallbackRef = useMemo(
+    () =>
+      activeTab.type === "chat" &&
+      chatOwnerReachability.status === "unreachable" &&
+      chatOwnerUserId !== null &&
+      activeHostIdForRecordGate !== null &&
+      activeHostIdForRecordGate !== activeTab.hostId
+        ? makePublishedChatTileRef({
+            taskId: epicId,
+            chatId: activeTab.id,
+            ownerUserId: chatOwnerUserId,
+            ownerHostId: activeTab.hostId,
+            name: activeTab.name,
+            hostId: activeHostIdForRecordGate,
+          })
+        : null,
+    [
+      activeTab.type,
+      activeTab.id,
+      activeTab.name,
+      activeTab.hostId,
+      chatOwnerReachability.status,
+      chatOwnerUserId,
+      activeHostIdForRecordGate,
+      epicId,
+    ],
+  );
   // Per-tab membership selectors: each tab only re-renders when its own
   // entry flips, not when any other tab is marked/unmarked.
   const isSelfDeleted = useEpicCanvasStore((s) =>
@@ -547,11 +596,28 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // observe this because it necessarily samples before that later commit).
   useLayoutEffect(() => {
     if (activeTab.type !== "chat") return undefined;
-    reportChatRemoteDeletionState(activeTab.instanceId, isRemoteDeleted);
+    // The published-copy fallback is folded in because the registry's real
+    // contract is "ActiveTabBody has taken this chat inline - drop the hosted
+    // surface", and the fallback branch below is a second inline takeover.
+    // Without it, membership keeps the instance, the environment registry
+    // ("removal only by membership") retains a stale visible/anchored
+    // snapshot from the unmounted slot, and the hosted live body paints over
+    // the copy - the exact two-owners drift design-review slice-4 finding 2
+    // exists to prevent. Reported through the deletion registry rather than a
+    // parallel one so membership has ONE inline-takeover input.
+    reportChatRemoteDeletionState(
+      activeTab.instanceId,
+      isRemoteDeleted || publishedFallbackRef !== null,
+    );
     return () => {
       reportChatRemoteDeletionState(activeTab.instanceId, false);
     };
-  }, [activeTab.type, activeTab.instanceId, isRemoteDeleted]);
+  }, [
+    activeTab.type,
+    activeTab.instanceId,
+    isRemoteDeleted,
+    publishedFallbackRef,
+  ]);
 
   if (isRemoteDeleted) {
     return (
@@ -566,6 +632,28 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           );
         }}
       />
+    );
+  }
+
+  if (publishedFallbackRef !== null) {
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <ChatDeadTileBannerContainer
+          epicId={epicId}
+          tabId={tabId}
+          chatId={activeTab.id}
+          sourceHostId={activeTab.hostId}
+          hostLabel={chatOwnerReachability.hostLabel}
+          testId={`chat-dead-tile-${activeTab.id}`}
+        />
+        <EpicNodeTile
+          node={publishedFallbackRef}
+          viewTabId={tabId}
+          tileId={groupId}
+          epicId={epicId}
+          isActive={isActive}
+        />
+      </div>
     );
   }
 

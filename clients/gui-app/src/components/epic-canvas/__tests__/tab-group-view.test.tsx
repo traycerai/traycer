@@ -60,6 +60,15 @@ interface TestState {
    * and desync the static `useEpicCanvasStore` import this file seeds).
    */
   stableTileSurfaceHostEnabled: boolean;
+  /**
+   * Per-host reachability answered by the `useHostReachability` mock.
+   * Unlisted hosts answer "reachable", which keeps every pre-existing
+   * fixture on the live render path.
+   */
+  readonly unreachableHostIds: Set<string>;
+  /** Value the `useReactiveActiveHostId` mock returns; null matches the
+   * provider-less default the older fixtures render under. */
+  activeHostId: string | null;
 }
 
 const testState = vi.hoisted((): TestState => ({
@@ -70,6 +79,8 @@ const testState = vi.hoisted((): TestState => ({
   closeAutoFocusGuards: new Map(),
   missingArtifactIds: new Set(),
   stableTileSurfaceHostEnabled: false,
+  unreachableHostIds: new Set(),
+  activeHostId: null,
 }));
 
 vi.mock(
@@ -118,8 +129,10 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
+  // `userId` present so the published-copy fallback can derive the chat's
+  // owner from the projection, the way the live store shape provides it.
   useEpicArtifact: (id: string) =>
-    testState.missingArtifactIds.has(id) ? null : { id },
+    testState.missingArtifactIds.has(id) ? null : { id, userId: "user-1" },
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
@@ -135,6 +148,32 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   useExistingChatSessionHandle: () => null,
+}));
+
+// ActiveTabBody's published-copy fallback reads reachability + the active host
+// through these two hook seams. Stubbed at the hook boundary (not their query
+// internals) so this provider-less suite can flip a bound host dead per test.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: (hostId: string) => ({
+    status: testState.unreachableHostIds.has(hostId)
+      ? "unreachable"
+      : "reachable",
+    hostLabel: hostId,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => testState.activeHostId,
+}));
+
+// tab-group-view imports ChatDeadTileBannerContainer straight from chat-tile,
+// whose real module graph needs the chat session registry + host runtime this
+// render-focused suite deliberately does not provide (the EpicNodeTile mock
+// used to sever that edge). Stub just the banner container at the same seam.
+vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
+  ChatDeadTileBannerContainer: (props: { readonly testId: string }) => (
+    <div data-testid={props.testId} />
+  ),
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
@@ -1117,5 +1156,181 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     expect(
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]?.activePaneId,
     ).toBe("other-group");
+  });
+});
+
+describe("<TabGroupView /> published-copy fallback for an unreachable bound host", () => {
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.activeHostId = null;
+    testState.stableTileSurfaceHostEnabled = false;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
+
+  it("renders the published copy + dead-tile banner instead of the live chat body", async () => {
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.activeHostId = "host-B";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).not.toBeNull();
+    // The live chat body must NOT render alongside the copy.
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("flips back to the live chat surface when the bound host returns", async () => {
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.activeHostId = "host-B";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+
+    testState.unreachableHostIds.delete(CHAT.hostId);
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(
+        `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+      ),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("stays on the live surface when the copy identity cannot be derived (no active host)", async () => {
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.activeHostId = null;
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(
+        `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not substitute when the unreachable bound host IS the active host", async () => {
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.activeHostId = CHAT.hostId;
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(
+        `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+      ),
+    ).toBeNull();
+  });
+
+  it("shows the lock icon on the live chat tab's strip entry while unreachable", async () => {
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.activeHostId = "host-B";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tab-live-chat-lock-${CHAT.instanceId}"]`,
+        ),
+      ).not.toBeNull();
+    });
+
+    testState.unreachableHostIds.delete(CHAT.hostId);
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tab-live-chat-lock-${CHAT.instanceId}"]`,
+        ),
+      ).toBeNull();
+    });
+  });
+
+  it("drops the instance from hosted-surface membership while the fallback is active (switch ON)", async () => {
+    testState.stableTileSurfaceHostEnabled = true;
+    testState.unreachableHostIds.add(CHAT.hostId);
+    testState.activeHostId = "host-B";
+    seedHostedTopLevelTab();
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+
+    // Inline copy renders; no slot, no hosted membership - membership keeping
+    // the instance would leave the environment registry holding a stale
+    // visible snapshot from the unmounted slot ("removal only by membership"),
+    // painting the live body over the copy.
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="tile-surface-slot"]'),
+    ).toBeNull();
+    expect(getTileSurfaceMembership().has(CHAT.instanceId)).toBe(false);
+
+    // Host returns: hosted routing resumes and membership re-admits.
+    testState.unreachableHostIds.delete(CHAT.hostId);
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="tile-surface-slot"]'),
+      ).not.toBeNull();
+    });
+    expect(getTileSurfaceMembership().has(CHAT.instanceId)).toBe(true);
+    expect(isChatRemoteDeleted(CHAT.instanceId)).toBe(false);
   });
 });
