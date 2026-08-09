@@ -80,8 +80,14 @@ function remapArchiveError(err: unknown, agentId: string): unknown {
   if (err.message.startsWith(AGENT_BUSY_PREFIX)) {
     return cliError({
       code: CLI_ERROR_CODES.AGENT_ARCHIVE_BUSY,
-      message:
-        "traycer: agent is still working - stop it first with `traycer agent stop`, or wait for it to settle.",
+      // Carry the host's OWN busy text through rather than substituting a
+      // single "stop it first" line. `archiveBlockedMessage` has two arms and
+      // they prescribe DIFFERENT remedies: a running turn is cleared by
+      // stopping, whereas detached subagents/workflows/scheduled wakes survive
+      // a stop and must be waited out or stopped individually. Collapsing both
+      // into "stop it first" walks the second case into a retry loop, and any
+      // arm the host adds later would inherit the same wrong advice.
+      message: `traycer: ${stripBusyPrefix(err.message)}`,
       details: null,
       exitCode: 1,
     });
@@ -95,4 +101,12 @@ function remapArchiveError(err: unknown, agentId: string): unknown {
     });
   }
   return err;
+}
+
+/**
+ * Drops the wire-level `AGENT_BUSY:` reason prefix, leaving the host's
+ * human-readable explanation (which already names the applicable remedy).
+ */
+function stripBusyPrefix(message: string): string {
+  return message.slice(AGENT_BUSY_PREFIX.length).trim();
 }

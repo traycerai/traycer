@@ -12,6 +12,7 @@ import { buildAgentStopCommand } from "../agent-stop";
 import { buildAgentArchiveCommand } from "../agent-archive";
 import { callHostRpc } from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -66,9 +67,9 @@ afterEach(() => {
   else process.env.TRAYCER_EPIC_ID = PREV_EPIC;
 });
 
-function rpcError(code: string, message: string): HostRpcError {
+function rpcError(code: RpcErrorCode, message: string): HostRpcError {
   return new HostRpcError({
-    code: code as never,
+    code,
     message,
     requestId: "req_1",
     method: "epic.setChatArchived",
@@ -141,13 +142,14 @@ describe("agent stop command function", () => {
   });
 
   it("fails fast with E_INVALID_ARGUMENT and sends zero frames when epicId is missing", async () => {
-    await expect(
-      buildAgentStopCommand({
-        epicId: null,
-        agentId: "agent_1",
-        cascade: false,
-      })(makeCtx()),
-    ).rejects.toBeInstanceOf(CliError);
+    const error = await buildAgentStopCommand({
+      epicId: null,
+      agentId: "agent_1",
+      cascade: false,
+    })(makeCtx()).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error("unreachable");
+    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(rpcMock).not.toHaveBeenCalled();
   });
 });
@@ -207,11 +209,15 @@ describe("agent archive command function", () => {
     expect(unarchived.human).toBe("agent_1 already unarchived");
   });
 
-  it("remaps an AGENT_BUSY: message to an actionable E_AGENT_ARCHIVE_BUSY error", async () => {
+  it("remaps a running-turn AGENT_BUSY: message to E_AGENT_ARCHIVE_BUSY, keeping the host's stop remedy", async () => {
     rpcMock.mockRejectedValue(
       rpcError(
         "RPC_ERROR",
-        "AGENT_BUSY: epic.setChatArchived refused to archive agent 'agent_1' - it is currently working.",
+        "AGENT_BUSY: epic.setChatArchived refused to archive agent 'agent_1' - " +
+          "nothing was changed. A turn is in progress, or one is about to start. " +
+          "Stopping the agent clears a turn - but NOT a detached subagent, workflow " +
+          "or scheduled wake, which all survive a stop. Wait for it to go idle - or " +
+          "stop the agent - and retry.",
       ),
     );
 
@@ -224,7 +230,39 @@ describe("agent archive command function", () => {
     expect(error).toBeInstanceOf(CliError);
     if (!(error instanceof CliError)) throw new Error("unreachable");
     expect(error.code).toBe(CLI_ERROR_CODES.AGENT_ARCHIVE_BUSY);
-    expect(error.message).toContain("traycer agent stop");
+    expect(error.message).toContain("A turn is in progress");
+    expect(error.message).toContain("Stopping the agent clears a turn");
+    // The wire-level reason prefix is an internal signal, not user copy.
+    expect(error.message).not.toContain("AGENT_BUSY");
+  });
+
+  // Regression: the host's OTHER busy arm prescribes the opposite remedy -
+  // stopping cannot clear background items. An earlier revision substituted a
+  // single "stop it first" line for every busy case, which walked this arm
+  // into a retry loop (PR #1076 review).
+  it("preserves the background-items AGENT_BUSY: arm instead of advising a stop", async () => {
+    rpcMock.mockRejectedValue(
+      rpcError(
+        "RPC_ERROR",
+        "AGENT_BUSY: epic.setChatArchived refused to archive agent 'agent_1' - " +
+          "nothing was changed. It has items still running in the background. " +
+          "Stopping the agent will NOT clear these - stop stops a turn, and there " +
+          "is no turn running. Wait for the background items to finish, or stop " +
+          "them individually from the agent's chat, then retry.",
+      ),
+    );
+
+    const error = await buildAgentArchiveCommand({
+      epicId: "epic_1",
+      agentId: "agent_1",
+      unarchive: false,
+    })(makeCtx()).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error("unreachable");
+    expect(error.code).toBe(CLI_ERROR_CODES.AGENT_ARCHIVE_BUSY);
+    expect(error.message).toContain("items still running in the background");
+    expect(error.message).toContain("will NOT clear these");
     expect(error.message).not.toContain("AGENT_BUSY");
   });
 
