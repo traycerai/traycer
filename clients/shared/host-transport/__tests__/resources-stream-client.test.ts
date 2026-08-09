@@ -329,6 +329,7 @@ describe("ResourcesStreamClient", () => {
             commandId: "cmd-1",
             monitoring: true,
             description: "deploy watcher",
+            createdByAgentId: "chat-1",
           },
         },
       ],
@@ -343,6 +344,7 @@ describe("ResourcesStreamClient", () => {
       commandId: "cmd-1",
       monitoring: true,
       description: "deploy watcher",
+      createdByAgentId: "chat-1",
     });
     client.close();
   });

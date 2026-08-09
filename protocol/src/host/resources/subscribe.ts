@@ -353,18 +353,29 @@ export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
  * labelled two different ways. `commandId` repeats `owner.ownerId` - the same
  * value by construction - so a client joining this row to the managed-command
  * list stream does it through a named field rather than a convention.
+ *
+ * `createdByAgentId` names the shell's creator - the agent whose tool call made
+ * it, which is what lets a client nest the row under that agent instead of
+ * listing it beside one. The owner list stays flat on the wire: the creator is
+ * an id, and whether it currently has an owner row of its own is a question
+ * only the client's own view can answer. It defaults rather than requires: a
+ * host from before the field exists must degrade to today's flat list, not
+ * fail the whole frame's parse and blank the panel.
  */
 export const managedCommandOwnerSchema = z.object({
   commandId: z.string(),
   monitoring: z.boolean(),
   description: z.string(),
+  createdByAgentId: z.string().default(""),
 });
 export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;
 
 /**
- * Frozen `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind
- * and `managedCommand`, which is non-null exactly when the kind is
- * `managed-command`.
+ * `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind and
+ * `managedCommand`, which is non-null exactly when the kind is
+ * `managed-command`. Not yet frozen: the v2 surface is staging-only with
+ * matched fleets, so this shape is still edited in place (see the shell
+ * unification ADR) - additions must default so an older host still parses.
  */
 export const ownerResourceSnapshotSchemaV14 = z.object({
   ...ownerResourceSnapshotSchemaV13.shape,

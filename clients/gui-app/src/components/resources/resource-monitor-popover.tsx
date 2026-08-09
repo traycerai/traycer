@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Cpu,
   ListChecks,
+  MessagesSquare,
   Monitor,
   Search,
   Server,
@@ -110,6 +111,7 @@ import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { ClosedTilePayload } from "@/stores/epics/canvas/store";
+import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type {
   EpicCanvasState,
@@ -207,6 +209,20 @@ interface OwnerDisplayRow {
   readonly location: OpenOwnerLocation | null;
   readonly closedTile: ClosedOwnerTile | null;
   readonly record: EpicNodeRecord | null;
+  /**
+   * The shells this row's agent created, nested behind its chevron. Empty for
+   * every row that is not a creator - a shell itself never has shells.
+   */
+  readonly shells: readonly OwnerDisplayRow[];
+  /**
+   * A Synthetic Agent Row: the stand-in for a creator whose own program is not
+   * running while its shells still are. It owns no processes (its snapshot is
+   * an honest all-zero one the GUI builds), so it can neither be killed nor
+   * report usage of its own - it exists to carry the agent's name, its
+   * navigation, and its shells' combined total.
+   */
+  readonly synthetic: boolean;
+  /** Subtree total: this row's own process tree plus its shells' trees. */
   readonly treeCpuPercent: number;
   readonly treeRssBytes: number;
 }
@@ -500,12 +516,8 @@ function ResourceMonitorContent(props: {
   const liveOwnerTitleEntries = useMemo(
     () =>
       taskRows.flatMap((task) =>
-        task.owners.map((owner) => ({
-          ownerKey: ownerKey(
-            owner.snapshot.owner.epicId,
-            owner.snapshot.owner.kind,
-            owner.snapshot.owner.ownerId,
-          ),
+        flattenOwnerRows(task.owners).map((owner) => ({
+          ownerKey: ownerRowKey(owner),
           epicId: owner.snapshot.owner.epicId,
           artifactId:
             owner.snapshot.owner.kind === "terminal"
@@ -537,9 +549,11 @@ function ResourceMonitorContent(props: {
         taskRows,
         liveOwnerTitleByKey,
         searchQuery,
+        expandedOwners,
       }),
     [
       desktopApp,
+      expandedOwners,
       projection.app,
       projection.other,
       liveOwnerTitleByKey,
@@ -1130,6 +1144,7 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
             treeRssBytes: props.app.process.rssBytes,
             children: [],
           }}
+          ownerDepth={0}
           stickyTop={0}
           labelMode="full"
           onToggleExpand={noProcessToggle}
@@ -1273,30 +1288,24 @@ function TaskResourceSection(props: {
           <span className={ROW_ACTION_SLOT} />
         </div>
       </div>
-      {props.task.owners.map((row) => {
-        const key = ownerKey(
-          row.snapshot.owner.epicId,
-          row.snapshot.owner.kind,
-          row.snapshot.owner.ownerId,
-        );
-        return (
-          <OwnerTreeRow
-            key={key}
-            row={row}
-            searchQuery={taskMatchesSearch ? "" : props.searchQuery}
-            taskSearchTerms={taskSearchTerms(props.task)}
-            liveArtifactTitle={props.liveOwnerTitleByKey.get(key) ?? null}
-            expanded={props.expandedOwners.has(key)}
-            expandedProcesses={props.expandedProcesses}
-            sortOption={props.sortOption}
-            stickyTop={headerHeight}
-            onToggle={() => props.onToggleOwner(key)}
-            onToggleProcess={props.onToggleProcess}
-            onOpen={() => props.onOpenOwner(row)}
-            kill={props.kill}
-          />
-        );
-      })}
+      {props.task.owners.map((row) => (
+        <OwnerTreeRow
+          key={ownerRowKey(row)}
+          row={row}
+          depth={0}
+          searchQuery={taskMatchesSearch ? "" : props.searchQuery}
+          taskSearchTerms={taskSearchTerms(props.task)}
+          liveOwnerTitleByKey={props.liveOwnerTitleByKey}
+          expandedOwners={props.expandedOwners}
+          expandedProcesses={props.expandedProcesses}
+          sortOption={props.sortOption}
+          stickyTop={headerHeight}
+          onToggleOwner={props.onToggleOwner}
+          onToggleProcess={props.onToggleProcess}
+          onOpenOwner={props.onOpenOwner}
+          kill={props.kill}
+        />
+      ))}
     </div>
   );
 }
@@ -1394,6 +1403,7 @@ function OtherResourceSection(props: {
             <ProcessTreeRow
               key={processRowKey(processRow.process)}
               processRow={processRow}
+              ownerDepth={0}
               stickyTop={headerHeight}
               labelMode="compact-root"
               onToggleExpand={props.onToggleProcess}
@@ -1685,7 +1695,16 @@ function ownerRowClickHandler(
 function OwnerProviderIcon(props: {
   readonly harnessId: string | null;
   readonly managedCommand: ManagedCommandOwnerWire | null;
+  readonly synthetic: boolean;
 }) {
+  // A Synthetic Agent Row has no running program, so there is no provider to
+  // advertise; the chat glyph says what the row stands for - the agent whose
+  // shells are still running underneath it.
+  if (props.synthetic) {
+    return (
+      <MessagesSquare className="size-3 shrink-0 text-muted-foreground/70" />
+    );
+  }
   if (props.managedCommand !== null) {
     return (
       <ManagedCommandMonitorIcon
@@ -1703,22 +1722,33 @@ function OwnerProviderIcon(props: {
   return <HarnessIcon harnessId={providerId} className="size-3" />;
 }
 
+/**
+ * One owner row and everything nested behind its chevron: the shells its agent
+ * created (rendered as sub-rows of the same shape, above), then its own OS
+ * process tree. A shell has no shells of its own, so the recursion is two deep.
+ */
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
+  readonly depth: number;
   readonly searchQuery: string;
   readonly taskSearchTerms: readonly (string | number | null)[];
-  readonly liveArtifactTitle: string | null;
-  readonly expanded: boolean;
+  readonly liveOwnerTitleByKey: ReadonlyMap<string, string | null>;
+  readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
   readonly stickyTop: number;
-  readonly onToggle: () => void;
+  readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
-  readonly onOpen: () => void;
+  readonly onOpenOwner: (row: OwnerDisplayRow) => void;
   readonly kill: ResourceKillApi | null;
 }) {
   const owner = props.row.snapshot.owner;
-  const label = resolvedOwnerLabel(props.row, props.liveArtifactTitle);
+  const rowKey = ownerRowKey(props.row);
+  const label = resolvedOwnerLabel(
+    props.row,
+    props.liveOwnerTitleByKey.get(rowKey) ?? null,
+  );
+  const shells = props.row.shells;
   const processRows = buildProcessRows(
     props.row.snapshot.processes,
     props.expandedProcesses,
@@ -1733,16 +1763,13 @@ function OwnerTreeRow(props: {
     taskTerms: props.taskSearchTerms,
   });
   const visibleProcessRows = processSearch.rows;
-  const visibleExpanded = props.expanded || processSearch.forcesExpanded;
-  const visibleCpuPercent = visibleExpanded
-    ? processRows.selfCpuPercent
-    : processRows.treeCpuPercent;
-  const visibleRssBytes = visibleExpanded
-    ? processRows.selfRssBytes
-    : processRows.treeRssBytes;
-  const harnessId = props.row.snapshot.harnessId;
+  const visibleExpanded =
+    props.expandedOwners.has(rowKey) || processSearch.forcesExpanded;
+  // Shells and OS processes hang off the same chevron, so either one is reason
+  // enough to offer it.
+  const canExpand = visibleProcessRows.canExpand || shells.length > 0;
   const killTarget: KillTarget = {
-    key: ownerKey(owner.epicId, owner.kind, owner.ownerId),
+    key: rowKey,
     hostId: owner.hostId,
     pids: props.row.snapshot.rootPids,
   };
@@ -1750,11 +1777,8 @@ function OwnerTreeRow(props: {
   const canKill = kill !== null && killTarget.pids.length > 0;
   const selecting = kill !== null && canKill && kill.selectionMode;
   const selected = selecting && kill.isSelected(killTarget.key);
-  const rowClick = ownerRowClickHandler(
-    selecting,
-    kill,
-    killTarget,
-    props.onOpen,
+  const rowClick = ownerRowClickHandler(selecting, kill, killTarget, () =>
+    props.onOpenOwner(props.row),
   );
   return (
     <div>
@@ -1764,17 +1788,20 @@ function OwnerTreeRow(props: {
           selected && "bg-muted/40",
           visibleExpanded && "sticky z-10 bg-popover",
         )}
-        style={visibleExpanded ? { top: props.stickyTop } : undefined}
+        style={{
+          paddingLeft: `${props.depth}rem`,
+          ...(visibleExpanded ? { top: props.stickyTop } : {}),
+        }}
       >
         <OwnerRowLeadingCell
           kill={kill}
           canKill={canKill}
           target={killTarget}
           label={label}
-          canExpand={visibleProcessRows.canExpand}
+          canExpand={canExpand}
           expanded={visibleExpanded}
           forcedExpanded={processSearch.forcesExpanded}
-          onToggle={props.onToggle}
+          onToggle={() => props.onToggleOwner(rowKey)}
         />
         <button
           type="button"
@@ -1791,28 +1818,25 @@ function OwnerTreeRow(props: {
             <div className="truncate text-ui-sm">{label}</div>
             <div className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
               <OwnerProviderIcon
-                harnessId={harnessId}
+                harnessId={props.row.snapshot.harnessId}
                 managedCommand={props.row.snapshot.managedCommand}
+                synthetic={props.row.synthetic}
               />
               <span className="min-w-0 truncate">
                 {harnessProviderSubtitle(
-                  harnessId,
-                  props.row.snapshot.owner.kind,
+                  props.row.snapshot.harnessId,
+                  owner.kind,
                   props.row.snapshot.activeProcessName,
                   props.row.snapshot.managedCommand,
                 )}
               </span>
             </div>
           </div>
-          <ProcessMetricPair
-            cpuPercent={visibleCpuPercent}
-            rssBytes={visibleRssBytes}
-            selfCpuPercent={processRows.selfCpuPercent}
-            selfRssBytes={processRows.selfRssBytes}
-            treeCpuPercent={processRows.treeCpuPercent}
-            treeRssBytes={processRows.treeRssBytes}
-            hasDescendants={processRows.canExpand}
-            className="text-ui-sm text-foreground/90"
+          <OwnerRowMetrics
+            row={props.row}
+            processRows={processRows}
+            expanded={visibleExpanded}
+            hasDescendants={canExpand}
           />
         </button>
         <OwnerRowKillCell
@@ -1824,10 +1848,31 @@ function OwnerTreeRow(props: {
       </div>
       {!visibleExpanded
         ? null
+        : shells.map((shell) => (
+            <OwnerTreeRow
+              key={ownerRowKey(shell)}
+              row={shell}
+              depth={props.depth + 1}
+              searchQuery={props.searchQuery}
+              taskSearchTerms={props.taskSearchTerms}
+              liveOwnerTitleByKey={props.liveOwnerTitleByKey}
+              expandedOwners={props.expandedOwners}
+              expandedProcesses={props.expandedProcesses}
+              sortOption={props.sortOption}
+              stickyTop={props.stickyTop}
+              onToggleOwner={props.onToggleOwner}
+              onToggleProcess={props.onToggleProcess}
+              onOpenOwner={props.onOpenOwner}
+              kill={props.kill}
+            />
+          ))}
+      {!visibleExpanded
+        ? null
         : visibleProcessRows.rows.map((processRow) => (
             <ProcessTreeRow
               key={processRowKey(processRow.process)}
               processRow={processRow}
+              ownerDepth={props.depth}
               stickyTop={props.stickyTop}
               labelMode="full"
               onToggleExpand={props.onToggleProcess}
@@ -1835,6 +1880,60 @@ function OwnerTreeRow(props: {
               killHostId={owner.hostId}
             />
           ))}
+    </div>
+  );
+}
+
+/**
+ * The owner row's cpu/memory cell. Collapsed it states the whole subtree (own
+ * process tree plus its shells'); expanded it states only this row's own
+ * process, the rest now carried on the lines below. A Synthetic Agent Row has
+ * no process at all, so expanded it states nothing rather than a row of zeroes.
+ */
+function OwnerRowMetrics(props: {
+  readonly row: OwnerDisplayRow;
+  readonly processRows: OwnerProcessRows;
+  readonly expanded: boolean;
+  readonly hasDescendants: boolean;
+}) {
+  if (props.row.synthetic) {
+    // No process of its own means no honest Self/Tree split to offer a
+    // tooltip: collapsed states the shells' sum plainly, expanded nothing.
+    if (props.expanded) return <MetricSpacer />;
+    return (
+      <MetricPair
+        cpuPercent={props.row.treeCpuPercent}
+        rssBytes={props.row.treeRssBytes}
+        className="text-ui-sm text-foreground/90"
+      />
+    );
+  }
+  return (
+    <ProcessMetricPair
+      cpuPercent={
+        props.expanded
+          ? props.processRows.selfCpuPercent
+          : props.row.treeCpuPercent
+      }
+      rssBytes={
+        props.expanded ? props.processRows.selfRssBytes : props.row.treeRssBytes
+      }
+      selfCpuPercent={props.processRows.selfCpuPercent}
+      selfRssBytes={props.processRows.selfRssBytes}
+      treeCpuPercent={props.row.treeCpuPercent}
+      treeRssBytes={props.row.treeRssBytes}
+      hasDescendants={props.hasDescendants}
+      className="text-ui-sm text-foreground/90"
+    />
+  );
+}
+
+/** Holds the cpu/memory columns for a row that has no numbers of its own. */
+function MetricSpacer() {
+  return (
+    <div className={cn(METRIC_COLS, "text-ui-sm")}>
+      <span className={CPU_COL} />
+      <span className={MEM_COL} />
     </div>
   );
 }
@@ -1940,6 +2039,12 @@ function processExpandAriaLabel(row: ProcessDisplayRow): string {
 
 function ProcessTreeRow(props: {
   readonly processRow: ProcessDisplayRow;
+  /**
+   * Indent levels contributed by the owner row above this tree, so a nested
+   * shell's processes sit deeper than its creator's own processes instead of
+   * lining up with them.
+   */
+  readonly ownerDepth: number;
   readonly stickyTop: number;
   readonly labelMode: "full" | "compact-root";
   readonly onToggleExpand: (key: string) => void;
@@ -1963,7 +2068,9 @@ function ProcessTreeRow(props: {
   const selected = selecting && kill.isSelected(rowKey);
   const rowClassName =
     "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-muted/40";
-  const rowStyle = { paddingLeft: `calc(1.25rem + ${depth} * 1rem)` };
+  const rowStyle = {
+    paddingLeft: `calc(1.25rem + ${props.ownerDepth + depth} * 1rem)`,
+  };
   const collapsedLabel = processCollapsedLabel(
     props.labelMode,
     process,
@@ -2082,6 +2189,7 @@ function ProcessTreeRow(props: {
             <ProcessTreeRow
               key={processRowKey(child.process)}
               processRow={child}
+              ownerDepth={props.ownerDepth}
               stickyTop={props.stickyTop}
               labelMode="full"
               onToggleExpand={props.onToggleExpand}
@@ -2147,55 +2255,41 @@ function MetricPair(props: {
   );
 }
 
-function buildTaskRows(input: {
+interface TaskRowBuildInput {
   readonly entries: readonly GlobalResourceEpicEntry[];
   readonly canvas: CanvasResourceSnapshot;
   readonly canvasIndex: CanvasResourceIndex;
   readonly recordByOwner: ReadonlyMap<string, EpicNodeRecord>;
   readonly epicTitleById: ReadonlyMap<string, string>;
   readonly sortOption: ResourceSortOption;
-}): TaskDisplayRow[] {
+}
+
+/** The owner kinds an agent's own program runs under - the only shell creators. */
+const AGENT_OWNER_KINDS = ["chat", "terminal-agent"] as const;
+
+function isAgentOwnerKind(kind: ResourceOwnerKindWireV14): boolean {
+  return AGENT_OWNER_KINDS.some((candidate) => candidate === kind);
+}
+
+function buildTaskRows(input: TaskRowBuildInput): TaskDisplayRow[] {
   const rows = input.entries.flatMap((entry): TaskDisplayRow[] => {
     if (entry.owners.length === 0) return [];
-    const owners = entry.owners.map((snapshot): OwnerDisplayRow => {
-      const key = ownerKey(
-        snapshot.owner.epicId,
-        snapshot.owner.kind,
-        snapshot.owner.ownerId,
-      );
-      const location = input.canvasIndex.locationByOwner.get(key) ?? null;
-      const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
-      const record = input.recordByOwner.get(key) ?? null;
-      const processRows = buildProcessRows(
-        snapshot.processes,
-        NO_EXPANDED_PROCESSES,
-        snapshot,
-        input.sortOption,
-      );
-      return {
-        snapshot,
-        label: ownerLabel(
-          snapshot,
-          ownerTileRef(location, closedTile),
-          record,
-          null,
-        ),
-        canOpen: canOpenOwner(snapshot, location, closedTile, record),
-        tabOrder:
-          input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
-        location,
-        closedTile,
-        record,
-        treeCpuPercent: processRows.treeCpuPercent,
-        treeRssBytes: processRows.treeRssBytes,
-      };
-    });
-    if (owners.length === 0) return [];
+    const flatRows = entry.owners.map((snapshot) =>
+      buildOwnerRow(snapshot, input),
+    );
+    const owners = nestShellsUnderCreators(flatRows, input).map((row) =>
+      row.shells.length === 0
+        ? row
+        : { ...row, shells: sortOwnerRows(row.shells, input.sortOption) },
+    );
     return [
       {
         entry,
         label: taskLabel(entry.epicId, input.canvas, input.epicTitleById),
         tabOrder: taskTabOrder(entry.epicId, input.canvas),
+        // Top-level totals are already subtree-inclusive, so nesting a shell
+        // under its creator moves where its usage is reported without changing
+        // what the section header adds up to.
         cpuPercent: owners.reduce(
           (sum, owner) => sum + owner.treeCpuPercent,
           0,
@@ -2206,6 +2300,216 @@ function buildTaskRows(input: {
     ];
   });
   return sortTaskRows(rows, input.sortOption);
+}
+
+function buildOwnerRow(
+  snapshot: OwnerResourceSnapshotWireV14,
+  input: TaskRowBuildInput,
+): OwnerDisplayRow {
+  const key = ownerKey(
+    snapshot.owner.epicId,
+    snapshot.owner.kind,
+    snapshot.owner.ownerId,
+  );
+  const location = input.canvasIndex.locationByOwner.get(key) ?? null;
+  const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
+  const record = input.recordByOwner.get(key) ?? null;
+  const processRows = buildProcessRows(
+    snapshot.processes,
+    NO_EXPANDED_PROCESSES,
+    snapshot,
+    input.sortOption,
+  );
+  return {
+    snapshot,
+    label: ownerLabel(
+      snapshot,
+      ownerTileRef(location, closedTile),
+      record,
+      null,
+    ),
+    canOpen: canOpenOwner(snapshot, location, closedTile, record),
+    tabOrder:
+      input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
+    location,
+    closedTile,
+    record,
+    shells: [],
+    synthetic: false,
+    treeCpuPercent: processRows.treeCpuPercent,
+    treeRssBytes: processRows.treeRssBytes,
+  };
+}
+
+/**
+ * Nests every shell row under a node for its creator. While the creator's own
+ * agent program is running, that node IS its owner row; otherwise a Synthetic
+ * Agent Row stands in. A shell whose creator names no agent this client can
+ * resolve stays where it has always been - flat, at the task level.
+ */
+function nestShellsUnderCreators(
+  rows: readonly OwnerDisplayRow[],
+  input: TaskRowBuildInput,
+): OwnerDisplayRow[] {
+  const shells = rows.filter(
+    (row) => row.snapshot.owner.kind === "managed-command",
+  );
+  if (shells.length === 0) return [...rows];
+  const parents = rows.filter(
+    (row) => row.snapshot.owner.kind !== "managed-command",
+  );
+  const runningCreators = new Map(
+    parents
+      .filter((row) => isAgentOwnerKind(row.snapshot.owner.kind))
+      .map((row): [string, OwnerDisplayRow] => [
+        row.snapshot.owner.ownerId,
+        row,
+      ]),
+  );
+  const syntheticCreators = new Map<string, OwnerDisplayRow>();
+  const shellsByCreatorId = new Map<string, OwnerDisplayRow[]>();
+  const unparented: OwnerDisplayRow[] = [];
+
+  for (const shell of shells) {
+    const creatorId = shell.snapshot.managedCommand?.createdByAgentId ?? "";
+    let creator =
+      runningCreators.get(creatorId) ??
+      syntheticCreators.get(creatorId) ??
+      null;
+    if (creator === null) {
+      creator = buildSyntheticAgentRow(creatorId, shell, input);
+      if (creator !== null) syntheticCreators.set(creatorId, creator);
+    }
+    if (creator === null) {
+      unparented.push(shell);
+      continue;
+    }
+    const attached = shellsByCreatorId.get(creatorId);
+    if (attached === undefined) shellsByCreatorId.set(creatorId, [shell]);
+    else attached.push(shell);
+  }
+
+  const attachShells = (row: OwnerDisplayRow): OwnerDisplayRow => {
+    if (!isAgentOwnerKind(row.snapshot.owner.kind)) return row;
+    const attached = shellsByCreatorId.get(row.snapshot.owner.ownerId) ?? [];
+    if (attached.length === 0) return row;
+    return {
+      ...row,
+      shells: attached,
+      treeCpuPercent: attached.reduce(
+        (sum, shell) => sum + shell.treeCpuPercent,
+        row.treeCpuPercent,
+      ),
+      treeRssBytes: attached.reduce(
+        (sum, shell) => sum + shell.treeRssBytes,
+        row.treeRssBytes,
+      ),
+    };
+  };
+  return [
+    ...parents.map(attachShells),
+    ...[...syntheticCreators.values()].map(attachShells),
+    ...unparented,
+  ];
+}
+
+/**
+ * The Synthetic Agent Row for a creator whose own program is not running. Its
+ * snapshot is an honest all-zero one: this agent really does own no processes
+ * right now, which is what leaves the row with no kill affordance and no usage
+ * of its own to report. `null` when nothing in this client names the creator -
+ * the caller then leaves the shell flat rather than inventing an unknown node.
+ */
+function buildSyntheticAgentRow(
+  creatorId: string,
+  shell: OwnerDisplayRow,
+  input: TaskRowBuildInput,
+): OwnerDisplayRow | null {
+  if (creatorId.length === 0) return null;
+  const epicId = shell.snapshot.owner.epicId;
+  for (const kind of AGENT_OWNER_KINDS) {
+    const key = ownerKey(epicId, kind, creatorId);
+    const location = input.canvasIndex.locationByOwner.get(key) ?? null;
+    const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
+    const record = input.recordByOwner.get(key) ?? null;
+    if (location === null && closedTile === null && record === null) continue;
+    const snapshot: OwnerResourceSnapshotWireV14 = {
+      owner: {
+        kind,
+        hostId: shell.snapshot.owner.hostId,
+        epicId,
+        ownerId: creatorId,
+      },
+      sampledAt: shell.snapshot.sampledAt,
+      rootPids: [],
+      activeProcessName: null,
+      processCount: 0,
+      cpuPercent: 0,
+      rssBytes: 0,
+      processes: [],
+      harnessId: null,
+      managedCommand: null,
+    };
+    return {
+      snapshot,
+      label: ownerLabel(
+        snapshot,
+        ownerTileRef(location, closedTile),
+        record,
+        null,
+      ),
+      canOpen: canOpenOwner(snapshot, location, closedTile, record),
+      tabOrder:
+        input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
+      location,
+      closedTile,
+      record,
+      shells: [],
+      synthetic: true,
+      treeCpuPercent: 0,
+      treeRssBytes: 0,
+    };
+  }
+  return null;
+}
+
+/** A task section's rows in render order: each top-level row, then its shells. */
+function flattenOwnerRows(rows: readonly OwnerDisplayRow[]): OwnerDisplayRow[] {
+  return rows.flatMap((row) => [row, ...row.shells]);
+}
+
+/**
+ * The owner rows currently on screen in a task section: a parent's shells
+ * count only once the parent is expanded - by hand, or by the search
+ * force-expand that reveals a shell whose parent failed to match on its own
+ * terms (mirroring `buildOwnerProcessSearchProjection`). Kill targeting must
+ * track exactly this: "Select all" must never reap a row the user cannot see.
+ */
+function visibleOwnerRowsForTask(
+  task: TaskDisplayRow,
+  searchQuery: string,
+  liveOwnerTitleByKey: ReadonlyMap<string, string | null>,
+  expandedOwners: ReadonlySet<string>,
+): OwnerDisplayRow[] {
+  // A matching task renders its owners with an empty query (no forcing), the
+  // same substitution TaskResourceSection makes.
+  const effectiveQuery = taskRowMatchesSearch(task, searchQuery)
+    ? ""
+    : searchQuery;
+  const searchActive = normalizeResourceSearch(effectiveQuery).length > 0;
+  return task.owners.flatMap((row) => {
+    if (row.shells.length === 0) return [row];
+    const key = ownerRowKey(row);
+    let shellsVisible = expandedOwners.has(key);
+    if (!shellsVisible && searchActive) {
+      const label = resolvedOwnerLabel(row, liveOwnerTitleByKey.get(key) ?? null);
+      shellsVisible = !matchesResourceSearch(effectiveQuery, [
+        ...taskSearchTerms(task),
+        ...ownerMetadataSearchTerms(row, label),
+      ]);
+    }
+    return shellsVisible ? [row, ...row.shells] : [row];
+  });
 }
 
 function normalizeResourceSearch(searchQuery: string): string {
@@ -2370,21 +2674,43 @@ function filterTaskRowsForSearch(
   liveOwnerTitleByKey: ReadonlyMap<string, string | null>,
 ): TaskDisplayRow[] {
   if (normalizeResourceSearch(searchQuery).length === 0) return [...rows];
+  const matches = (row: OwnerDisplayRow, task: TaskDisplayRow): boolean =>
+    ownerHierarchyMatchesSearch(
+      task,
+      row,
+      searchQuery,
+      liveOwnerTitleByKey.get(ownerRowKey(row)) ?? null,
+    );
   return rows.flatMap((task): TaskDisplayRow[] => {
     if (taskRowMatchesSearch(task, searchQuery)) return [task];
-    const owners = task.owners.filter((owner) => {
-      const snapshotOwner = owner.snapshot.owner;
-      const key = ownerKey(
-        snapshotOwner.epicId,
-        snapshotOwner.kind,
-        snapshotOwner.ownerId,
+    // A parent that matches keeps its whole subtree; one that does not survives
+    // only on its matching shells, so searching a shell's name reveals it (the
+    // parent force-expands, having failed to match on its own terms).
+    const owners = task.owners.flatMap((owner): OwnerDisplayRow[] => {
+      if (matches(owner, task)) return [owner];
+      const shells = owner.shells.filter((shell) => matches(shell, task));
+      if (shells.length === 0) return [];
+      // The subtree totals must describe the shells that survived the filter,
+      // not the ones it removed - the metrics tooltip renders them even while
+      // the row itself is force-expanded.
+      const droppedCpu = owner.shells.reduce(
+        (sum, shell) =>
+          shells.includes(shell) ? sum : sum + shell.treeCpuPercent,
+        0,
       );
-      return ownerHierarchyMatchesSearch(
-        task,
-        owner,
-        searchQuery,
-        liveOwnerTitleByKey.get(key) ?? null,
+      const droppedRss = owner.shells.reduce(
+        (sum, shell) =>
+          shells.includes(shell) ? sum : sum + shell.treeRssBytes,
+        0,
       );
+      return [
+        {
+          ...owner,
+          shells,
+          treeCpuPercent: owner.treeCpuPercent - droppedCpu,
+          treeRssBytes: owner.treeRssBytes - droppedRss,
+        },
+      ];
     });
     return owners.length === 0 ? [] : [{ ...task, owners }];
   });
@@ -2397,6 +2723,7 @@ function buildResourceSearchProjection(input: {
   readonly taskRows: readonly TaskDisplayRow[];
   readonly liveOwnerTitleByKey: ReadonlyMap<string, string | null>;
   readonly searchQuery: string;
+  readonly expandedOwners: ReadonlySet<string>;
 }): ResourceSearchProjection {
   const desktopApp =
     input.desktopApp !== null &&
@@ -2420,13 +2747,12 @@ function buildResourceSearchProjection(input: {
   );
   const visibleOwnerKeys = new Set(
     taskRows.flatMap((task) =>
-      task.owners.map((owner) =>
-        ownerKey(
-          owner.snapshot.owner.epicId,
-          owner.snapshot.owner.kind,
-          owner.snapshot.owner.ownerId,
-        ),
-      ),
+      visibleOwnerRowsForTask(
+        task,
+        input.searchQuery,
+        input.liveOwnerTitleByKey,
+        input.expandedOwners,
+      ).map(ownerRowKey),
     ),
   );
   const visibleKillKeys = buildSearchVisibleKillKeys(
@@ -2434,6 +2760,7 @@ function buildResourceSearchProjection(input: {
     other,
     input.searchQuery,
     input.liveOwnerTitleByKey,
+    input.expandedOwners,
   );
   const active = normalizeResourceSearch(input.searchQuery).length > 0;
   const hasResults =
@@ -2458,17 +2785,18 @@ function buildSearchVisibleKillKeys(
   other: OtherResourceUsage | null,
   searchQuery: string,
   liveOwnerTitleByKey: ReadonlyMap<string, string | null>,
+  expandedOwners: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const visibleKeys = new Set<string>();
   for (const task of taskRows) {
     const taskMatches = taskRowMatchesSearch(task, searchQuery);
-    for (const owner of task.owners) {
-      const snapshotOwner = owner.snapshot.owner;
-      const key = ownerKey(
-        snapshotOwner.epicId,
-        snapshotOwner.kind,
-        snapshotOwner.ownerId,
-      );
+    for (const owner of visibleOwnerRowsForTask(
+      task,
+      searchQuery,
+      liveOwnerTitleByKey,
+      expandedOwners,
+    )) {
+      const key = ownerRowKey(owner);
       visibleKeys.add(key);
       const label = resolvedOwnerLabel(
         owner,
@@ -2899,6 +3227,31 @@ function openResourceOwner(args: {
     return true;
   }
 
+  // A shell has no canvas node to reopen - its output window is built from the
+  // command id alone, and the canvas's content-id dedup turns "open" into
+  // "focus the one that is already there".
+  if (snapshot.owner.kind === "managed-command") {
+    commitOwnerFocus({
+      epicId: snapshot.owner.epicId,
+      tabId: null,
+      name: taskLabel(snapshot.owner.epicId, args.canvas, args.epicTitleById),
+      focus: focusForOwner(snapshot),
+      preparation: {
+        kind: "open-tile",
+        node: makeManagedCommandOutputTileRef({
+          commandId: snapshot.owner.ownerId,
+          hostId: snapshot.owner.hostId,
+        }),
+      },
+      navigate: args.navigate,
+      navigateNested: args.navigateNested,
+      activeEpicId: args.activeEpicId,
+      activeTabId: args.activeTabId,
+      desktopNestedFocusEnabled: args.desktopNestedFocusEnabled,
+    });
+    return true;
+  }
+
   if (
     snapshot.owner.kind !== "chat" &&
     snapshot.owner.kind !== "terminal-agent"
@@ -2998,11 +3351,16 @@ function prepareResourceTarget(
   );
 }
 
-function focusForOwner(snapshot: OwnerResourceSnapshotWireV14) {
+// Terminals and shells are not artifacts, so neither has an artifact id to
+// focus - the tile preparation is the whole of what they navigate to.
+function focusForOwner(snapshot: OwnerResourceSnapshotWireV14): EpicRouteFocus {
+  const kind = snapshot.owner.kind;
   return {
     focusedAt: Date.now(),
     focusArtifactId:
-      snapshot.owner.kind === "terminal" ? undefined : snapshot.owner.ownerId,
+      kind === "terminal" || kind === "managed-command"
+        ? undefined
+        : snapshot.owner.ownerId,
     focusThreadId: undefined,
     migrationSource: undefined,
   };
@@ -3043,6 +3401,14 @@ function ownerKey(
   ownerId: string,
 ): string {
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
+}
+
+function ownerRowKey(row: OwnerDisplayRow): string {
+  return ownerKey(
+    row.snapshot.owner.epicId,
+    row.snapshot.owner.kind,
+    row.snapshot.owner.ownerId,
+  );
 }
 
 function resourceOwnerKindForNodeType(
@@ -3195,6 +3561,9 @@ function canOpenOwner(
 ): boolean {
   if (location !== null) return true;
   if (closedTile !== null) return true;
+  // A shell's output window is a pure pointer (command id + host), so it can
+  // always be opened - there is no tile payload or artifact record to have lost.
+  if (snapshot.owner.kind === "managed-command") return true;
   if (snapshot.owner.kind === "terminal") return false;
   return record !== null;
 }

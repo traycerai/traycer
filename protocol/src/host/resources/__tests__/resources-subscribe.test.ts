@@ -403,6 +403,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
       commandId: "cmd-1",
       monitoring: true,
       description: "deploy watcher",
+      createdByAgentId: "chat-1",
     },
   };
 
@@ -430,7 +431,29 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
       commandId: "cmd-1",
       monitoring: true,
       description: "deploy watcher",
+      createdByAgentId: "chat-1",
     });
+  });
+
+  it("defaults an absent creator to the empty string", () => {
+    // A host from before the field exists must degrade to the flat list (the
+    // GUI leaves a creatorless shell at the task level), not fail the whole
+    // frame's parse - a required field here blacks out the entire panel, every
+    // owner row included, the moment fleets skew.
+    const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
+      frameWithOwners([
+        {
+          ...MANAGED_OWNER,
+          managedCommand: {
+            commandId: "cmd-1",
+            monitoring: true,
+            description: "deploy watcher",
+          },
+        },
+      ]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot frame");
+    expect(parsed.owners[0].managedCommand?.createdByAgentId).toBe("");
   });
 
   it("requires managedCommand on every owner, null for the other kinds", () => {
@@ -459,6 +482,7 @@ describe("resources.subscribe@1.4 managed-command owners", () => {
             managedCommand: {
               commandId: "cmd-1",
               description: "deploy watcher",
+              createdByAgentId: "chat-1",
             },
           },
         ]),
