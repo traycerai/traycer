@@ -55,6 +55,8 @@ const chat: Chat = {
   messages: [userMessage],
   events: [],
   archivedAt: null,
+  pinnedUserProviderHandle: null,
+  lastDeliveredRolesDigest: null,
 };
 
 const event: ChatEvent = {

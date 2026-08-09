@@ -6,7 +6,11 @@ import { cn } from "@/lib/utils";
 import { CopyPathButton } from "./copy-path-button";
 import { FolderLocationControl } from "./folder-location-control";
 import { FolderBranchControl } from "./folder-branch-control";
-import { workspaceRunPath, type WorkspaceRunItem } from "./workspace-run-item";
+import {
+  folderLocationValue,
+  workspaceRunPath,
+  type WorkspaceRunItem,
+} from "./workspace-run-item";
 
 /**
  * One compact single-line folder row using the parent grid's shared columns:
@@ -66,6 +70,25 @@ export function FolderRow(props: {
               className="size-3.5 shrink-0 text-destructive opacity-100"
               aria-hidden
               data-testid="folder-row-missing"
+            />
+          </TooltipWrapper>
+        ) : null}
+        {/* Only when a NEW branch is actually the row's active choice - an
+            import/local row never uses the generated proposal this warns
+            about, so it would be noise there. Creation stays unblocked;
+            this only makes the already-applied fallback visible. */}
+        {item.branchPrefixWarning !== null &&
+        folderLocationValue(item) === "worktree" ? (
+          <TooltipWrapper
+            label={item.branchPrefixWarning}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <TriangleAlert
+              className="size-3.5 shrink-0 text-destructive opacity-100"
+              aria-hidden
+              data-testid="folder-row-branch-prefix-warning"
             />
           </TooltipWrapper>
         ) : null}

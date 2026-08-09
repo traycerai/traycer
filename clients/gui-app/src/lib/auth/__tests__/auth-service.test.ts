@@ -642,6 +642,44 @@ describe("AuthService", () => {
     expect(refreshCalls).toEqual([]);
   });
 
+  it("rotates the live lease in place when a snapshot re-signs-in the SAME user", async () => {
+    // "Same user => same context object" is load-bearing beyond this file:
+    // the remote-session cache keys its auth epoch on the lease SOURCE, and
+    // stream owners do not rebuild transports on a same-user event. Minting a
+    // fresh context here would retire the epoch under every live remote
+    // session while its holders keep using it, then duplicate the physical
+    // connection on the next acquire. The cross-window snapshot projection is
+    // one of the two paths that used to sidestep the same-user rotate.
+    const { service, host } = makeService();
+    await service.start();
+    await deviceSignIn(service, host, "user-1-token");
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore).not.toBeNull();
+
+    // The desktop windows-bridge projection: a sibling window signed in and
+    // pushed its persisted snapshot. Same user, newer token.
+    await service.ingestProjectedSessionSnapshot({
+      status: "signed-in",
+      token: "user-1-newer-token",
+      profile: {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      contextMetadata: null,
+    });
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "user-1-newer-token",
+    );
+
+    // The SAME context object carries on with the rotated bearer - not an
+    // aborted predecessor plus a freshly-minted successor.
+    expect(provider.current()).toBe(contextBefore);
+  });
+
   it("drops an account A session-list response that resolves after account B replaces it", async () => {
     const { service, host } = makeService();
     await service.start();
