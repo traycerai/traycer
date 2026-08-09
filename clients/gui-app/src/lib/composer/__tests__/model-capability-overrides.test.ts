@@ -55,6 +55,33 @@ describe("modelImageSupportOverride", () => {
     ).toBe(true);
   });
 
+  it("flags bare-generation slugs on the Kimi harness (slug 'k3', label 'K3')", () => {
+    expect(
+      modelImageSupportOverride({
+        harnessId: "kimi",
+        slug: "k3",
+        label: "K3",
+      }),
+    ).toBe(true);
+    expect(
+      modelImageSupportOverride({
+        harnessId: "kimi",
+        slug: "k2.7",
+        label: "K2.7",
+      }),
+    ).toBe(true);
+  });
+
+  it("has no opinion on bare slugs outside the Kimi harness", () => {
+    expect(
+      modelImageSupportOverride({
+        harnessId: "omp",
+        slug: "k3",
+        label: "K3",
+      }),
+    ).toBe(null);
+  });
+
   it("has no opinion on older Kimi generations", () => {
     expect(
       modelImageSupportOverride({

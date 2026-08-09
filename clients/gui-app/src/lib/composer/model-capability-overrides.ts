@@ -19,12 +19,19 @@ function normalizeModelText(value: string): string {
 /**
  * Kimi K3 and K2.7 families accept image input, but the host model catalog
  * does not flag them, so the composer refuses image attachments for them.
- * Matches slugs/labels like "kimi-k3", "kimi-k2.7-code", "Kimi K2.7",
- * "moonshot/kimi-k3-turbo" — normalized to lowercase alphanumerics first.
+ *
+ * Two match shapes:
+ * - Kimi harness (`harnessId === "kimi"`): the harness itself is Kimi, so the
+ *   generation marker alone is enough — covers bare slugs like "k3" whose
+ *   label may be just "K3".
+ * - Any other harness (omp/opencode/...): require "kimi" in slug+label plus
+ *   the generation marker — covers "Kimi K3 (ClinePass)", "moonshot/kimi-k3".
  */
-function isKimiVisionFamily(normalized: string): boolean {
-  if (!normalized.includes("kimi")) return false;
-  return normalized.includes("k3") || normalized.includes("k27");
+function isKimiVisionFamily(identity: ModelCapabilityIdentity): boolean {
+  const normalized = normalizeModelText(`${identity.slug} ${identity.label}`);
+  const generation = normalized.includes("k3") || normalized.includes("k27");
+  if (identity.harnessId === "kimi") return generation;
+  return normalized.includes("kimi") && generation;
 }
 
 /**
@@ -36,7 +43,6 @@ function isKimiVisionFamily(normalized: string): boolean {
 export function modelImageSupportOverride(
   identity: ModelCapabilityIdentity,
 ): boolean | null {
-  const normalized = normalizeModelText(`${identity.slug} ${identity.label}`);
-  if (isKimiVisionFamily(normalized)) return true;
+  if (isKimiVisionFamily(identity)) return true;
   return null;
 }
