@@ -1326,7 +1326,7 @@ export type ModelProviderSource = z.infer<typeof modelProviderSourceSchema>;
  * (`connect` carries plaintext once), and the read side reports presence and
  * origin only - the same convention the MCP secret write/mask pair follows.
  */
-export const modelProviderEntrySchema = z.object({
+const modelProviderEntryBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   source: modelProviderSourceSchema.nullable(),
@@ -1354,7 +1354,71 @@ export const modelProviderEntrySchema = z.object({
    * emptiness, and would drift the first time upstream tightened either.
    */
   configDeclaredCustom: z.boolean(),
+  /**
+   * The values this provider is DECLARED with, when it is a config-declared
+   * custom one. Non-null exactly when `configDeclaredCustom` is true - an
+   * invariant this schema enforces rather than describes (see the refinement
+   * below).
+   *
+   * Edit needs it, and needs it to be real. `updateCustom` carries the whole
+   * block, so a dialog opened with nothing to prefill would submit blanks over
+   * a working declaration - the user would "edit the name" and silently lose
+   * their base URL and model list. Sending the current values is what makes
+   * the round trip lossless.
+   *
+   * It also keeps the verb set closed. Re-enabling a disconnected custom
+   * provider is `updateCustom` with the row's own values - no `enable` verb,
+   * no `setDisabled` toggle, and nothing that could disagree with disconnect
+   * about what "off" means.
+   *
+   * Read-side constraints are LOOSER than the write side on purpose. A user
+   * can hand-edit `opencode.json`, so a declared base URL may be malformed and
+   * a model list may be junk; `createCustom`/`updateCustom` reject those, but
+   * refusing to REPORT them would fail the row's parse and vanish the one
+   * provider whose declaration needs fixing - with Edit, the only surface that
+   * could fix it, gone with it. Validate what we accept; report what we find.
+   */
+  custom: z
+    .object({
+      baseUrl: z.string(),
+      modelIds: z.array(z.string()),
+    })
+    .nullable(),
 });
+
+/**
+ * `configDeclaredCustom` and `custom` are one fact in two fields, so the wire
+ * enforces that they agree rather than trusting every producer to.
+ *
+ * Both halves matter and they fail differently. A row claiming custom with no
+ * values gives Edit nothing to prefill, which is the blank-overwrite this
+ * field exists to prevent. A row carrying values while denying it is custom
+ * gives the client an Edit affordance the host will refuse - or worse, one it
+ * accepts, quietly converting a provider the user never declared.
+ *
+ * Refined, not merely tested, on the same reasoning as
+ * `refineProviderNativeScope` above: a state nothing downstream can act on
+ * should be unrepresentable, not just unasserted.
+ */
+export const modelProviderEntrySchema = modelProviderEntryBaseSchema.superRefine(
+  (entry, ctx) => {
+    if (entry.configDeclaredCustom && entry.custom === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["custom"],
+        message:
+          "configDeclaredCustom: true requires the declared custom values",
+      });
+    }
+    if (!entry.configDeclaredCustom && entry.custom !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["custom"],
+        message: "custom values require configDeclaredCustom: true",
+      });
+    }
+  },
+);
 export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 
 /**

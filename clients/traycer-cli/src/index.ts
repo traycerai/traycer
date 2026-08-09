@@ -19,8 +19,10 @@ import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
+import { buildAgentArchiveCommand } from "./commands/agent-archive";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
+import { buildAgentStopCommand } from "./commands/agent-stop";
 import { buildAgentListProfilesCommand } from "./commands/agent-list-profiles";
 import { buildAgentProfileRateLimitsCommand } from "./commands/agent-profile-rate-limits";
 import { buildAgentActivityFromHookCommand } from "./commands/agent-activity-from-hook";
@@ -1679,6 +1681,50 @@ function registerAgentCommands(
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("stop", readonlyHidden)
+      .description(
+        "Stop another agent's in-progress turn. Not terminal - a later message wakes the agent again; this halts work, it does not delete anything.",
+      )
+      .requiredOption(
+        "--agent-id <id>",
+        "Full agent id to stop. No prefix resolution - the id must be exact.",
+      )
+      .option(
+        "--cascade",
+        "Also stop the active descendants the agent delegated to.",
+      ),
+    (opts) =>
+      buildAgentStopCommand({
+        epicId: null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : "",
+        cascade: opts.cascade === true,
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("archive", readonlyHidden)
+      .description(
+        "Archive or unarchive a GUI chat or terminal agent. Archived agents stay addressable - any later message to them auto-unarchives the record. Archiving a still-working agent is refused; stop it first with 'traycer agent stop', or wait for it to settle. Unarchiving is never gated.",
+      )
+      .requiredOption(
+        "--agent-id <id>",
+        "Full id of the chat or terminal agent to archive/unarchive. No prefix resolution - the id must be exact.",
+      )
+      .option(
+        "--unarchive",
+        "Unarchive instead of archive. Omitted means archive.",
+      ),
+    (opts) =>
+      buildAgentArchiveCommand({
+        epicId: null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : "",
+        unarchive: opts.unarchive === true,
       }),
   );
 

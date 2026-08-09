@@ -592,6 +592,7 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: true,
       connected: true,
       configDeclaredCustom: false,
+      custom: null,
       methods: [
         {
           type: "api",
@@ -616,6 +617,7 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: false,
       connected: true,
       configDeclaredCustom: false,
+      custom: null,
       methods: [],
     });
     expect(entry.canDisconnect).toBe(false);
@@ -634,6 +636,7 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: true,
       connected: true,
       configDeclaredCustom: false,
+      custom: null,
       methods: [],
     });
     const declaredCustom = modelProviderEntrySchema.parse({
@@ -644,6 +647,10 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: true,
       connected: true,
       configDeclaredCustom: true,
+      custom: {
+        baseUrl: "https://api.example.com/v1",
+        modelIds: ["gpt-4o"],
+      },
       methods: [],
     });
     expect(plainConfig.source).toBe(declaredCustom.source);
@@ -664,10 +671,115 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: false,
       connected: false,
       configDeclaredCustom: true,
+      custom: {
+        baseUrl: "https://api.example.com/v1",
+        modelIds: ["gpt-4o"],
+      },
       methods: [],
     });
     expect(entry.connected).toBe(false);
     expect(entry.configDeclaredCustom).toBe(true);
+  });
+
+  it("ties custom values to the flag in BOTH directions", () => {
+    // One fact in two fields, so the wire refuses to let them disagree. Each
+    // direction fails differently: a row claiming custom with no values gives
+    // Edit nothing to prefill - the blank-overwrite this field exists to
+    // prevent - while values without the flag offer an Edit the host will
+    // refuse, or accept and quietly convert a provider nobody declared.
+    const base = {
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: null,
+      hasStoredCredential: false,
+      canDisconnect: false,
+      connected: false,
+      methods: [],
+    };
+    const declared = {
+      baseUrl: "https://api.example.com/v1",
+      modelIds: ["gpt-4o"],
+    };
+    expect(
+      modelProviderEntrySchema.safeParse({
+        ...base,
+        configDeclaredCustom: true,
+        custom: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      modelProviderEntrySchema.safeParse({
+        ...base,
+        configDeclaredCustom: false,
+        custom: declared,
+      }).success,
+    ).toBe(false);
+    for (const entry of [
+      { ...base, configDeclaredCustom: true, custom: declared },
+      { ...base, configDeclaredCustom: false, custom: null },
+    ]) {
+      expect(modelProviderEntrySchema.safeParse(entry).success).toBe(true);
+    }
+  });
+
+  it("reports a hand-broken declaration instead of vanishing the row", () => {
+    // Read side is looser than the write side on purpose. `opencode.json` is
+    // hand-editable, so a declared base URL can be malformed - and refusing to
+    // report it would fail the row's parse and remove the one provider whose
+    // declaration needs fixing, taking Edit (the only surface that could fix
+    // it) with it. `createCustom`/`updateCustom` still reject the same value.
+    const entry = modelProviderEntrySchema.parse({
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: null,
+      hasStoredCredential: false,
+      canDisconnect: false,
+      connected: false,
+      configDeclaredCustom: true,
+      custom: { baseUrl: "api.example.com", modelIds: [] },
+      methods: [],
+    });
+    expect(entry.custom?.baseUrl).toBe("api.example.com");
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "updateCustom",
+        modelProviderId: "my-endpoint",
+        name: "My Endpoint",
+        baseUrl: "api.example.com",
+        modelIds: ["gpt-4o"],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("round-trips a declaration from the row into updateCustom", () => {
+    // What Edit and bare re-enable both do, and the reason no `enable` verb
+    // was needed: resubmit the row's own values.
+    const entry = modelProviderEntrySchema.parse({
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: null,
+      hasStoredCredential: false,
+      canDisconnect: false,
+      connected: false,
+      configDeclaredCustom: true,
+      custom: {
+        baseUrl: "https://api.example.com/v1",
+        modelIds: ["gpt-4o", "gpt-4o-mini"],
+      },
+      methods: [],
+    });
+    expect(entry.custom).not.toBeNull();
+    if (entry.custom === null) return;
+    const parsed = modelProviderAuthActionSchema.parse({
+      action: "updateCustom",
+      modelProviderId: entry.id,
+      name: entry.name,
+      baseUrl: entry.custom.baseUrl,
+      modelIds: entry.custom.modelIds,
+    });
+    expect(parsed.action).toBe("updateCustom");
+    if (parsed.action !== "updateCustom") return;
+    expect(parsed.modelIds).toEqual(["gpt-4o", "gpt-4o-mini"]);
   });
 
   it("requires configDeclaredCustom rather than defaulting it", () => {
@@ -679,6 +791,10 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: false,
       connected: false,
       configDeclaredCustom: true,
+      custom: {
+        baseUrl: "https://api.example.com/v1",
+        modelIds: ["gpt-4o"],
+      },
       methods: [],
     };
     expect(modelProviderEntrySchema.safeParse(withoutFlag).success).toBe(false);
@@ -699,6 +815,7 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: false,
       connected: true,
       configDeclaredCustom: false,
+      custom: null,
       methods: [],
     });
     expect(entry.connected).toBe(true);
@@ -719,6 +836,7 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: true,
       connected: true,
       configDeclaredCustom: false,
+      custom: null,
       methods: [],
     });
     expect(entry.canDisconnect).toBe(true);
@@ -734,6 +852,7 @@ describe("providers.listModelProviders payloads", () => {
         canDisconnect: false,
         connected: false,
         configDeclaredCustom: false,
+        custom: null,
         methods: [],
       }).success,
     ).toBe(true);
@@ -746,6 +865,7 @@ describe("providers.listModelProviders payloads", () => {
         canDisconnect: false,
         connected: false,
         configDeclaredCustom: false,
+        custom: null,
         methods: [],
       }).success,
     ).toBe(false);
