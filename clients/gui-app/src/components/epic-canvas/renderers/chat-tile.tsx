@@ -1921,7 +1921,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // pinned strip. Per-folder Environment config lives inside the selected
   // Workspace panel.
   //
-  // The monitors menu rides the leading cell rather than becoming a third grid
+  // The Shells menu rides the leading cell rather than becoming a third grid
   // column: the usage chip's pinned strip spans the row via `col-span-full`,
   // which only works while it is a direct child of `ComposerWorkspaceRow`'s
   // two-column grid. `justify-between` parks the menu at that cell's trailing

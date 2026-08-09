@@ -1118,6 +1118,7 @@ function HistoryRowTrailingMetadata(props: {
           maximumVisible={2}
           className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
+          openPrInApp={null}
         />
       ) : null}
     </span>

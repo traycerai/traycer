@@ -189,13 +189,13 @@ export function WorktreeBranchPrefixSection(): ReactNode {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-ui-sm font-medium text-foreground">
-              Branch prefix
+              Default branch prefix
             </span>
-            <span className="text-ui-xs text-muted-foreground">All hosts</span>
           </div>
           <p className="mt-0.5 truncate text-ui-xs text-muted-foreground">
             New branches start like{" "}
-            <span className="font-medium text-foreground">{previewBranch}</span>
+            <span className="font-medium text-foreground">{previewBranch}</span>{" "}
+            unless a repository sets its own prefix in Environment
           </p>
         </div>
         <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5">

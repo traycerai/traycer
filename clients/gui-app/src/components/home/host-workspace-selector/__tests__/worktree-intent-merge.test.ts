@@ -8,6 +8,7 @@ import {
   mergeWorktreeIntentEntry,
   removeWorktreeIntentEntry,
   restampWorktreeIntentPrimary,
+  setWorktreeIntentEntryBranchName,
   setWorktreeIntentEntryScripts,
 } from "../worktree-intent-merge";
 
@@ -139,6 +140,79 @@ describe("worktree intent merge", () => {
     ).toBe(intent);
     expect(
       setWorktreeIntentEntryScripts(null, "/workspace/x", SCRIPTS),
+    ).toBeNull();
+  });
+
+  it("setWorktreeIntentEntryBranchName replaces only a type:new branch name", () => {
+    const first = createEntry({
+      workspacePath: "/workspace/first",
+      newBranch: "traycer/first",
+      isPrimary: true,
+    });
+    const second = createEntry({
+      workspacePath: "/workspace/second",
+      newBranch: "traycer/second",
+      isPrimary: false,
+    });
+    const next = setWorktreeIntentEntryBranchName(
+      { entries: [first, second] },
+      "/workspace/first",
+      "team/regenerated",
+    );
+    const updated = next?.entries.find(
+      (e) => e.workspacePath === "/workspace/first",
+    );
+    const other = next?.entries.find(
+      (e) => e.workspacePath === "/workspace/second",
+    );
+    expect(updated?.kind === "worktree" ? updated.branch.name : null).toBe(
+      "team/regenerated",
+    );
+    // Source + scripts are preserved on the targeted entry.
+    expect(
+      updated?.kind === "worktree" && updated.branch.type === "new"
+        ? updated.branch.source
+        : null,
+    ).toBe("main");
+    expect(updated?.kind === "worktree" ? updated.scripts : null).toBeNull();
+    // Sibling folders are untouched.
+    expect(other?.kind === "worktree" ? other.branch.name : null).toBe(
+      "traycer/second",
+    );
+  });
+
+  it("setWorktreeIntentEntryBranchName is a no-op for existing-branch and local entries", () => {
+    const existing: WorktreeFolderIntent = {
+      kind: "worktree",
+      scripts: null,
+      workspacePath: "/workspace/existing",
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: { type: "existing", name: "release/1" },
+    };
+    const local: WorktreeFolderIntent = {
+      kind: "local",
+      workspacePath: "/workspace/local",
+      repoIdentifier: null,
+      isPrimary: false,
+    };
+    const intent = { entries: [existing, local] };
+    expect(
+      setWorktreeIntentEntryBranchName(
+        intent,
+        "/workspace/existing",
+        "should-not-apply",
+      ),
+    ).toBe(intent);
+    expect(
+      setWorktreeIntentEntryBranchName(
+        intent,
+        "/workspace/local",
+        "should-not-apply",
+      ),
+    ).toBe(intent);
+    expect(
+      setWorktreeIntentEntryBranchName(null, "/workspace/x", "x"),
     ).toBeNull();
   });
 

@@ -766,20 +766,15 @@ describe("GeneralSettingsPanel", () => {
     expect(documentPosition(danger, snapshots)).toBe("before");
   });
 
-  it("does not render the Worktree branch prefix row (moved to Worktrees)", () => {
+  it("renders the Worktree branch prefix editor (moved from Worktrees)", () => {
     renderPanel();
 
-    // Current accessible name is "Branch prefix" (compact strip on Worktrees).
-    // The obsolete "Worktree branch prefix" name alone would miss a regression
-    // that re-mounted WorktreeBranchPrefixSection on General.
-    expect(screen.queryByRole("textbox", { name: "Branch prefix" })).toBeNull();
-    expect(
-      screen.queryByTestId("worktree-branch-prefix-saving-spinner"),
-    ).toBeNull();
-    expect(
-      screen.queryByTestId("worktree-branch-prefix-saved-check"),
-    ).toBeNull();
-    expect(screen.queryByText("Worktree branch prefix")).toBeNull();
+    // The global default now lives on General (the Worktrees page is
+    // inventory-only). Assert the actual editor mounted, not just its label
+    // text, so a regression that drops `WorktreeBranchPrefixSection` fails
+    // loudly here.
+    screen.getByRole("textbox", { name: "Branch prefix" });
+    screen.getByText("Default branch prefix");
   });
 });
 

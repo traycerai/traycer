@@ -69,6 +69,29 @@ export const RECONNECT_INITIAL_BACKOFF_MS = 1_000;
 export const RECONNECT_MAX_BACKOFF_MS = 30_000;
 
 /**
+ * How often the session's `DialFailureLog` re-states an UNCHANGED failure
+ * cause. At the 30s backoff cap this suppresses ~9 of every 10 attempts while
+ * keeping the cause present in any 5-minute log tail (mirrors the host
+ * uplink's `UPLINK_FAILURE_RESTATE_MS` - the two halves of the tunnel log
+ * with the same cadence).
+ */
+export const DIAL_FAILURE_RESTATE_MS = 5 * 60 * 1000;
+
+/**
+ * Keep-warm linger for the shared remote session after its LAST consumer
+ * releases (the S1 ticket deferred this; the cost is now measured: every
+ * settings-panel open against a remote host paid a fresh grant mint + relay
+ * dial + Noise handshake (~1-2s of visible "connecting"), and a release that
+ * landed mid-establishment tore the dial down in flight - a double
+ * mint/attach was observed on one panel open). The torn-to-zero session stays
+ * cached and connected for this window; a re-acquire inside it adopts the
+ * warm, already-ready session. Bounded so an abandoned session (host
+ * deregistered, user signed out) never outlives the window - within it the
+ * session's own re-auth/standing machinery still governs.
+ */
+export const REMOTE_SESSION_LINGER_MS = 60_000;
+
+/**
  * Relay keepalive cadence. The client sends the `relay-ping` string on this
  * interval; the relay auto-responds `relay-pong` WITHOUT waking the DO
  * (`setWebSocketAutoResponse`). Missing `PONG_TIMEOUT` worth of pongs means the

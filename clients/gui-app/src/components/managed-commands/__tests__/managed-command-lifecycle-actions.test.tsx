@@ -27,7 +27,7 @@ import { ManagedCommandLifecycleActions } from "../managed-command-lifecycle-act
 
 const RUNNING: ManagedCommand = {
   id: "cmd-1",
-  kind: "monitor",
+  monitoring: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",

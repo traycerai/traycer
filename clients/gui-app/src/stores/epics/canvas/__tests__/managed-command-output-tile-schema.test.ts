@@ -76,13 +76,13 @@ describe("managed-command output tile schema", () => {
       instanceId: "tab-1",
       type: "managed-command-output",
       hostId: HOST,
-      kind: "monitor",
+      monitoring: true,
       description: "deploy watcher",
       status: { state: "running", pid: 4410, startedAtMs: 1 },
-      name: "Monitor · deploy watcher",
+      name: "Shell · deploy watcher",
     });
 
-    // The label falls back to the kind-free constant: a persisted title would
+    // The label falls back to the generic constant: a persisted title would
     // be a second source of truth for something the stream already answers.
     expect(restored).toEqual({
       id: COMMAND,

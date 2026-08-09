@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -2667,6 +2668,49 @@ describe("status survives selection mode and rename", () => {
   });
 });
 
+const createdSessionHandles: ChatSessionStoreHandle[] = [];
+
+/**
+ * A real chat session store, standing in for an OPEN chat. Module-scope because
+ * two describes need one: the leading icon's authority order, and the archive
+ * gate - which reads the same store and must agree with the icon.
+ */
+function createSessionHandle(chatId: string): ChatSessionStoreHandle {
+  const handle = createChatSessionStore({
+    epicId: EPIC_ID,
+    chatId,
+    userId: null,
+    onAuthError: null,
+    onProviderAuthError: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: () => ({
+      sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => false,
+      close: () => undefined,
+    }),
+  });
+  createdSessionHandles.push(handle);
+  return handle;
+}
+
+function disposeCreatedSessionHandles(): void {
+  for (const handle of createdSessionHandles.splice(0)) {
+    handle.dispose();
+  }
+}
+
+function runningShell(chatId: string): ManagedCommand {
+  return {
+    id: `${chatId}-shell`,
+    monitoring: true,
+    description: "dev server",
+    status: { state: "running", pid: 4242, startedAtMs: 1 },
+    chatId,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
+}
+
 describe("chat status icon session authority (open session vs awareness)", () => {
   const MONITOR_ITEM = {
     taskId: "task-1",
@@ -2676,25 +2720,6 @@ describe("chat status icon session authority (open session vs awareness)", () =>
     parentTaskId: null,
     scheduledFor: null,
   };
-  const createdSessionHandles: ChatSessionStoreHandle[] = [];
-
-  function createSessionHandle(chatId: string): ChatSessionStoreHandle {
-    const handle = createChatSessionStore({
-      epicId: EPIC_ID,
-      chatId,
-      userId: null,
-      onAuthError: null,
-      onProviderAuthError: null,
-      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-      streamClientFactory: () => ({
-        sendAction: () => undefined,
-        sameTurnSteeringProtocolSupported: () => false,
-        close: () => undefined,
-      }),
-    });
-    createdSessionHandles.push(handle);
-    return handle;
-  }
 
   afterEach(() => {
     cleanup();
@@ -2707,9 +2732,7 @@ describe("chat status icon session authority (open session vs awareness)", () =>
     testState.activeAgentIds = new Set<string>();
     testState.activityTierById = new Map();
     testState.sessionHandleByChatId = {};
-    for (const handle of createdSessionHandles.splice(0)) {
-      handle.dispose();
-    }
+    disposeCreatedSessionHandles();
   });
 
   it("lets an open session's background tri-state override an awareness tier of turn, then falls back to awareness once the session closes", () => {
@@ -3184,12 +3207,16 @@ describe("chat row archive", () => {
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
     testState.archiveBatchPending = false;
+    // Leaking this one disables every later row's Archive for a reason no test
+    // named, which reads as the gate under test firing.
+    testState.archiveRowPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
     testState.activeHostClient = { getActiveHostId: () => "host-1" };
     testState.sessionHandleByChatId = {};
+    disposeCreatedSessionHandles();
   });
 
   function indicator(
@@ -4079,6 +4106,62 @@ describe("chat row archive", () => {
     expect(isMenuItemUnavailable(item)).toBe(true);
     // ...and hard-disabled, so Radix keeps its own ARIA rather than ours.
     expect(item.getAttribute("aria-describedby")).toBeNull();
+  });
+
+  /**
+   * A running shell is the one activity `runStatus` cannot speak for: it
+   * outlives the turn that started it, so the chat reads idle while a process
+   * of its own is still printing. The host refuses to archive over one, so the
+   * row must refuse too - both halves of the affordance, since the hover button
+   * is offered only on an idle row.
+   */
+  it("refuses Archive while an open session owns a running shell (B11)", () => {
+    seedChatTree();
+    const handle = createSessionHandle("chat-child");
+    handle.store.setState({ managedCommands: [runningShell("chat-child")] });
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // The leading icon has always read the shell; the gate must agree with it,
+    // or the row shows "working" beside an Archive that says it is idle.
+    expect(leadingStatusKinds("chat-child")).toEqual(["background-activity"]);
+    const entry = screen.getByTestId("epic-sidebar-archive-item-chat-child");
+    expect(isMenuItemUnavailable(entry)).toBe(true);
+    expect(tooltipTextIn(entry)).toBe(
+      "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.",
+    );
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
+  });
+
+  it("returns both archive affordances once the shell exits (B11)", () => {
+    // Only a RUNNING shell is activity. An exited one is a durable record, and
+    // gating on it would strand the row's Archive forever.
+    seedChatTree();
+    const handle = createSessionHandle("chat-child");
+    handle.store.setState({
+      managedCommands: [
+        {
+          ...runningShell("chat-child"),
+          status: {
+            state: "exited",
+            exitCode: 0,
+            signal: null,
+            exitedAtMs: 2,
+          },
+        },
+      ],
+    });
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(leadingStatusKinds("chat-child")).toEqual([]);
+    const entry = screen.getByTestId("epic-sidebar-archive-item-chat-child");
+    expect(isMenuItemUnavailable(entry)).toBe(false);
+    expect(
+      screen.getByTestId("epic-sidebar-archive-chat-child"),
+    ).not.toBeNull();
   });
 });
 
