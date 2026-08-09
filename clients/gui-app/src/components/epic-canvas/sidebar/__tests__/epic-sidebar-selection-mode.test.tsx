@@ -129,6 +129,8 @@ interface TestState {
     }) => Promise<unknown>
   >;
   rowHostId: string | null;
+  rowHostReachability: "reachable" | "unreachable";
+  preparedOpenRefs: Array<{ type: string; id: string; hostId: string }>;
   rowHostEntry: unknown;
   rowHostClient: unknown;
   activeHostClient: unknown;
@@ -184,6 +186,8 @@ const testState = vi.hoisted<TestState>(() => ({
   archiveRowPending: false,
   archiveMutateAsync: vi.fn(),
   rowHostId: "host-1",
+  rowHostReachability: "reachable",
+  preparedOpenRefs: [],
   rowHostEntry: { hostId: "host-1" },
   rowHostClient: { getActiveHostId: () => "host-1" },
   activeHostClient: { getActiveHostId: () => "host-1" },
@@ -390,6 +394,18 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
 
+// The row's unreachable-owner lock reads the host directory through
+// `useHostReachability`; this harness mounts no HostRuntimeProvider, so mock
+// at the hook boundary. "reachable" everywhere = the pre-lock rendering, so
+// every existing assertion is exercised unchanged; the lock's own behavior is
+// pinned where the directory is faked per-entry (host-binding.test.ts).
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: (hostId: string) => ({
+    status: testState.rowHostReachability,
+    hostLabel: hostId,
+  }),
+}));
+
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () => null,
 }));
@@ -560,6 +576,28 @@ vi.mock("@/stores/epics/canvas/store", () => ({
       markArtifactSelfDeleted: testState.markArtifactSelfDeleted,
       openTileInTab: vi.fn(),
       openTilePreviewInTab: vi.fn(),
+      prepareOpenTilePreviewInTabFocusTarget: (
+        _tabId: string,
+        ref: { type: string; id: string; hostId: string },
+      ) => {
+        testState.preparedOpenRefs.push({
+          type: ref.type,
+          id: ref.id,
+          hostId: ref.hostId,
+        });
+        return null;
+      },
+      prepareOpenTileInTabFocusTarget: (
+        _tabId: string,
+        ref: { type: string; id: string; hostId: string },
+      ) => {
+        testState.preparedOpenRefs.push({
+          type: ref.type,
+          id: ref.id,
+          hostId: ref.hostId,
+        });
+        return null;
+      },
       pendingRootCreatesByEpic: {},
       preAckRootCreatesByEpic: {},
       promotePreviewInTab: vi.fn(),
@@ -666,6 +704,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicNodeArchived: (nodeId: string) =>
     testState.archivedIds.includes(nodeId),
   useEpicNodeHostId: () => testState.rowHostId,
+  useEpicNodeOwnerUserId: () => "user-1",
   useEpicNodeOwnerKind: () => "chat",
   // The row's last-activity time. Production reads the chat/TUI PROJECTION
   // rather than the tree node (the node's copy lags - see the selector's doc),
@@ -863,6 +902,8 @@ describe("epic sidebar selection mode", () => {
     testState.archiveRowPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+    testState.preparedOpenRefs = [];
     testState.rowHostEntry = { hostId: "host-1" };
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
     testState.activeHostClient = { getActiveHostId: () => "host-1" };
@@ -2540,6 +2581,73 @@ describe("chat row leading status icon", () => {
   });
 });
 
+describe("unreachable-owner chat rows (tree lock + published-copy routing)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.permissionRole = "owner";
+    testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+    testState.preparedOpenRefs = [];
+  });
+
+  it("locks a chat row whose owner host is unreachable, matching the cloud rows", () => {
+    seedChatTree();
+    testState.rowHostId = "host-dead";
+    testState.rowHostReachability = "unreachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.getByTestId("epic-sidebar-tree-lock-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("keeps reachable-owner rows lock-free", () => {
+    seedChatTree();
+    testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.queryByTestId("epic-sidebar-tree-lock-chat-root"),
+    ).toBeNull();
+  });
+
+  it("routes an unreachable-owner row's click to the PUBLISHED COPY, not a live tab", () => {
+    seedChatTree();
+    testState.rowHostId = "host-dead";
+    testState.rowHostReachability = "unreachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(testState.preparedOpenRefs).toHaveLength(1);
+    expect(testState.preparedOpenRefs[0].type).toBe("published-chat");
+  });
+
+  it("routes a reachable-owner row's click to a LIVE tab bound to the owner", () => {
+    seedChatTree();
+    testState.rowHostId = "host-b";
+    testState.rowHostReachability = "reachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(testState.preparedOpenRefs).toHaveLength(1);
+    expect(testState.preparedOpenRefs[0].type).toBe("chat");
+    expect(testState.preparedOpenRefs[0].hostId).toBe("host-b");
+  });
+});
+
 describe("chat row read-only arm", () => {
   afterEach(() => {
     cleanup();
@@ -3257,6 +3365,8 @@ describe("chat row archive", () => {
     testState.archiveBatchPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+    testState.preparedOpenRefs = [];
     testState.rowHostEntry = { hostId: "host-1" };
     testState.rowHostClient = { getActiveHostId: () => "host-1" };
     testState.activeHostClient = { getActiveHostId: () => "host-1" };

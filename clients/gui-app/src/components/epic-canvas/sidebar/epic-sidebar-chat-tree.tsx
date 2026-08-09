@@ -7,6 +7,9 @@ import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useEpicArchiveChat,
@@ -115,6 +118,7 @@ import {
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
   useEpicNodeHostId,
+  useEpicNodeOwnerUserId,
   useEpicNodeOwnerKind,
   useEpicPermissionRole,
   useEpicTreeIndex,
@@ -141,6 +145,7 @@ import {
   Check,
   MessagesSquare,
   MoreHorizontal,
+  Lock,
   Pencil,
   Plus,
   Trash2,
@@ -1031,25 +1036,65 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // `TabHostProvider`), so the owner id is all that was missing.
   const ownerHostId = useEpicNodeHostId(nodeId);
   const openHostId = ownerHostId ?? activeHostId;
+  // Same rule the cloud rows follow (user ruling: offline hosts show as
+  // readonly with a locked composer): a CHAT row whose owner host is
+  // unreachable opens the published copy, not a live tab that dials a dead
+  // host into a banner. Falls back to the live ref when the identity triple
+  // cannot be built (no owner user on the record) - a click always opens
+  // something.
+  const ownerReachability = useHostReachability(
+    ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const ownerUserId = useEpicNodeOwnerUserId(nodeId);
+  const opensPublishedCopy =
+    openableType === "chat" &&
+    ownerHostId !== null &&
+    ownerUserId !== null &&
+    ownerReachability.status === "unreachable";
+  const openRef = useCallback(
+    () =>
+      opensPublishedCopy && ownerHostId !== null && ownerUserId !== null
+        ? makePublishedChatTileRef({
+            taskId: epicId,
+            chatId: nodeId,
+            ownerUserId,
+            ownerHostId,
+            name: nodeName,
+            hostId: activeHostId,
+          })
+        : {
+            id: nodeId,
+            type: openableType ?? "chat",
+            name: nodeName,
+            hostId: openHostId,
+          },
+    [
+      opensPublishedCopy,
+      ownerHostId,
+      ownerUserId,
+      epicId,
+      nodeId,
+      nodeName,
+      activeHostId,
+      openableType,
+      openHostId,
+    ],
+  );
 
   const selectChatNode = useCallback(() => {
     if (isRenaming) return;
     if (openableType === null) return;
     navigateNested(epicId, tabId, () =>
       prepareOpenTilePreviewInTabFocusTarget(tabId, {
-        id: nodeId,
+        ...openRef(),
         instanceId: uuidv4(),
-        type: openableType,
-        name: nodeName,
-        hostId: openHostId,
       }),
     );
   }, [
-    openHostId,
+    openRef,
     epicId,
     isRenaming,
     navigateNested,
-    nodeName,
     nodeId,
     openableType,
     prepareOpenTilePreviewInTabFocusTarget,
@@ -1071,16 +1116,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     } else {
       navigateNested(epicId, tabId, () =>
         prepareOpenTileInTabFocusTarget(tabId, {
-          id: nodeId,
+          ...openRef(),
           instanceId: uuidv4(),
-          type: openableType,
-          name: nodeName,
-          hostId: openHostId,
         }),
       );
     }
   }, [
-    openHostId,
+    openRef,
     epicId,
     isRenaming,
     navigateNested,
@@ -2098,6 +2140,18 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const ownerHostId = useEpicNodeHostId(nodeId);
   const activeHostId = useReactiveActiveHostId();
   const sourceHostId = ownerHostId ?? activeHostId;
+  // Same lock the cloud rows carry, driven by the same signal: a CHAT row
+  // whose owner host is unreachable is readonly here (its click opens the
+  // published copy), and the row must say so before the click. State, not
+  // provenance - reachable-owner rows stay lock-free whatever host they
+  // live on.
+  const ownerReachability = useHostReachability(
+    ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const showUnreachableLock =
+    artifactType === "chat" &&
+    ownerHostId !== null &&
+    ownerReachability.status === "unreachable";
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       sourceHostId === null
@@ -2251,6 +2305,20 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <span className="flex min-w-0 items-center gap-1.5">
           {isArchived ? <ArchivedTitlePrefix /> : null}
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          {showUnreachableLock ? (
+            <TooltipWrapper
+              label={`Lives on ${ownerReachability.hostLabel}, which is offline. Opens read-only from the last published copy.`}
+              side="right"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Lock
+                className="size-3 shrink-0 text-muted-foreground"
+                data-testid={`epic-sidebar-tree-lock-${nodeId}`}
+                aria-label={`On ${ownerReachability.hostLabel}, offline`}
+              />
+            </TooltipWrapper>
+          ) : null}
           <AgentRoleBadgesForOwner
             ownerKind={resourceOwnerKind}
             claims={roleClaims}

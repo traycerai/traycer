@@ -1358,6 +1358,21 @@ export function useEpicNodeHostId(nodeId: string): string | null {
 }
 
 /**
+ * The owning USER of a chat row, as a primitive for the same
+ * churn-isolation reason as {@link useEpicNodeHostId}. Chat rows only:
+ * the one consumer (the sidebar's unreachable-owner published-copy
+ * routing) needs the cloud identity triple, which only chats have.
+ */
+export function useEpicNodeOwnerUserId(nodeId: string): string | null {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].userId;
+    }
+    return null;
+  });
+}
+
+/**
  * Whether this node's record is archived, as a primitive so unrelated
  * projection churn cannot re-render the row. Covers both record kinds - one
  * `epic.setChatArchived` RPC keyed by id serves chats and terminal-agents
