@@ -907,4 +907,49 @@ describe("response-lane value-growth strictness", () => {
       /array items: adds enum value 'running'.*responseGrowthProjectionGated/s,
     );
   });
+
+  it("rejects a redundant projection-gated annotation on a minor with no growth", () => {
+    // The annotation must stay load-bearing: if it outlived the growth it
+    // was granted for, the response lane would stay silently lenient for
+    // every later edit to that same minor.
+    const flatV10 = defineRpcContract({
+      method: "flat",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const flatV11 = defineRpcContract({
+      method: "flat",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({ ok: z.boolean(), note: z.string().optional() }),
+    });
+    const flatUpgrade = defineUpgradePath<typeof flatV10, typeof flatV11>({
+      from: flatV10.schemaVersion,
+      to: flatV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ ok: response.ok }),
+    });
+
+    const registry = {
+      flat: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: flatV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: flatV11,
+              upgradeFromPreviousVersion: flatUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      /declares `responseGrowthProjectionGated` but its response has no value growth.*remove the annotation/s,
+    );
+  });
 });

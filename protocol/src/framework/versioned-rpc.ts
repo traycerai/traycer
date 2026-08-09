@@ -440,11 +440,28 @@ function assertSchemaCompatibility(
         // projection with no opt-out.
         const responseGrowthGated =
           line.versions[currentMinor].responseGrowthProjectionGated === true;
-        const responseViolation = findAdditivityViolation(
+        const strictResponseViolation = findAdditivityViolation(
           previous.response,
           current.response,
-          responseGrowthGated ? "lenient" : "no-value-growth",
+          "no-value-growth",
         );
+        // The annotation is a reviewed claim about the EMITTER, so it must
+        // never outlive the growth it was granted for: a minor that carries
+        // it without growth (or whose growth is later removed) would keep
+        // the response lane silently lenient for every future edit to that
+        // same minor. Require it to be load-bearing.
+        if (responseGrowthGated && strictResponseViolation === null) {
+          throw new Error(
+            `Minor ${major}.${currentMinor} for method '${method}' declares \`responseGrowthProjectionGated\` but its response has no value growth over ${major}.${previousMinor}; remove the annotation`,
+          );
+        }
+        const responseViolation = responseGrowthGated
+          ? findAdditivityViolation(
+              previous.response,
+              current.response,
+              "lenient",
+            )
+          : strictResponseViolation;
         if (responseViolation !== null) {
           // Growth violations may arrive wrapped in `array-items`, so
           // classify the unwrapped root rather than the rendered prose.
