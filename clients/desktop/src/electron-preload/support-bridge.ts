@@ -18,8 +18,10 @@ import type {
   SupportSubmitReportResult,
 } from "../ipc-contracts/window-types";
 import type {
+  DesktopNotificationFeedSource,
   DesktopNotificationForegroundAppLocal,
   DesktopNotificationForegroundDisplay,
+  DesktopNotificationShowOutcome,
 } from "../ipc-contracts/notification-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -91,8 +93,9 @@ export interface SupportBridgeSurface {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      feedSource: DesktopNotificationFeedSource | null,
       foregroundAppLocal: DesktopNotificationForegroundAppLocal | null,
-    ): Promise<void>;
+    ): Promise<DesktopNotificationShowOutcome>;
     onClick(handler: Listener<unknown>): Disposable;
     onForegroundDisplay(
       handler: Listener<DesktopNotificationForegroundDisplay>,
@@ -158,6 +161,7 @@ export function buildSupportBridge(): SupportBridgeSurface {
         payload,
         replaceKey,
         deliveryKey,
+        feedSource,
         foregroundAppLocal,
       ) =>
         ipcRenderer.invoke(
@@ -167,8 +171,9 @@ export function buildSupportBridge(): SupportBridgeSurface {
           payload,
           replaceKey,
           deliveryKey,
+          feedSource,
           foregroundAppLocal,
-        ),
+        ) as Promise<DesktopNotificationShowOutcome>,
       onClick: (handler) =>
         subscribe<unknown>(RunnerHostEvent.notificationClick, handler),
       onForegroundDisplay: (handler) =>

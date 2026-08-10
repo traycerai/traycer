@@ -7,7 +7,11 @@ import {
   type SchemaVersion,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { canonicalForMethodVersionLine } from "@traycer/protocol/framework/compat-helpers";
+import {
+  mergeConnectionManifests,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/capability-manifest";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
@@ -57,6 +61,8 @@ import {
   RECONNECT_MAX_BACKOFF_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
+import { recordNegotiatedHostMethods } from "../negotiated-manifest-registry";
+import { resolveUnavailableMethodDegrade } from "../unavailable-method-degrade";
 import {
   CURRENT_MUX_VERSION,
   MuxFrameType,
@@ -248,6 +254,13 @@ interface ActiveConnection {
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
+  /**
+   * `hostManifest.rpc` + `hostManifest.optionalRpc`, merged once at ack.
+   * Version selection and dispatch read THIS (an optional method must
+   * dispatch like any other); only the session-level compatibility check
+   * reads the raw floor.
+   */
+  hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
   hostAttached: boolean;
 }
@@ -260,6 +273,8 @@ export class RemoteSession<
 {
   private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
   private readonly clientManifests: SessionManifests;
+  /** `clientManifests.rpc` + `.optionalRpc` merged - the dispatch view. */
+  private readonly clientRpcMerged: ConnectionManifest;
 
   private phase: SessionPhase = "idle";
   private connectGeneration = 0;
@@ -311,10 +326,23 @@ export class RemoteSession<
 
   constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
     this.options = options;
+    // The same floor/optional split the local `WsRpcClient` advertises, from
+    // the same released-floor list - the remote handshake's compatibility
+    // check runs over the floor ONLY, so a peer that lacks an optional
+    // method degrades instead of fataling the session.
+    const rpcSplit = splitConnectionManifest(
+      options.rpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+    );
     this.clientManifests = {
-      rpc: buildRpcManifest(options.rpcRegistry),
+      rpc: rpcSplit.manifest,
+      optionalRpc: rpcSplit.optionalManifest,
       stream: buildStreamManifest(options.streamRegistry),
     };
+    this.clientRpcMerged = mergeConnectionManifests(
+      rpcSplit.manifest,
+      rpcSplit.optionalManifest,
+    );
     this.dialFailures = new DialFailureLog({
       label: `remote session (host ${options.hostId})`,
       now: () => Date.now(),
@@ -446,24 +474,60 @@ export class RemoteSession<
       );
     }
 
-    const clientCanonical = this.clientManifests.rpc[method];
-    const hostCanonical = hostManifest.rpc[method];
-    if (clientCanonical === undefined || hostCanonical === undefined) {
-      return Promise.reject(
-        new HostRpcError({
-          code: "RPC_ERROR",
-          message: `Method '${method}' is not in both manifests`,
-          requestId,
-          method,
-          fatalDetails: null,
-        }),
-      );
-    }
+    const clientCanonical = this.clientRpcMerged[method];
+    const hostCanonical = connection.hostRpcMerged?.[method];
     const methodRegistry = indexMethodRegistry(
       this.options.rpcRegistry,
       method,
     );
+    if (clientCanonical === undefined || hostCanonical === undefined) {
+      // Now that optional methods no longer fatal the handshake, "this host
+      // doesn't have that method" is a NORMAL runtime outcome here, and it
+      // must honor the registry's declared degrade exactly as `WsRpcClient`
+      // does - callers key off the resulting `E_HOST_UNSUPPORTED` (e.g. the
+      // run-settings write queue suppresses only that code to fall back to
+      // legacy persist-on-next-send). A generic `RPC_ERROR` would surface as
+      // a real failure instead.
+      return this.executeUnavailableMethodDegrade(
+        connection,
+        method,
+        methodRegistry,
+        clientCanonical,
+        connection.hostRpcMerged ?? {},
+        params,
+        requestId,
+      );
+    }
 
+    return this.dispatchNegotiatedUnary(
+      connection,
+      method,
+      methodRegistry,
+      clientCanonical,
+      hostCanonical,
+      params,
+      requestId,
+    ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
+  /**
+   * Sends an ALREADY-negotiated method at EXPLICIT versions.
+   *
+   * The versions are parameters rather than re-derived from the manifests
+   * because a degrade fallback targets the version its declaration names
+   * (`degrade.to`), which is not necessarily the target method's canonical
+   * version - re-deriving would validate the already-adapted request, and
+   * transform the response, against the wrong contract.
+   */
+  private dispatchNegotiatedUnary(
+    connection: ActiveConnection,
+    method: string,
+    methodRegistry: MethodVersionRegistry,
+    clientCanonical: SchemaVersion,
+    hostCanonical: SchemaVersion,
+    params: unknown,
+    requestId: string,
+  ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
       prepared = prepareRequestPayload(
@@ -479,8 +543,8 @@ export class RemoteSession<
     }
 
     const streamId = this.allocateStreamId();
-    return new Promise<ResponseOfMethod<RpcRegistry, Method>>(
-      (resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
+      {
         const timer = setTimeout(() => {
           this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
         }, UNARY_RESPONSE_TIMEOUT_MS);
@@ -490,8 +554,7 @@ export class RemoteSession<
           clientCanonical,
           hostCanonical,
           methodRegistry,
-          resolve: (result) =>
-            resolve(result as ResponseOfMethod<RpcRegistry, Method>),
+          resolve,
           reject,
           timer,
         });
@@ -513,8 +576,8 @@ export class RemoteSession<
           this.clearPendingUnary(streamId);
           reject(asHostRpcError(cause, requestId, method));
         }
-      },
-    );
+      }
+    });
   }
 
   /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
@@ -761,6 +824,7 @@ export class RemoteSession<
       reassembler: new ChunkReassembler(),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
+      hostRpcMerged: null,
       credentialUpdateSupported: false,
       hostAttached: true,
     };
@@ -965,6 +1029,51 @@ export class RemoteSession<
     void connection;
   }
 
+  /**
+   * A method this host never advertised. Applies the registry's DECLARED
+   * degrade through the shared policy (see `unavailable-method-degrade.ts`) -
+   * `E_HOST_UNSUPPORTED` for an `unsupported` declaration, or the declared
+   * floor fallback dispatched back through this same session.
+   */
+  private executeUnavailableMethodDegrade<
+    Method extends keyof RpcRegistry & string,
+  >(
+    connection: ActiveConnection,
+    method: Method,
+    methodRegistry: MethodVersionRegistry,
+    clientCanonical: SchemaVersion | undefined,
+    hostRpcMerged: ConnectionManifest,
+    params: RequestOfMethod<RpcRegistry, Method>,
+    requestId: string,
+  ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+    return resolveUnavailableMethodDegrade({
+      registry: this.options.rpcRegistry,
+      method,
+      methodRegistry,
+      clientCanonical,
+      clientManifest: this.clientRpcMerged,
+      hostManifest: hostRpcMerged,
+      params,
+      requestId,
+      // Dispatched at the versions the DECLARATION names, not the target's
+      // canonical pair: `degrade.to` may anchor an older version, and the
+      // request handed over here is already adapted to it. Re-entering
+      // `sendUnary` would re-derive canonical versions and validate the
+      // adapted payload - and transform the response - against the wrong
+      // contract. Same anchoring the local transport's fallback tests pin.
+      execute: (input) =>
+        this.dispatchNegotiatedUnary(
+          connection,
+          input.method,
+          input.methodRegistry,
+          input.clientCanonical,
+          input.hostCanonical,
+          input.params,
+          requestId,
+        ),
+    }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
   private handleOpenAck(
     generation: number,
     connection: ActiveConnection,
@@ -978,6 +1087,24 @@ export class RemoteSession<
       this.handleConnectionLost(generation, "malformed-openAck");
       return;
     }
+    const hostRpcMerged = mergeConnectionManifests(
+      parsed.data.manifest.rpc,
+      parsed.data.manifest.optionalRpc,
+    );
+    // Publish what this host advertised so UI layers can gate an optional
+    // (non-floor) affordance without calling the method - the exact mirror of
+    // `WsRpcClient`'s publish on the local path, and recorded BEFORE the
+    // compatibility check for the same reason: an incompatible pairing still
+    // tells us truthfully which methods the host has. A long-lived session
+    // refreshes this on every re-attach, which is when a host upgraded
+    // underneath us re-handshakes.
+    recordNegotiatedHostMethods(
+      this.options.hostId,
+      Object.keys(hostRpcMerged),
+    );
+    // Floor vs floor ONLY - optional methods are deliberately outside the
+    // session-fatal surface (see `SessionManifests`); a peer lacking one
+    // degrades per-call/per-gate instead.
     const compat = checkCompatibility(
       this.options.rpcRegistry,
       this.clientManifests.rpc,
@@ -989,6 +1116,7 @@ export class RemoteSession<
       return;
     }
     connection.hostManifest = parsed.data.manifest;
+    connection.hostRpcMerged = hostRpcMerged;
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -1743,14 +1871,6 @@ const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
  * stream transport's `REVALIDATE_TIMEOUT_MS`.
  */
 const UNAUTHORIZED_REVALIDATE_TIMEOUT_MS = 10_000;
-
-function buildRpcManifest(registry: VersionedRpcRegistry): ConnectionManifest {
-  const manifest: Record<string, SchemaVersion> = {};
-  for (const method of Object.keys(registry)) {
-    manifest[method] = canonicalForMethodVersionLine(registry[method], method);
-  }
-  return manifest;
-}
 
 function indexMethodRegistry(
   registry: VersionedRpcRegistry,

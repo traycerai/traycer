@@ -1201,6 +1201,14 @@ describe("two lanes: mutation vs download independence", () => {
     writeStagedRecord("production", "1.8.0", null);
 
     const downloadGate = deferred<unknown>();
+    // Signals that the preflight download has actually been ENTERED. The
+    // property under test is "convergeReady is not blocked while apply sits
+    // in its preflight download", so apply must provably be sitting there
+    // before convergeReady starts. `flushMicrotasks()` cannot establish that:
+    // it is three promise turns, while `applyStaged` first crosses real fs
+    // reads. Losing that race makes this test either time out or - worse -
+    // pass without ever exercising the concurrency it claims to prove.
+    const downloadStarted = deferred<void>();
     let ensureCalled = false;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
@@ -1210,6 +1218,7 @@ describe("two lanes: mutation vs download independence", () => {
     });
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
+        downloadStarted.resolve(undefined);
         await downloadGate.promise;
         return { data: {} };
       }
@@ -1228,7 +1237,7 @@ describe("two lanes: mutation vs download independence", () => {
     });
 
     const applyPromise = controller.applyStaged("manual", false);
-    await flushMicrotasks();
+    await downloadStarted.promise;
 
     const convergePromise = controller.convergeReady(false);
     // The download is still gated (unresolved) while convergeReady reaches
@@ -1262,6 +1271,9 @@ describe("two lanes: mutation vs download independence", () => {
     writeStagedRecord("production", "1.8.0", null);
 
     const downloadGate = deferred<unknown>();
+    // See the sibling applyStaged test: the preflight download must provably
+    // have been entered before convergeReady starts, or this proves nothing.
+    const downloadStarted = deferred<void>();
     let ensureCalled = false;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
@@ -1271,6 +1283,7 @@ describe("two lanes: mutation vs download independence", () => {
     });
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
+        downloadStarted.resolve(undefined);
         await downloadGate.promise;
         return { data: {} };
       }
@@ -1289,7 +1302,7 @@ describe("two lanes: mutation vs download independence", () => {
     });
 
     const activatePromise = controller.activateInstalled(false);
-    await flushMicrotasks();
+    await downloadStarted.promise;
 
     const convergePromise = controller.convergeReady(false);
     await vi.waitFor(() => {
@@ -3000,12 +3013,26 @@ describe("platform matrix", () => {
       }
       return { removedInstallDir: true, serviceUninstalled: true };
     });
+    // Signals that the download is genuinely in flight WITH its abort
+    // listener attached. Without this handshake the test has no in-flight
+    // child to abort: `flushMicrotasks()` is three promise turns, while
+    // `stageLatest` first crosses real fs reads (isHostRemovedByUser, the
+    // staged-record read) before the download child and its AbortController
+    // exist. Removal could therefore win outright, leaving `observedAbort`
+    // false forever - which is a 1 s `vi.waitFor` timeout, not a bug in the
+    // behaviour under test. Raising that deadline would only wait longer on
+    // a precondition that never became true.
+    const downloadStarted = deferred<void>();
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
         const aborted = new Promise<void>((resolve) => {
-          if (opts.signal === null) return;
+          if (opts.signal === null) {
+            downloadStarted.resolve(undefined);
+            return;
+          }
           if (opts.signal.aborted) {
             observedAbort = true;
+            downloadStarted.resolve(undefined);
             resolve();
             return;
           }
@@ -3017,6 +3044,9 @@ describe("platform matrix", () => {
             },
             { once: true },
           );
+          // Resolved only after the listener is attached, so an abort that
+          // arrives next tick is guaranteed to be observed.
+          downloadStarted.resolve(undefined);
         });
         await aborted;
         await downloadGate.promise;
@@ -3026,7 +3056,7 @@ describe("platform matrix", () => {
     });
 
     const stagePromise = controller.stageLatest();
-    await flushMicrotasks();
+    await downloadStarted.promise;
 
     const removal = controller.removeTraycer();
     await vi.waitFor(() => {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect } from "react";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
+  NotificationFeedSource,
   NotificationForegroundAppLocal,
   NotificationForegroundDisplay,
+  NotificationShowOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 
 export interface NotificationShowRequest {
@@ -11,37 +13,40 @@ export interface NotificationShowRequest {
   readonly payload: unknown;
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
 export type NotificationShow = (
   request: NotificationShowRequest,
-) => Promise<void>;
+) => Promise<NotificationShowOutcome>;
 
 /**
  * Returns a stable callback that forwards GUI-driven notification requests
- * to the runner-host notification surface.
+ * to the runner-host notification surface and reports the shell's delivery
+ * outcome back to the caller.
  */
 export function useNotificationShow(): NotificationShow {
   const runnerHost = useRunnerHost();
   return useCallback<NotificationShow>(
-    async ({
+    ({
       title,
       body,
       payload,
       replaceKey,
       deliveryKey,
+      feedSource,
       foregroundAppLocal,
-    }) => {
-      await runnerHost.notifications.show(
+    }) =>
+      runnerHost.notifications.show(
         title,
         body,
         payload,
         replaceKey,
         deliveryKey,
+        feedSource,
         foregroundAppLocal,
-      );
-    },
+      ),
     [runnerHost],
   );
 }

@@ -35,7 +35,7 @@ export interface CloudNotificationsState {
   >;
   readonly summary: HostNotificationsCloudFeedSummary | null;
   /** The cloud's per-user change sequence, as of the last snapshot. This is
-   * what a `clearAll` names as the feed the user was looking at. */
+   * what a bulk mutation names as the feed the user was looking at. */
   readonly version: number | null;
   /** A cloud feed is authoritative only after this session has received a
    * complete snapshot. Until then an in-progress retry must not masquerade as
@@ -74,6 +74,9 @@ export interface CloudNotificationsState {
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
   markReadLocally(entryId: string, readAt: number): void;
+  /** Optimistically covers the whole raw snapshot summary, including unread
+   * entries omitted from `rows` because this client cannot render them. */
+  markAllReadLocally(readAt: number): void;
   /** One atomic step for a view-consumption fan-out: claim every entry as
    * in-flight and apply its optimistic marker in a single write, so no
    * subscriber can observe the new rows before the claim is visible. */
@@ -230,6 +233,21 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
                   ...state.summary,
                   unreadCount: Math.max(0, state.summary.unreadCount - 1),
                 },
+        };
+      }),
+    markAllReadLocally: (readAt) =>
+      set((state) => {
+        const rows = { ...state.rows };
+        for (const [key, row] of Object.entries(rows)) {
+          if (row === undefined || row.entry.readAt !== null) continue;
+          rows[key] = { ...row, entry: { ...row.entry, readAt } };
+        }
+        return {
+          rows,
+          summary:
+            state.summary === null
+              ? null
+              : { ...state.summary, unreadCount: 0 },
         };
       }),
     beginEntityRead: (entryIds, readAt) =>
