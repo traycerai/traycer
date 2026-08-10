@@ -1,4 +1,12 @@
-import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useCallback,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -287,6 +295,7 @@ export function ProviderCustomModelProviderDialog(props: {
             {draft.models.map((model, index) => (
               <EditorRow
                 key={model.row}
+                rowId={`${fieldId}-model-${model.row}`}
                 firstLabel="ID"
                 firstPlaceholder="model-id"
                 firstValue={model.id}
@@ -338,6 +347,7 @@ export function ProviderCustomModelProviderDialog(props: {
             {draft.headers.map((header, index) => (
               <EditorRow
                 key={header.row}
+                rowId={`${fieldId}-header-${header.row}`}
                 firstLabel="Header"
                 firstPlaceholder="Header-Name"
                 firstValue={header.key}
@@ -401,6 +411,15 @@ export function ProviderCustomModelProviderDialog(props: {
   );
 }
 
+/**
+ * A labelled field whose message is ANNOUNCED with it.
+ *
+ * The message carries an id the control points at through `aria-describedby`,
+ * and an invalid one also sets `aria-invalid`. Without that the error is a
+ * paragraph that happens to sit nearby: sighted users infer the association
+ * from proximity, and a screen reader gets the label and the box with nothing
+ * saying why it was rejected. `RowField` already did this; this one did not.
+ */
 function Field(props: {
   readonly id: string;
   readonly label: string;
@@ -409,12 +428,22 @@ function Field(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const message = props.error ?? props.hint;
+  const messageId = `${props.id}-message`;
   return (
     <div className="flex w-full flex-col gap-1.5">
       <Label htmlFor={props.id}>{props.label}</Label>
-      {props.children}
+      {isValidElement<{
+        readonly "aria-describedby"?: string;
+        readonly "aria-invalid"?: boolean;
+      }>(props.children)
+        ? cloneElement(props.children, {
+            "aria-describedby": message === null ? undefined : messageId,
+            "aria-invalid": props.error !== null,
+          })
+        : props.children}
       {message === null ? null : (
         <p
+          id={messageId}
           className={cn(
             "text-ui-xs",
             props.error === null ? "text-muted-foreground" : "text-destructive",
@@ -461,6 +490,7 @@ function RowSection(props: {
  * placeholders have said the same thing.
  */
 function EditorRow(props: {
+  readonly rowId: string;
   readonly firstLabel: string;
   readonly firstPlaceholder: string;
   readonly firstValue: string;
@@ -479,6 +509,7 @@ function EditorRow(props: {
   return (
     <div className="flex w-full items-start gap-2">
       <RowField
+        id={`${props.rowId}-first`}
         label={props.firstLabel}
         placeholder={props.firstPlaceholder}
         value={props.firstValue}
@@ -486,6 +517,7 @@ function EditorRow(props: {
         onChange={props.onFirstChange}
       />
       <RowField
+        id={`${props.rowId}-second`}
         label={props.secondLabel}
         placeholder={props.secondPlaceholder}
         value={props.secondValue}
@@ -510,17 +542,29 @@ function EditorRow(props: {
   );
 }
 
+/**
+ * One column of a row editor, with its error ANNOUNCED rather than merely
+ * adjacent - the same association {@link Field} makes, for the same reason.
+ *
+ * These rows repeat, so an unassociated "Required" is worse here than in the
+ * fields above: a screen reader hears the column label and the value, and the
+ * complaint belongs to whichever of the six nearby boxes the reader guesses.
+ */
 function RowField(props: {
+  readonly id: string;
   readonly label: string;
   readonly placeholder: string;
   readonly value: string;
   readonly error: string | null;
   readonly onChange: (value: string) => void;
 }): ReactNode {
+  const messageId = `${props.id}-message`;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
       <Input
         aria-label={props.label}
+        aria-invalid={props.error !== null}
+        aria-describedby={props.error === null ? undefined : messageId}
         value={props.value}
         placeholder={props.placeholder}
         autoComplete="off"
@@ -530,7 +574,9 @@ function RowField(props: {
         }}
       />
       {props.error === null ? null : (
-        <p className="text-ui-xs text-destructive">{props.error}</p>
+        <p id={messageId} className="text-ui-xs text-destructive">
+          {props.error}
+        </p>
       )}
     </div>
   );

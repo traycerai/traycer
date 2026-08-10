@@ -162,6 +162,12 @@ const providerMocks = vi.hoisted(() => ({
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
+  /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
+  refreshedHostIds: [] as string[],
+  /** The app-wide binding. Null unless a test opts into a distinct ambient. */
+  ambientBinding: null as {
+    hostClient: { getActiveHostId: () => string };
+  } | null,
   refreshUsageLimits: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
 }));
@@ -455,9 +461,25 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   }),
 }));
 
-vi.mock("@/hooks/providers/use-refresh-providers", () => ({
-  useRefreshProviders: () => providerMocks.refreshProviders,
-}));
+vi.mock("@/hooks/providers/use-refresh-providers", async () => {
+  const { useContext } = await import("react");
+  const { HostRuntimeContext } = await import("@/lib/host/runtime");
+  return {
+    // Resolves its client the way the real hook does - off
+    // `HostRuntimeContext` - rather than being handed one. That is the whole
+    // point: a stub that ignores context cannot tell a header inside the
+    // provider from a header outside it, which is exactly the bug this suite
+    // needs to be able to fail on.
+    useRefreshProviders: () => {
+      const binding = useContext(HostRuntimeContext);
+      const hostId = binding?.hostClient.getActiveHostId() ?? "ambient";
+      return async () => {
+        providerMocks.refreshedHostIds.push(hostId);
+        await providerMocks.refreshProviders();
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   useRunnerOpenExternalLink: () => ({
@@ -512,6 +534,19 @@ vi.mock("@/lib/host", async (importOriginal) => {
     ...actual,
     useHostBinding: () => null,
     useHostClient: () => null,
+  };
+});
+
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    // `HostRuntimeContext` stays REAL - the panel's provider swap is the thing
+    // under test. Only the ambient binding is faked, and it is null by DEFAULT
+    // so every existing test keeps the shape it was written against. A non-null
+    // one is what lets the provider actually wrap the shell, which is the only
+    // way the wrong-host regression can observe anything at all.
+    useHostBinding: () => providerMocks.ambientBinding,
   };
 });
 
@@ -604,9 +639,17 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+/**
+ * The only thing the panel calls on a scope client, so the only thing a stub
+ * has to be. Named rather than asserted: the real `HostClient` is far wider
+ * than this test needs, and casting to it would be claiming a shape nothing
+ * here provides.
+ */
+type ScopeClientStub = { readonly getActiveHostId: () => string };
+
 const hostScopeMocks: {
   status: HostScopeStatus | undefined;
-  client: null;
+  client: ScopeClientStub | null;
   setHostId: Mock<(hostId: string) => void>;
   hostId: string;
   host: HostScopeOption | undefined;
@@ -624,9 +667,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () =>
-      hostScopeFixture({
-        client: hostScopeMocks.client,
+    useHostScope: () => ({
+      ...hostScopeFixture({
         setHostId: hostScopeMocks.setHostId,
         hostId: hostScopeMocks.hostId,
         // `host: undefined` must be OMITTED, not passed: the fixture's final
@@ -640,6 +682,10 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
           ? {}
           : { status: hostScopeMocks.status }),
       }),
+      // Spread OUTSIDE the fixture call: the stub satisfies what the panel
+      // uses, not the full `HostClient` the fixture's type demands.
+      client: hostScopeMocks.client,
+    }),
   };
 });
 
@@ -1184,6 +1230,9 @@ describe("<ProvidersSettingsPanel />", () => {
     // Reset alongside the rest: a test that pins an unusable status would
     // otherwise leave every later one scoped to a host with no client.
     hostScopeMocks.status = undefined;
+    providerMocks.refreshedHostIds.length = 0;
+    providerMocks.ambientBinding = null;
+    hostScopeMocks.client = null;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -2093,6 +2142,36 @@ describe("<ProvidersSettingsPanel />", () => {
       ),
     ).toBe(true);
     expect(document.querySelector("header")?.contains(status)).toBe(true);
+  });
+
+  it("refreshes the SELECTED host, never the ambient one", async () => {
+    // The wrong-host bug's actual signature. DOM absence cannot see it: the
+    // failure was never a missing control, it was a present control resolving
+    // the wrong client - so this gives the two hosts distinct identities and
+    // asks which one Refresh reached.
+    //
+    // Moving `HostRuntimeContext.Provider` back below the header - the exact
+    // historical regression - makes this fail, because the header would then
+    // resolve `ambient` instead of the selected host.
+    providerMocks.ambientBinding = {
+      hostClient: { getActiveHostId: () => "host-ambient" },
+    };
+    hostScopeMocks.status = "ready";
+    hostScopeMocks.client = { getActiveHostId: () => "host-selected" };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh all providers" }),
+    );
+    await waitFor(() => {
+      expect(providerMocks.refreshedHostIds).toEqual(["host-selected"]);
+    });
+    expect(providerMocks.refreshedHostIds).not.toContain("host-ambient");
   });
 
   it("mounts NO global control - and no RPC - until the scope is ready", () => {

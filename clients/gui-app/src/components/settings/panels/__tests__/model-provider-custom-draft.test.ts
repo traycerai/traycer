@@ -363,6 +363,30 @@ describe("re-enable eligibility", () => {
     ).toBe(true);
   });
 
+  it("judges the row's REAL headers, not a blank set", () => {
+    // Re-enable submits `updateCustom` with the row's own headers, so viability
+    // has to be decided about that payload. Judging a blank header list judged
+    // a different write than the one that would go out.
+    expect(
+      canReenableCustomProvider({
+        ...values,
+        headers: [{ key: "X-Org", value: "acme" }],
+      }),
+    ).toBe(true);
+    // Two header names differing only in case collapse when written, so our
+    // write path refuses them - and re-enable must refuse them too rather than
+    // sending a payload it would reject from the form.
+    expect(
+      canReenableCustomProvider({
+        ...values,
+        headers: [
+          { key: "X-Org", value: "acme" },
+          { key: "x-org", value: "other" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("refuses one the write side would reject", () => {
     // Sending it back would report a failure the user never had a chance to
     // fix; that row gets Edit instead.

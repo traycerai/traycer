@@ -399,30 +399,24 @@ function ProvidersSettingsPanelInner({
 }
 
 /**
- * Everything that talks to the scoped host, mounted only once the gate has
- * proven there is a client behind the name.
- *
- * The list query and the Refresh control live HERE rather than in the panel
- * header for one reason: the header is outside the gate. Mounted there, these
- * hooks resolved against the ambient host whenever the scope was not ready —
- * so "Refresh" re-probed provider auth and rewrote the cached provider list of
- * a host the page was not showing. Being a child of the gate is what makes
- * them unable to do that.
- */
-/**
  * "All providers · Checked …" plus Refresh, for the panel heading row.
  *
  * Named for its SCOPE because that is what was unclear: `checkedAt` is a max
  * over every provider and Refresh re-probes all of them, which read as
  * per-provider when it sat at the card's top-right.
  *
- * Mounted only under a ready scope - see `headerAction` above. Its hooks read
- * `useHostClient()`, so mounting it any earlier would target the ambient host.
+ * Mounted only on a USABLE scope - see `headerAction` above. Its hooks resolve
+ * `useHostClient()`, so on `connecting` / `unreachable` / `vanished` they would
+ * resolve the ambient host instead of the one the page names.
  */
 function ProvidersGlobalStatus(): ReactNode {
-  // `subscribed: false`: the body's instance owns the subscription, and this
-  // shares its cache entry rather than opening a second one.
-  const query = useProvidersList({ enabled: true, subscribed: false });
+  // SUBSCRIBED, like the body's instance. `subscribed: false` was avoiding a
+  // duplicate that does not exist - two observers of one key share a fetch -
+  // while buying a real defect: an unsubscribed observer renders the cache at
+  // mount and then ignores it, so a refresh would update the rows below and
+  // leave this row's "Checked …" and its spinner frozen on the old answer.
+  // That is precisely the state this control exists to report.
+  const query = useProvidersList({ enabled: true, subscribed: true });
   const providers = query.data?.providers ?? [];
   const checking = query.isFetching || hasPendingProviderProbe(providers);
   const refreshProviders = useRefreshProviders();
@@ -447,6 +441,10 @@ function ProvidersGlobalStatus(): ReactNode {
   );
 }
 
+/**
+ * Everything that talks to the scoped host, mounted only once the gate has
+ * proven there is a client behind the name.
+ */
 function ProvidersScopedContent({
   hostId,
   isSelectedHostLocal,

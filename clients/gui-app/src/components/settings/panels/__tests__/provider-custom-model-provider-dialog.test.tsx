@@ -15,6 +15,7 @@ function renderDialog(args: {
   readonly disabledIds: readonly string[];
   readonly onSubmit: (values: CustomProviderValues) => void;
   readonly submitError: string | null;
+  readonly isPending?: boolean;
 }) {
   return render(
     <ProviderCustomModelProviderDialog
@@ -24,7 +25,7 @@ function renderDialog(args: {
       takenIds={args.takenIds}
       disabledIds={args.disabledIds}
       initial={args.initial}
-      isPending={false}
+      isPending={args.isPending ?? false}
       submitError={args.submitError}
       onSubmit={args.onSubmit}
     />,
@@ -350,6 +351,26 @@ describe("custom model provider dialog", () => {
         "Use lowercase letters, numbers, hyphens, or underscores",
       ),
     ).toBeTruthy();
+  });
+
+  it("refuses a second submit while one is in flight", () => {
+    // The label does NOT change while pending (repo rule: disable, never swap
+    // to "Submitting…"), so the guard is the only thing standing between an
+    // impatient double click and two writes to one config file.
+    const onSubmit = vi.fn();
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      disabledIds: [],
+      onSubmit,
+      submitError: null,
+      isPending: true,
+    });
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    fillValidForm();
+    fireEvent.click(submit);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("keeps the form open and shows what the host rejected", () => {

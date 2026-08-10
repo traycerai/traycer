@@ -1141,6 +1141,10 @@ function ModelProviderRow(props: {
               variant="ghost"
               disabled={props.busy}
               onClick={props.onConnect}
+              // Row-specific, like its three siblings: "Connect" alone repeats
+              // ~180 times in the accessibility tree with nothing saying which
+              // provider each one belongs to.
+              aria-label={`Connect ${entry.name}`}
             >
               Connect
             </Button>

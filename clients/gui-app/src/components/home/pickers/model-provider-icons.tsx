@@ -46,7 +46,6 @@ import VertexAIMono from "@lobehub/icons/es/VertexAI/components/Mono";
 import XAIMono from "@lobehub/icons/es/XAI/components/Mono";
 import ZAIMono from "@lobehub/icons/es/ZAI/components/Mono";
 import ZenMuxMono from "@lobehub/icons/es/ZenMux/components/Mono";
-import ZhipuMono from "@lobehub/icons/es/Zhipu/components/Mono";
 
 /**
  * Brand marks for the UPSTREAM model providers a harness can call - the
@@ -176,7 +175,10 @@ const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
   vercel: (props) => <VercelMono {...props} />,
   xai: (props) => <XAIMono {...props} />,
   zai: (props) => <ZAIMono {...props} />,
-  "zai-coding-plan": (props) => <ZhipuMono {...props} />,
+  // Z.AI's plan variant folds to Z.AI's own mark. It pointed at Zhipu's, which
+  // is the parent company rather than the brand this row names - and it broke
+  // the rule stated above it, where every plan variant wears its parent's mark.
+  "zai-coding-plan": (props) => <ZAIMono {...props} />,
   zenmux: (props) => <ZenMuxMono {...props} />,
 };
 

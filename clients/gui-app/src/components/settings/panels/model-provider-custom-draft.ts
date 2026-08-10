@@ -471,7 +471,17 @@ export function canReenableCustomProvider(
                 id: model.id,
                 name: model.name,
               })),
-        headers: [emptyCustomProviderHeaderRow()],
+        // The row's REAL headers, not a blank row. Re-enable sends
+        // `updateCustom` with these, so judging viability without them judges a
+        // different payload than the one that would go out.
+        headers:
+          values.headers.length === 0
+            ? [emptyCustomProviderHeaderRow()]
+            : values.headers.map((header) => ({
+                row: header.key,
+                key: header.key,
+                value: header.value,
+              })),
       },
       // An EXISTING declaration, so its id is judged as one.
       { takenIds: [], disabledIds: [], existing: true },

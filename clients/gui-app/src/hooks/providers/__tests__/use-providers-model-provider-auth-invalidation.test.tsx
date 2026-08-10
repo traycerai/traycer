@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 import { queryKeys } from "@/lib/query-keys";
@@ -55,6 +55,14 @@ function wrapper(client: QueryClient) {
     );
   };
 }
+
+beforeEach(() => {
+  // Hoisted state is shared across every test in the file; without this a host
+  // id or a queued response from one leaks into the next, and the failure shows
+  // up in whichever test happens to run after the one that set it.
+  hostMocks.activeHostId = "host-1";
+  hostMocks.request.mockReset();
+});
 
 describe("model provider auth invalidation", () => {
   it("retires the tab's own catalog when a disconnect lands", async () => {
@@ -158,6 +166,46 @@ describe("model provider auth invalidation", () => {
     );
     expect(keys).toContain(
       JSON.stringify(modelProvidersQueryKeys.listScope("host-1")),
+    );
+  });
+
+  it("invalidates the host the mutation STARTED on, not the one it ended on", async () => {
+    // `onMutate` captures the host id for exactly this: Settings can be
+    // re-pointed mid-flight, and reading the active host in `onSuccess` would
+    // retire the NEW host's caches with the old host's result - leaving the
+    // host that actually changed showing stale rows.
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    hostMocks.request.mockImplementation(() => {
+      // The swap lands while the request is in flight.
+      hostMocks.activeHostId = "host-2";
+      return Promise.resolve({ result: { kind: "done" } });
+    });
+
+    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
+      wrapper: wrapper(client),
+    });
+    result.current.mutate({
+      providerId: "opencode",
+      action: { action: "disconnect", modelProviderId: "openai" },
+    });
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    const keys = invalidate.mock.calls.map((call) =>
+      JSON.stringify(call[0]?.queryKey),
+    );
+    expect(keys).toContain(
+      JSON.stringify(modelProvidersQueryKeys.listScope("host-1")),
+    );
+    expect(keys).not.toContain(
+      JSON.stringify(modelProvidersQueryKeys.listScope("host-2")),
     );
   });
 

@@ -431,7 +431,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     // Connect STAYS: `source` is a status, not a permission. Setting a
     // provider up and choosing which credential wins are different decisions,
     // and the dialog carries the precedence warning.
-    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect Groq" })).toBeTruthy();
   });
 
   it("splits Config from Custom on the host's flag, not on source alone", () => {
@@ -498,7 +498,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(
       screen.getByRole("button", { name: "Disconnect OpenAI" }),
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Connect / })).toBeNull();
   });
 
   it("labels an env-sourced row without taking its Connect away", () => {
@@ -529,7 +529,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     // This is also the ONE case a connected row still shows Connect: the host
     // will not disconnect it, so parity's "Disconnect only" would leave the row
     // with no action at all.
-    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Connect OpenAI" })).toBeTruthy();
   });
 
   it("gates the disconnect affordance on canDisconnect ALONE", () => {
@@ -847,7 +847,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       },
       capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
     });
-    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Connect / })).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Re-enable My gateway" }),
     );
@@ -1403,9 +1403,14 @@ describe("ProviderModelProvidersTab layout", () => {
     expect(list.className).toContain("w-full");
     expect(list.className).not.toContain("overflow-y-auto");
     expect(list.className).not.toMatch(/max-h-/);
-    // No fixed layout box in EITHER unit: a rem cap freezes with the text size
+    // No fixed layout BOX in either unit - a rem cap freezes with the text size
     // instead of following the window, which a px-only assertion would miss.
-    expect(list.className).not.toMatch(/-\[[^\]]*\d(?:px|rem)/);
+    // Anchored to the sizing utilities on purpose: the looser form also matched
+    // bounded-fluid values like `min(85vh,52rem)`, which are exactly what this
+    // rule wants people to use.
+    expect(list.className).not.toMatch(
+      /\b(?:w|h|min-w|min-h|max-w|max-h|size)-\[\d*\.?\d+(?:px|rem)\]/,
+    );
   });
 
   it("keeps Add reachable for a SUCCESSFUL but empty catalog", () => {
