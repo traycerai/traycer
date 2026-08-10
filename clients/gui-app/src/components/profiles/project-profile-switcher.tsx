@@ -12,6 +12,7 @@ import {
 import { buildProfileLandingEpicIntent } from "@/lib/profiles/profile-landing";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import type { ProjectProfile } from "@/lib/profiles/types";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
@@ -22,6 +23,7 @@ import {
 } from "@/stores/profiles/profile-tab-workspaces-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import { flattenLayoutRefs } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
 import { profileColorHex, profileIcon } from "./profile-options";
 import { ProjectProfileBadge } from "./project-profile-badge";
 import { ProjectProfileDialog } from "./project-profile-dialog";
@@ -41,15 +43,16 @@ export function ProjectProfileSwitcher(): ReactNode {
   const [dialog, setDialog] = useState<DialogMode>({ mode: "closed" });
 
   // Entering a project jumps straight to its working surface: the most
-  // recently updated epic the project owns. Projects with no owned epic yet
-  // stay on the current surface (the locked composer is the right start).
+  // recently updated epic the project owns (when that epic is still open in
+  // the profile's restored strip). Fresh / empty profiles open a draft
+  // composer — standing on `/` after the strip swap is a black void.
   //
   // Anti-zombie rule: the profile's restored tab strip is the work-surface
   // authority. Only an epic whose tab is still OPEN may be a landing target —
   // otherwise switching into the profile reopens a tab the user deliberately
   // closed and the write-through persists it again. A missing bucket (fresh
   // profile) allows the cold-open jump; an existing strip — even an EMPTY
-  // one (all tabs closed) — means "stay".
+  // one (all tabs closed) — still needs a draft home, not a black page.
   const selectProfile = (profile: ProjectProfile): void => {
     setActiveProfile(profile.id);
     const restored =
@@ -73,6 +76,11 @@ export function ProjectProfileSwitcher(): ReactNode {
     );
     if (intent !== null) {
       activateTabIntent(navigate, intent, undefined);
+      return;
+    }
+    // After the sync strip swap, empty project → mint a draft composer.
+    if (useTabsStore.getState().stripOrder.length === 0) {
+      activateTabIntent(navigate, openNewEpicIntent(), { replace: true });
     }
   };
 

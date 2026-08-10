@@ -25,7 +25,6 @@ import {
   type TabNavigationIntent,
 } from "@/lib/tab-navigation/intents";
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
-import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   resolveTabIdForEpic,
@@ -1506,7 +1505,12 @@ export class TabNavigationController {
     location: TabNavigationLocation,
     navigate: NavigateFn,
   ): void {
-    if (hasRestoredTabs()) {
+    // Only bounce away when the LIVE strip already owns a surface. Checking
+    // the global drafts/canvas stores (via hasRestoredTabs) falsely blocks
+    // minting when switching into a brand-new empty profile while orphan
+    // drafts from another profile still sit in landing-draft-store — that
+    // produced a permanent spinner loop: /draft/new → / → /draft/new.
+    if (useTabsStore.getState().stripOrder.length > 0) {
       this.issueLandingCorrection(location, navigate);
       return;
     }

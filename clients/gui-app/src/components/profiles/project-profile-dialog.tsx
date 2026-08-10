@@ -12,10 +12,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useWorkspaceFolderActions } from "@/hooks/workspace/use-workspace-folder-actions";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import type {
   ProjectProfile,
   ProjectProfileFolder,
 } from "@/lib/profiles/types";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
@@ -122,10 +124,10 @@ function ProjectProfileDialogBody(props: {
         folders,
       });
       setActiveProfile(created.id);
-      // New profiles have an empty tab strip and often a still-cold history
-      // cache. Land on the draft composer immediately so the user never sees
-      // a black ProfileLaunchLanding void while membership hydrates.
-      void navigate({ to: "/draft/new", replace: true });
+      // After the sync profile-tab strip swap (empty bucket), mint a draft
+      // composer directly. Avoid /draft/new route bounce races with orphan
+      // drafts from other profiles in landing-draft-store.
+      activateTabIntent(navigate, openNewEpicIntent(), { replace: true });
     } else {
       updateProfile(props.editing.id, {
         name: name.trim(),

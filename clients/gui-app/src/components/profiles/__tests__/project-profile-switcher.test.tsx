@@ -180,7 +180,7 @@ describe("ProjectProfileSwitcher", () => {
     expect(call[1]).toMatchObject({ kind: "open-epic", epicId: "titanos-new" });
   });
 
-  it("does not navigate when the project owns no epic", async () => {
+  it("opens a fresh draft when the project owns no epic", async () => {
     const user = userEvent.setup();
     const profiles = useProjectProfilesStore.getState().profiles;
     useHistoryMembershipCacheStore.getState().setMembershipItems([
@@ -200,7 +200,10 @@ describe("ProjectProfileSwitcher", () => {
     expect(useActiveProjectProfileStore.getState().activeProfileId).toBe(
       profiles[0].id,
     );
-    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(activateTabIntent).mock.calls[0][1]).toMatchObject({
+      kind: "new-draft",
+    });
   });
 
   it("lands on the OPEN epic, never on a closed tab (anti-zombie)", async () => {
@@ -239,12 +242,12 @@ describe("ProjectProfileSwitcher", () => {
     expect(call[1]).toMatchObject({ kind: "open-epic", epicId: "titanos-old" });
   });
 
-  it("stays on the current surface when the profile's strip is empty (all tabs closed)", async () => {
+  it("opens a draft when the profile's strip is empty (all tabs closed)", async () => {
     const user = userEvent.setup();
     const profiles = useProjectProfilesStore.getState().profiles;
     const titanos = profiles[0];
-    // The bucket exists but every tab was closed: entering the profile must
-    // not reopen anything.
+    // The bucket exists but every tab was closed: do not resurrect closed
+    // epics — open a fresh draft composer instead of a black `/`.
     useProfileTabWorkspacesStore
       .getState()
       .saveLayout(titanos.id, emptyTabStripLayout());
@@ -265,6 +268,9 @@ describe("ProjectProfileSwitcher", () => {
     expect(useActiveProjectProfileStore.getState().activeProfileId).toBe(
       titanos.id,
     );
-    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(activateTabIntent).mock.calls[0][1]).toMatchObject({
+      kind: "new-draft",
+    });
   });
 });
