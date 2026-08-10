@@ -76,10 +76,12 @@ function resetStores(): void {
   useTabsStore.setState({ stripOrder: [] });
 }
 
-function expectDraftRedirect(times = 1): void {
-  expect(mockNavigate).toHaveBeenCalledTimes(times);
-  expect(mockNavigate).toHaveBeenCalledWith({
-    to: "/draft/new",
+function expectDraftIntent(times = 1): void {
+  expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(times);
+  expect(vi.mocked(activateTabIntent).mock.calls[0][1]).toMatchObject({
+    kind: "new-draft",
+  });
+  expect(vi.mocked(activateTabIntent).mock.calls[0][2]).toEqual({
     replace: true,
   });
 }
@@ -171,7 +173,7 @@ describe("ProfileLaunchLanding", () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it("goes to a fresh draft when membership is hydrated empty (new profile)", async () => {
+  it("opens a fresh draft when membership is hydrated empty (new profile)", async () => {
     const profile = useProjectProfilesStore.getState().profiles[0];
     useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
     // Warm empty snapshot — brand-new project with zero history.
@@ -180,10 +182,10 @@ describe("ProfileLaunchLanding", () => {
     renderLanding();
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalled();
+      expect(vi.mocked(activateTabIntent)).toHaveBeenCalled();
     });
-    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
-    expectDraftRedirect();
+    expectDraftIntent();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it("does not navigate when no profile is active (All projects owns /)", async () => {
@@ -209,7 +211,7 @@ describe("ProfileLaunchLanding", () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it("goes to a fresh draft when the active project owns no epic", async () => {
+  it("opens a fresh draft when the active project owns no epic", async () => {
     const profile = useProjectProfilesStore.getState().profiles[0];
     useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
     useHistoryMembershipCacheStore.getState().setMembershipItems([
@@ -223,24 +225,27 @@ describe("ProfileLaunchLanding", () => {
     renderLanding();
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalled();
+      expect(vi.mocked(activateTabIntent)).toHaveBeenCalled();
     });
-    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
-    expectDraftRedirect();
+    expectDraftIntent();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it("does not draft-redirect while a live tab strip owns the surface", async () => {
+  it("renders nothing (no click-blocking spinner) when the strip owns a surface", async () => {
     useTabsStore.setState({
       stripOrder: [{ kind: "epic", id: "live-epic" }],
     });
 
-    renderLanding();
+    const view = renderLanding();
 
     await waitFor(() => {
       expect(useTabsStore.getState().stripOrder.length).toBe(1);
     });
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    expect(
+      view.queryByTestId("profile-launch-landing-spinner"),
+    ).toBeNull();
   });
 
   it("re-fires the draft fallback when the strip empties AFTER mount (profile-switch race)", async () => {
@@ -267,29 +272,15 @@ describe("ProfileLaunchLanding", () => {
     await waitFor(() => {
       expect(useTabsStore.getState().stripOrder.length).toBe(1);
     });
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
 
     // The bridge swap lands: incoming bucket is empty.
     useTabsStore.setState({ stripOrder: [] });
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
     });
-    expectDraftRedirect();
-    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
-  });
-
-  it("never re-fires the draft redirect off the `/` pathname", async () => {
-    // A failed /draft/new resolution re-renders RootLandingPage (and this
-    // component) at /draft/new — the fallback must not loop.
-    mockPathname = "/draft/new";
-
-    renderLanding();
-
-    await waitFor(() => {
-      expect(mockPathname).toBe("/draft/new");
-    });
+    expectDraftIntent();
     expect(mockNavigate).not.toHaveBeenCalled();
-    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
   });
 });
