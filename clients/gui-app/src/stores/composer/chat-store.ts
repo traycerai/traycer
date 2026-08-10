@@ -10,6 +10,7 @@ import type {
   GuiHarnessId,
   InterviewAnswer,
   InterviewQuestion,
+  ImageResolutionEntry,
   TodoItem,
   AgentUserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -69,6 +70,11 @@ export interface SegmentTodoItem {
   text: string;
   priority: string | null;
   activeForm: string | null;
+}
+
+export interface AssistantMarkdownImageResolution {
+  readonly messageId: string;
+  readonly entry: ImageResolutionEntry;
 }
 
 export interface FileChangeSegment {

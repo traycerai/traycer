@@ -17,7 +17,10 @@ import {
   TableRow,
   TableWrapper,
 } from "./components/table-wrapper";
-import { markdownUrlTransform } from "./links/markdown-url-transform";
+import {
+  assistantMarkdownUrlTransform,
+  markdownUrlTransform,
+} from "./links/markdown-url-transform";
 import {
   TRAYCER_CHAT_TAG,
   TRAYCER_EPIC_TAG,
@@ -30,7 +33,10 @@ import { rehypeTraycerChat } from "./plugins/rehype-traycer-chat";
 import { rehypeTraycerEpic } from "./plugins/rehype-traycer-epic";
 import { rehypeTraycerSpec } from "./plugins/rehype-traycer-spec";
 import { rehypeTraycerTicket } from "./plugins/rehype-traycer-ticket";
-import { extendTraycerSanitizeSchema } from "./plugins/rehype-sanitize-schema";
+import {
+  extendAssistantImageSanitizeSchema,
+  extendTraycerSanitizeSchema,
+} from "./plugins/rehype-sanitize-schema";
 import { getTraycerStreamingHighlighter } from "./traycer-streaming-highlighter";
 
 const TRAYCER_STREAMING_HIGHLIGHTER = getTraycerStreamingHighlighter();
@@ -100,6 +106,8 @@ export function TraycerMarkdown({
   quotable,
   isStreaming,
 }: TraycerMarkdownProps) {
+  const hasImageOverride =
+    components !== null && Object.hasOwn(components, "img");
   const mergedComponents = useMemo((): Components => {
     if (!components) return DEFAULT_COMPONENTS;
     return {
@@ -134,8 +142,16 @@ export function TraycerMarkdown({
       <StreamingMarkdown
         isStreaming={isStreaming}
         highlighter={TRAYCER_STREAMING_HIGHLIGHTER}
-        sanitizeSchema={extendTraycerSanitizeSchema}
-        urlTransform={markdownUrlTransform}
+        sanitizeSchema={
+          hasImageOverride
+            ? extendAssistantImageSanitizeSchema
+            : extendTraycerSanitizeSchema
+        }
+        urlTransform={
+          hasImageOverride
+            ? assistantMarkdownUrlTransform
+            : markdownUrlTransform
+        }
         remarkPlugins={effectiveRemarkPlugins}
         rehypePlugins={effectiveRehypePlugins}
         components={mergedComponents}

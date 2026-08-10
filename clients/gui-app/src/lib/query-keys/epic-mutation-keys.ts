@@ -11,4 +11,10 @@ export const epicMutationKeys = {
   updateChatProfile: () => ["epic.updateChatProfile"] as const,
   setChatArchived: () => ["epic.setChatArchived"] as const,
   archiveChats: () => ["epic.archiveChats"] as const,
+  requestImageIngest: (
+    epicId: string,
+    chatId: string,
+    messageId: string,
+    source: string,
+  ) => ["chat.requestImageIngest", epicId, chatId, messageId, source] as const,
 };
