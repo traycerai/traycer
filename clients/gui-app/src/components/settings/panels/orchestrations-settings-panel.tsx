@@ -1092,7 +1092,23 @@ function RoleCard(props: {
   );
 }
 
-const ROLE_TIERS = ["premium", "executor", "economic"] as const;
+const ROLE_TIERS = [
+  {
+    id: "premium",
+    label: "premium · T1",
+    hint: "Plan / review / arbitrate — does not implement",
+  },
+  {
+    id: "executor",
+    label: "executor · T2",
+    hint: "Quality implementation",
+  },
+  {
+    id: "economic",
+    label: "economic · T3",
+    hint: "Trivial / fast / cheap",
+  },
+] as const;
 
 function RoleEditorForm(props: {
   readonly orchestrationName: string;
@@ -1126,7 +1142,7 @@ function RoleEditorForm(props: {
 
   const idValid =
     isEdit ||
-    (/^[a-z][a-z0-9-]*$/.test(id) && !props.existingIds.includes(id));
+    (/^[a-z][a-z0-9_-]*$/.test(id) && !props.existingIds.includes(id));
   const canSave =
     idValid &&
     label.trim().length > 0 &&
@@ -1181,12 +1197,12 @@ function RoleEditorForm(props: {
             type="text"
             value={id}
             onChange={(e) => setId(e.target.value.toLowerCase())}
-            placeholder="analyst"
+            placeholder="analyst or senior_dev"
             className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
           />
           {id.length > 0 && !idValid ? (
             <p className="mt-0.5 text-ui-xs text-destructive">
-              Use lowercase letters, numbers, hyphens. Must be unique.
+              Use lowercase letters, numbers, _ or -. Must be unique.
             </p>
           ) : null}
         </div>
@@ -1221,7 +1237,7 @@ function RoleEditorForm(props: {
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-            Model tier
+            Model tier (= roster tier)
           </label>
           <select
             value={tier}
@@ -1229,11 +1245,14 @@ function RoleEditorForm(props: {
             className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
           >
             {ROLE_TIERS.map((t) => (
-              <option key={t} value={t}>
-                {t}
+              <option key={t.id} value={t.id} title={t.hint}>
+                {t.label}
               </option>
             ))}
           </select>
+          <p className="mt-0.5 max-w-xs text-ui-xs text-muted-foreground">
+            {ROLE_TIERS.find((t) => t.id === tier)?.hint ?? ""}
+          </p>
         </div>
         <label className="mt-4 flex items-center gap-2 text-ui-xs">
           <input

@@ -1,6 +1,10 @@
 import { mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import {
+  DEFAULT_ORCHESTRATION_SEEDS,
+  toOrchestrationRole,
+} from "./orchestration-defaults";
 
 // ~/.traycer/orchestrations/<name>/orchestration.json + roles/*.md
 // ~/.traycer/model-groups/<name>.json
@@ -89,8 +93,61 @@ export async function readModelGroup(name: string): Promise<ModelGroup | null> {
 
 // ─── Orchestrations ─────────────────────────────────────────────────────────
 
+/**
+ * Idempotent seed of built-in templates (dev-team-full, critical, basicos, …).
+ * - Missing orchestration → create full template + role markdown
+ * - Existing orchestration → add only missing role ids (never overwrite user text)
+ */
+export async function ensureDefaultOrchestrations(): Promise<void> {
+  await mkdir(ORCHESTRATIONS_DIR, { recursive: true });
+  for (const seed of DEFAULT_ORCHESTRATION_SEEDS) {
+    const existing = await readOrchestration(seed.name);
+    if (existing === null) {
+      const roles = seed.roles.map(toOrchestrationRole);
+      const orch: Orchestration = {
+        name: seed.name,
+        description: seed.description,
+        version: "1.0.0",
+        defaultModelGroup: seed.defaultModelGroup,
+        roles,
+        artifactChain: [],
+        globalRules: [...seed.globalRules],
+      };
+      await writeOrchestration(orch);
+      for (const roleSeed of seed.roles) {
+        await writeFile(
+          join(
+            ORCHESTRATIONS_DIR,
+            seed.name,
+            `roles/${roleSeed.id}.md`,
+          ),
+          roleSeed.responsibility.endsWith("\n")
+            ? roleSeed.responsibility
+            : `${roleSeed.responsibility}\n`,
+          "utf-8",
+        );
+      }
+      continue;
+    }
+
+    // Fill gaps only — preserve user edits on existing roles.
+    for (const roleSeed of seed.roles) {
+      if (existing.roles.some((r) => r.id === roleSeed.id)) continue;
+      await upsertOrchestrationRole(seed.name, {
+        id: roleSeed.id,
+        label: roleSeed.label,
+        description: roleSeed.description,
+        tier: roleSeed.tier,
+        isRoot: roleSeed.isRoot && !existing.roles.some((r) => r.isRoot),
+        responsibility: roleSeed.responsibility,
+      });
+    }
+  }
+}
+
 export async function listOrchestrations(): Promise<readonly string[]> {
   try {
+    await ensureDefaultOrchestrations();
     const entries = await readdir(ORCHESTRATIONS_DIR, {
       withFileTypes: true,
     });
@@ -374,7 +431,7 @@ export async function writeResponsibility(
   }
 }
 
-const ROLE_ID_RE = /^[a-z][a-z0-9-]*$/;
+const ROLE_ID_RE = /^[a-z][a-z0-9_-]*$/;
 
 export interface UpsertOrchestrationRoleInput {
   readonly id: string;
