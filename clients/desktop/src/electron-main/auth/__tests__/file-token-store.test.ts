@@ -34,6 +34,20 @@ const IDENTITY = {
   name: "Ada",
 } as const;
 
+/**
+ * Waits that cross a REAL `fs.watch` need a regression-scale bound, not the
+ * implicit 1000 ms `vi.waitFor` default. OS event delivery is unbounded, and
+ * the store's own 50 ms debounce only starts once the watcher callback runs,
+ * so the default is a wall-clock bet on a loaded machine - and it loses. CI
+ * observed `external write fires subscribe...` failing at 1017 ms, and 12
+ * parallel local copies of this file reproduce it.
+ *
+ * A watcher that genuinely never delivers still fails here in seconds, while
+ * ordinary scheduler latency no longer does. Only real-delivery waits use
+ * this; mock-driven waits elsewhere keep the default deliberately.
+ */
+const WATCHER_DELIVERY_TIMEOUT_MS = 10_000;
+
 vi.mock("electron", () => ({
   app: {
     getPath: (): string => join(tmpdir(), "traycer-file-token-store-userdata"),
@@ -365,16 +379,63 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect((await b.get())?.token).toBe(live?.token);
   });
 
-  it("subscribe is a live registration that never fires (§4 stub)", async () => {
+  /**
+   * Replaces a test that asserted `subscribe` "never fires". It does fire:
+   * the watcher is installed in the constructor and deliberately notifies on
+   * SELF-writes as well as external ones (see the contract note on
+   * `FileTokenStore` and on `subscribe` itself), so the old assertion only
+   * held while the 50 ms debounce had not yet elapsed - i.e. it was a race
+   * that a fast machine won. CI lost it: `expected 1 to be +0`. The suite
+   * already knew better one screen down, where a sibling test drains "the
+   * self-write emit from signIn" before asserting on a delete.
+   *
+   * What is actually worth pinning is the unsubscribe contract, and it is
+   * pinned without any sleep: a SECOND live listener acts as a positive
+   * acknowledgement that a post-unsubscribe write travelled the whole real
+   * path (fs.watch delivery -> debounce -> read -> fan-out). Once the probe
+   * has observed that event, the unsubscribed listener demonstrably had its
+   * chance and did not fire. Sleeping past 50 ms instead would not work:
+   * `fs.watch` delivery itself has no upper bound, and the debounce only
+   * starts once the watcher callback runs.
+   */
+  it("unsubscribing stops delivery while the watcher keeps notifying others", async () => {
     const store = makeStore();
-    let fired = 0;
-    const dispose = store.subscribe(() => {
-      fired += 1;
+
+    let firstCount = 0;
+    const unsubscribeFirst = store.subscribe(() => {
+      firstCount += 1;
     });
+
+    // Establish that the registration is genuinely live, rather than
+    // inferring it from the absence of a call.
     await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
+    await vi.waitFor(
+      () => {
+        expect(firstCount).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+    );
+
+    unsubscribeFirst();
+    const countAtUnsubscribe = firstCount;
+
+    let probeCount = 0;
+    const unsubscribeProbe = store.subscribe(() => {
+      probeCount += 1;
+    });
+
     await store.rotate({ userId: IDENTITY.id, token: "tok-1" });
-    dispose();
-    expect(fired).toBe(0);
+    await vi.waitFor(
+      () => {
+        expect(probeCount).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+    );
+
+    // The probe proves an event completed the full path after the first
+    // listener unsubscribed, so an unchanged count is a real guarantee.
+    expect(firstCount).toBe(countAtUnsubscribe);
+    unsubscribeProbe();
   });
 
   it("signIn on a second instance supersedes a prior sign-out tombstone", async () => {
@@ -449,9 +510,12 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
 
       await writeCredentialsFile(credentialsPath(), EXTERNAL, 0);
 
-      await vi.waitFor(() => {
-        expect(changes.length).toBeGreaterThanOrEqual(1);
-      });
+      await vi.waitFor(
+        () => {
+          expect(changes.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
       const last = changes[changes.length - 1];
       expect(last).toEqual({
         present: true,
@@ -466,9 +530,12 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       const store = makeStore();
       await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
       // Drain the self-write emit from signIn before asserting on the delete.
-      await vi.waitFor(async () => {
-        expect(await store.get()).not.toBeNull();
-      });
+      await vi.waitFor(
+        async () => {
+          expect(await store.get()).not.toBeNull();
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
 
       const changes: TokenStoreChange[] = [];
       const dispose = store.subscribe((change) => {
@@ -477,9 +544,12 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
 
       await deleteCredentialsFile(credentialsPath());
 
-      await vi.waitFor(() => {
-        expect(changes.some((c) => c.present === false)).toBe(true);
-      });
+      await vi.waitFor(
+        () => {
+          expect(changes.some((c) => c.present === false)).toBe(true);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
       const lastDelete = changes.filter((c) => c.present === false).at(-1);
       expect(lastDelete).toEqual({
         present: false,
@@ -515,9 +585,12 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
         ),
       ]);
 
-      await vi.waitFor(() => {
-        expect(changes.length).toBeGreaterThanOrEqual(1);
-      });
+      await vi.waitFor(
+        () => {
+          expect(changes.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
       // Give the debounce window a little more time to prove no late extras.
       await new Promise<void>((resolve) => setTimeout(resolve, 120));
       // A burst must not produce one event per write; coalesce toward one.
