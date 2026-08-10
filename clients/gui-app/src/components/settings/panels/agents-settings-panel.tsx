@@ -16,7 +16,7 @@ export function AgentsSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Agent selection"
-      description="How Traycer picks a coding agent, model, and reasoning effort when it spawns child agents. This does not manage the agents inside a Task."
+      description="Which harness, model, and effort a child agent runs with when one is spawned mid-task. Orchestrations (Settings → Orchestrations) define WHO the chat is; this guide defines WHICH models its children use. This does not manage the agents inside a Task."
       fillHeight
     >
       <AgentSelectionGuideSection />
