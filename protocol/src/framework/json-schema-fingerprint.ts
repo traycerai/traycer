@@ -123,8 +123,14 @@ function asSchemaNode(node: unknown): UnknownKeySchemaNode | null {
  * so it strips-equivalent and growth stays safe.
  */
 type UnknownKeyPolicy =
-  /** Unknown keys are dropped (plain `z.object`) or accepted unconstrained. */
+  /** Unknown keys are dropped before they reach the payload (plain `z.object`). */
   | { readonly kind: "strip" }
+  /**
+   * Unknown keys are accepted AND preserved (`.catchall(z.unknown())`, which
+   * renders as `additionalProperties: {}`). Distinct from `strip`: a
+   * stripping schema never emits an undeclared key, a passthrough one does.
+   */
+  | { readonly kind: "passthrough" }
   /** Unknown keys are rejected outright (`z.strictObject` / `.strict()`). */
   | { readonly kind: "reject" }
   /** Unknown keys are VALIDATED against a catchall schema. */
@@ -137,10 +143,11 @@ function unknownKeyPolicy(node: unknown): UnknownKeyPolicy {
   if (additional === false) return { kind: "reject" };
   if (typeof additional === "object" && additional !== null) {
     // An empty schema (`{}`, from `.catchall(z.unknown())`) constrains
-    // nothing, so unknown keys sail through; anything else validates them.
+    // nothing, so unknown keys sail through unvalidated - but they are
+    // PRESERVED, not dropped; anything else validates them.
     return Object.keys(additional as Record<string, unknown>).length > 0
       ? { kind: "validate", schema: additional }
-      : { kind: "strip" };
+      : { kind: "passthrough" };
   }
   return { kind: "strip" };
 }
@@ -172,6 +179,114 @@ function inputVariants(previousInput: unknown): readonly unknown[] {
   if (Array.isArray(shape.anyOf)) return shape.anyOf;
   if (Array.isArray(shape.oneOf)) return shape.oneOf;
   return [];
+}
+
+/**
+ * Directional comparison of array-level constraints. A newer schema may only
+ * tighten what it emits: a higher `maxItems`, a lower `minItems`, or dropping
+ * `uniqueItems` all let it produce arrays the older schema refuses.
+ */
+function arrayBoundsRelaxation(
+  previous: unknown,
+  next: unknown,
+  path: readonly string[],
+): AdditivityViolation | null {
+  const previousShape = previous as {
+    minItems?: unknown;
+    maxItems?: unknown;
+    uniqueItems?: unknown;
+  } | null;
+  const nextShape = next as {
+    minItems?: unknown;
+    maxItems?: unknown;
+    uniqueItems?: unknown;
+  } | null;
+  if (
+    typeof previousShape !== "object" ||
+    previousShape === null ||
+    typeof nextShape !== "object" ||
+    nextShape === null
+  ) {
+    return null;
+  }
+  const location = path.length === 0 ? "<root>" : dottedPath(path);
+  const previousMax = previousShape.maxItems;
+  const nextMax = nextShape.maxItems;
+  if (typeof previousMax === "number") {
+    if (typeof nextMax !== "number" || nextMax > previousMax) {
+      return { kind: "array-bounds", detail: `${location} maxItems` };
+    }
+  }
+  const previousMin = previousShape.minItems;
+  const nextMin = nextShape.minItems;
+  if (typeof previousMin === "number") {
+    if (typeof nextMin !== "number" || nextMin < previousMin) {
+      return { kind: "array-bounds", detail: `${location} minItems` };
+    }
+  }
+  if (previousShape.uniqueItems === true && nextShape.uniqueItems !== true) {
+    return { kind: "array-bounds", detail: `${location} uniqueItems` };
+  }
+  return null;
+}
+
+/** Input-tree `required` list - what the older peer actually enforces. */
+function inputRequired(input: unknown): readonly string[] | null {
+  const shape = asSchemaNode(input);
+  // No input tree available -> caller falls back to the output fingerprint.
+  if (shape === null || shape.properties === undefined) return null;
+  const required = (shape as { required?: unknown }).required;
+  // An object node with NO `required` array requires nothing - that is the
+  // rendering for a fully-optional/defaulted object, and it must not fall
+  // back to the output tree (which marks defaulted fields required).
+  if (!Array.isArray(required)) return [];
+  return required.filter((field): field is string => typeof field === "string");
+}
+
+/**
+ * Directional comparison of unknown-key policies. Projection asks: can the
+ * NEWER schema emit an unknown key that the OLDER one refuses?
+ *
+ * - old `strip` accepts anything (it discards unknowns), so nothing to check.
+ * - old `reject` only tolerates a newer schema that never emits unknown keys,
+ *   i.e. one that also rejects or strips them.
+ * - old `validate` (typed catchall) tolerates a newer catchall whose values
+ *   are a subset of the old one's; an unconstrained passthrough is not.
+ */
+function unknownKeyPolicyRelaxation(
+  previous: UnknownKeyPolicy,
+  next: UnknownKeyPolicy,
+  path: readonly string[],
+): AdditivityViolation | null {
+  const location = path.length === 0 ? "<root>" : dottedPath(path);
+  // An older schema that drops or freely accepts unknown keys can never be
+  // broken by what the newer one emits.
+  if (previous.kind === "strip" || previous.kind === "passthrough") return null;
+  // The newer schema only puts undeclared keys on the wire when it preserves
+  // them (`passthrough`) or validates them (`validate`); `reject`/`strip`
+  // both emit nothing undeclared.
+  const nextEmitsUnknownKeys =
+    next.kind === "passthrough" || next.kind === "validate";
+  if (!nextEmitsUnknownKeys) return null;
+  if (previous.kind === "reject") {
+    return { kind: "unknown-key-policy", detail: location };
+  }
+  // Old validates against a catchall: an unconstrained passthrough can emit
+  // anything, so only a narrower typed catchall is safe.
+  if (next.kind !== "validate") {
+    return { kind: "unknown-key-policy", detail: location };
+  }
+  const catchallMismatch = findNodeAdditivityViolation(
+    previous.schema,
+    next.schema,
+    path,
+    "no-value-growth",
+    previous.schema,
+    next.schema,
+  );
+  return catchallMismatch === null
+    ? null
+    : { kind: "unknown-key-policy", detail: location };
 }
 
 function convertJsonSchemaShape(
@@ -320,6 +435,8 @@ function classifyEnumRepresentation(
 export type AdditivityViolation =
   | { readonly kind: "field"; readonly detail: string }
   | { readonly kind: "required-field"; readonly detail: string }
+  | { readonly kind: "unknown-key-policy"; readonly detail: string }
+  | { readonly kind: "array-bounds"; readonly detail: string }
   | { readonly kind: "strict-object-growth"; readonly detail: string }
   | { readonly kind: "enum-value"; readonly detail: string }
   | { readonly kind: "enum-value-added"; readonly detail: string }
@@ -414,8 +531,16 @@ export function findAdditivityViolation(
   next: JsonSchemaFingerprint,
   mode: AdditivityMode,
   previousInput: unknown,
+  nextInput: unknown,
 ): AdditivityViolation | null {
-  return findNodeAdditivityViolation(previous, next, [], mode, previousInput);
+  return findNodeAdditivityViolation(
+    previous,
+    next,
+    [],
+    mode,
+    previousInput,
+    nextInput,
+  );
 }
 
 /**
@@ -664,6 +789,7 @@ function findNodeAdditivityViolation(
   path: readonly string[],
   mode: AdditivityMode,
   previousInput: unknown,
+  nextInput: unknown,
 ): AdditivityViolation | null {
   const previousNode = classifySchemaNode(previous);
   const nextNode = classifySchemaNode(next);
@@ -679,14 +805,16 @@ function findNodeAdditivityViolation(
       if (mode === "no-value-growth") {
         return { kind: "union-variant-added", detail: snippet(next) };
       }
+      const nextWideningArms = inputVariants(nextInput);
       const oldFormRetained = nextNode.variants.some(
-        (variant) =>
+        (variant, variantIndex) =>
           findNodeAdditivityViolation(
             previous,
             variant,
             path,
             mode,
             previousInput,
+            nextWideningArms[variantIndex] ?? null,
           ) === null,
       );
       return oldFormRetained
@@ -705,6 +833,7 @@ function findNodeAdditivityViolation(
             path,
             mode,
             previousInputArms[index] ?? null,
+            nextInput,
           ) !== null
         ) {
           return { kind: "union-variant", detail: snippet(variant) };
@@ -742,6 +871,7 @@ function findNodeAdditivityViolation(
         [...path, field],
         mode,
         inputProperty(previousInput, field),
+        inputProperty(nextInput, field),
       );
       if (nested !== null) return nested;
     }
@@ -750,7 +880,7 @@ function findNodeAdditivityViolation(
     // minor breaks projection for every payload - not just those exercising
     // the new field.
     const policy = unknownKeyPolicy(previousInput);
-    if (policy.kind !== "strip") {
+    if (policy.kind === "reject" || policy.kind === "validate") {
       for (const field of Object.keys(nextNode.properties)) {
         if (Object.hasOwn(previousNode.properties, field)) continue;
         if (policy.kind === "reject") {
@@ -764,12 +894,20 @@ function findNodeAdditivityViolation(
         // rejecting it outright would force safe evolution into a major.
         // Compare the added key against the catchall (input-rendered, the
         // shape the old peer accepts) and only reject a genuine mismatch.
+        //
+        // This comparison is ALWAYS strict, never the caller's `mode`: the
+        // question is whether every value the new property admits satisfies
+        // the old catchall, which is a subset test. Under `lenient` an added
+        // property typed `z.enum(["a","b"])` would pass a `z.enum(["a"])`
+        // catchall because enum growth is lenient - yet the old peer rejects
+        // the value "b".
         const mismatch = findNodeAdditivityViolation(
           policy.schema,
           nextNode.properties[field],
           [...path, field],
-          mode,
+          "no-value-growth",
           policy.schema,
+          inputProperty(nextInput, field),
         );
         if (mismatch !== null) {
           return {
@@ -779,12 +917,25 @@ function findNodeAdditivityViolation(
         }
       }
     }
+    // An unknown-key policy can also be RELAXED without declaring any new
+    // field: `z.strictObject({a})` -> the same shape with `.catchall(...)` or
+    // passthrough. The loop above sees no added properties, so only comparing
+    // the policies themselves catches it - and the newer schema then emits
+    // undeclared keys the older one rejects.
+    const nextPolicy = unknownKeyPolicy(nextInput);
+    const policyViolation = unknownKeyPolicyRelaxation(policy, nextPolicy, path);
+    if (policyViolation !== null) return policyViolation;
     // Relaxing required -> optional is not additive: the newer peer may omit
-    // the field, and the older schema rejects the payload outright. (A field
-    // that merely gains a `default` stays in `required` - `z.toJSONSchema`
-    // describes the output shape - so this does not catch that case.)
-    const nextRequired = new Set(nextNode.required);
-    for (const field of previousNode.required) {
+    // the field, and the older schema rejects the payload outright.
+    //
+    // Requiredness comes from the INPUT rendering, which is what the older
+    // peer actually enforces on a payload. The output rendering marks a
+    // `.default()` field required, so using it would reject the
+    // projection-safe `z.string().default("x")` -> `z.string().optional()`
+    // transition (the old schema accepts omission and fills the default).
+    const previousRequired = inputRequired(previousInput) ?? previousNode.required;
+    const nextRequired = new Set(inputRequired(nextInput) ?? nextNode.required);
+    for (const field of previousRequired) {
       if (!nextRequired.has(field)) {
         return { kind: "required-field", detail: dottedPath([...path, field]) };
       }
@@ -824,47 +975,51 @@ function findNodeAdditivityViolation(
     // successor whose only sin is value growth, surface that precise
     // violation instead of a misleading "dropped variant".
     const previousInputArms = inputVariants(previousInput);
+    const nextInputArms = inputVariants(nextInput);
     for (const [index, previousVariant] of previousNode.variants.entries()) {
       // Each arm carries its OWN unknown-key behaviour: a mixed union (one
       // strict arm, one stripping arm) must reject growth of the strict arm
       // while still allowing growth of the stripping one.
       const previousArmInput = previousInputArms[index] ?? null;
       const survives = nextNode.variants.some(
-        (nextVariant) =>
+        (nextVariant, nextIndex) =>
           findNodeAdditivityViolation(
             previousVariant,
             nextVariant,
             path,
             mode,
             previousArmInput,
+            nextInputArms[nextIndex] ?? null,
           ) === null,
       );
       if (survives) continue;
       if (mode === "no-value-growth") {
-        const lenientMatch = nextNode.variants.find(
-          (nextVariant) =>
+        const lenientIndex = nextNode.variants.findIndex(
+          (nextVariant, nextIndex) =>
             findNodeAdditivityViolation(
               previousVariant,
               nextVariant,
               path,
               "lenient",
               previousArmInput,
+              nextInputArms[nextIndex] ?? null,
             ) === null,
         );
-        if (lenientMatch !== undefined) {
+        if (lenientIndex !== -1) {
           return findNodeAdditivityViolation(
             previousVariant,
-            lenientMatch,
+            nextNode.variants[lenientIndex],
             path,
             mode,
             previousArmInput,
+            nextInputArms[lenientIndex] ?? null,
           );
         }
       }
       return { kind: "union-variant", detail: snippet(previousVariant) };
     }
     if (mode === "no-value-growth") {
-      for (const nextVariant of nextNode.variants) {
+      for (const [nextIndex, nextVariant] of nextNode.variants.entries()) {
         // Probe in the SAME mode as the survival loop. Under "lenient" a
         // new arm that differs from an old one only by value growth would
         // count as "having a predecessor" and escape the gate - e.g.
@@ -878,6 +1033,7 @@ function findNodeAdditivityViolation(
               path,
               mode,
               previousInputArms[index] ?? null,
+              nextInputArms[nextIndex] ?? null,
             ) === null,
         );
         if (!hasPredecessor) {
@@ -889,12 +1045,19 @@ function findNodeAdditivityViolation(
   }
 
   if (previousNode.kind === "array" && nextNode.kind === "array") {
+    // Array-level bounds constrain the payload independently of `items`:
+    // widening `.max(1)` to `.max(2)` lets the newer peer emit a two-element
+    // array the older schema rejects, with identical item schemas. The newer
+    // bounds must stay at least as tight as the older ones.
+    const boundsViolation = arrayBoundsRelaxation(previous, next, path);
+    if (boundsViolation !== null) return boundsViolation;
     const itemsViolation = findNodeAdditivityViolation(
       previousNode.items,
       nextNode.items,
       [...path, "items"],
       mode,
       inputItems(previousInput),
+      inputItems(nextInput),
     );
     if (itemsViolation !== null) {
       return {
@@ -960,14 +1123,22 @@ export type BreakingChange =
 export function findBreakingChange(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
+  previousInput: unknown,
+  nextInput: unknown,
 ): BreakingChange | null {
   // Major justification only asks "is this breaking"; strictness-aware
   // growth detection is an additivity concern, so no strict paths here.
+  //
+  // The input trees are still required. Passing `null` would make every old
+  // object look like it strips unknown keys, so adding a root field to a
+  // `z.strictObject` would read as non-breaking here while being correctly
+  // forbidden as a minor - leaving the change with no valid version bump.
   const additivityViolation = findAdditivityViolation(
     previous,
     next,
     "lenient",
-    null,
+    previousInput,
+    nextInput,
   );
   if (additivityViolation !== null) {
     if (additivityViolation.kind === "schema-kind") {
@@ -985,6 +1156,18 @@ export function findBreakingChange(
     }
     if (additivityViolation.kind === "strict-object-growth") {
       // Growing a strict object changes what the schema accepts.
+      return {
+        kind: "field",
+        detail: additivityViolation.detail,
+        reason: "schema-changed",
+      };
+    }
+    if (
+      additivityViolation.kind === "unknown-key-policy" ||
+      additivityViolation.kind === "array-bounds"
+    ) {
+      // Relaxing what the schema accepts is a change in the field's own
+      // contract, not a removal.
       return {
         kind: "field",
         detail: additivityViolation.detail,
@@ -1027,7 +1210,12 @@ export function findBreakingChange(
   }
 
   if (previous.type === "array" && next.type === "array") {
-    const itemsBreakingChange = findBreakingChange(previous.items, next.items);
+    const itemsBreakingChange = findBreakingChange(
+      previous.items,
+      next.items,
+      inputItems(previousInput),
+      inputItems(nextInput),
+    );
     if (itemsBreakingChange !== null) {
       return {
         kind: "array-items",
@@ -1051,6 +1239,10 @@ export function describeAdditivityViolation(
       return `drops field '${violation.detail}'`;
     case "required-field":
       return `makes required field '${violation.detail}' optional`;
+    case "unknown-key-policy":
+      return `relaxes the unknown-key policy at '${violation.detail}'`;
+    case "array-bounds":
+      return `relaxes array bounds (${violation.detail})`;
     case "strict-object-growth":
       return `adds field '${violation.detail}' to a strict object (an older strict schema rejects the extra key instead of stripping it)`;
     case "enum-value":

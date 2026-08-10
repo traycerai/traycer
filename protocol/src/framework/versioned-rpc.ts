@@ -443,11 +443,18 @@ function assertSchemaCompatibility(
         const previousResponseInput = toUnknownKeyTree(
           line.versions[previousMinor].contract.responseSchema,
         );
+        const currentRequestInput = toUnknownKeyTree(
+          line.versions[currentMinor].contract.requestSchema,
+        );
+        const currentResponseInput = toUnknownKeyTree(
+          line.versions[currentMinor].contract.responseSchema,
+        );
         const requestViolation = findAdditivityViolation(
           previous.request,
           current.request,
           "lenient",
           previousRequestInput,
+          currentRequestInput,
         );
         if (requestViolation !== null) {
           throw new Error(
@@ -466,6 +473,7 @@ function assertSchemaCompatibility(
           current.response,
           "no-value-growth",
           previousResponseInput,
+          currentResponseInput,
         );
         // The annotation is a reviewed claim about the EMITTER, so it must
         // never outlive the growth it was granted for: a minor that carries
@@ -483,6 +491,7 @@ function assertSchemaCompatibility(
               current.response,
               "lenient",
               previousResponseInput,
+              currentResponseInput,
             )
           : strictResponseViolation;
         if (responseViolation !== null) {
@@ -514,13 +523,21 @@ function assertSchemaCompatibility(
       const currentLatest =
         schemas[method][currentMajor][currentLine.latestMinor];
 
+      const previousLatestContract =
+        previousLine.versions[previousLine.latestMinor].contract;
+      const currentLatestContract =
+        currentLine.versions[currentLine.latestMinor].contract;
       const requestBreak = findBreakingChange(
         previousLatest.request,
         currentLatest.request,
+        toUnknownKeyTree(previousLatestContract.requestSchema),
+        toUnknownKeyTree(currentLatestContract.requestSchema),
       );
       const responseBreak = findBreakingChange(
         previousLatest.response,
         currentLatest.response,
+        toUnknownKeyTree(previousLatestContract.responseSchema),
+        toUnknownKeyTree(currentLatestContract.responseSchema),
       );
 
       if (requestBreak === null && responseBreak === null) {
