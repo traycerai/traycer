@@ -577,19 +577,21 @@ export function ProviderModelProvidersTab(props: {
       </p>
 
       {entries.length > 0 ? (
-        // STICKY, because the panel is the only scroll context now: the list
-        // runs its full length inside it, and a search box that scrolled away
-        // would leave a long catalog with no way to narrow it without
-        // scrolling back up.
-        <div className="sticky top-0 z-10 -mx-1 bg-background/95 px-1 py-1 backdrop-blur">
-          <ModelProviderListControls
-            query={searchQuery}
-            onQueryChange={setSearchQuery}
-            filter={methodFilter}
-            onFilterChange={setMethodFilter}
-            resultCount={filtered.length}
-          />
-        </div>
+        // NOT sticky, and the panel says why in its own words: the scroll box
+        // is `TabsContent`, whose pane is a translucent `bg-card/40`. Sticky
+        // inside it needs an opaque fill for rows to pass under, and there is
+        // no opaque colour to match - so the fill reads as a lighter band
+        // floating over the pane. The panel already hit this and pins its rail
+        // as a sibling OUTSIDE the scroll box instead; a first attempt here
+        // used `bg-background/95` + blur and produced exactly the band that
+        // comment predicts.
+        <ModelProviderListControls
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          filter={methodFilter}
+          onFilterChange={setMethodFilter}
+          resultCount={filtered.length}
+        />
       ) : null}
 
       <ModelProvidersBody
