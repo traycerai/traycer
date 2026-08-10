@@ -556,7 +556,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     useCloudNotificationsStore.getState().setConnectionState("unavailable");
   };
   const handleCloudMutationResult = (data: {
-    readonly status: "applied" | "unavailable";
+    readonly status: "applied" | "unavailable" | "unsupported";
   }): void => {
     if (data.status === "unavailable") markCloudUnavailable();
   };
@@ -1059,22 +1059,28 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             )
             .map((row) => row.entryId);
           cloudState.markAllReadLocally(Date.now());
+          const fallBackToEntryMutations = async (): Promise<void> => {
+            // An older cloud server cannot atomically include rows it did not
+            // render, but it can preserve the released per-entry behavior for
+            // every renderable row.
+            for (const entryId of fallbackEntryIds) {
+              try {
+                await cloudMarkRead.mutateAsync({ entryId });
+              } catch {
+                return;
+              }
+            }
+          };
           void cloudMarkAllRead
             .mutateAsync({ observedVersion: cloudVersion })
+            .then(async (result) => {
+              if (result.status === "unsupported") {
+                await fallBackToEntryMutations();
+              }
+            })
             .catch(async (error: unknown) => {
               if (!isHostUnsupportedError(error)) return;
-              // An older relay cannot atomically include rows it did not
-              // render, but it can preserve the released per-entry behavior
-              // for every renderable row. Keep this compatibility path only
-              // for the optional-RPC rejection; ordinary failures retain the
-              // unavailable-state behavior owned by the mutation.
-              for (const entryId of fallbackEntryIds) {
-                try {
-                  await cloudMarkRead.mutateAsync({ entryId });
-                } catch {
-                  return;
-                }
-              }
+              await fallBackToEntryMutations();
             });
           return;
         }

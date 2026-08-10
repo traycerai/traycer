@@ -1152,6 +1152,46 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     );
   });
 
+  it("falls back when an older cloud server cannot acknowledge mark-all", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.resolve({ status: "unsupported", version: null });
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-a" },
+      );
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-b" },
+      );
+    });
+    expect(useCloudNotificationsStore.getState().connectionState).toBe(
+      "connected",
+    );
+  });
+
   it("does not mark a newer cloud snapshot from a stale action closure", () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

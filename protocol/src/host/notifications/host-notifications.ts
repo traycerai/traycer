@@ -1187,21 +1187,22 @@ export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
 /**
  * `unavailable` means the relay could not reach the cloud, and NOTHING was
  * changed anywhere - the host deliberately keeps no local shadow of the cloud
- * feed to mutate optimistically. The client keeps showing the rows it has and
- * surfaces the degraded state; it must not treat the mutation as applied.
+ * feed to mutate optimistically. `unsupported` means an older cloud server
+ * accepted the envelope but could not acknowledge this optional operation; a
+ * client may use a released compatibility path. Neither is an applied mutation.
  */
 export const hostNotificationsCloudFeedMutationResponseSchema = z
   .object({
-    status: z.enum(["applied", "unavailable"]),
-    /** The feed version after the mutation; `null` when unavailable. */
+    status: z.enum(["applied", "unavailable", "unsupported"]),
+    /** The feed version after the mutation; `null` when it was not applied. */
     version: z.number().int().nonnegative().nullable(),
   })
   .superRefine((value, context) => {
-    if ((value.status === "unavailable") === (value.version === null)) return;
+    if ((value.status === "applied") === (value.version !== null)) return;
     context.addIssue({
       code: "custom",
       path: ["version"],
-      message: "version must be null exactly when status is unavailable",
+      message: "version must be non-null exactly when status is applied",
     });
   });
 export type HostNotificationsCloudFeedMutationResponse = z.infer<

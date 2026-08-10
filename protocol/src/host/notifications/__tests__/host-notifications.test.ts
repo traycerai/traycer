@@ -853,6 +853,12 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
       }),
     ).toEqual({ status: "unavailable", version: null });
     expect(
+      hostNotificationsCloudFeedMutationResponseSchema.parse({
+        status: "unsupported",
+        version: null,
+      }),
+    ).toEqual({ status: "unsupported", version: null });
+    expect(
       hostNotificationsCloudFeedMutationResponseSchema.safeParse({
         status: "applied",
         version: null,
