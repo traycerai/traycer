@@ -85,6 +85,20 @@ export const imageResolutionStateSchema = z.enum([
 ]);
 export type ImageResolutionState = z.infer<typeof imageResolutionStateSchema>;
 
+const imageResolutionEntryBaseFields = {
+  source: z.string(),
+  canonicalSource: z.string(),
+  width: z.number().nullable().default(null),
+  height: z.number().nullable().default(null),
+} as const;
+
+const nonResolvedImageResolutionStateSchema = z.enum([
+  "blocked",
+  "consent-required",
+  "oversized",
+  "not-found",
+]);
+
 /**
  * One entry in an assistant message's durable image resolution record - the
  * host's authoritative answer for one markdown-referenced image (`![alt](src)`
@@ -95,16 +109,27 @@ export type ImageResolutionState = z.infer<typeof imageResolutionStateSchema>;
  * turns, re-opened chats, and multi-window rendering stay deterministic.
  * `canonicalSource` is the key identity (`chat.requestImageIngest` targets an
  * entry by it); `source` is the raw markdown reference as authored.
+ *
+ * State-discriminated so the invariant is structural, not just documented:
+ * `resolved` REQUIRES a non-null `attachmentHash`/`mediaType` (there is
+ * nothing to render otherwise), and every other state FORCES them to `null`
+ * (a blocked/consent-required/error entry must never carry renderable
+ * attachment data).
  */
-export const imageResolutionEntrySchema = z.object({
-  source: z.string(),
-  canonicalSource: z.string(),
-  attachmentHash: z.string().nullable().default(null),
-  mediaType: z.string().nullable().default(null),
-  width: z.number().nullable().default(null),
-  height: z.number().nullable().default(null),
-  state: imageResolutionStateSchema,
-});
+export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
+  z.object({
+    ...imageResolutionEntryBaseFields,
+    state: z.literal("resolved"),
+    attachmentHash: z.string(),
+    mediaType: z.string(),
+  }),
+  z.object({
+    ...imageResolutionEntryBaseFields,
+    state: nonResolvedImageResolutionStateSchema,
+    attachmentHash: z.null().default(null),
+    mediaType: z.null().default(null),
+  }),
+]);
 export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
 
 export const assistantMessageSchema = z.object({

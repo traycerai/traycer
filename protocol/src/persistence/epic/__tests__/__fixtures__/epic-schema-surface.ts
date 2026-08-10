@@ -5298,73 +5298,112 @@ export const epicSchemaSurfaceBaseline = {
                         "default": [],
                         "type": "array",
                         "items": {
-                          "type": "object",
-                          "properties": {
-                            "source": {
-                              "type": "string"
-                            },
-                            "canonicalSource": {
-                              "type": "string"
-                            },
-                            "attachmentHash": {
-                              "default": null,
-                              "anyOf": [
-                                {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
                                   "type": "string"
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "mediaType": {
-                              "default": null,
-                              "anyOf": [
-                                {
+                                "canonicalSource": {
                                   "type": "string"
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "width": {
-                              "default": null,
-                              "anyOf": [
-                                {
-                                  "type": "number"
+                                "width": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "height": {
-                              "default": null,
-                              "anyOf": [
-                                {
-                                  "type": "number"
+                                "height": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 },
-                                {
-                                  "type": "null"
+                                "state": {
+                                  "type": "string",
+                                  "const": "resolved"
+                                },
+                                "attachmentHash": {
+                                  "type": "string"
+                                },
+                                "mediaType": {
+                                  "type": "string"
                                 }
+                              },
+                              "required": [
+                                "source",
+                                "canonicalSource",
+                                "state",
+                                "attachmentHash",
+                                "mediaType"
                               ]
                             },
-                            "state": {
-                              "type": "string",
-                              "enum": [
-                                "resolved",
-                                "blocked",
-                                "consent-required",
-                                "oversized",
-                                "not-found"
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string"
+                                },
+                                "canonicalSource": {
+                                  "type": "string"
+                                },
+                                "width": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "height": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "blocked",
+                                    "consent-required",
+                                    "oversized",
+                                    "not-found"
+                                  ]
+                                },
+                                "attachmentHash": {
+                                  "default": null,
+                                  "type": "null"
+                                },
+                                "mediaType": {
+                                  "default": null,
+                                  "type": "null"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "canonicalSource",
+                                "state"
                               ]
                             }
-                          },
-                          "required": [
-                            "source",
-                            "canonicalSource",
-                            "state"
                           ]
                         }
                       }
@@ -12574,79 +12613,121 @@ export const epicSchemaSurfaceBaseline = {
                         "default": [],
                         "type": "array",
                         "items": {
-                          "type": "object",
-                          "properties": {
-                            "source": {
-                              "type": "string"
-                            },
-                            "canonicalSource": {
-                              "type": "string"
-                            },
-                            "attachmentHash": {
-                              "default": null,
-                              "anyOf": [
-                                {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
                                   "type": "string"
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "mediaType": {
-                              "default": null,
-                              "anyOf": [
-                                {
+                                "canonicalSource": {
                                   "type": "string"
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "width": {
-                              "default": null,
-                              "anyOf": [
-                                {
-                                  "type": "number"
+                                "width": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "height": {
-                              "default": null,
-                              "anyOf": [
-                                {
-                                  "type": "number"
+                                "height": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 },
-                                {
+                                "state": {
+                                  "type": "string",
+                                  "const": "resolved"
+                                },
+                                "attachmentHash": {
+                                  "type": "string"
+                                },
+                                "mediaType": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "canonicalSource",
+                                "width",
+                                "height",
+                                "state",
+                                "attachmentHash",
+                                "mediaType"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string"
+                                },
+                                "canonicalSource": {
+                                  "type": "string"
+                                },
+                                "width": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "height": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "blocked",
+                                    "consent-required",
+                                    "oversized",
+                                    "not-found"
+                                  ]
+                                },
+                                "attachmentHash": {
+                                  "default": null,
+                                  "type": "null"
+                                },
+                                "mediaType": {
+                                  "default": null,
                                   "type": "null"
                                 }
-                              ]
-                            },
-                            "state": {
-                              "type": "string",
-                              "enum": [
-                                "resolved",
-                                "blocked",
-                                "consent-required",
-                                "oversized",
-                                "not-found"
-                              ]
+                              },
+                              "required": [
+                                "source",
+                                "canonicalSource",
+                                "width",
+                                "height",
+                                "state",
+                                "attachmentHash",
+                                "mediaType"
+                              ],
+                              "additionalProperties": false
                             }
-                          },
-                          "required": [
-                            "source",
-                            "canonicalSource",
-                            "attachmentHash",
-                            "mediaType",
-                            "width",
-                            "height",
-                            "state"
-                          ],
-                          "additionalProperties": false
+                          ]
                         }
                       }
                     },

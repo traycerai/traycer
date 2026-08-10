@@ -35,6 +35,8 @@ import {
 import type {
   Chat,
   ChatEvent,
+  ImageResolutionEntry,
+  ImageResolutionState,
   UserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { describe, expect, it } from "vitest";
@@ -1879,15 +1881,37 @@ describe("chat.subscribe@1.7 (image generation)", () => {
 
   const resolutionStates = imageResolutionStateSchema.options;
 
-  const imageResolutions = resolutionStates.map((state, index) => ({
-    source: `https://example.com/img-${index}.png`,
-    canonicalSource: `https://example.com/img-${index}.png`,
-    attachmentHash: state === "resolved" ? `hash-${index}` : null,
-    mediaType: state === "resolved" ? "image/png" : null,
-    width: state === "resolved" ? 100 : null,
-    height: state === "resolved" ? 80 : null,
-    state,
-  }));
+  function buildResolutionEntry(
+    state: ImageResolutionState,
+    index: number,
+  ): ImageResolutionEntry {
+    const source = `https://example.com/img-${index}.png`;
+    const canonicalSource = source;
+    if (state === "resolved") {
+      return {
+        source,
+        canonicalSource,
+        state,
+        attachmentHash: `hash-${index}`,
+        mediaType: "image/png",
+        width: 100,
+        height: 80,
+      };
+    }
+    return {
+      source,
+      canonicalSource,
+      state,
+      attachmentHash: null,
+      mediaType: null,
+      width: null,
+      height: null,
+    };
+  }
+
+  const imageResolutions = resolutionStates.map((state, index) =>
+    buildResolutionEntry(state, index),
+  );
 
   const assistantWithImages = {
     role: "assistant" as const,
@@ -2042,6 +2066,21 @@ describe("chat.subscribe@1.7 (image generation)", () => {
 
   it("round-trips a resolution entry for every imageResolution state", () => {
     for (const state of resolutionStates) {
+      if (state === "resolved") {
+        const parsed = imageResolutionEntrySchema.parse({
+          source: "https://example.com/a.png",
+          canonicalSource: "https://example.com/a.png",
+          state,
+          attachmentHash: "hash-a",
+          mediaType: "image/png",
+        });
+        expect(parsed.state).toBe("resolved");
+        expect(parsed.attachmentHash).toBe("hash-a");
+        expect(parsed.mediaType).toBe("image/png");
+        expect(parsed.width).toBeNull();
+        expect(parsed.height).toBeNull();
+        continue;
+      }
       const parsed = imageResolutionEntrySchema.parse({
         source: "https://example.com/a.png",
         canonicalSource: "https://example.com/a.png",
@@ -2052,6 +2091,32 @@ describe("chat.subscribe@1.7 (image generation)", () => {
       expect(parsed.mediaType).toBeNull();
       expect(parsed.width).toBeNull();
       expect(parsed.height).toBeNull();
+    }
+  });
+
+  it("rejects a resolved resolution entry without an attachment", () => {
+    expect(
+      imageResolutionEntrySchema.safeParse({
+        source: "https://example.com/a.png",
+        canonicalSource: "https://example.com/a.png",
+        state: "resolved",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a non-resolved resolution entry that carries attachment data", () => {
+    for (const state of resolutionStates) {
+      if (state === "resolved") continue;
+      expect(
+        imageResolutionEntrySchema.safeParse({
+          source: "https://example.com/a.png",
+          canonicalSource: "https://example.com/a.png",
+          state,
+          attachmentHash: "hash-a",
+          mediaType: "image/png",
+        }).success,
+        state,
+      ).toBe(false);
     }
   });
 
