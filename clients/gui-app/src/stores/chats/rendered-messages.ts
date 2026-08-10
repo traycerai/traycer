@@ -2151,7 +2151,10 @@ function renderAssistantTurnSlice(
         epicId: input.epicId,
         chatId: input.chatId,
         resolutions: input.acc.imageResolutions,
-        deduplicatedSources: NO_DEDUPLICATED_IMAGE_SOURCES,
+        deduplicatedSources: deduplicatedAssistantImageSources(
+          input.acc.blocks,
+          input.acc.imageResolutions,
+        ),
       },
     ),
     structuredContent: null,
@@ -2177,6 +2180,42 @@ function renderAssistantTurnSlice(
     sessionAnchor: null,
     steerBadge: null,
   };
+}
+
+function deduplicatedAssistantImageSources(
+  blocks: ReadonlyArray<ContentBlock>,
+  resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+): ReadonlySet<string> {
+  const generatedHashes = new Set<string>();
+  const generatedSources = new Set<string>();
+  for (const block of blocks) {
+    if (block.type !== "tool_call") continue;
+    for (const result of block.imageResults) {
+      generatedHashes.add(result.attachmentHash);
+      if (result.filePath !== null) generatedSources.add(result.filePath);
+    }
+  }
+  if (generatedHashes.size === 0 && generatedSources.size === 0) {
+    return NO_DEDUPLICATED_IMAGE_SOURCES;
+  }
+
+  const deduplicatedSources = new Set<string>();
+  for (const resolution of resolutions) {
+    const entry = resolution.entry;
+    if (entry.state !== "resolved") continue;
+    if (
+      !generatedHashes.has(entry.attachmentHash) &&
+      !generatedSources.has(entry.canonicalSource) &&
+      !generatedSources.has(entry.source)
+    ) {
+      continue;
+    }
+    deduplicatedSources.add(entry.source);
+    deduplicatedSources.add(entry.canonicalSource);
+  }
+  return deduplicatedSources.size === 0
+    ? NO_DEDUPLICATED_IMAGE_SOURCES
+    : deduplicatedSources;
 }
 
 function attachRunStateToTrailingAssistantSlice(
