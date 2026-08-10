@@ -1,7 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import type { AppRouter } from "@/router";
-import { profileOwnsWorkspaceRefs } from "@/lib/profiles/profile-membership";
+import { profileOwnsEpic } from "@/lib/profiles/profile-membership";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
@@ -138,7 +138,7 @@ export function startProfileTabWorkspaceController(
         .getState()
         .itemsByEpicId.get(epicId);
       if (item === undefined) return; // unknown membership → keep context
-      if (profileOwnsWorkspaceRefs(incoming, item.linkedWorkspaces)) return;
+      if (profileOwnsEpic(incoming, epicId, item.linkedWorkspaces)) return;
       route.navigateHome();
       return;
     }

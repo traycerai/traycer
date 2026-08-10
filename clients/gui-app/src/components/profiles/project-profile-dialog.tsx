@@ -27,6 +27,7 @@ import {
   PROFILE_ICONS,
   profileColorHex,
 } from "./profile-options";
+import { UnscopedEpicsAssignSection } from "./unscoped-epics-assign-section";
 
 export interface ProjectProfileDialogProps {
   readonly open: boolean;
@@ -68,15 +69,9 @@ function ProjectProfileDialogBody(props: {
   );
   const { pickAndPrepareFolders } = useWorkspaceFolderActions();
 
-  const [name, setName] = useState(
-    () => props.editing?.name ?? "",
-  );
-  const [icon, setIcon] = useState(
-    () => props.editing?.icon ?? "folder",
-  );
-  const [color, setColor] = useState(
-    () => props.editing?.color ?? "blue",
-  );
+  const [name, setName] = useState(() => props.editing?.name ?? "");
+  const [icon, setIcon] = useState(() => props.editing?.icon ?? "folder");
+  const [color, setColor] = useState(() => props.editing?.color ?? "blue");
   const [folders, setFolders] = useState<ReadonlyArray<ProjectProfileFolder>>(
     () => props.editing?.folders ?? [],
   );
@@ -150,194 +145,194 @@ function ProjectProfileDialogBody(props: {
   };
 
   return (
-      <DialogContent
-        className="sm:max-w-md"
-        data-testid="project-profile-dialog"
-      >
-        <DialogHeader>
-          <DialogTitle>
-            {isEdit ? "Edit project" : "New project"}
-          </DialogTitle>
-          <DialogDescription>
-            {isEdit
-              ? "Update this project's name, appearance, and folders."
-              : "Group workspace folders into a project for scoped epics and composer."}
-          </DialogDescription>
-        </DialogHeader>
+    <DialogContent className="sm:max-w-md" data-testid="project-profile-dialog">
+      <DialogHeader>
+        <DialogTitle>{isEdit ? "Edit project" : "New project"}</DialogTitle>
+        <DialogDescription>
+          {isEdit
+            ? "Update this project's name, appearance, and folders."
+            : "Group workspace folders into a project for scoped epics and composer."}
+        </DialogDescription>
+      </DialogHeader>
 
-        <div className="flex flex-col gap-4">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-ui-sm font-medium">Name</span>
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Project name"
-              data-testid="project-profile-name"
-              autoFocus
-            />
-          </label>
+      <div className="flex flex-col gap-4">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-ui-sm font-medium">Name</span>
+          <Input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Project name"
+            data-testid="project-profile-name"
+            autoFocus
+          />
+        </label>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-ui-sm font-medium">Icon</span>
-            <div className="grid grid-cols-8 gap-1.5">
-              {PROFILE_ICONS.map((entry) => {
-                const Icon = entry.Icon;
-                const selected = icon === entry.id;
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    aria-label={`Icon ${entry.id}`}
-                    aria-pressed={selected}
-                    className={cn(
-                      "flex size-8 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors hover:bg-muted",
-                      selected && "border-ring ring-1 ring-ring",
-                    )}
-                    onClick={() => setIcon(entry.id)}
-                  >
-                    <Icon className="size-4" aria-hidden />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <span className="text-ui-sm font-medium">Color</span>
-            <div className="grid grid-cols-8 gap-1.5">
-              {PROFILE_COLORS.map((entry) => {
-                const selected = color === entry.id;
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    aria-label={`Color ${entry.id}`}
-                    aria-pressed={selected}
-                    className={cn(
-                      "size-8 rounded-full border border-transparent transition-shadow",
-                      selected && "ring-2 ring-ring ring-offset-2 ring-offset-background",
-                    )}
-                    style={{ backgroundColor: entry.hex }}
-                    onClick={() => setColor(entry.id)}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <span className="text-ui-sm font-medium">Folders</span>
-            <ul className="flex flex-col gap-1">
-              {folders.map((folder, index) => (
-                <li
-                  key={folder.path}
-                  className="flex min-w-0 items-center gap-2 rounded-md border border-border px-2 py-1.5"
-                  data-testid="project-profile-folder-row"
+        <div className="flex flex-col gap-1.5">
+          <span className="text-ui-sm font-medium">Icon</span>
+          <div className="grid grid-cols-8 gap-1.5">
+            {PROFILE_ICONS.map((entry) => {
+              const Icon = entry.Icon;
+              const selected = icon === entry.id;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  aria-label={`Icon ${entry.id}`}
+                  aria-pressed={selected}
+                  className={cn(
+                    "flex size-8 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors hover:bg-muted",
+                    selected && "border-ring ring-1 ring-ring",
+                  )}
+                  onClick={() => setIcon(entry.id)}
                 >
-                  <Folder
-                    className="size-3.5 shrink-0"
-                    style={{ color: profileColorHex(color) }}
-                    aria-hidden
-                  />
-                  <span
-                    className="min-w-0 flex-1 truncate text-ui-sm"
-                    title={folder.path}
-                  >
-                    {folder.path}
-                  </span>
-                  {index === 0 ? (
-                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
-                      Primary
-                    </span>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Remove folder ${folder.path}`}
-                    onClick={() => handleRemoveFolder(folder.path)}
-                  >
-                    <X className="size-3.5" aria-hidden />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full justify-start"
-              onClick={handleAddFolder}
-              disabled={isPicking}
-              data-testid="project-profile-add-folder"
-            >
-              <Plus className="size-3.5" aria-hidden />
-              Add folder…
-            </Button>
+                  <Icon className="size-4" aria-hidden />
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        <DialogFooter className="flex-col gap-2 sm:flex-col">
-          <div className="flex w-full flex-wrap items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => props.onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              data-testid="project-profile-submit"
-            >
-              {isEdit ? "Save" : "Create project"}
-            </Button>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-ui-sm font-medium">Color</span>
+          <div className="grid grid-cols-8 gap-1.5">
+            {PROFILE_COLORS.map((entry) => {
+              const selected = color === entry.id;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  aria-label={`Color ${entry.id}`}
+                  aria-pressed={selected}
+                  className={cn(
+                    "size-8 rounded-full border border-transparent transition-shadow",
+                    selected &&
+                      "ring-2 ring-ring ring-offset-2 ring-offset-background",
+                  )}
+                  style={{ backgroundColor: entry.hex }}
+                  onClick={() => setColor(entry.id)}
+                />
+              );
+            })}
           </div>
+        </div>
 
-          {isEdit ? (
-            confirmDelete ? (
-              <div
-                className="flex w-full flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
-                data-testid="project-profile-delete-confirm"
+        <div className="flex flex-col gap-1.5">
+          <span className="text-ui-sm font-medium">Folders</span>
+          <ul className="flex flex-col gap-1">
+            {folders.map((folder, index) => (
+              <li
+                key={folder.path}
+                className="flex min-w-0 items-center gap-2 rounded-md border border-border px-2 py-1.5"
+                data-testid="project-profile-folder-row"
               >
-                <p className="text-ui-sm">
-                  Delete this project? Epics are not deleted.
-                </p>
-                <div className="flex justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleDelete}
-                    data-testid="project-profile-delete-confirm-button"
-                  >
-                    Confirm
-                  </Button>
-                </div>
+                <Folder
+                  className="size-3.5 shrink-0"
+                  style={{ color: profileColorHex(color) }}
+                  aria-hidden
+                />
+                <span
+                  className="min-w-0 flex-1 truncate text-ui-sm"
+                  title={folder.path}
+                >
+                  {folder.path}
+                </span>
+                {index === 0 ? (
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
+                    Primary
+                  </span>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Remove folder ${folder.path}`}
+                  onClick={() => handleRemoveFolder(folder.path)}
+                >
+                  <X className="size-3.5" aria-hidden />
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+            onClick={handleAddFolder}
+            disabled={isPicking}
+            data-testid="project-profile-add-folder"
+          >
+            <Plus className="size-3.5" aria-hidden />
+            Add folder…
+          </Button>
+        </div>
+
+        {isEdit && props.editing !== null ? (
+          <UnscopedEpicsAssignSection editing={props.editing} />
+        ) : null}
+      </div>
+
+      <DialogFooter className="flex-col gap-2 sm:flex-col">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => props.onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            data-testid="project-profile-submit"
+          >
+            {isEdit ? "Save" : "Create project"}
+          </Button>
+        </div>
+
+        {isEdit ? (
+          confirmDelete ? (
+            <div
+              className="flex w-full flex-col gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+              data-testid="project-profile-delete-confirm"
+            >
+              <p className="text-ui-sm">
+                Delete this project? Epics are not deleted.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDelete}
+                  data-testid="project-profile-delete-confirm-button"
+                >
+                  Confirm
+                </Button>
               </div>
-            ) : (
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full text-destructive hover:text-destructive"
-                onClick={() => setConfirmDelete(true)}
-                data-testid="project-profile-delete"
-              >
-                Delete project
-              </Button>
-            )
-          ) : null}
-        </DialogFooter>
-      </DialogContent>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full text-destructive hover:text-destructive"
+              onClick={() => setConfirmDelete(true)}
+              data-testid="project-profile-delete"
+            >
+              Delete project
+            </Button>
+          )
+        ) : null}
+      </DialogFooter>
+    </DialogContent>
   );
 }

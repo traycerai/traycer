@@ -5,6 +5,7 @@ import { itemVisibleInProfile } from "@/lib/profiles/profile-membership";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import type { ProjectProfile } from "@/lib/profiles/types";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
+import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
@@ -55,6 +56,7 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
   const activeProfile = useActiveProjectProfile();
+  const allProfiles = useProjectProfilesStore((s) => s.profiles);
   const historyByEpicId = useHistoryMembershipCacheStore(
     (s) => s.itemsByEpicId,
   );
@@ -81,7 +83,12 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
           }),
         )
         .filter((tab) =>
-          headerTabVisibleInProfile(tab, activeProfile, historyByEpicId),
+          headerTabVisibleInProfile(
+            tab,
+            activeProfile,
+            historyByEpicId,
+            allProfiles,
+          ),
         ),
     [
       activeProfile,
@@ -140,6 +147,7 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
   const activeProfile = useActiveProjectProfile();
+  const allProfiles = useProjectProfilesStore((s) => s.profiles);
   const historyByEpicId = useHistoryMembershipCacheStore(
     (s) => s.itemsByEpicId,
   );
@@ -170,6 +178,7 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
             item.tab,
             activeProfile,
             historyByEpicId,
+            allProfiles,
           )
         ) {
           visible.push(item);
@@ -253,6 +262,7 @@ export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
   const left = useHeaderTabForRef(leftRef);
   const right = useHeaderTabForRef(rightRef);
   const activeProfile = useActiveProjectProfile();
+  const allProfiles = useProjectProfilesStore((s) => s.profiles);
   const historyByEpicId = useHistoryMembershipCacheStore(
     (s) => s.itemsByEpicId,
   );
@@ -263,7 +273,12 @@ export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
       // Display-level hide: strip item ids stay in the store so index math for
       // drag/drop is unfiltered; foreign epic tabs simply omit themselves here.
       if (
-        !headerTabVisibleInProfile(tab, activeProfile, historyByEpicId)
+        !headerTabVisibleInProfile(
+          tab,
+          activeProfile,
+          historyByEpicId,
+          allProfiles,
+        )
       ) {
         return null;
       }
@@ -276,13 +291,23 @@ export function useHeaderStripItem(itemId: string): HeaderStripItem | null {
       left:
         item.left.kind === "tab" &&
         left !== null &&
-        headerTabVisibleInProfile(left, activeProfile, historyByEpicId)
+        headerTabVisibleInProfile(
+          left,
+          activeProfile,
+          historyByEpicId,
+          allProfiles,
+        )
           ? { kind: "tab", tab: left }
           : { kind: "fillable", slot: fillableSide(item.left) },
       right:
         item.right.kind === "tab" &&
         right !== null &&
-        headerTabVisibleInProfile(right, activeProfile, historyByEpicId)
+        headerTabVisibleInProfile(
+          right,
+          activeProfile,
+          historyByEpicId,
+          allProfiles,
+        )
           ? { kind: "tab", tab: right }
           : { kind: "fillable", slot: fillableSide(item.right) },
     } satisfies HeaderStripItem;
@@ -484,11 +509,17 @@ function headerTabVisibleInProfile(
   tab: HeaderTab,
   activeProfile: ProjectProfile | null,
   historyByEpicId: ReadonlyMap<string, HistoryItem>,
+  allProfiles: ReadonlyArray<ProjectProfile>,
 ): boolean {
   if (activeProfile === null) return true;
   if (tab.kind !== "epic") return true;
   const historyItem = historyByEpicId.get(tab.epicId);
   // Unknown membership (not yet in history cache) → fail-open, keep visible.
   if (historyItem === undefined) return true;
-  return itemVisibleInProfile(activeProfile, historyItem.linkedWorkspaces);
+  return itemVisibleInProfile(
+    activeProfile,
+    historyItem.linkedWorkspaces,
+    historyItem.epicId,
+    allProfiles,
+  );
 }

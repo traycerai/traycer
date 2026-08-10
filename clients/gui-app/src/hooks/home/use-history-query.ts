@@ -34,6 +34,7 @@ import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
 import { itemVisibleInProfile } from "@/lib/profiles/profile-membership";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
+import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
@@ -74,6 +75,7 @@ export function useHistoryQuery(
   params: UseHistoryQueryParams,
 ): UseHistoryQueryResult {
   const activeProfile = useActiveProjectProfile();
+  const allProfiles = useProjectProfilesStore((s) => s.profiles);
   const trimmedQuery = params.search.query.trim();
   const debouncedQuery = useDebouncedValue(trimmedQuery, SEARCH_DEBOUNCE_MS);
   const [fallbackNowMs] = useState(() => Date.now());
@@ -198,7 +200,12 @@ export function useHistoryQuery(
       activeProfile === null
         ? items
         : items.filter((item) =>
-            itemVisibleInProfile(activeProfile, item.linkedWorkspaces),
+            itemVisibleInProfile(
+              activeProfile,
+              item.linkedWorkspaces,
+              item.epicId,
+              allProfiles,
+            ),
           );
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;

@@ -123,3 +123,64 @@ describe("useActiveProjectProfileStore", () => {
     expect(useActiveProjectProfileStore.getState().activeProfileId).toBe(null);
   });
 });
+
+describe("epic assignment", () => {
+  function twoProfiles(): { a: string; b: string } {
+    const store = useProjectProfilesStore.getState();
+    const a = store.createProfile({
+      name: "Acme",
+      icon: "rocket",
+      color: "blue",
+      folders: [{ path: "/Users/x/Acme", hostId: "h1" }],
+    });
+    const b = store.createProfile({
+      name: "Buzz",
+      icon: "zap",
+      color: "orange",
+      folders: [{ path: "/Users/x/Buzz", hostId: "h1" }],
+    });
+    return { a: a.id, b: b.id };
+  }
+
+  it("assigns epics, deduped, and initializes new profiles with an empty list", () => {
+    const { a } = twoProfiles();
+    const store = useProjectProfilesStore.getState();
+    expect(
+      useProjectProfilesStore.getState().profiles.find((p) => p.id === a)
+        ?.assignedEpicIds,
+    ).toEqual([]);
+    store.assignEpicsToProfile(a, ["e1", "e2", "e1"]);
+    expect(
+      useProjectProfilesStore.getState().profiles.find((p) => p.id === a)
+        ?.assignedEpicIds,
+    ).toEqual(["e1", "e2"]);
+  });
+
+  it("assignment is exclusive: reassigning moves the epic between profiles", () => {
+    const { a, b } = twoProfiles();
+    const store = useProjectProfilesStore.getState();
+    store.assignEpicsToProfile(a, ["e1"]);
+    store.assignEpicsToProfile(b, ["e1"]);
+    const profiles = useProjectProfilesStore.getState().profiles;
+    expect(profiles.find((p) => p.id === a)?.assignedEpicIds).toEqual([]);
+    expect(profiles.find((p) => p.id === b)?.assignedEpicIds).toEqual(["e1"]);
+  });
+
+  it("unassignEpic removes the epic from every profile", () => {
+    const { a } = twoProfiles();
+    const store = useProjectProfilesStore.getState();
+    store.assignEpicsToProfile(a, ["e1", "e2"]);
+    store.unassignEpic("e1");
+    expect(
+      useProjectProfilesStore.getState().profiles.find((p) => p.id === a)
+        ?.assignedEpicIds,
+    ).toEqual(["e2"]);
+  });
+
+  it("ignores empty assignment batches", () => {
+    const { a } = twoProfiles();
+    const before = useProjectProfilesStore.getState().profiles;
+    useProjectProfilesStore.getState().assignEpicsToProfile(a, []);
+    expect(useProjectProfilesStore.getState().profiles).toEqual(before);
+  });
+});

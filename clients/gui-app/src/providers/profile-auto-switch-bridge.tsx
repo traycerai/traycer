@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
-import { profileOwnsWorkspaceRefs } from "@/lib/profiles/profile-membership";
+import { profileOwnsEpic } from "@/lib/profiles/profile-membership";
 import type { AppRouter } from "@/router";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
@@ -54,7 +54,7 @@ export function ProfileAutoSwitchBridge(
     if (item === undefined) return;
 
     const owners = profiles.filter((profile) =>
-      profileOwnsWorkspaceRefs(profile, item.linkedWorkspaces),
+      profileOwnsEpic(profile, epicId, item.linkedWorkspaces),
     );
     if (owners.length !== 1) return;
     const owner = owners[0];

@@ -3,6 +3,7 @@ import {
   folderMatchesWorkspace,
   isPathUnderFolder,
   itemVisibleInProfile,
+  profileOwnsEpic,
   profileOwnsWorkspaceRefs,
 } from "../profile-membership";
 import type { ProjectProfile } from "../types";
@@ -13,9 +14,23 @@ const fixtureProfile: ProjectProfile = {
   icon: "rocket",
   color: "blue",
   folders: [{ path: "/Users/x/Acme", hostId: "h1" }],
+  assignedEpicIds: [],
   createdAt: 0,
   updatedAt: 0,
 };
+
+const otherProfile: ProjectProfile = {
+  id: "p2",
+  name: "Buzz",
+  icon: "zap",
+  color: "orange",
+  folders: [{ path: "/Users/x/Buzz", hostId: "h1" }],
+  assignedEpicIds: [],
+  createdAt: 0,
+  updatedAt: 0,
+};
+
+const allProfiles = [fixtureProfile, otherProfile];
 
 describe("isPathUnderFolder", () => {
   it("matches exact path", () => {
@@ -105,20 +120,65 @@ describe("profileOwnsWorkspaceRefs", () => {
 
 describe("itemVisibleInProfile", () => {
   it("returns true for empty workspaces (unscoped / fail-open)", () => {
-    expect(itemVisibleInProfile(fixtureProfile, [])).toBe(true);
+    expect(itemVisibleInProfile(fixtureProfile, [], "e1", allProfiles)).toBe(
+      true,
+    );
   });
 
   it("returns true for owned workspaces", () => {
     expect(
-      itemVisibleInProfile(fixtureProfile, [
-        { hostId: "h1", workspacePath: "/Users/x/Acme" },
-      ]),
+      itemVisibleInProfile(
+        fixtureProfile,
+        [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+        "e1",
+        allProfiles,
+      ),
     ).toBe(true);
   });
 
   it("returns false for foreign workspaces", () => {
     expect(
-      itemVisibleInProfile(fixtureProfile, [
+      itemVisibleInProfile(
+        fixtureProfile,
+        [{ hostId: "h1", workspacePath: "/Users/x/Foreign" }],
+        "e1",
+        allProfiles,
+      ),
+    ).toBe(false);
+  });
+
+  it("shows an epic assigned to this profile even when foreign/unscoped", () => {
+    const assigned = { ...fixtureProfile, assignedEpicIds: ["e9"] };
+    expect(
+      itemVisibleInProfile(assigned, [], "e9", [assigned, otherProfile]),
+    ).toBe(true);
+  });
+
+  it("hides an epic assigned to another profile, even when unscoped", () => {
+    const other = { ...otherProfile, assignedEpicIds: ["e9"] };
+    expect(
+      itemVisibleInProfile(fixtureProfile, [], "e9", [fixtureProfile, other]),
+    ).toBe(false);
+  });
+});
+
+describe("profileOwnsEpic", () => {
+  it("owns via folder match", () => {
+    expect(
+      profileOwnsEpic(fixtureProfile, "e1", [
+        { hostId: "h1", workspacePath: "/Users/x/Acme" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("owns via assignment even with no workspace match", () => {
+    const assigned = { ...fixtureProfile, assignedEpicIds: ["e1"] };
+    expect(profileOwnsEpic(assigned, "e1", [])).toBe(true);
+  });
+
+  it("does not own when neither folder nor assignment matches", () => {
+    expect(
+      profileOwnsEpic(fixtureProfile, "e1", [
         { hostId: "h1", workspacePath: "/Users/x/Foreign" },
       ]),
     ).toBe(false);

@@ -1,7 +1,7 @@
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { openOrFocusEpicIntent } from "@/lib/tab-navigation";
 import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
-import { profileOwnsWorkspaceRefs } from "./profile-membership";
+import { profileOwnsEpic } from "./profile-membership";
 import type { ProjectProfile } from "./types";
 
 export type ProfileLandingEpicIntent = Extract<
@@ -20,7 +20,7 @@ export function mostRecentOwnedEpic(
 ): HistoryItem | null {
   let best: HistoryItem | null = null;
   for (const item of items) {
-    if (!profileOwnsWorkspaceRefs(profile, item.linkedWorkspaces)) continue;
+    if (!profileOwnsEpic(profile, item.epicId, item.linkedWorkspaces)) continue;
     if (best === null || item.updatedAtMs > best.updatedAtMs) {
       best = item;
     }

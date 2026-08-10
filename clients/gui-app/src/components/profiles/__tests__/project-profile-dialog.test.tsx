@@ -29,6 +29,7 @@ const existingProfile: ProjectProfile = {
   icon: "rocket",
   color: "red",
   folders: [{ path: "/Users/x/Existing", hostId: "h1" }],
+  assignedEpicIds: [],
   createdAt: 1,
   updatedAt: 1,
 };

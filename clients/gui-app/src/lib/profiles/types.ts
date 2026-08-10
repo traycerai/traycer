@@ -11,6 +11,12 @@ export interface ProjectProfile {
   readonly icon: string; // id from PROFILE_ICONS (Task 4)
   readonly color: string; // id from PROFILE_COLORS (Task 4)
   readonly folders: ReadonlyArray<ProjectProfileFolder>; // length >= 1; [0] is primary
+  /**
+   * Epics manually assigned to this project. Assignment wins over folder
+   * matching and makes an unscoped epic scoped (visible only here). An epic
+   * id lives in at most one profile's list.
+   */
+  readonly assignedEpicIds: ReadonlyArray<string>;
   readonly createdAt: number;
   readonly updatedAt: number;
 }

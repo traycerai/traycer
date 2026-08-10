@@ -16,7 +16,8 @@ export function folderMatchesWorkspace(
   folder: ProjectProfileFolder,
   workspace: MembershipWorkspaceRef,
 ): boolean {
-  if (folder.hostId !== null && folder.hostId !== workspace.hostId) return false;
+  if (folder.hostId !== null && folder.hostId !== workspace.hostId)
+    return false;
   return isPathUnderFolder(workspace.workspacePath, folder.path);
 }
 
@@ -31,13 +32,36 @@ export function profileOwnsWorkspaceRefs(
 }
 
 /**
- * Visibility rule for lists: unscoped items (no linked workspaces) are visible
- * in every profile (fail-open); scoped items must be owned by the profile.
+ * Full ownership: folder match OR manual assignment. Landing, auto-switch,
+ * and tab-swap release all treat an assigned epic as owned by its profile.
+ */
+export function profileOwnsEpic(
+  profile: ProjectProfile,
+  epicId: string,
+  workspaces: ReadonlyArray<MembershipWorkspaceRef>,
+): boolean {
+  if (profile.assignedEpicIds.includes(epicId)) return true;
+  return profileOwnsWorkspaceRefs(profile, workspaces);
+}
+
+/**
+ * Visibility rule for lists. Assignment is exclusive and wins: assigned to
+ * this profile → visible; assigned to another → hidden. Unassigned +
+ * unscoped (no linked workspaces) → visible in every profile (fail-open —
+ * never hide user data). Unassigned + scoped → folder match.
  */
 export function itemVisibleInProfile(
   profile: ProjectProfile,
   workspaces: ReadonlyArray<MembershipWorkspaceRef>,
+  epicId: string,
+  allProfiles: ReadonlyArray<ProjectProfile>,
 ): boolean {
+  if (profile.assignedEpicIds.includes(epicId)) return true;
+  const assignedElsewhere = allProfiles.some(
+    (other) =>
+      other.id !== profile.id && other.assignedEpicIds.includes(epicId),
+  );
+  if (assignedElsewhere) return false;
   if (workspaces.length === 0) return true;
   return profileOwnsWorkspaceRefs(profile, workspaces);
 }
