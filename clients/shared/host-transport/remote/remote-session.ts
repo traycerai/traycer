@@ -7,7 +7,11 @@ import {
   type SchemaVersion,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { canonicalForMethodVersionLine } from "@traycer/protocol/framework/compat-helpers";
+import {
+  mergeConnectionManifests,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/capability-manifest";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
@@ -57,6 +61,7 @@ import {
   RECONNECT_MAX_BACKOFF_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
+import { recordNegotiatedHostMethods } from "../negotiated-manifest-registry";
 import {
   CURRENT_MUX_VERSION,
   MuxFrameType,
@@ -248,6 +253,13 @@ interface ActiveConnection {
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
+  /**
+   * `hostManifest.rpc` + `hostManifest.optionalRpc`, merged once at ack.
+   * Version selection and dispatch read THIS (an optional method must
+   * dispatch like any other); only the session-level compatibility check
+   * reads the raw floor.
+   */
+  hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
   hostAttached: boolean;
 }
@@ -260,6 +272,8 @@ export class RemoteSession<
 {
   private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
   private readonly clientManifests: SessionManifests;
+  /** `clientManifests.rpc` + `.optionalRpc` merged - the dispatch view. */
+  private readonly clientRpcMerged: ConnectionManifest;
 
   private phase: SessionPhase = "idle";
   private connectGeneration = 0;
@@ -311,10 +325,23 @@ export class RemoteSession<
 
   constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
     this.options = options;
+    // The same floor/optional split the local `WsRpcClient` advertises, from
+    // the same released-floor list - the remote handshake's compatibility
+    // check runs over the floor ONLY, so a peer that lacks an optional
+    // method degrades instead of fataling the session.
+    const rpcSplit = splitConnectionManifest(
+      options.rpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+    );
     this.clientManifests = {
-      rpc: buildRpcManifest(options.rpcRegistry),
+      rpc: rpcSplit.manifest,
+      optionalRpc: rpcSplit.optionalManifest,
       stream: buildStreamManifest(options.streamRegistry),
     };
+    this.clientRpcMerged = mergeConnectionManifests(
+      rpcSplit.manifest,
+      rpcSplit.optionalManifest,
+    );
     this.dialFailures = new DialFailureLog({
       label: `remote session (host ${options.hostId})`,
       now: () => Date.now(),
@@ -446,8 +473,8 @@ export class RemoteSession<
       );
     }
 
-    const clientCanonical = this.clientManifests.rpc[method];
-    const hostCanonical = hostManifest.rpc[method];
+    const clientCanonical = this.clientRpcMerged[method];
+    const hostCanonical = connection.hostRpcMerged?.[method];
     if (clientCanonical === undefined || hostCanonical === undefined) {
       return Promise.reject(
         new HostRpcError({
@@ -761,6 +788,7 @@ export class RemoteSession<
       reassembler: new ChunkReassembler(),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
+      hostRpcMerged: null,
       credentialUpdateSupported: false,
       hostAttached: true,
     };
@@ -978,6 +1006,24 @@ export class RemoteSession<
       this.handleConnectionLost(generation, "malformed-openAck");
       return;
     }
+    const hostRpcMerged = mergeConnectionManifests(
+      parsed.data.manifest.rpc,
+      parsed.data.manifest.optionalRpc,
+    );
+    // Publish what this host advertised so UI layers can gate an optional
+    // (non-floor) affordance without calling the method - the exact mirror of
+    // `WsRpcClient`'s publish on the local path, and recorded BEFORE the
+    // compatibility check for the same reason: an incompatible pairing still
+    // tells us truthfully which methods the host has. A long-lived session
+    // refreshes this on every re-attach, which is when a host upgraded
+    // underneath us re-handshakes.
+    recordNegotiatedHostMethods(
+      this.options.hostId,
+      Object.keys(hostRpcMerged),
+    );
+    // Floor vs floor ONLY - optional methods are deliberately outside the
+    // session-fatal surface (see `SessionManifests`); a peer lacking one
+    // degrades per-call/per-gate instead.
     const compat = checkCompatibility(
       this.options.rpcRegistry,
       this.clientManifests.rpc,
@@ -989,6 +1035,7 @@ export class RemoteSession<
       return;
     }
     connection.hostManifest = parsed.data.manifest;
+    connection.hostRpcMerged = hostRpcMerged;
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -1743,14 +1790,6 @@ const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
  * stream transport's `REVALIDATE_TIMEOUT_MS`.
  */
 const UNAUTHORIZED_REVALIDATE_TIMEOUT_MS = 10_000;
-
-function buildRpcManifest(registry: VersionedRpcRegistry): ConnectionManifest {
-  const manifest: Record<string, SchemaVersion> = {};
-  for (const method of Object.keys(registry)) {
-    manifest[method] = canonicalForMethodVersionLine(registry[method], method);
-  }
-  return manifest;
-}
 
 function indexMethodRegistry(
   registry: VersionedRpcRegistry,

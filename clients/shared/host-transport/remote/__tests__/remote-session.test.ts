@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineVersionedRpcRegistry,
@@ -32,6 +32,10 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../host-messenger";
+import {
+  getNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "../../negotiated-manifest-registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type {
   IStreamWebSocketFactory,
@@ -165,6 +169,14 @@ class FakeRelayHost {
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
   streamManifest = buildStreamManifest(emptyStreamRegistry);
+  /**
+   * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
+   * stays empty (matching the empty client registries here); optional
+   * methods are the interesting surface - they must publish to the
+   * negotiated-manifest registry and must NEVER fatal the session, however
+   * unknown to the client they are.
+   */
+  optionalRpcManifest: Record<string, { major: number; minor: number }> = {};
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -311,7 +323,11 @@ class FakeRelayHost {
         streamId: SESSION_CONTROL_STREAM_ID,
         qos: QosClass.INTERACTIVE,
         json: {
-          manifest: { rpc: {}, stream: this.streamManifest },
+          manifest: {
+            rpc: {},
+            optionalRpc: this.optionalRpcManifest,
+            stream: this.streamManifest,
+          },
           capabilities: [],
         },
         binary: null,
@@ -1006,4 +1022,79 @@ describe("RemoteSession dial-failure logging", () => {
       session.close();
     }
   });
+});
+
+describe("RemoteSession negotiated-manifest publication", () => {
+  // The registry is module-level by design (a host's manifest is a property
+  // of the host process, not of one messenger), so these tests reset it.
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  it(
+    "publishes the openAck's merged rpc manifest at the ready boundary - optional methods included",
+    async () => {
+      const relay = new FakeRelayHost();
+      // Methods the CLIENT's registry does not know: exactly the shape of an
+      // optional (non-floor) method a newer host advertises - the case that
+      // silently failed closed when the remote path did not publish.
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+        "workspace.writeFile": { major: 2, minor: 1 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      // Fail-closed before any handshake: unknown, never false.
+      expect(getNegotiatedHostMethods("host-1")).toBeNull();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(getNegotiatedHostMethods("host-1")).toEqual(
+          new Set(["host.usage.summary", "workspace.writeFile"]),
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "refreshes the published set on re-attach - a host upgraded under a live session self-corrects",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(getNegotiatedHostMethods("host-1")).toEqual(
+          new Set(["host.usage.summary"]),
+        );
+        // The host restarts on a newer binary advertising one more optional
+        // method; the client's re-attach after the drop must overwrite the
+        // stale entry without an app restart.
+        relay.optionalRpcManifest = {
+          "host.usage.summary": { major: 1, minor: 0 },
+          "host.newly.added": { major: 1, minor: 0 },
+        };
+        relay.dropCurrentConnection();
+        await vi.waitFor(
+          () =>
+            expect(getNegotiatedHostMethods("host-1")).toEqual(
+              new Set(["host.usage.summary", "host.newly.added"]),
+            ),
+          WAIT,
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 });
