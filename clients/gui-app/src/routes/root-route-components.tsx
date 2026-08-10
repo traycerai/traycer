@@ -18,6 +18,7 @@ import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-naviga
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import { EmptyProjectsHomeEnforcer } from "@/components/profiles/empty-projects-home-enforcer";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { isProductIntroDisabled } from "@/lib/thanos-flags";
@@ -64,6 +65,7 @@ export function RootComponent() {
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller. */}
       {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
+      {authStatus === "signed-in" ? <EmptyProjectsHomeEnforcer /> : null}
       <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
