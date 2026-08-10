@@ -148,7 +148,11 @@ describe("<ChatUsageDialog />", () => {
     act(() => {
       useChatUsageDialogStore
         .getState()
-        .open({ hostId: mockLocalHostEntry.hostId, chatId: "chat-1", chatTitle: "Fix the flaky test" });
+        .open({
+          hostId: mockLocalHostEntry.hostId,
+          chatId: "chat-1",
+          chatTitle: "Fix the flaky test",
+        });
     });
 
     expect(await screen.findByText("Usage — Fix the flaky test")).toBeTruthy();
@@ -162,7 +166,11 @@ describe("<ChatUsageDialog />", () => {
     act(() => {
       useChatUsageDialogStore
         .getState()
-        .open({ hostId: mockLocalHostEntry.hostId, chatId: "chat-1", chatTitle: "Fix the flaky test" });
+        .open({
+          hostId: mockLocalHostEntry.hostId,
+          chatId: "chat-1",
+          chatTitle: "Fix the flaky test",
+        });
     });
     await screen.findByTestId("usage-cost-figure");
 
@@ -181,7 +189,11 @@ describe("<ChatUsageDialog />", () => {
     act(() => {
       useChatUsageDialogStore
         .getState()
-        .open({ hostId: mockLocalHostEntry.hostId, chatId: "chat-1", chatTitle: "Fix the flaky test" });
+        .open({
+          hostId: mockLocalHostEntry.hostId,
+          chatId: "chat-1",
+          chatTitle: "Fix the flaky test",
+        });
     });
     await screen.findByTestId("usage-cost-figure");
 

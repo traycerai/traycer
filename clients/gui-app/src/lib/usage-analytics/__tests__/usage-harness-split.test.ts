@@ -25,7 +25,11 @@ function bucket(overrides: Partial<UsageBucket>): UsageBucket {
 describe("buildUsageHarnessSplitRows", () => {
   it("folds every model and day for a harness into one row", () => {
     const rows = buildUsageHarnessSplitRows([
-      bucket({ harnessId: "claude", model: "claude-sonnet-5", knownCostUsd: 1 }),
+      bucket({
+        harnessId: "claude",
+        model: "claude-sonnet-5",
+        knownCostUsd: 1,
+      }),
       bucket({
         harnessId: "claude",
         model: "claude-opus-5",

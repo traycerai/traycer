@@ -190,16 +190,16 @@ function UsageSummaryPanelBody(props: {
       />
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-ui-sm font-medium text-foreground">
-            Breakdown
-          </h3>
+          <h3 className="text-ui-sm font-medium text-foreground">Breakdown</h3>
           <UsageBreakdownToggle
             groupBy={breakdownGroupBy}
             onChange={onBreakdownGroupByChange}
           />
         </div>
         {breakdownGroupBy === "model" ? (
-          <UsageBreakdownTable rows={buildUsageBreakdownRows(summary.buckets)} />
+          <UsageBreakdownTable
+            rows={buildUsageBreakdownRows(summary.buckets)}
+          />
         ) : (
           <UsageDayBreakdownTable
             rows={buildUsageDayBreakdownRows(summary.buckets)}

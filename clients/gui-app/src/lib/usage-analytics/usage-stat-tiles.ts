@@ -72,7 +72,8 @@ export function buildUsageStatTiles(
     tokens.cacheCreationTokens +
     tokens.outputTokens;
   const activeDays = countActiveDays(buckets);
-  const observedInput = tokens.uncachedInputTokens + tokens.cacheReadInputTokens;
+  const observedInput =
+    tokens.uncachedInputTokens + tokens.cacheReadInputTokens;
   const rawCostUsd = totals.knownCostUsd + totals.knownCacheSavingsUsd;
 
   return {

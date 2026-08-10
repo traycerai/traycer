@@ -60,9 +60,8 @@ const DEFAULT_WINDOW: EpicUsageWindow = DEFAULT_WINDOW_DAYS;
  */
 export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const { epicId, client, open, onOpenChange } = props;
-  const [windowValue, setWindowValue] = useState<EpicUsageWindow>(
-    DEFAULT_WINDOW,
-  );
+  const [windowValue, setWindowValue] =
+    useState<EpicUsageWindow>(DEFAULT_WINDOW);
   const [nowMs] = useState(() => Date.now());
   const request = useMemo(
     () =>
