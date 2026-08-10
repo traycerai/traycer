@@ -15,6 +15,8 @@ import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/publ
 import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
+import { useHostClient } from "@/lib/host";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   PaneActivationFocusIntentContext,
   registerHostedPaneActivationClaim,
@@ -510,7 +512,64 @@ const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
  * two-phase decision (render live first, substitute once the terminate
  * lands) rather than the reachability arm's upfront one - `chat-tile.tsx`
  * must attempt the open before this can possibly fire.
+ *
+ * ## Extended AGAIN for a SAME-host chat with no local record (ticket 36)
+ *
+ * Ticket 35's `confirmedAbsent` needs `chat-tile.tsx` to have already
+ * attempted `chat.subscribe` - but `chat-tile.tsx`'s own `enabled` gate
+ * (`chatRecord !== null || isCrossHostOpen`) never even TRIES for a
+ * same-host tab with no local doc record, so `fatalClose` never fires for
+ * this case; without this arm the tile fell through to
+ * `computeIsRemoteDeleted`'s reap instead (a silent no-open, ticket 36's
+ * bug report). `cloudChatRecord` reads the SAME already-fetched
+ * `useCloudChatList` data `use-epic-route-synchronization.ts`'s reap
+ * exemption reads (`epic.listCloudChats`'s host-side filter already
+ * excludes anything this host's registry has tombstoned, so cloud presence
+ * alone is trustworthy here - no local-tombstone check needed client-side).
+ * `ownerUserId` comes off the cloud row instead of `liveArtifact` for this
+ * arm specifically, since a chat this arm targets by definition has no
+ * local projection to read it from.
  */
+interface ChatFallbackDecision {
+  readonly substitute: boolean;
+  readonly reason: ChatDeadTileBannerReason;
+  readonly ownerUserId: string | null;
+}
+
+/**
+ * The three substitution causes, resolved in one place and kept OUT of the
+ * hook body below on purpose - `usePublishedChatFallbackRef` mixes React
+ * hook calls with this decision, and folding the branching in with them is
+ * what pushed its own complexity over this repo's lint ceiling. Pure
+ * function, easy to reason about (and test) independently of the hooks that
+ * feed it.
+ */
+function resolveChatFallbackDecision(args: {
+  readonly isChat: boolean;
+  readonly isSameHost: boolean;
+  readonly hostUnreachable: boolean;
+  readonly confirmedAbsent: boolean;
+  readonly cloudChatOwnerUserId: string | null;
+  readonly liveArtifactOwnerUserId: string | null;
+}): ChatFallbackDecision {
+  const sameHostCloudKnownAbsent = args.cloudChatOwnerUserId !== null;
+  // Same cross-host gate as ticket 35 for the reachability/confirmed-absent
+  // causes - a same-host confirmed-absent chat with no cloud fallback is a
+  // genuine local error, not a substitutable one. The cloud-known arm
+  // (ticket 36) is its own condition: same-host by construction, so it does
+  // not belong inside that cross-host gate.
+  const crossHostFallback =
+    !args.isSameHost && (args.hostUnreachable || args.confirmedAbsent);
+  const substitute =
+    args.isChat && (crossHostFallback || sameHostCloudKnownAbsent);
+  const reason: ChatDeadTileBannerReason =
+    !args.isSameHost && args.hostUnreachable
+      ? "host-offline"
+      : "chat-not-visible";
+  const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
+  return { substitute, reason, ownerUserId };
+}
+
 function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
@@ -521,9 +580,11 @@ function usePublishedChatFallbackRef(args: {
   readonly fallbackRef: EpicCanvasTileRef | null;
   readonly ownerHostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
+  readonly isCloudKnown: boolean;
 } {
   const { activeTab, epicId, liveArtifact, activeHostId } = args;
   const isChat = activeTab.type === "chat";
+  const isSameHost = activeHostId === activeTab.hostId;
   const reachability = useHostReachability(
     isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
@@ -532,20 +593,31 @@ function usePublishedChatFallbackRef(args: {
     isChat &&
     fatalClose !== null &&
     fatalClose.code === CHAT_SESSION_NOT_VISIBLE_CODE;
-  const ownerUserId =
-    isChat && liveArtifact !== null && "userId" in liveArtifact
+  const wantsCloudChatFallback = isChat && isSameHost && liveArtifact === null;
+  const appHostClient = useHostClient();
+  const cloudChats = useCloudChatList({
+    client: appHostClient,
+    taskId: epicId,
+    enabled: wantsCloudChatFallback,
+  });
+  const cloudChatRecord = wantsCloudChatFallback
+    ? (cloudChats.data?.chats.find(
+        (chat) => chat.identity.chatId === activeTab.id,
+      ) ?? null)
+    : null;
+  const liveArtifactOwnerUserId =
+    liveArtifact !== null && "userId" in liveArtifact
       ? liveArtifact.userId
       : null;
-  // Same cross-host gate for both causes: a same-host confirmed-absent chat
-  // is a genuine local error (nothing to substitute IN from), not a
-  // cross-host reachability story - it keeps the tile's own generic
-  // `ChatTileError`, unchanged.
-  const substitute =
-    isChat &&
-    activeHostId !== activeTab.hostId &&
-    (reachability.status === "unreachable" || confirmedAbsent);
-  const reason: ChatDeadTileBannerReason =
-    reachability.status === "unreachable" ? "host-offline" : "chat-not-visible";
+  const decision = resolveChatFallbackDecision({
+    isChat,
+    isSameHost,
+    hostUnreachable: reachability.status === "unreachable",
+    confirmedAbsent,
+    cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
+    liveArtifactOwnerUserId,
+  });
+  const { substitute, reason, ownerUserId } = decision;
   const fallbackRef = useMemo(
     () =>
       substitute && ownerUserId !== null && activeHostId !== null
@@ -568,7 +640,12 @@ function usePublishedChatFallbackRef(args: {
       epicId,
     ],
   );
-  return { fallbackRef, ownerHostLabel: reachability.hostLabel, reason };
+  return {
+    fallbackRef,
+    ownerHostLabel: reachability.hostLabel,
+    reason,
+    isCloudKnown: cloudChatRecord !== null,
+  };
 }
 
 function ActiveTabBody(props: ActiveTabBodyProps) {
@@ -589,6 +666,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     fallbackRef: publishedFallbackRef,
     ownerHostLabel,
     reason: deadTileBannerReason,
+    isCloudKnown,
   } = usePublishedChatFallbackRef({
     activeTab,
     epicId,
@@ -628,6 +706,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           isSelfDeleted,
           isPendingCreate,
           projectionHostId: activeHostIdForRecordGate,
+          isCloudKnown,
         });
   const isActive = role !== null && props.selected && props.globallyActive;
 
@@ -789,6 +868,15 @@ interface ComputeIsRemoteDeletedArgs {
   readonly isPendingCreate: boolean;
   /** The host whose projection `liveArtifact` was resolved from. */
   readonly projectionHostId: string | null;
+  /**
+   * Same-host counterpart of the cross-host exemption below (chat-sync-v2
+   * ticket 36): true when this SAME-host chat has no local record but is
+   * still known to `epic.listCloudChats` (whose host-side filter already
+   * excludes anything this host's own registry has tombstoned - see
+   * `usePublishedChatFallbackRef`, which computes this alongside the
+   * substitution ref so the two never disagree).
+   */
+  readonly isCloudKnown: boolean;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -799,6 +887,7 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
     isSelfDeleted,
     isPendingCreate,
     projectionHostId,
+    isCloudKnown,
   } = args;
   if (!snapshotLoaded) return false;
   if (leafArtifact === null) return false;
@@ -821,5 +910,6 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   if (liveArtifact !== null) return false;
   if (isSelfDeleted) return false;
   if (isPendingCreate) return false;
+  if (leafArtifact.type === "chat" && isCloudKnown) return false;
   return true;
 }

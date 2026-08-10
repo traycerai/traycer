@@ -14,6 +14,8 @@ import {
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostClient } from "@/lib/host";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -79,6 +81,19 @@ export function useEpicRouteSynchronization(
   const liveTitle = useEpicTitle();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
+  // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
+  // ticket 36): `epic.listCloudChats` already excludes anything this host's
+  // own registry has tombstoned, so "still cloud-known" is what tells a
+  // never-adopted chat apart from a genuinely deleted one for
+  // `isTileRefRecordLive` below. `useCloudChatList`'s TanStack Query cache is
+  // shared with the sidebar's own call for this same epic - no extra
+  // network traffic from reading it a second time here.
+  const appHostClient = useHostClient();
+  const cloudChats = useCloudChatList({
+    client: appHostClient,
+    taskId: epicId,
+    enabled: epicId.length > 0,
+  });
   const currentTab = useEpicTab(tabId);
   const renameTab = useEpicCanvasStore((s) => s.renameTab);
   const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
@@ -420,6 +435,10 @@ export function useEpicRouteSynchronization(
     if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
+    const cloudKnownIds = new Set(
+      (cloudChats.data?.chats ?? []).map((chat) => chat.identity.chatId),
+    );
+    const isCloudKnown = (id: string) => cloudKnownIds.has(id);
     for (const pane of collectPanes(canvas.root)) {
       for (const instanceId of pane.tabInstanceIds) {
         const tab = canvas.tilesByInstanceId[instanceId];
@@ -428,7 +447,7 @@ export function useEpicRouteSynchronization(
           isTileRefRecordLive(
             tab,
             pendingCreateArtifactIds,
-            hasLiveRecord,
+            { hasLiveRecord, isCloudKnown },
             activeHostId,
           )
         ) {
@@ -441,6 +460,7 @@ export function useEpicRouteSynchronization(
     snapshotLoaded,
     canvas,
     records,
+    cloudChats.data,
     pendingCreateArtifactIds,
     activeHostId,
     epicId,

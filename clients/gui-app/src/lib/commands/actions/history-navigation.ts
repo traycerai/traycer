@@ -154,7 +154,17 @@ function reopenClosedTilePreview(href: string): void {
     !isTileRefRecordLive(
       preserved.node,
       state.pendingCreateArtifactIds,
-      hasLiveRecord,
+      {
+        hasLiveRecord,
+        // No cloud-known exemption on this imperative, non-React path
+        // (chat-sync-v2 ticket 36 scoped the fix to the route-sync reap
+        // and the tab-group-view substitution, both React-hook-driven).
+        // `() => false` preserves exactly today's behavior here - a
+        // same-host, never-adopted chat restored from browser
+        // back/forward still closes rather than substituting, same as
+        // before this ticket.
+        isCloudKnown: () => false,
+      },
       getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
     )
   ) {

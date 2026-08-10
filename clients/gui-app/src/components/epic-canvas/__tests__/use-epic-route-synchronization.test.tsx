@@ -65,6 +65,9 @@ interface TestState {
   canvasRoot: TileLayoutNode | null;
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
   records: ReadonlyArray<{ readonly id: string }>;
+  /** Chat ids the `useCloudChatList` mock answers as present
+   * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
+  cloudChatIds: ReadonlySet<string>;
   canvasStore: CanvasStoreSlice;
   openEpicState: {
     readonly setLastFocusedArtifactId: Mock;
@@ -82,6 +85,7 @@ const testState = vi.hoisted<TestState>(() => ({
   canvasRoot: null,
   canvasTiles: {},
   records: [],
+  cloudChatIds: new Set<string>(),
   canvasStore: {
     renameTab: vi.fn(),
     openTileInTab: vi.fn(),
@@ -151,6 +155,30 @@ vi.mock("@/lib/epic-auto-open", () => ({
   resolveAutoOpenTarget: () => testState.autoOpenTarget,
 }));
 
+// The reap effect's same-host cloud-known exemption (chat-sync-v2 ticket
+// 36) reads these two - stubbed at the hook boundary, same reason as every
+// other seam in this provider-less suite.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({
+    data:
+      testState.cloudChatIds.size === 0
+        ? undefined
+        : {
+            chats: [...testState.cloudChatIds].map((chatId) => ({
+              identity: { taskId: EPIC_ID, chatId, ownerUserId: "user-1" },
+            })),
+          },
+    isError: false,
+    isPending: false,
+    isFetching: false,
+  }),
+}));
+
 const EPIC_ID = "route-sync-epic";
 const TAB_ID = "route-sync-tab";
 const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
@@ -197,6 +225,7 @@ function resetStores(): void {
   testState.canvasRoot = null;
   testState.canvasTiles = {};
   testState.records = [];
+  testState.cloudChatIds = new Set();
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   vi.mocked(testState.canvasStore.openTileInTab).mockClear();
   vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
@@ -912,6 +941,50 @@ describe("useEpicRouteSynchronization", () => {
       "group-1",
       "removed-chat",
     );
+  });
+
+  // chat-sync-v2 ticket 36: a chat with no local record but still known to
+  // `epic.listCloudChats` must NOT be reaped - a leased identity that never
+  // adopted this chat's rows, not a genuine deletion.
+  it("does not close a record-less chat tile that is still cloud-known", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudChatIds = new Set(["cloud-known-chat"]);
+    const cloudKnownChat: EpicCanvasTileRef = {
+      id: "cloud-known-chat",
+      instanceId: "inst-cloud-known-chat",
+      type: "chat",
+      name: "Cloud-known chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [cloudKnownChat.instanceId],
+      activeTabId: cloudKnownChat.instanceId,
+      previewTabId: null,
+      activationHistory: [cloudKnownChat.instanceId],
+    };
+    testState.canvasTiles = { [cloudKnownChat.instanceId]: cloudKnownChat };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps editor focus when a canvas mutation re-runs an already-applied nested focus target", async () => {

@@ -72,6 +72,9 @@ interface TestState {
   /** Per-chat `fatalClose.code` the `useExistingChatSessionFatalClose` mock
    * answers; unlisted chat ids answer `null` (no fatal close observed). */
   readonly fatalCloseCodeByChatId: Map<string, string>;
+  /** Chat ids the `useCloudChatList` mock answers as present
+   * (chat-sync-v2 ticket 36's same-host cloud-known exemption). */
+  readonly cloudKnownChatIds: Set<string>;
 }
 
 const testState = vi.hoisted((): TestState => ({
@@ -85,6 +88,7 @@ const testState = vi.hoisted((): TestState => ({
   unreachableHostIds: new Set(),
   activeHostId: null,
   fatalCloseCodeByChatId: new Map(),
+  cloudKnownChatIds: new Set(),
 }));
 
 vi.mock(
@@ -179,6 +183,29 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => testState.activeHostId,
+}));
+
+// ticket 36's same-host cloud-known exemption reads these two - stubbed at
+// the same hook boundary as the pair above, for the same reason
+// (provider-less suite).
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => null,
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatList: () => ({
+    data:
+      testState.cloudKnownChatIds.size === 0
+        ? undefined
+        : {
+            chats: [...testState.cloudKnownChatIds].map((chatId) => ({
+              identity: { taskId: "epic-1", chatId, ownerUserId: "user-1" },
+            })),
+          },
+    isError: false,
+    isPending: false,
+    isFetching: false,
+  }),
 }));
 
 // tab-group-view imports ChatDeadTileBannerContainer straight from chat-tile,
@@ -1183,6 +1210,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     testState.missingArtifactIds.clear();
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
+    testState.cloudKnownChatIds.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1360,6 +1388,7 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
     testState.missingArtifactIds.clear();
     testState.unreachableHostIds.clear();
     testState.fatalCloseCodeByChatId.clear();
+    testState.cloudKnownChatIds.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1448,6 +1477,128 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
     });
 
     testState.fatalCloseCodeByChatId.delete(CHAT.id);
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+});
+
+// chat-sync-v2 ticket 36: a SAME-host chat (the active host IS the chat's
+// bound host) with no local record but still cloud-known - a leased
+// identity that never adopted this chat's rows. `chat-tile.tsx`'s own
+// `enabled` gate never attempts `chat.subscribe` for this shape (no local
+// record, not cross-host), so ticket 35's `fatalClose`-driven arm never
+// fires here - this is a genuinely separate exemption, driven by
+// `useCloudChatList` instead.
+describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (ticket 36)", () => {
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.cloudKnownChatIds.clear();
+    testState.activeHostId = null;
+    testState.stableTileSurfaceHostEnabled = false;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
+
+  it("substitutes for a same-host chat with no local record that is still cloud-known", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    const banner = container.querySelector(
+      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    expect(banner?.getAttribute("data-reason")).toBe("chat-not-visible");
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("does NOT substitute, and does not render published-chat's DeletedArtifactBody either, when the same-host chat has no local record and is NOT cloud-known", async () => {
+    // Neither reap-exempted (not cloud-known) nor live (no local record) -
+    // this is what a stale persisted tab reduces to once nothing anywhere
+    // attests to the chat. `computeIsRemoteDeleted` renders
+    // `DeletedArtifactBody`, not a silent no-op and not the copy-ladder.
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="deleted-node-body"]'),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+
+  it("does not substitute when the same-host chat still HAS a local record, even if also cloud-known", async () => {
+    // liveArtifact !== null here (CHAT.id not in missingArtifactIds) - the
+    // live tile renders normally, exactly today's behavior. Cloud-known
+    // alone is never sufficient; it only matters once there is no local
+    // record to explain the tile with.
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+
+  it("flips to the live surface once a local record appears (e.g. this identity adopts the chat)", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+
+    testState.missingArtifactIds.delete(CHAT.id);
     rerender(groupView([CHAT], CHAT.instanceId, true));
 
     await waitFor(() => {
