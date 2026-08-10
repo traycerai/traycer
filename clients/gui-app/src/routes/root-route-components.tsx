@@ -20,6 +20,7 @@ import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { isProductIntroDisabled } from "@/lib/thanos-flags";
 
 export function RootComponent() {
   const authStatus = useAuthStore((state) => state.status);
@@ -29,9 +30,12 @@ export function RootComponent() {
   const isOnboardingRoute = useRouterState({
     select: (state) => state.location.pathname === "/onboarding",
   });
-  // A signed-in user who hasn't finished onboarding sees the tour on any route.
+  // Thanos Traycer: no first-run product tour. Replay via Settings still works
+  // when the user navigates to /onboarding?replay=true (if exposed).
   const showOnboarding =
-    authStatus === "signed-in" && onboardingCompletedAt === null;
+    !isProductIntroDisabled() &&
+    authStatus === "signed-in" &&
+    onboardingCompletedAt === null;
   // Sign-in and the tour render bare, without the app shell.
   const isStandalone =
     authStatus !== "signed-in" || showOnboarding || isOnboardingRoute;

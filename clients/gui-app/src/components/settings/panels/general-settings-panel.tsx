@@ -30,6 +30,7 @@ import {
 import { startMigrationRun } from "@/components/migration/migration-run-handle";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { isProductIntroDisabled } from "@/lib/thanos-flags";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import { modLabel } from "@/lib/keybindings/platform";
 import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
@@ -258,27 +259,29 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
-          <SettingsRow
-            label="Product tour"
-            description="Replay the first-launch onboarding tour."
-            control={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                data-testid="settings-replay-onboarding"
-                onClick={() => {
-                  restartOnboarding();
-                  void navigate({
-                    to: "/onboarding",
-                    search: { replay: true },
-                  });
-                }}
-              >
-                Replay tour
-              </Button>
-            }
-          />
+          {isProductIntroDisabled() ? null : (
+            <SettingsRow
+              label="Product tour"
+              description="Replay the first-launch onboarding tour."
+              control={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="settings-replay-onboarding"
+                  onClick={() => {
+                    restartOnboarding();
+                    void navigate({
+                      to: "/onboarding",
+                      search: { replay: true },
+                    });
+                  }}
+                >
+                  Replay tour
+                </Button>
+              }
+            />
+          )}
           <SettingsRow
             label="Data migration"
             description={

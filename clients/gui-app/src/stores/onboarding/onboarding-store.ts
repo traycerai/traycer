@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
+import { isProductIntroDisabled } from "@/lib/thanos-flags";
 
 const LAST_STEP = ONBOARDING_ACTS.length - 1;
 const clampStep = (step: number): number =>
@@ -11,8 +12,10 @@ const clampStep = (step: number): number =>
  * First-launch onboarding state, persisted locally so the tour runs once per
  * machine. `completedAt` is set when the tour is finished or skipped; `step`
  * is intentionally session-local so a closed or replayed tour starts from the
- * first act instead of resuming from the last viewed page. The store owns step
- * movement and bounds - callers just invoke the actions.
+ * first act instead of resuming from the last viewed page.
+ *
+ * Thanos Traycer: product intro is disabled outside tests — start/hydrate as
+ * completed so the cinematic tour never blocks the app.
  */
 interface OnboardingState {
   readonly completedAt: number | null;
@@ -47,10 +50,20 @@ function persistedCompletedAt(persistedState: unknown): number | null {
   return typeof completedAt === "number" ? completedAt : null;
 }
 
+function initialCompletedAt(): number | null {
+  return isProductIntroDisabled() ? 1 : null;
+}
+
+function resolveCompletedAt(persistedState: unknown): number | null {
+  const fromDisk = persistedCompletedAt(persistedState);
+  if (fromDisk !== null) return fromDisk;
+  return initialCompletedAt();
+}
+
 export const useOnboardingStore = create<OnboardingState>()(
   persist(
     (set, get) => ({
-      completedAt: null,
+      completedAt: initialCompletedAt(),
       step: 0,
       advance: () => {
         const step = clampStep(get().step);
@@ -70,7 +83,7 @@ export const useOnboardingStore = create<OnboardingState>()(
       storage: createJSONStorage(() => localStorage),
       merge: (persistedState, currentState) => ({
         ...currentState,
-        completedAt: persistedCompletedAt(persistedState),
+        completedAt: resolveCompletedAt(persistedState),
         step: 0,
       }),
       partialize: (state) => ({
