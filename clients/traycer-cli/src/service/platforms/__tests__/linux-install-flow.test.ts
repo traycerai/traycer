@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -182,6 +182,38 @@ describe("linux service install flow", () => {
     ]);
     const unit = await readFile(unitFile(), "utf8");
     expect(unit).toContain(`SyslogIdentifier=${label.id}`);
+  });
+
+  it("replaces an existing unit with the OOM containment policy before reloading systemd", async () => {
+    await writeFile(
+      unitFile(),
+      "[Unit]\nDescription=stale-unit-fixture\n",
+      "utf8",
+    );
+    const calls: RecordedCall[] = [];
+    const unitsSeenAtReload: string[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "daemon-reload") {
+        unitsSeenAtReload.push(await readFile(unitFile(), "utf8"));
+      }
+      return ok();
+    };
+
+    await installWith(runner);
+
+    expect(calls.map(verbOf)).toEqual([
+      "show-environment",
+      "daemon-reload",
+      "enable",
+      "loginctl:enable-linger",
+    ]);
+    expect(unitsSeenAtReload).toHaveLength(1);
+    expect(unitsSeenAtReload[0]).not.toContain("stale-unit-fixture");
+    expect(unitsSeenAtReload[0]).toContain("\nOOMPolicy=continue\n");
+    const unit = await readFile(unitFile(), "utf8");
+    expect(unit).not.toContain("stale-unit-fixture");
+    expect(unit).toContain("\nOOMPolicy=continue\n");
   });
 
   it("uninstall clears a failed unit entry after removing the file", async () => {

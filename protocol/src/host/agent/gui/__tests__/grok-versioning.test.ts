@@ -132,6 +132,11 @@ function agentSummary(id: string, harnessId: string | null) {
     active: false,
     folderPaths: [],
     isWorktree: false,
+    runConfig: {
+      model: { kind: "concrete", slug: "gpt-5.6-sol" },
+      reasoningEffort: "high",
+      fastMode: true,
+    },
   };
 }
 
@@ -736,6 +741,9 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       "a-omp",
       "a-null",
     ]);
+    expect(toV6.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV60.parse(toV6.value)).not.toThrow();
 
     const toV5 = agentListDowngradeV7ToV5.downgradeResponse(v7Response);
@@ -749,6 +757,9 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       "a-hermes",
       "a-null",
     ]);
+    expect(toV5.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV50.parse(toV5.value)).not.toThrow();
 
     const toV4 = agentListDowngradeV7ToV4.downgradeResponse(v7Response);
@@ -761,6 +772,9 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       "a-pi",
       "a-null",
     ]);
+    expect(toV4.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV40.parse(toV4.value)).not.toThrow();
 
     const toV3 = agentListDowngradeV7ToV3.downgradeResponse(v7Response);
@@ -771,6 +785,9 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       "a-amp",
       "a-null",
     ]);
+    expect(toV3.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV30.parse(toV3.value)).not.toThrow();
 
     const toV2 = agentListDowngradeV7ToV2.downgradeResponse(v7Response);
@@ -780,6 +797,9 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       "a-claude",
       "a-null",
     ]);
+    expect(toV2.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV20.parse(toV2.value)).not.toThrow();
 
     const toV1 = agentListDowngradeV7ToV1.downgradeResponse(v7Response);
@@ -789,6 +809,9 @@ describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
       "a-claude",
       "a-null",
     ]);
+    expect(toV1.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
