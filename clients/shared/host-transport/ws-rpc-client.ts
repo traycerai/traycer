@@ -1,5 +1,4 @@
 import type {
-  MethodDegradeDeclaration,
   MethodVersionRegistry,
   SchemaVersion,
   SplitConnectionManifest,

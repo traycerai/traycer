@@ -489,6 +489,7 @@ export class RemoteSession<
       // legacy persist-on-next-send). A generic `RPC_ERROR` would surface as
       // a real failure instead.
       return this.executeUnavailableMethodDegrade(
+        connection,
         method,
         methodRegistry,
         clientCanonical,
@@ -498,6 +499,35 @@ export class RemoteSession<
       );
     }
 
+    return this.dispatchNegotiatedUnary(
+      connection,
+      method,
+      methodRegistry,
+      clientCanonical,
+      hostCanonical,
+      params,
+      requestId,
+    ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
+  /**
+   * Sends an ALREADY-negotiated method at EXPLICIT versions.
+   *
+   * The versions are parameters rather than re-derived from the manifests
+   * because a degrade fallback targets the version its declaration names
+   * (`degrade.to`), which is not necessarily the target method's canonical
+   * version - re-deriving would validate the already-adapted request, and
+   * transform the response, against the wrong contract.
+   */
+  private dispatchNegotiatedUnary(
+    connection: ActiveConnection,
+    method: string,
+    methodRegistry: MethodVersionRegistry,
+    clientCanonical: SchemaVersion,
+    hostCanonical: SchemaVersion,
+    params: unknown,
+    requestId: string,
+  ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
       prepared = prepareRequestPayload(
@@ -513,8 +543,8 @@ export class RemoteSession<
     }
 
     const streamId = this.allocateStreamId();
-    return new Promise<ResponseOfMethod<RpcRegistry, Method>>(
-      (resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
+      {
         const timer = setTimeout(() => {
           this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
         }, UNARY_RESPONSE_TIMEOUT_MS);
@@ -524,8 +554,7 @@ export class RemoteSession<
           clientCanonical,
           hostCanonical,
           methodRegistry,
-          resolve: (result) =>
-            resolve(result as ResponseOfMethod<RpcRegistry, Method>),
+          resolve,
           reject,
           timer,
         });
@@ -547,8 +576,8 @@ export class RemoteSession<
           this.clearPendingUnary(streamId);
           reject(asHostRpcError(cause, requestId, method));
         }
-      },
-    );
+      }
+    });
   }
 
   /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
@@ -1009,6 +1038,7 @@ export class RemoteSession<
   private executeUnavailableMethodDegrade<
     Method extends keyof RpcRegistry & string,
   >(
+    connection: ActiveConnection,
     method: Method,
     methodRegistry: MethodVersionRegistry,
     clientCanonical: SchemaVersion | undefined,
@@ -1025,14 +1055,21 @@ export class RemoteSession<
       hostManifest: hostRpcMerged,
       params,
       requestId,
-      // The fallback target is an ordinary negotiated method, so it re-enters
-      // the normal unary path (single-flight, scheduler, timeout) rather than
-      // a bespoke send - it cannot recurse, because a floor method the host
-      // advertises never lands back in this degrade.
+      // Dispatched at the versions the DECLARATION names, not the target's
+      // canonical pair: `degrade.to` may anchor an older version, and the
+      // request handed over here is already adapted to it. Re-entering
+      // `sendUnary` would re-derive canonical versions and validate the
+      // adapted payload - and transform the response - against the wrong
+      // contract. Same anchoring the local transport's fallback tests pin.
       execute: (input) =>
-        this.sendUnary(
-          input.method as Method,
-          input.params as RequestOfMethod<RpcRegistry, Method>,
+        this.dispatchNegotiatedUnary(
+          connection,
+          input.method,
+          input.methodRegistry,
+          input.clientCanonical,
+          input.hostCanonical,
+          input.params,
+          requestId,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }

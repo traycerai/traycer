@@ -156,6 +156,17 @@ export interface SessionOpenPayload {
  * - `stream` stays a single merged map: stream methods are checked
  *   per-subscription at open (a missing method fails that one stream, not
  *   the session), so a session-level floor for them adds nothing.
+ *
+ * `optionalRpc` is deliberately REQUIRED, not `.default({})`. Tolerating its
+ * absence would only move the failure: a pre-split peer sends its floor and
+ * optional methods MERGED in `rpc`, so the floor check would then compare a
+ * merged set against a floor set and fatal the session anyway - with a
+ * confusing compat error instead of an honest "malformed frame". The mux is
+ * unreleased, so no such peer exists; when it ships, a future frame-shape
+ * change gets the same treatment this split did - evolve the shape while it
+ * is still pre-release, or version the frame. See
+ * `remote-session.test.ts` > "RemoteSession openAck without optionalRpc",
+ * which pins the rejection.
  */
 export interface SessionManifests {
   readonly rpc: ConnectionManifest;
