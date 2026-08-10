@@ -924,7 +924,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       the same package). Monochrome variants, so rows tint with the surrounding
       text; sizing follows the row (`size-4`).
       **Coverage is the popular head, and the tail falls back on purpose.** The
-      fallback is a NEUTRAL glyph, never a real brand's mark: upstream fetches
+      fallback is **sparkles** — the mark users already read as "provider with
+      no logo" in OpenCode, so the visual language carries over. What does NOT
+      carry over is the reason it is broken there: upstream fetches
       `models.dev/logos/{id}.svg` at build time, that endpoint answers 200 for
       any id with a generic sparkles body, and the result is that 14 of their 98
       sprite entries are the fallback wearing a named provider's identity — and
@@ -932,11 +934,19 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       renders as that company. A user-declared custom provider gets the same
       neutral mark, for the same reason: it has no brand, and borrowing one puts
       a real company's logo on someone's private gateway.
-      A missing entry here cannot render blank the way upstream's `llmgateway`
-      does (declared in the generated name list, absent from the generated
-      sprite, so the guard passes and the `<use>` resolves to nothing) — the map
-      holds imported components, so a bad one is a compile error rather than an
-      invisible icon.
+      **A DECLARED row never gets a brand mark, whatever its id.** The host's
+      `isConfigDeclaredCustom` judges a block by its `npm` and model map, never
+      its key, so a hand-written `provider.openai` block pointing at a private
+      endpoint is a legal custom declaration under a mapped id — and painting
+      OpenAI's logo on it is the same impersonation the neutral fallback exists
+      to prevent, arriving through the one door the id cannot close. The mark
+      takes `configDeclaredCustom` alongside the id for exactly that case.
+      On the drift bug, precisely: a key MISSING from the map falls back (that
+      is correct, and the expected fate of most of the catalog), while a
+      reference to a component that does not exist fails to compile. Neither is
+      a coverage guarantee — nothing here promises an id has a mark — but
+      between them there is no state where a mark is claimed and nothing
+      renders, which is what upstream's `llmgateway` does.
     - **A post-mutation refetch SAYS it is refreshing.** The host rotates its
       managed server on every write, so the next list pays a cold
       `opencode serve` boot — **measured ~3.7s, against ~0.24s warm**. For that

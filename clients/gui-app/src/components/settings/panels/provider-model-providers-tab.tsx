@@ -986,6 +986,7 @@ function ModelProviderRow(props: {
            * mark the same way an id we have no logo for does. */}
           <ModelProviderMark
             id={entry.id}
+            configDeclaredCustom={entry.configDeclaredCustom}
             aria-hidden
             className="size-4 shrink-0 text-muted-foreground"
           />

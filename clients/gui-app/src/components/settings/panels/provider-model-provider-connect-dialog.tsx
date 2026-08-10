@@ -607,6 +607,7 @@ export function ProviderModelProviderConnectDialog(props: {
              * name the same thing the same way. */}
             <ModelProviderMark
               id={entry.id}
+              configDeclaredCustom={entry.configDeclaredCustom}
               aria-hidden
               className="size-4 shrink-0"
             />

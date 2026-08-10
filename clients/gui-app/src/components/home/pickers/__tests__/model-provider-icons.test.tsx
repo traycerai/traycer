@@ -8,9 +8,11 @@ import { ModelProviderMark } from "@/components/home/pickers/model-provider-icon
  * passed the "do we have it" check and then rendered nothing at all.
  */
 
-/** The mark actually chosen for an id: the id itself, or `"generic"`. */
-function markFor(id: string): string {
-  const { container, unmount } = render(<ModelProviderMark id={id} />);
+/** The mark actually chosen for a row: the id itself, or `"generic"`. */
+function markFor(id: string, configDeclaredCustom: boolean): string {
+  const { container, unmount } = render(
+    <ModelProviderMark id={id} configDeclaredCustom={configDeclaredCustom} />,
+  );
   const svg = container.querySelector("svg");
   if (svg === null) throw new Error(`no svg rendered for ${id}`);
   const chosen = svg.getAttribute("data-model-provider-icon");
@@ -34,7 +36,7 @@ describe("model provider icons", () => {
       "github-copilot",
       "huggingface",
     ]) {
-      expect(markFor(id)).toBe(id);
+      expect(markFor(id, false)).toBe(id);
     }
   });
 
@@ -47,28 +49,48 @@ describe("model provider icons", () => {
       "moonshotai-cn",
       "cloudflare-ai-gateway",
     ]) {
-      expect(markFor(id)).toBe(id);
+      expect(markFor(id, false)).toBe(id);
     }
   });
 
   it("falls back for an unknown id instead of rendering nothing", () => {
     // Upstream's failure was an invisible icon, which reads as a broken row
     // rather than an unknown provider.
-    expect(markFor("zzz-not-real")).toBe("generic");
+    expect(markFor("zzz-not-real", false)).toBe("generic");
   });
 
   it("gives a user-declared custom provider the generic mark", () => {
     // It has no brand, and borrowing one would put a real company's logo on
     // someone's private gateway.
-    expect(markFor("my-gateway")).toBe("generic");
-    expect(markFor("wafer.ai")).toBe("generic");
+    expect(markFor("my-gateway", false)).toBe("generic");
+    expect(markFor("wafer.ai", false)).toBe("generic");
   });
 
-  it("never hands back a real brand as the fallback", () => {
-    // The whole point of choosing our own: upstream's fallback IS Synthetic's
-    // logo, so 14 named providers render as that company's mark.
+  it("refuses a brand mark to a DECLARED row, even under a mapped id", () => {
+    // `isConfigDeclaredCustom` judges a block by its `npm` and model map, never
+    // its key - so a hand-written `provider.openai` block pointing at a private
+    // endpoint is a legal custom declaration under a mapped id. Painting
+    // OpenAI's mark on it is the impersonation the neutral fallback exists to
+    // prevent, arriving through the one door the id cannot close.
+    expect(markFor("openai", true)).toBe("generic");
+    expect(markFor("anthropic", true)).toBe("generic");
+    // And an ordinary row under the same id keeps its brand.
+    expect(markFor("openai", false)).toBe("openai");
+  });
+
+  it("never MAPS a provider onto the fallback glyph", () => {
+    // The fallback is sparkles, matching what users already read as "no logo"
+    // in OpenCode - and the invariant that keeps it honest is that no real
+    // provider is mapped to it. Upstream's sparkles IS Synthetic's logo, which
+    // is why their unknown-provider case and that company's row are the same
+    // picture; here these ids simply have no mark, and say so.
     for (const id of ["synthetic", "chutes", "requesty", "wandb"]) {
-      expect(markFor(id)).toBe("generic");
+      expect(markFor(id, false)).toBe("generic");
+    }
+    // A mapped id must never answer "generic" - that would mean a brand was
+    // pointed at the fallback glyph.
+    for (const id of ["anthropic", "openai", "google", "xai"]) {
+      expect(markFor(id, false)).not.toBe("generic");
     }
   });
 });
