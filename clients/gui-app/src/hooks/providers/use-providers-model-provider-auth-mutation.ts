@@ -11,6 +11,18 @@ import { invalidateAfterModelProviderMutation } from "@/hooks/providers/model-pr
 import { providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
+/**
+ * The actions that write the provider's CONFIG FILE rather than its auth store.
+ *
+ * They settle differently from the rest: the host commits the block and rotates
+ * before it reports the credential step, so even a failed key leaves the
+ * catalog changed - which makes "invalidate only on `done`" wrong for exactly
+ * these two.
+ */
+function isCustomProviderWrite(action: ModelProviderAuthAction): boolean {
+  return action.action === "createCustom" || action.action === "updateCustom";
+}
+
 export interface ModelProviderAuthVariables {
   readonly providerId: ProviderId;
   readonly action: ModelProviderAuthAction;
@@ -56,12 +68,27 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
       // Captured here, not read in `onSuccess`: a host swap mid-flight would
       // otherwise invalidate the NEW host's caches with the old host's result.
       onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (data, _variables, context) => {
-        if (data.result.kind !== "done") return;
-        invalidateAfterModelProviderMutation({
-          queryClient,
-          hostId: context.hostId,
-        });
+      onSuccess: (data, variables, context) => {
+        // A CONFIG WRITE retires the caches whatever arm it came back on. The
+        // host commits the config block and completes its rotation before it
+        // reports the credential step, so a `createCustom` whose key failed has
+        // still changed what the next list will say - and reporting the failure
+        // while leaving the row showing its old state is the staleness this
+        // surface has already been bitten by once.
+        //
+        // Everything else keeps the `done`-only rule, and one arm is the reason
+        // it exists: a `pending` OAuth poll has changed nothing yet, and
+        // invalidating on it would re-list - and so re-lease a managed server -
+        // on every tick.
+        if (
+          isCustomProviderWrite(variables.action) ||
+          data.result.kind === "done"
+        ) {
+          invalidateAfterModelProviderMutation({
+            queryClient,
+            hostId: context.hostId,
+          });
+        }
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't reach the host for that sign-in."),

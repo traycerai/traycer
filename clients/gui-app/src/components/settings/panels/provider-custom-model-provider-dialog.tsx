@@ -241,10 +241,10 @@ export function ProviderCustomModelProviderDialog(props: {
               hint={
                 editing
                   ? // The stored secret is never read back, so an edit cannot
-                    // show it. Saying "leave empty to keep it" is the whole
-                    // difference between an empty field that changes nothing
-                    // and one the user thinks just cleared their credential.
-                    "Optional. Leave empty to keep the saved key, or manage auth via headers."
+                    // show it - and neither can one field show several env
+                    // fallbacks. Leaving it alone keeps whatever is there;
+                    // typing replaces it.
+                    "Optional. Leave empty to keep the saved key or env fallbacks."
                   : "Optional. Leave empty if you manage auth via headers."
               }
               error={null}
@@ -260,6 +260,9 @@ export function ProviderCustomModelProviderDialog(props: {
                   setDraft((current) => ({
                     ...current,
                     apiKey: event.target.value,
+                    // From here the field REPLACES whatever the row arrived
+                    // with; until now it was only proposing to.
+                    apiKeyEdited: true,
                   }));
                 }}
               />

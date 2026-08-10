@@ -853,13 +853,18 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       ("does Traycer hold a credential?") than `canDisconnect` ("may it be
       removed from here?"); a later host may answer them differently, and
       reading either for the other is how a button appears that the host will
-      refuse. Today the host answers both `source ∈ {api, custom}` — the two
-      that are auth-store-backed in practice, `api` for a key written through
-      `auth.set` and `custom` for a provider whose loader is fed by that same
-      store (`xai` signs in through OAuth and reports `custom`). `env` and
-      `config` stay read-only unless the row is a DECLARED custom provider (see
-      below): neither is ours to remove, and `auth.remove` cannot touch a config
-      block anyway. The control is a **text button reading "Disconnect"** —
+      refuse. The host answers `source ∈ {api, custom, config}`. `api` and
+      `custom` are auth-store removals (`api` for a key written through
+      `auth.set`, `custom` for a provider whose loader is fed by that same
+      store — `xai` signs in through OAuth and reports `custom`). **`config` is
+      disconnectable too, and it is a CONFIG WRITE**: a config row has nothing
+      for `auth.remove` to take, so the host suppresses it through
+      `disabled_providers` — the same mechanism a declared custom uses, and for
+      the same reason. That is true whether or not the row is a declared
+      custom; an earlier version of this doc said config rows were read-only
+      unless declared, which stopped being true when the host closed the
+      key-only-config hole. **`env` stays read-only**: it is not ours to remove
+      and no file write can suppress it. The control is a **text button reading "Disconnect"** —
       upstream's own word — with hover-only destructive tone (the pattern
       `provider-cli-candidates-section` and `env-override-editor` already use:
       quiet among neutral rows, red under the pointer). It was an unplug ICON

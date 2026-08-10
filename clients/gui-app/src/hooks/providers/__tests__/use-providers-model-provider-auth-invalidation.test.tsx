@@ -113,6 +113,54 @@ describe("model provider auth invalidation", () => {
     expect(client.getQueryState(liveKey)?.isInvalidated).toBe(true);
   });
 
+  it("retires the caches for a PARTIALLY failed config write", async () => {
+    // The host commits the config block and rotates before it reports the
+    // credential step, so a `createCustom` whose key failed has still changed
+    // what the next list says. Reporting the failure while leaving the row on
+    // its old state is the staleness this surface was already bitten by once.
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    hostMocks.request.mockResolvedValue({
+      result: {
+        kind: "error",
+        code: "provider_auth_failed",
+        detail: "key rejected",
+      },
+    });
+
+    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
+      wrapper: wrapper(client),
+    });
+    result.current.mutate({
+      providerId: "opencode",
+      action: {
+        action: "createCustom",
+        modelProviderId: "myprovider",
+        name: "My AI Provider",
+        baseUrl: "https://api.myprovider.com/v1",
+        models: [{ id: "a", name: "A" }],
+        headers: [],
+        key: "sk-live-123",
+        env: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+    const keys = invalidate.mock.calls.map((call) =>
+      JSON.stringify(call[0]?.queryKey),
+    );
+    expect(keys).toContain(
+      JSON.stringify(modelProvidersQueryKeys.listScope("host-1")),
+    );
+  });
+
   it("does NOT retire anything for a result that changed nothing", async () => {
     // A pending OAuth attempt invalidating on every poll tick would re-list -
     // and so re-lease a managed server - once a second.

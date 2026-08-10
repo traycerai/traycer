@@ -1147,6 +1147,64 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     ).toBe(true);
   });
 
+  it("closes a PLAIN Config row's Disconnect during a config write", () => {
+    // T3 widened the host: a config row whose key lives in
+    // `provider.x.options.apiKey` has nothing for `auth.remove` to take, so its
+    // disconnect is suppressed through `disabled_providers` - a config write,
+    // even though the row is not a declared custom.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "gateway-a",
+            name: "Gateway A",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: {
+              baseUrl: "https://a.example.test/v1",
+              models: [{ id: "a", name: "A" }],
+              headers: [],
+              env: [],
+            },
+          }),
+          entry({
+            id: "groq",
+            name: "Groq",
+            connected: true,
+            source: "config",
+            canDisconnect: true,
+          }),
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: "api",
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: {
+        actions: ["connect", "disconnect", "createCustom", "updateCustom"],
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable Gateway A" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Disconnect Groq" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    // And the negative still holds: an auth-store row contends with nothing.
+    expect(
+      screen
+        .getByRole("button", { name: "Disconnect OpenAI" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   it("drops a completion that is no longer the current write", () => {
     renderTab({
       result: {

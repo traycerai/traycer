@@ -40,6 +40,18 @@ export type CustomProviderDraft = {
   readonly baseUrl: string;
   /** Optional. Also accepts upstream's `{env:VAR}` syntax - see below. */
   readonly apiKey: string;
+  /**
+   * Whether the key field has been EDITED in this session.
+   *
+   * Load-bearing on an edit. The field can hold at most one `{env:VAR}`
+   * reference, but a config block may name several fallbacks - and rendering
+   * only the first meant saving an untouched form silently dropped the rest.
+   * While this is false the original array below is sent back verbatim; the
+   * field is a proposal to REPLACE it, not a lossy mirror of it.
+   */
+  readonly apiKeyEdited: boolean;
+  /** The env fallbacks this row arrived with. Empty when declaring. */
+  readonly originalEnv: readonly string[];
   readonly models: readonly CustomProviderModelRow[];
   readonly headers: readonly CustomProviderHeaderRow[];
 };
@@ -113,6 +125,8 @@ export function emptyCustomProviderDraft(): CustomProviderDraft {
     name: "",
     baseUrl: "",
     apiKey: "",
+    apiKeyEdited: false,
+    originalEnv: [],
     models: [emptyCustomProviderModelRow()],
     headers: [emptyCustomProviderHeaderRow()],
   };
@@ -128,9 +142,15 @@ export function customProviderDraftFrom(
     baseUrl: values.baseUrl,
     // A STORED secret is never read back - credentials are write-only on this
     // surface - so the field starts empty and leaves the stored key alone
-    // unless something is typed. An env REFERENCE is not a secret and is
-    // restored verbatim, or the user would silently lose it on the next save.
-    apiKey: values.env.length === 0 ? "" : `{env:${values.env[0]}}`,
+    // unless something is typed.
+    //
+    // A SINGLE env reference is shown, because it is not a secret and the field
+    // can represent it exactly. SEVERAL cannot be shown in one field at all, so
+    // the field stays empty and `originalEnv` carries them - showing `env[0]`
+    // alone is what dropped `env[1]` on save.
+    apiKey: values.env.length === 1 ? `{env:${values.env[0]}}` : "",
+    apiKeyEdited: false,
+    originalEnv: values.env,
     models:
       values.models.length === 0
         ? [emptyCustomProviderModelRow()]
@@ -360,7 +380,11 @@ export function customProviderValues(
   if (hasCustomProviderDraftError(validateCustomProviderDraft(draft, scope))) {
     return null;
   }
-  const credential = customProviderKeyOf(draft.apiKey);
+  // Untouched means UNCHANGED: send back exactly the fallbacks this row
+  // arrived with, however many there were, and leave any stored secret alone.
+  const credential = draft.apiKeyEdited
+    ? customProviderKeyOf(draft.apiKey)
+    : { key: null, env: draft.originalEnv };
   return {
     modelProviderId: draft.providerId.trim(),
     name: draft.name.trim(),
@@ -437,6 +461,8 @@ export function canReenableCustomProvider(
         name: values.name,
         baseUrl: values.baseUrl,
         apiKey: "",
+        apiKeyEdited: false,
+        originalEnv: values.env,
         models:
           values.models.length === 0
             ? [emptyCustomProviderModelRow()]

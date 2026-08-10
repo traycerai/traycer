@@ -214,7 +214,10 @@ describe("values for the wire", () => {
     expect(
       customProviderValues(
         draft({
+          // A typed key: the field only replaces what the row arrived with once
+          // it has been edited.
           apiKey: "sk-live-123",
+          apiKeyEdited: true,
           models: [{ row: "m1", id: " a ", name: " A " }],
           headers: [
             { row: "h1", key: " X-Key ", value: " v " },
@@ -261,11 +264,42 @@ describe("editing an existing declaration", () => {
     expect(customProviderDraftFrom(values).apiKey).toBe("");
   });
 
-  it("restores an env REFERENCE verbatim, because it is not a secret", () => {
-    // Blanking it would silently drop the reference on the next save.
+  it("restores a SINGLE env reference verbatim, because the field can hold it", () => {
     expect(
       customProviderDraftFrom({ ...values, env: ["OPENAI_KEY"] }).apiKey,
     ).toBe("{env:OPENAI_KEY}");
+  });
+
+  it("keeps EVERY env fallback across an untouched Edit", () => {
+    // One field cannot show two references, and rendering `env[0]` alone meant
+    // saving an untouched form silently dropped `env[1]`. Untouched means
+    // unchanged: the original array goes back exactly as it came.
+    const two = { ...values, env: ["KEY_A", "KEY_B"] };
+    const draft = customProviderDraftFrom(two);
+    expect(draft.apiKey).toBe("");
+    expect(
+      customProviderValues(draft, {
+        takenIds: [],
+        disabledIds: [],
+        existing: true,
+      }),
+    ).toMatchObject({ key: null, env: ["KEY_A", "KEY_B"] });
+  });
+
+  it("replaces the fallbacks once the field is edited", () => {
+    const two = { ...values, env: ["KEY_A", "KEY_B"] };
+    const edited = {
+      ...customProviderDraftFrom(two),
+      apiKey: "{env:KEY_C}",
+      apiKeyEdited: true,
+    };
+    expect(
+      customProviderValues(edited, {
+        takenIds: [],
+        disabledIds: [],
+        existing: true,
+      }),
+    ).toMatchObject({ key: null, env: ["KEY_C"] });
   });
 
   it("prefills rows from the row's own values", () => {

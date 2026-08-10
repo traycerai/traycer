@@ -175,6 +175,24 @@ function busyRowIds(args: {
   return ids;
 }
 
+/**
+ * Does disconnecting THIS row write the provider's config file?
+ *
+ * `source === "config"` is the whole rule, and it is deliberately not
+ * `configDeclaredCustom`. A plain config row - one whose key lives in
+ * `provider.x.options.apiKey` rather than the auth store - has nothing for
+ * `auth.remove` to remove, so the host suppresses it through
+ * `disabled_providers` exactly as it does for a declared custom. Both edit one
+ * file; only one of them used to take the lock.
+ *
+ * `api` and `custom` rows stay OUT. Those are auth-store removals that touch no
+ * file, and serializing them against the form would be over-serializing two
+ * actions that never contend.
+ */
+function disconnectWritesConfig(entry: ModelProviderEntry): boolean {
+  return entry.source === "config";
+}
+
 /** The catalog a list result carries, sorted, or nothing at all. */
 function entriesOf(
   result: ModelProvidersListResult | undefined,
@@ -478,10 +496,9 @@ export function ProviderModelProvidersTab(props: {
     // credential - so it takes the same lock the form paths do. A plain
     // disconnect is `auth.remove` through the server and touches no file, so it
     // runs unlocked; locking it would serialize two actions that never contend.
-    const token = target.configDeclaredCustom
-      ? configWrite.claim(target.id)
-      : null;
-    if (target.configDeclaredCustom && token === null) return;
+    const writesConfig = disconnectWritesConfig(target);
+    const token = writesConfig ? configWrite.claim(target.id) : null;
+    if (writesConfig && token === null) return;
     setRowError(null);
     auth.mutate(
       {
@@ -984,11 +1001,12 @@ function ModelProviderRow(props: {
                 "text-muted-foreground",
                 "hover:bg-destructive/10 hover:text-destructive",
               )}
-              // A DECLARED row's Disconnect is a config write (it appends to
-              // `disabled_providers`), so it closes with the rest while one is
-              // in flight. A plain row's Disconnect is `auth.remove` through the
-              // server and contends with nothing, so it stays live.
-              disabled={entry.configDeclaredCustom ? configBusy : props.busy}
+              // A CONFIG-sourced row's Disconnect is a config write (it appends
+              // to `disabled_providers`), so it closes with the rest while one
+              // is in flight - declared custom or not, since both reach the file
+              // the same way. An auth-store row's Disconnect contends with
+              // nothing and stays live.
+              disabled={disconnectWritesConfig(entry) ? configBusy : props.busy}
               onClick={props.onDisconnect}
               aria-label={`Disconnect ${entry.name}`}
             >

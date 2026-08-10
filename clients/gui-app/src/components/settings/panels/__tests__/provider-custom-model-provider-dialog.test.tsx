@@ -268,11 +268,13 @@ describe("custom model provider dialog", () => {
       true,
     );
     // The stored secret is never read back, so the field cannot show it - and
-    // the helper has to say that empty KEEPS it rather than clears it.
+    // the helper has to say that empty KEEPS whatever is there rather than
+    // clearing it. That covers env fallbacks too, which one field cannot show
+    // when there is more than one.
     expect(screen.getByLabelText("API key").getAttribute("value")).toBe("");
     expect(
       screen.getByText(
-        "Optional. Leave empty to keep the saved key, or manage auth via headers.",
+        "Optional. Leave empty to keep the saved key or env fallbacks.",
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
