@@ -6,10 +6,27 @@ import { activateTabIntent } from "@/lib/tab-navigation";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   __resetProfileLaunchLandingForTesting,
   ProfileLaunchLanding,
 } from "../profile-launch-landing";
+
+const mockNavigate = vi.fn(() => Promise.resolve());
+let mockPathname = "/";
+
+vi.mock("@tanstack/react-router", async (importActual) => {
+  const actual = await importActual<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useRouterState: (opts: {
+      readonly select: (state: {
+        readonly location: { readonly pathname: string };
+      }) => string;
+    }) => opts.select({ location: { pathname: mockPathname } }),
+  };
+});
 
 vi.mock("@/lib/tab-navigation", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/tab-navigation")>();
@@ -56,11 +73,22 @@ function resetStores(): void {
   useProjectProfilesStore.getState().resetForTests();
   useActiveProjectProfileStore.getState().resetForTests();
   useHistoryMembershipCacheStore.getState().resetForTests();
+  useTabsStore.setState({ stripOrder: [] });
+}
+
+function expectDraftRedirect(times = 1): void {
+  expect(mockNavigate).toHaveBeenCalledTimes(times);
+  expect(mockNavigate).toHaveBeenCalledWith({
+    to: "/draft/new",
+    replace: true,
+  });
 }
 
 describe("ProfileLaunchLanding", () => {
   beforeEach(() => {
     vi.mocked(activateTabIntent).mockClear();
+    mockNavigate.mockClear();
+    mockPathname = "/";
     __resetProfileLaunchLandingForTesting();
     resetStores();
     useProjectProfilesStore.getState().createProfile({
@@ -98,7 +126,8 @@ describe("ProfileLaunchLanding", () => {
     expect(call[1]).toMatchObject({ kind: "open-epic", epicId: "owned" });
     expect(call[2]).toEqual({ replace: true });
 
-    // A later cache update must NOT redirect again (consumed once).
+    // A later cache update must NOT redirect again (consumed once) and must
+    // NOT clobber the queued jump with the draft fallback (jump pending).
     useHistoryMembershipCacheStore.getState().setMembershipItems([
       historyItem({
         epicId: "owned-newer",
@@ -114,6 +143,7 @@ describe("ProfileLaunchLanding", () => {
       ).toBe(1);
     });
     expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it("waits for a cold membership cache, then redirects when it warms", async () => {
@@ -122,6 +152,8 @@ describe("ProfileLaunchLanding", () => {
 
     renderLanding();
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    // Cold cache: no draft fallback either — the pending jump must win.
+    expect(mockNavigate).not.toHaveBeenCalled();
 
     useHistoryMembershipCacheStore.getState().setMembershipItems([
       historyItem({
@@ -136,9 +168,10 @@ describe("ProfileLaunchLanding", () => {
     await waitFor(() => {
       expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
     });
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it("stays on the Start Page when no profile is active", async () => {
+  it("goes to a fresh draft when no profile is active and the strip is empty", async () => {
     useHistoryMembershipCacheStore.getState().setMembershipItems([
       historyItem({
         epicId: "owned",
@@ -152,14 +185,13 @@ describe("ProfileLaunchLanding", () => {
     renderLanding();
 
     await waitFor(() => {
-      expect(
-        useHistoryMembershipCacheStore.getState().itemsByEpicId.size,
-      ).toBe(1);
+      expect(mockNavigate).toHaveBeenCalled();
     });
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    expectDraftRedirect();
   });
 
-  it("stays on the Start Page when the active project owns no epic", async () => {
+  it("goes to a fresh draft when the active project owns no epic", async () => {
     const profile = useProjectProfilesStore.getState().profiles[0];
     useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
     useHistoryMembershipCacheStore.getState().setMembershipItems([
@@ -173,10 +205,37 @@ describe("ProfileLaunchLanding", () => {
     renderLanding();
 
     await waitFor(() => {
-      expect(
-        useHistoryMembershipCacheStore.getState().itemsByEpicId.size,
-      ).toBe(1);
+      expect(mockNavigate).toHaveBeenCalled();
     });
+    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    expectDraftRedirect();
+  });
+
+  it("does not draft-redirect while a live tab strip owns the surface", async () => {
+    useTabsStore.setState({
+      stripOrder: [{ kind: "epic", id: "live-epic" }],
+    });
+
+    renderLanding();
+
+    await waitFor(() => {
+      expect(useTabsStore.getState().stripOrder.length).toBe(1);
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+  });
+
+  it("never re-fires the draft redirect off the `/` pathname", async () => {
+    // A failed /draft/new resolution re-renders RootLandingPage (and this
+    // component) at /draft/new — the fallback must not loop.
+    mockPathname = "/draft/new";
+
+    renderLanding();
+
+    await waitFor(() => {
+      expect(mockPathname).toBe("/draft/new");
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
   });
 });
