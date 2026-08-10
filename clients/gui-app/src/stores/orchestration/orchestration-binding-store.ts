@@ -29,7 +29,7 @@ interface OrchestrationBindingStoreState {
 
 const DEFAULT_BINDING: OrchestrationBinding = {
   enabled: true,
-  orchestrationName: "dev-team-full",
+  orchestrationName: "auto",
   roleId: "orchestrator",
   modelGroup: null,
 };
