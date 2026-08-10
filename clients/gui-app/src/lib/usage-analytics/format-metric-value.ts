@@ -44,6 +44,24 @@ export function formatDayLabel(day: string): string {
   return `${monthLabel} ${String(Number(date))}`;
 }
 
+/**
+ * The window picker's companion label - "Aug 1 – Aug 10, 2026" for the days
+ * currently on the x-axis. Reads the year off the bucketed `YYYY-MM-DD`
+ * strings directly (same reasoning as {@link formatDayLabel}: never through
+ * `Date`, which would re-interpret the calendar date in the browser's local
+ * zone). `days` is assumed non-empty and oldest-first, matching
+ * `lastNCalendarDays`'s contract; an empty list renders nothing.
+ */
+export function formatDateRangeLabel(days: readonly string[]): string {
+  const first = days.at(0);
+  const last = days.at(-1);
+  if (first === undefined || last === undefined) return "";
+  const year = last.split("-").at(0) ?? "";
+  const from = formatDayLabel(first);
+  const to = formatDayLabel(last);
+  return year.length === 0 ? `${from} – ${to}` : `${from} – ${to}, ${year}`;
+}
+
 const NICE_STEPS = [1, 2, 5, 10] as const;
 
 /** Rounds up to a clean 1/2/5/10 step for y-axis ticks. */

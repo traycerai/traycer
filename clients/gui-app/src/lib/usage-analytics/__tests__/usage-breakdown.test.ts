@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildUsageBreakdownRows } from "@/lib/usage-analytics/usage-breakdown";
+import {
+  buildUsageBreakdownRows,
+  buildUsageDayBreakdownRows,
+} from "@/lib/usage-analytics/usage-breakdown";
 import type { UsageBucket } from "@/lib/usage-analytics/usage-chart-data";
 
 function bucket(overrides: Partial<UsageBucket>): UsageBucket {
@@ -67,5 +70,45 @@ describe("buildUsageBreakdownRows", () => {
 
   it("returns nothing for an empty window", () => {
     expect(buildUsageBreakdownRows([])).toEqual([]);
+  });
+});
+
+describe("buildUsageDayBreakdownRows", () => {
+  it("folds every harness and model on a day into one row", () => {
+    const rows = buildUsageDayBreakdownRows([
+      bucket({ day: "2026-08-01", harnessId: "claude", knownCostUsd: 1 }),
+      bucket({ day: "2026-08-01", harnessId: "codex", knownCostUsd: 2 }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ day: "2026-08-01", costUsd: 3 });
+  });
+
+  it("sorts newest day first", () => {
+    const rows = buildUsageDayBreakdownRows([
+      bucket({ day: "2026-08-01" }),
+      bucket({ day: "2026-08-05" }),
+      bucket({ day: "2026-08-03" }),
+    ]);
+    expect(rows.map((row) => row.day)).toEqual([
+      "2026-08-05",
+      "2026-08-03",
+      "2026-08-01",
+    ]);
+  });
+
+  it("reports the weakest provenance across the day's folded buckets", () => {
+    const rows = buildUsageDayBreakdownRows([
+      bucket({ day: "2026-08-01", costProvenance: "providerReported" }),
+      bucket({
+        day: "2026-08-01",
+        harnessId: "codex",
+        costProvenance: "unpriced",
+      }),
+    ]);
+    expect(rows[0]?.provenance).toBe("unpriced");
+  });
+
+  it("returns nothing for an empty window", () => {
+    expect(buildUsageDayBreakdownRows([])).toEqual([]);
   });
 });

@@ -159,8 +159,18 @@ describe("<UsageSettingsPanel />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("usage-breakdown-table")).toBeTruthy();
     });
-    expect(screen.getByText("claude")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("usage-breakdown-table")).getByText("claude"),
+    ).toBeTruthy();
     expect(screen.queryByTestId("usage-unsupported-notice")).toBeNull();
+
+    // Ticket 11 dashboard build-out: per-harness split, stat tiles, and the
+    // cost-quality panel all render off the same summary.
+    expect(screen.getByTestId("usage-harness-split")).toBeTruthy();
+    expect(screen.getByTestId("usage-harness-split-row-claude")).toBeTruthy();
+    expect(screen.getByTestId("usage-stat-tiles")).toBeTruthy();
+    expect(screen.getByTestId("usage-cost-quality-panel")).toBeTruthy();
+    expect(screen.getByTestId("usage-date-range-label")).toBeTruthy();
   });
 
   it("renders a retryable error card, never a silent fallback, when the RPC fails", async () => {

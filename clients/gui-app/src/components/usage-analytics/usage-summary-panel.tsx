@@ -15,13 +15,30 @@ import {
   buildUsageChartColumns,
   buildUsageSeriesScaleForBuckets,
 } from "@/lib/usage-analytics/usage-chart-data";
-import { buildUsageBreakdownRows } from "@/lib/usage-analytics/usage-breakdown";
+import {
+  buildUsageBreakdownRows,
+  buildUsageDayBreakdownRows,
+} from "@/lib/usage-analytics/usage-breakdown";
+import { buildUsageHarnessSplitRows } from "@/lib/usage-analytics/usage-harness-split";
+import {
+  buildUsageStatTiles,
+  usageCompletenessAbsentNote,
+} from "@/lib/usage-analytics/usage-stat-tiles";
+import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value";
 import { lastNCalendarDays } from "@/lib/usage-analytics/day-window";
 import { getViewerTimeZone } from "@/lib/usage-analytics/viewer-timezone";
 import { UsageWindowPicker } from "@/components/usage-analytics/usage-window-picker";
 import { UsageMetricToggle } from "@/components/usage-analytics/usage-metric-toggle";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
 import { UsageBreakdownTable } from "@/components/usage-analytics/usage-breakdown-table";
+import { UsageDayBreakdownTable } from "@/components/usage-analytics/usage-day-breakdown-table";
+import {
+  UsageBreakdownToggle,
+  type UsageBreakdownGroupBy,
+} from "@/components/usage-analytics/usage-breakdown-toggle";
+import { UsageHarnessSplit } from "@/components/usage-analytics/usage-harness-split";
+import { UsageStatTiles } from "@/components/usage-analytics/usage-stat-tiles";
+import { UsageCostQualityPanel } from "@/components/usage-analytics/usage-cost-quality-panel";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 
@@ -46,6 +63,8 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const [windowDays, setWindowDays] =
     useState<UsageSummaryWindowDays>(DEFAULT_WINDOW_DAYS);
   const [metric, setMetric] = useState<UsageMetric>("cost");
+  const [breakdownGroupBy, setBreakdownGroupBy] =
+    useState<UsageBreakdownGroupBy>("model");
   // Captured once on mount, not read live during render - the x-axis's day
   // list only needs to be stable for the life of this panel, and reading
   // `Date.now()` directly in the render body is an impure render (flagged by
@@ -64,18 +83,29 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   // ambient epic cost badge, this is an actively-viewed screen with its own
   // refetch triggers (window/metric change, manual Retry).
   const query = useUsageSummaryForClient(props.client, request, true, false);
+  const days = lastNCalendarDays(windowDays, getViewerTimeZone(), nowMs);
+  const dateRangeLabel = formatDateRangeLabel(days);
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
+        <div className="flex flex-wrap items-center gap-2">
+          <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
+          <span
+            className="text-ui-xs text-muted-foreground"
+            data-testid="usage-date-range-label"
+          >
+            {dateRangeLabel}
+          </span>
+        </div>
         <UsageMetricToggle metric={metric} onChange={setMetric} />
       </div>
       <UsageSummaryPanelBody
         query={query}
         metric={metric}
-        windowDays={windowDays}
-        nowMs={nowMs}
+        days={days}
+        breakdownGroupBy={breakdownGroupBy}
+        onBreakdownGroupByChange={setBreakdownGroupBy}
       />
     </div>
   );
@@ -84,10 +114,12 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
 function UsageSummaryPanelBody(props: {
   readonly query: UsageSummaryQueryResult;
   readonly metric: UsageMetric;
-  readonly windowDays: UsageSummaryWindowDays;
-  readonly nowMs: number;
+  readonly days: readonly string[];
+  readonly breakdownGroupBy: UsageBreakdownGroupBy;
+  readonly onBreakdownGroupByChange: (groupBy: UsageBreakdownGroupBy) => void;
 }): ReactNode {
-  const { query, metric, windowDays, nowMs } = props;
+  const { query, metric, days, breakdownGroupBy, onBreakdownGroupByChange } =
+    props;
 
   if (query.isLoading) {
     return (
@@ -121,25 +153,58 @@ function UsageSummaryPanelBody(props: {
   }
 
   const { summary, coverage, servedBy } = query.data;
-  const days = lastNCalendarDays(windowDays, getViewerTimeZone(), nowMs);
   const scale = buildUsageSeriesScaleForBuckets(summary.buckets);
   const columns = buildUsageChartColumns(days, summary.buckets, scale, metric);
-  const rows = buildUsageBreakdownRows(summary.buckets);
+  const harnessRows = buildUsageHarnessSplitRows(summary.buckets);
+  const statTiles = buildUsageStatTiles(summary.totals, summary.buckets);
+  const absentNote = usageCompletenessAbsentNote(
+    summary.usageCompletenessBreakdown,
+  );
 
   return (
     <div className="flex flex-col gap-5">
-      <UsageCostFigure
-        totals={summary.totals}
-        coverage={coverage}
-        servedBy={servedBy}
-        size="default"
-      />
+      <div className="flex flex-col gap-3">
+        <UsageCostFigure
+          totals={summary.totals}
+          coverage={coverage}
+          servedBy={servedBy}
+          size="default"
+        />
+        <UsageHarnessSplit rows={harnessRows} scale={scale} />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <UsageStatTiles tiles={statTiles} />
+        {absentNote === null ? null : (
+          <p
+            className="text-ui-xs text-muted-foreground/80"
+            data-testid="usage-stat-tiles-absent-note"
+          >
+            {absentNote}
+          </p>
+        )}
+      </div>
       <UsageDailyChart columns={columns} scale={scale} metric={metric} />
+      <UsageCostQualityPanel
+        totals={summary.totals}
+        cacheSavings={statTiles.cacheSavings}
+      />
       <div>
-        <h3 className="mb-2 text-ui-sm font-medium text-foreground">
-          By harness and model
-        </h3>
-        <UsageBreakdownTable rows={rows} />
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-ui-sm font-medium text-foreground">
+            Breakdown
+          </h3>
+          <UsageBreakdownToggle
+            groupBy={breakdownGroupBy}
+            onChange={onBreakdownGroupByChange}
+          />
+        </div>
+        {breakdownGroupBy === "model" ? (
+          <UsageBreakdownTable rows={buildUsageBreakdownRows(summary.buckets)} />
+        ) : (
+          <UsageDayBreakdownTable
+            rows={buildUsageDayBreakdownRows(summary.buckets)}
+          />
+        )}
       </div>
     </div>
   );

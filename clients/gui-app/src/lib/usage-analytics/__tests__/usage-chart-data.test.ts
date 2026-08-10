@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyUsageSeriesVisibility,
   bucketMetricValue,
   buildUsageChartColumns,
   totalTokensForBucket,
@@ -101,5 +102,42 @@ describe("buildUsageChartColumns", () => {
     );
     expect(otherSegment?.value).toBe(4);
     expect(columns[0]?.total).toBe(4);
+  });
+});
+
+describe("applyUsageSeriesVisibility", () => {
+  const scale = buildUsageSeriesScale(["claude", "codex"]);
+  const columns = buildUsageChartColumns(
+    ["2026-08-01"],
+    [
+      bucket({ harnessId: "claude", knownCostUsd: 3 }),
+      bucket({ harnessId: "codex", knownCostUsd: 5 }),
+    ],
+    scale,
+    "cost",
+  );
+
+  it("returns the columns unchanged when nothing is hidden", () => {
+    expect(applyUsageSeriesVisibility(columns, new Set())).toBe(columns);
+  });
+
+  it("zeroes a hidden series' segment without removing it, and recomputes the total", () => {
+    const filtered = applyUsageSeriesVisibility(columns, new Set(["codex"]));
+    const codexSegment = filtered[0]?.segments.find(
+      (s) => s.seriesKey === "codex",
+    );
+    const claudeSegment = filtered[0]?.segments.find(
+      (s) => s.seriesKey === "claude",
+    );
+    expect(codexSegment?.value).toBe(0);
+    expect(claudeSegment?.value).toBe(3);
+    expect(filtered[0]?.total).toBe(3);
+  });
+
+  it("leaves the original columns' series order/keys untouched", () => {
+    const filtered = applyUsageSeriesVisibility(columns, new Set(["codex"]));
+    expect(filtered[0]?.segments.map((s) => s.seriesKey)).toEqual(
+      columns[0]?.segments.map((s) => s.seriesKey),
+    );
   });
 });

@@ -1,13 +1,14 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type {
-  UsageChartColumn,
-  UsageMetric,
+import {
+  applyUsageSeriesVisibility,
+  type UsageChartColumn,
+  type UsageMetric,
 } from "@/lib/usage-analytics/usage-chart-data";
 import type { UsageSeriesScale } from "@/lib/usage-analytics/usage-series-scale";
 import {
@@ -37,10 +38,28 @@ export interface UsageDailyChartProps {
  */
 export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
   const { columns, scale, metric } = props;
+  // Self-contained: which series the legend chips have hidden. Toggling never
+  // changes `scale.order` or its color assignment (see
+  // `applyUsageSeriesVisibility`'s doc comment) - only which segments render.
+  const [hiddenSeries, setHiddenSeries] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const visibleColumns = applyUsageSeriesVisibility(columns, hiddenSeries);
   const maxTotal = niceCeil(
-    Math.max(0, ...columns.map((column) => column.total)),
+    Math.max(0, ...visibleColumns.map((column) => column.total)),
   );
   const tickEvery = Math.max(1, Math.ceil(columns.length / MAX_X_AXIS_LABELS));
+  const toggleSeries = (seriesKey: string) => {
+    setHiddenSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(seriesKey)) {
+        next.delete(seriesKey);
+      } else {
+        next.add(seriesKey);
+      }
+      return next;
+    });
+  };
 
   return (
     <div
@@ -50,7 +69,7 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
       <div className="flex h-[clamp(11rem,26vh,16rem)] w-full gap-3">
         <YAxis maxValue={maxTotal} metric={metric} />
         <div className="flex min-w-0 flex-1 items-stretch gap-px border-l border-b border-border/60 pl-1">
-          {columns.map((column) => (
+          {visibleColumns.map((column) => (
             <DayColumn
               key={column.day}
               column={column}
@@ -62,7 +81,13 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
         </div>
       </div>
       <XAxis days={columns.map((column) => column.day)} tickEvery={tickEvery} />
-      {scale.order.length >= 2 ? <UsageChartLegend scale={scale} /> : null}
+      {scale.order.length >= 2 ? (
+        <UsageChartLegend
+          scale={scale}
+          hiddenSeries={hiddenSeries}
+          onToggle={toggleSeries}
+        />
+      ) : null}
     </div>
   );
 }
@@ -195,24 +220,47 @@ function DayTooltipBody(props: {
   );
 }
 
+/**
+ * Legend chips double as the chart's series filter: clicking one hides its
+ * segments from every bar (see `applyUsageSeriesVisibility`) without
+ * changing `scale.order` or any chip's color, so a filtered-out series can
+ * always be brought back in the same slot. `aria-pressed` carries the
+ * on/off state for assistive tech since the visual cue is opacity alone.
+ */
 function UsageChartLegend(props: {
   readonly scale: UsageSeriesScale;
+  readonly hiddenSeries: ReadonlySet<string>;
+  readonly onToggle: (seriesKey: string) => void;
 }): ReactNode {
   return (
     <ul
       className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-[3.25rem] text-ui-xs text-muted-foreground"
       data-testid="usage-daily-chart-legend"
     >
-      {props.scale.order.map((seriesKey) => (
-        <li key={seriesKey} className="flex items-center gap-1.5">
-          <span
-            aria-hidden
-            className="h-2 w-2 shrink-0 rounded-full"
-            style={{ backgroundColor: props.scale.colorVar(seriesKey) }}
-          />
-          {props.scale.labelFor(seriesKey)}
-        </li>
-      ))}
+      {props.scale.order.map((seriesKey) => {
+        const hidden = props.hiddenSeries.has(seriesKey);
+        return (
+          <li key={seriesKey}>
+            <button
+              type="button"
+              aria-pressed={hidden ? "false" : "true"}
+              data-testid={`usage-daily-chart-legend-chip-${seriesKey}`}
+              className={cn(
+                "flex items-center gap-1.5 rounded-sm outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-ring",
+                hidden ? "opacity-40" : "opacity-100",
+              )}
+              onClick={() => props.onToggle(seriesKey)}
+            >
+              <span
+                aria-hidden
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: props.scale.colorVar(seriesKey) }}
+              />
+              {props.scale.labelFor(seriesKey)}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }

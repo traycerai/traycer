@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatDateRangeLabel,
   formatDayLabel,
   formatMetricValue,
   niceCeil,
@@ -30,6 +31,22 @@ describe("formatDayLabel", () => {
 
   it("falls back to the raw string for a malformed day", () => {
     expect(formatDayLabel("nodashesatall")).toBe("nodashesatall");
+  });
+});
+
+describe("formatDateRangeLabel", () => {
+  it("renders the first and last day with the year once", () => {
+    expect(
+      formatDateRangeLabel(["2026-08-01", "2026-08-02", "2026-08-10"]),
+    ).toBe("Aug 1 – Aug 10, 2026");
+  });
+
+  it("handles a single-day window", () => {
+    expect(formatDateRangeLabel(["2026-01-05"])).toBe("Jan 5 – Jan 5, 2026");
+  });
+
+  it("renders nothing for an empty day list", () => {
+    expect(formatDateRangeLabel([])).toBe("");
   });
 });
 
