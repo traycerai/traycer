@@ -47,10 +47,12 @@ function setPlatform(value: string): void {
 const originalPrivateUpdateRepo = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO;
 const originalPrivateUpdateToken =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN;
+const originalThanosSingleUser = process.env.VITE_THANOS_SINGLE_USER;
 
 beforeEach(() => {
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_REPO");
   Reflect.deleteProperty(process.env, "VITE_TRAYCER_DESKTOP_UPDATE_TOKEN");
+  Reflect.deleteProperty(process.env, "VITE_THANOS_SINGLE_USER");
   Object.defineProperty(process, "resourcesPath", {
     configurable: true,
     value: "/tmp/traycer-test-resources",
@@ -90,6 +92,7 @@ afterEach(() => {
     "VITE_TRAYCER_DESKTOP_UPDATE_TOKEN",
     originalPrivateUpdateToken,
   );
+  restoreEnvValue("VITE_THANOS_SINGLE_USER", originalThanosSingleUser);
   // Only the architecture-selection test sets this; clean up unconditionally
   // so it can never leak into a later test's `platformChannelFile()` call.
   Reflect.deleteProperty(process.env, "TEST_UPDATER_ARCH");
@@ -118,6 +121,38 @@ describe("desktop app updater", () => {
       private: true,
       token: "test-token",
     });
+  });
+
+  it("Thanos single-user: reports official auto-update disabled when flag is 1", async () => {
+    process.env.VITE_THANOS_SINGLE_USER = "1";
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    expect(updater.isThanosOfficialAutoUpdateDisabled()).toBe(true);
+  });
+
+  it("Thanos single-user: skips feed checks even on a shipped non-dev build", async () => {
+    process.env.VITE_THANOS_SINGLE_USER = "1";
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    // access() is mocked to succeed (app-update.yml present) — without the
+    // Thanos gate, isDev=false would allow a real checkForUpdates call.
+    await updater.installAutoUpdater(false, makeDeps(true));
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+
+    await updater.checkForUpdatesNow(false, "automatic");
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(updater.getAppUpdateSnapshot().status).not.toBe("available");
+  });
+
+  it("Thanos single-user: manual check surfaces unavailable without touching the feed", async () => {
+    process.env.VITE_THANOS_SINGLE_USER = "1";
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await updater.installAutoUpdater(false, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(updater.getAppUpdateSnapshot().status).toBe("unavailable");
+    expect(updater.getAppUpdateSnapshot().errorMessage).toMatch(
+      /not available for this build/i,
+    );
   });
 
   it("emits an error instead of staying stuck when a download fails", async () => {

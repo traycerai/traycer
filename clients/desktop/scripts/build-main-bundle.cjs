@@ -63,6 +63,11 @@ const envDefines = {
   "process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN": JSON.stringify(
     process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "",
   ),
+  // Thanos phase 0: default ON so packaged builds never auto-install from
+  // traycerai/traycer. Set VITE_THANOS_SINGLE_USER=0 to re-enable intentionally.
+  "process.env.VITE_THANOS_SINGLE_USER": JSON.stringify(
+    process.env.VITE_THANOS_SINGLE_USER ?? "1",
+  ),
 };
 
 if (!existsSync(mainEntry)) {

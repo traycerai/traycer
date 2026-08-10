@@ -108,6 +108,23 @@ const IS_PRERELEASE_BUILD = CURRENT_VERSION.split("+")[0].includes("-");
 const PRIVATE_UPDATE_REPO = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ?? "";
 const PRIVATE_UPDATE_TOKEN =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "";
+// Thanos fork phase 0: when baked as "1" (default in build-main-bundle.cjs),
+// refuse every official auto-update path so a traycerai/traycer desktop-v*
+// release cannot overwrite a local Thanos build and resurrect login/sharing.
+// Escape hatch for intentional dogfood of upstream feeds: build with
+// VITE_THANOS_SINGLE_USER=0. Unset in unit tests keeps the stock updater
+// behavior so the suite stays meaningful.
+const THANOS_SINGLE_USER_FLAG = (
+  process.env.VITE_THANOS_SINGLE_USER ?? ""
+).trim();
+
+/**
+ * True when this Thanos build must not check/install updates from the
+ * packaged official feed (traycerai/traycer).
+ */
+export function isThanosOfficialAutoUpdateDisabled(): boolean {
+  return THANOS_SINGLE_USER_FLAG === "1";
+}
 
 // User-facing copy for the update failure classes. Deliberately generic and
 // reassuring - users shouldn't see release-feed internals, HTTP bodies, or be
@@ -296,6 +313,11 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   // Never download on our own - the user starts the download from the header
   // button (see `startUpdateDownload`). We only check + surface availability.
   autoUpdater.autoDownload = false;
+  if (isThanosOfficialAutoUpdateDisabled()) {
+    log.info(
+      "[updater] Thanos single-user build: official auto-update disabled (VITE_THANOS_SINGLE_USER=1)",
+    );
+  }
   if (process.platform === "linux") {
     linuxPackageType = readLinuxPackageType();
     if (linuxPackageType !== null) {
@@ -314,6 +336,11 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   // update" click, where a failure is guaranteed to surface visibly (see
   // `handleUpdaterError`'s `installingUpdate` branch).
   autoUpdater.autoInstallOnAppQuit = linuxPackageType === null;
+  // Thanos phase 0: force off after the platform default so Linux AppImage
+  // cannot re-enable quit-and-install against the official feed.
+  if (isThanosOfficialAutoUpdateDisabled()) {
+    autoUpdater.autoInstallOnAppQuit = false;
+  }
   // electron-updater auto-enables prereleases when the running build is an RC.
   // Replace that implicit behaviour with the explicit, persisted app setting.
   // The default remains stable-only; prerelease checks are routed through the
@@ -866,6 +893,15 @@ export function onAppUpdateChange(listener: AppUpdateListener): () => void {
 }
 
 async function canCheckForUpdates(isDev: boolean): Promise<boolean> {
+  // Thanos single-user / fork builds: never consult the official feed.
+  // Packaged Thanos defaults this on via build-main-bundle.cjs so a
+  // traycerai desktop-v* cannot silently replace the fork binary.
+  if (isThanosOfficialAutoUpdateDisabled()) {
+    log.debug(
+      "[updater] check skipped: VITE_THANOS_SINGLE_USER=1 (official auto-update disabled)",
+    );
+    return false;
+  }
   // `isDev` is the dev deploy slot (the development build) - it never has a
   // real update feed, so skip the updater entirely.
   if (isDev) return false;
