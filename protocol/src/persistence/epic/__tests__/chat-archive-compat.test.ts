@@ -45,3 +45,51 @@ describe("chatSchemaPreInReplyTo does not surface archivedAt", () => {
     expect(Object.hasOwn(parsed, "archivedAt")).toBe(false);
   });
 });
+
+describe("chatSchema.claudePendingWakes heldChain", () => {
+  const heldChain = {
+    harnessId: "claude",
+    sessionId: "session-held-wake",
+    sessionWorkspaceSnapshot: {
+      workspaceKind: "session-snapshot",
+      primaryWorkspace: "/workspace",
+      secondaryWorkspaces: [],
+    },
+    coveredUntilMessageId: null,
+    profileId: null,
+  };
+  const heldWake = {
+    sessionId: "session-held-wake",
+    toolUseId: "wake-held-chain",
+    scheduledFor: 12345,
+    prompt: "Resume the scheduled task.",
+    reason: "a detached interview is still pending",
+    heldChain,
+  };
+
+  it("retains the chain that protects a held wake across host restart", () => {
+    const parsed = chatSchema.parse({
+      ...baseChat,
+      claudePendingWakes: [heldWake],
+    });
+
+    expect(parsed.claudePendingWakes).toEqual([heldWake]);
+  });
+
+  it("keeps the marker out of frozen chat.subscribe versions", () => {
+    const parsed = chatSchemaPreInReplyTo.parse({
+      ...baseChat,
+      claudePendingWakes: [heldWake],
+    });
+
+    expect(parsed.claudePendingWakes).toEqual([
+      {
+        sessionId: heldWake.sessionId,
+        toolUseId: heldWake.toolUseId,
+        scheduledFor: heldWake.scheduledFor,
+        prompt: heldWake.prompt,
+        reason: heldWake.reason,
+      },
+    ]);
+  });
+});

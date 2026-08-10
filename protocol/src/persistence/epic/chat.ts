@@ -29,6 +29,11 @@ export const claudePendingWakeSchema = z.object({
   prompt: z.string(),
   reason: z.string(),
   retryDeadlineStartedAt: z.number().nullable().optional(),
+  // A due wake can be parked behind a detached interview while a later
+  // history rewrite temporarily clears the chat's active chain. Preserve the
+  // validated chain with the wake so host hydration can restore it instead of
+  // pruning the wake after a restart during that handoff.
+  heldChain: activeSessionChainSchema.nullable().optional(),
 });
 export type ClaudePendingWake = z.infer<typeof claudePendingWakeSchema>;
 
