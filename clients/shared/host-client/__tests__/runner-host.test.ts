@@ -181,6 +181,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
       { kind: "info" },
       null,
       "delivery-1",
+      "host",
       null,
     );
 
@@ -193,6 +194,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
         payload: { kind: "info" },
         replaceKey: null,
         deliveryKey: "delivery-1",
+        feedSource: "host",
         foregroundAppLocal: null,
       },
     ]);

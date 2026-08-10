@@ -233,6 +233,7 @@ describe("systemd unit — scaffolding and the token guard", () => {
       cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
     });
     expect(unit).toContain("[Service]\nType=simple");
+    expect(unit).toContain("\nOOMPolicy=continue\n");
     expect(unit).toContain("Restart=on-failure");
     expect(unit).toContain("[Install]\nWantedBy=default.target");
     expect(unit).not.toContain("--environment");

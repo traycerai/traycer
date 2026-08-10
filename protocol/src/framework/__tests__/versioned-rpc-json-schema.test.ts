@@ -763,3 +763,222 @@ describe("Traversal produces values that parse against the target contract", () 
     });
   });
 });
+
+describe("response-lane value-growth strictness", () => {
+  const growV10 = defineRpcContract({
+    method: "grow",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ id: z.string() }),
+    responseSchema: z.object({ status: z.enum(["queued"]) }),
+  });
+  const growV11 = defineRpcContract({
+    method: "grow",
+    schemaVersion: { major: 1, minor: 1 } as const,
+    requestSchema: z.object({ id: z.string() }),
+    responseSchema: z.object({ status: z.enum(["queued", "running"]) }),
+  });
+  const growUpgrade = defineUpgradePath<typeof growV10, typeof growV11>({
+    from: growV10.schemaVersion,
+    to: growV11.schemaVersion,
+    upgradeRequest: (request) => ({ id: request.id }),
+    upgradeResponse: (response) => ({ status: response.status }),
+  });
+
+  it("rejects response enum growth on an unannotated minor, naming the escape hatch", () => {
+    const registry = {
+      grow: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: growV10, upgradeFromPreviousVersion: null },
+            1: { contract: growV11, upgradeFromPreviousVersion: growUpgrade },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "Minor 1.1 for method 'grow' response adds enum value 'running' from 1.0 (if this growth is genuinely emission-gated on the negotiated version, declare `responseGrowthProjectionGated: true` on the minor's registry entry)",
+    );
+  });
+
+  it("accepts the same growth when the minor declares it projection-gated", () => {
+    const registry = {
+      grow: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: growV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: growV11,
+              upgradeFromPreviousVersion: growUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("keeps REQUEST enum growth legal on minors without annotation", () => {
+    const optInV10 = defineRpcContract({
+      method: "optIn",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ mode: z.enum(["fast"]) }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const optInV11 = defineRpcContract({
+      method: "optIn",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ mode: z.enum(["fast", "careful"]) }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const optInUpgrade = defineUpgradePath<typeof optInV10, typeof optInV11>({
+      from: optInV10.schemaVersion,
+      to: optInV11.schemaVersion,
+      upgradeRequest: (request) => ({ mode: request.mode }),
+      upgradeResponse: (response) => ({ ok: response.ok }),
+    });
+
+    const registry = {
+      optIn: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: optInV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: optInV11,
+              upgradeFromPreviousVersion: optInUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("keeps the annotation hint when response growth is nested under an array", () => {
+    const nestedV10 = defineRpcContract({
+      method: "nested",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        rows: z.array(z.object({ status: z.enum(["queued"]) })),
+      }),
+    });
+    const nestedV11 = defineRpcContract({
+      method: "nested",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({
+        rows: z.array(z.object({ status: z.enum(["queued", "running"]) })),
+      }),
+    });
+    const nestedUpgrade = defineUpgradePath<typeof nestedV10, typeof nestedV11>({
+      from: nestedV10.schemaVersion,
+      to: nestedV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ rows: response.rows }),
+    });
+
+    const registry = {
+      nested: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: nestedV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: nestedV11,
+              upgradeFromPreviousVersion: nestedUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      /array items: adds enum value 'running'.*responseGrowthProjectionGated/s,
+    );
+  });
+
+  it("rejects a redundant projection-gated annotation on a minor with no growth", () => {
+    // The annotation must stay load-bearing: if it outlived the growth it
+    // was granted for, the response lane would stay silently lenient for
+    // every later edit to that same minor.
+    const flatV10 = defineRpcContract({
+      method: "flat",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const flatV11 = defineRpcContract({
+      method: "flat",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({ ok: z.boolean(), note: z.string().optional() }),
+    });
+    const flatUpgrade = defineUpgradePath<typeof flatV10, typeof flatV11>({
+      from: flatV10.schemaVersion,
+      to: flatV11.schemaVersion,
+      upgradeRequest: (request) => ({ id: request.id }),
+      upgradeResponse: (response) => ({ ok: response.ok }),
+    });
+
+    const registry = {
+      flat: {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: flatV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: flatV11,
+              upgradeFromPreviousVersion: flatUpgrade,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      /declares `responseGrowthProjectionGated` but its response has no value growth.*remove the annotation/s,
+    );
+  });
+
+  it("rejects a projection-gated annotation on the first installed minor", () => {
+    const soloV10 = defineRpcContract({
+      method: "solo",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+
+    const registry = {
+      solo: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: soloV10,
+              upgradeFromPreviousVersion: null,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      /first installed minor of its line, so it has no predecessor to grow over/,
+    );
+  });
+});
