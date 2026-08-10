@@ -1099,6 +1099,90 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     ).toHaveLength(0);
   });
 
+  it("falls back to renderable cloud entries when an older relay lacks mark-all", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message: "host.notifications.cloudFeed.markAllRead is unsupported",
+            requestId: "test-request",
+            method,
+            fatalDetails: {
+              code: "E_HOST_UNSUPPORTED",
+              reason: "unsupported method",
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+            },
+          }),
+        );
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-a" },
+      );
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-b" },
+      );
+    });
+    expect(useCloudNotificationsStore.getState().connectionState).toBe(
+      "connected",
+    );
+  });
+
+  it("does not mark a newer cloud snapshot from a stale action closure", () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+    const staleMarkAllAsRead = result.current.markAllAsRead;
+
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+        version: 11,
+      });
+      staleMarkAllAsRead();
+    });
+
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(2);
+    expect(
+      Object.values(useCloudNotificationsStore.getState().rows).every(
+        (row) => row?.entry.readAt === null,
+      ),
+    ).toBe(true);
+    expect(hostRequestMock).not.toHaveBeenCalled();
+  });
+
   it("ignores a cloud command completion from a replaced ownership epoch", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

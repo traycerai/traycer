@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
   Analytics,
@@ -115,6 +116,10 @@ export interface MergedNotificationRow {
   /** Product-vocabulary category, mapped from `source` at the projection
    * boundary so consumers never branch on the internal source seam. */
   readonly category: NotificationCategory;
+}
+
+function isHostUnsupportedError(error: unknown): boolean {
+  return error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED";
 }
 
 export interface MergedNotificationsActions {
@@ -603,7 +608,10 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           handleCloudMutationResult(data);
         }
       },
-      onError: (_error, _variables, context) => {
+      onError: (error, _variables, context) => {
+        // This is an optional RPC. Older cloud relays still support the
+        // established per-entry write used by the compatibility fallback.
+        if (isHostUnsupportedError(error)) return;
         if (context !== undefined && isCurrentCloudMutation(context)) {
           markCloudUnavailable();
         }
@@ -1038,8 +1046,36 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       markAllAsRead: () => {
         if (feedMode === "cloud" && cloudVersion !== null) {
-          useCloudNotificationsStore.getState().markAllReadLocally(Date.now());
-          cloudMarkAllRead.mutate({ observedVersion: cloudVersion });
+          // `cloudVersion` belongs to the rendered action closure, whereas a
+          // frame can update the store before the click reaches this handler.
+          // Do not locally consume rows that the versioned bulk command will
+          // deliberately leave unread.
+          const cloudState = useCloudNotificationsStore.getState();
+          if (cloudState.version !== cloudVersion) return;
+          const fallbackEntryIds = Object.values(cloudState.rows)
+            .filter(
+              (row): row is HostNotificationsCloudFeedRow =>
+                row !== undefined && row.entry.readAt === null,
+            )
+            .map((row) => row.entryId);
+          cloudState.markAllReadLocally(Date.now());
+          void cloudMarkAllRead
+            .mutateAsync({ observedVersion: cloudVersion })
+            .catch(async (error: unknown) => {
+              if (!isHostUnsupportedError(error)) return;
+              // An older relay cannot atomically include rows it did not
+              // render, but it can preserve the released per-entry behavior
+              // for every renderable row. Keep this compatibility path only
+              // for the optional-RPC rejection; ordinary failures retain the
+              // unavailable-state behavior owned by the mutation.
+              for (const entryId of fallbackEntryIds) {
+                try {
+                  await cloudMarkRead.mutateAsync({ entryId });
+                } catch {
+                  return;
+                }
+              }
+            });
           return;
         }
         if (feedMode !== "local") return;
