@@ -3474,6 +3474,7 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
+    imageResolutions: [],
   };
 }
 

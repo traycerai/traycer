@@ -25,6 +25,8 @@ import {
   guiHarnessOptionSchemaV40,
   guiHarnessOptionSchemaV50,
   guiHarnessOptionSchemaV60,
+  requestImageIngestRequestSchema,
+  requestImageIngestResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   chatSubscribeV10,
@@ -34,6 +36,7 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -626,6 +629,18 @@ export const agentGuiGetPlanV10 = defineRpcContract({
   responseSchema: getGuiAgentPlanResponseSchema,
 });
 
+// Optional (non-floor) capability: consent to ingest a `consent-required`
+// markdown-referenced image (see `requestImageIngestRequestSchema`).
+// Registered with a `degrade: unsupported` strategy (see registry.ts) so an
+// old host that lacks it fails only this call - it must never enter the
+// released floor, which would be handshake-fatal for existing peers.
+export const chatRequestImageIngestV10 = defineRpcContract({
+  method: "chat.requestImageIngest",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: requestImageIngestRequestSchema,
+  responseSchema: requestImageIngestResponseSchema,
+});
+
 export {
   chatSubscribeV10,
   chatSubscribeV11,
@@ -634,4 +649,5 @@ export {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 };

@@ -530,6 +530,7 @@ function assistantSteerMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -3367,6 +3368,7 @@ describe("createChatSessionStore", () => {
         toolName: "Bash",
         agentMessageSend: null,
         backgroundTask: true,
+        imageResults: [],
       },
     });
 
@@ -3417,6 +3419,7 @@ describe("createChatSessionStore", () => {
           usage: null,
           reasoningEffort: null,
           serviceTier: null,
+          imageResolutions: [],
         },
       ],
       queue: { status: "idle", items: [] },
@@ -3704,6 +3707,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
           ],
           events: [],
@@ -3846,6 +3850,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
             {
@@ -3871,6 +3876,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              imageResolutions: [],
             },
           ],
           events: [],
@@ -5514,6 +5520,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      imageResolutions: [],
     };
   }
 
@@ -5698,6 +5705,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         usage: null,
         reasoningEffort: null,
         serviceTier: null,
+        imageResolutions: [],
       },
     ]);
     expect(harness.nudgeCount()).toBe(1);

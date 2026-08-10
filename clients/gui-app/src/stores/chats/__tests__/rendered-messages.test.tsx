@@ -254,6 +254,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -1466,6 +1467,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "command",
@@ -1511,6 +1513,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "autonomous_resume",
@@ -1574,6 +1577,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "autonomous_resume",
@@ -1626,6 +1630,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           type: "text",
@@ -1703,6 +1708,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2002,
           startedAt: 2002,
           endedAt: 2002,
+          imageResults: [],
         },
         {
           // The resume trigger's blockId targets the subagent itself, but in
@@ -1812,6 +1818,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: null,
+          imageResults: [],
         },
         {
           type: "subagent",
@@ -1926,6 +1933,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -1945,6 +1953,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: null,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -1967,6 +1976,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 70_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -1986,6 +1996,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 5_000,
           endedAt: 67_000,
+          imageResults: [],
         },
         {
           type: "tool_call",
@@ -2002,6 +2013,7 @@ describe("useRenderedMessages", () => {
           stopped: false,
           startedAt: 2000,
           endedAt: 5000,
+          imageResults: [],
         },
       ],
     };
@@ -2423,6 +2435,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2000,
           startedAt: 2000,
           endedAt: 2000,
+          imageResults: [],
         },
         {
           type: "subagent",
@@ -3022,6 +3035,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: 2001,
+          imageResults: [],
         },
         {
           type: "file_change",
@@ -3075,6 +3089,7 @@ describe("useRenderedMessages", () => {
           timestamp: 2001,
           startedAt: 2001,
           endedAt: 2001,
+          imageResults: [],
         },
         {
           type: "file_change",

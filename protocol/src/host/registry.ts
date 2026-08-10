@@ -168,6 +168,7 @@ import {
   agentGuiListHarnessesV60,
   agentGuiListHarnessesV70,
   agentGuiListModelsV10,
+  chatRequestImageIngestV10,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -175,6 +176,7 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -3633,6 +3635,26 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Optional (non-floor) capability: consent to ingest a `consent-required`
+  // markdown-referenced image (`chat.subscribe@1.7`, see
+  // `requestImageIngestRequestSchema`). The `degrade: unsupported` strategy
+  // EXCLUDES it from the released floor and the released-method-names
+  // snapshot - adding it to the floor would be handshake-fatal for existing
+  // clients. Old peers lack it in their optional manifest; the caller gets
+  // E_HOST_UNSUPPORTED for this call only and hides the consent affordance.
+  "chat.requestImageIngest": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatRequestImageIngestV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "agent.tui.listHarnesses": {
     1: {
       latestMinor: 0,
@@ -6491,7 +6513,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -6513,6 +6535,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         6: {
           contract: chatSubscribeV16,
+        },
+        7: {
+          contract: chatSubscribeV17,
         },
       },
     },

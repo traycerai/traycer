@@ -12,9 +12,26 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  guiAgentModelCapabilitiesSchema,
+  guiAgentModelOptionSchema,
+  requestImageIngestRequestSchema,
+  requestImageIngestResponseSchema,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
+import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  autonomousResumeTriggerSchema,
+  imageGenerationResultSchema,
+  toolCallBlockSchema,
+} from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  imageResolutionEntrySchema,
+  imageResolutionStateSchema,
+} from "@traycer/protocol/persistence/epic/messages";
 import type {
   Chat,
   ChatEvent,
@@ -1808,5 +1825,493 @@ describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
       throw new Error("expected turnStateChanged");
     }
     expect(v15.activeTurn?.sameTurnSteeringSupported).toBe(true);
+  });
+});
+
+// ─── chat.subscribe@1.7 image generation + rendering ───────────────────────
+//
+// Live image shapes land on 1.7 only. Every earlier minor is pinned to a
+// pre-image freeze so additive image fields cannot leak onto a released wire
+// line (the bug this ticket closed).
+describe("chat.subscribe@1.7 (image generation)", () => {
+  const imageResultA = {
+    attachmentHash: "sha256-image-a",
+    mediaType: "image/png",
+    byteLength: 1024,
+    width: 64,
+    height: 48,
+    alt: "generated chart",
+    revisedPrompt: "a clean chart",
+    filePath: "/tmp/chart.png",
+  };
+
+  const imageResultB = {
+    attachmentHash: "sha256-image-b",
+    mediaType: "image/jpeg",
+    byteLength: 2048,
+    width: null,
+    height: null,
+    alt: null,
+    revisedPrompt: null,
+    filePath: null,
+  };
+
+  const toolCallBlockWithImages = {
+    type: "tool_call" as const,
+    blockId: "tool-image-1",
+    status: "completed" as const,
+    timestamp: 5000,
+    parentBlockId: null,
+    toolName: "image_gen",
+    inputSummary: "draw a chart",
+    inputDetail: null,
+    taskTodoItems: null,
+    error: null,
+    agentMessageSend: null,
+    progress: null,
+    backgroundOutput: null,
+    startedAt: 4900,
+    endedAt: 5000,
+    backgroundTask: false,
+    stopped: false,
+    imageResults: [imageResultA, imageResultB],
+  };
+
+  const resolutionStates = imageResolutionStateSchema.options;
+
+  const imageResolutions = resolutionStates.map((state, index) => ({
+    source: `https://example.com/img-${index}.png`,
+    canonicalSource: `https://example.com/img-${index}.png`,
+    attachmentHash: state === "resolved" ? `hash-${index}` : null,
+    mediaType: state === "resolved" ? "image/png" : null,
+    width: state === "resolved" ? 100 : null,
+    height: state === "resolved" ? 80 : null,
+    state,
+  }));
+
+  const assistantWithImages = {
+    role: "assistant" as const,
+    messageId: "assistant-image-1",
+    sender: {
+      type: "agent" as const,
+      harnessId: "codex" as const,
+      agentId: "agent-1",
+      displayName: "Coder",
+      reply: { expectsReply: false as const },
+      inReplyTo: null,
+    },
+    blocks: [toolCallBlockWithImages],
+    startedAt: 4900,
+    timestamp: 5000,
+    turnId: "turn-image-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions,
+  };
+
+  const chatWithImages: Chat = {
+    ...chat,
+    messages: [userMessage, assistantWithImages],
+  };
+
+  function snapshotFrameWithChat(
+    chatPayload: Chat,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat: chatPayload,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    };
+  }
+
+  function blockDeltaFrame(event: Record<string, unknown>): Record<string, unknown> {
+    return {
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event,
+    };
+  }
+
+  const frozenSubscribeContracts = [
+    { label: "1.0", contract: chatSubscribeV10 },
+    { label: "1.1", contract: chatSubscribeV11 },
+    { label: "1.2", contract: chatSubscribeV12 },
+    { label: "1.3", contract: chatSubscribeV13 },
+    { label: "1.4", contract: chatSubscribeV14 },
+    { label: "1.5", contract: chatSubscribeV15 },
+    { label: "1.6", contract: chatSubscribeV16 },
+  ] as const;
+
+  it("declares schemaVersion 1.7", () => {
+    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+  });
+
+  it("round-trips a tool_call content block with multiple imageResults", () => {
+    const parsed = toolCallBlockSchema.parse(toolCallBlockWithImages);
+    expect(parsed.imageResults).toHaveLength(2);
+    expect(parsed.imageResults[0]).toMatchObject(imageResultA);
+    expect(parsed.imageResults[1]).toMatchObject({
+      attachmentHash: "sha256-image-b",
+      mediaType: "image/jpeg",
+      byteLength: 2048,
+      width: null,
+      height: null,
+      alt: null,
+      revisedPrompt: null,
+      filePath: null,
+    });
+  });
+
+  it("defaults omitted imageResults to an empty array on the live tool_call block", () => {
+    const { imageResults: _omit, ...withoutImages } = toolCallBlockWithImages;
+    const parsed = toolCallBlockSchema.parse(withoutImages);
+    expect(parsed.imageResults).toEqual([]);
+  });
+
+  it("defaults omitted imageGenerationResult optionals to null", () => {
+    expect(
+      imageGenerationResultSchema.parse({
+        attachmentHash: "h",
+        mediaType: "image/png",
+        byteLength: 1,
+      }),
+    ).toEqual({
+      attachmentHash: "h",
+      mediaType: "image/png",
+      byteLength: 1,
+      width: null,
+      height: null,
+      alt: null,
+      revisedPrompt: null,
+      filePath: null,
+    });
+  });
+
+  it("round-trips tool_call.completed with imageResults through the 1.7 frame", () => {
+    const withImages = chatSubscribeV17.serverFrameSchema.parse(
+      blockDeltaFrame({
+        type: "tool_call.completed",
+        blockId: "tool-image-1",
+        timestamp: 5000,
+        toolName: "image_gen",
+        imageResults: [imageResultA, imageResultB],
+      }),
+    );
+    expect(withImages).toMatchObject({
+      kind: "blockDelta",
+      event: {
+        type: "tool_call.completed",
+        imageResults: [
+          expect.objectContaining({ attachmentHash: "sha256-image-a" }),
+          expect.objectContaining({ attachmentHash: "sha256-image-b" }),
+        ],
+      },
+    });
+
+    const omitted = chatSubscribeV17.serverFrameSchema.parse(
+      blockDeltaFrame({
+        type: "tool_call.completed",
+        blockId: "tool-image-1",
+        timestamp: 5000,
+        toolName: "image_gen",
+      }),
+    );
+    if (omitted.kind !== "blockDelta") throw new Error("expected blockDelta");
+    if (omitted.event.type !== "tool_call.completed") {
+      throw new Error("expected tool_call.completed");
+    }
+    expect(omitted.event.imageResults).toEqual([]);
+  });
+
+  it("round-trips a resolution entry for every imageResolution state", () => {
+    for (const state of resolutionStates) {
+      const parsed = imageResolutionEntrySchema.parse({
+        source: "https://example.com/a.png",
+        canonicalSource: "https://example.com/a.png",
+        state,
+      });
+      expect(parsed.state).toBe(state);
+      expect(parsed.attachmentHash).toBeNull();
+      expect(parsed.mediaType).toBeNull();
+      expect(parsed.width).toBeNull();
+      expect(parsed.height).toBeNull();
+    }
+  });
+
+  it("round-trips image_resolution.updated through the 1.7 serverFrame", () => {
+    for (const entry of imageResolutions) {
+      const parsed = chatSubscribeV17.serverFrameSchema.parse(
+        blockDeltaFrame({
+          type: "image_resolution.updated",
+          blockId: "resolution-evt",
+          timestamp: 5100,
+          messageId: "assistant-image-1",
+          entry,
+        }),
+      );
+      expect(parsed).toMatchObject({
+        kind: "blockDelta",
+        event: {
+          type: "image_resolution.updated",
+          messageId: "assistant-image-1",
+          entry: { state: entry.state, canonicalSource: entry.canonicalSource },
+        },
+      });
+    }
+  });
+
+  it("round-trips tool_call.progress with and without imageGenerationPhase", () => {
+    const withPhase = chatSubscribeV17.serverFrameSchema.parse(
+      blockDeltaFrame({
+        type: "tool_call.progress",
+        blockId: "tool-image-1",
+        timestamp: 4950,
+        update: "generating…",
+        imageGenerationPhase: "draft",
+      }),
+    );
+    if (withPhase.kind !== "blockDelta") throw new Error("expected blockDelta");
+    if (withPhase.event.type !== "tool_call.progress") {
+      throw new Error("expected tool_call.progress");
+    }
+    expect(withPhase.event.imageGenerationPhase).toBe("draft");
+
+    const withoutPhase = chatSubscribeV17.serverFrameSchema.parse(
+      blockDeltaFrame({
+        type: "tool_call.progress",
+        blockId: "tool-image-1",
+        timestamp: 4950,
+        update: "still working",
+      }),
+    );
+    if (withoutPhase.kind !== "blockDelta") {
+      throw new Error("expected blockDelta");
+    }
+    if (withoutPhase.event.type !== "tool_call.progress") {
+      throw new Error("expected tool_call.progress");
+    }
+    expect(withoutPhase.event.imageGenerationPhase).toBeNull();
+  });
+
+  it("carries imageResults and imageResolutions through a live 1.7 snapshot", () => {
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
+      snapshotFrameWithChat(chatWithImages),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    const assistant = parsed.snapshot.chat.messages.find(
+      (message) => message.role === "assistant",
+    );
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("expected assistant message");
+    }
+    expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
+    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    if (!toolCall || toolCall.type !== "tool_call") {
+      throw new Error("expected tool_call block");
+    }
+    expect(toolCall.imageResults).toHaveLength(2);
+  });
+
+  it("stays frozen without image fields on every released minor 1.0-1.6", () => {
+    const snapshotFrame = snapshotFrameWithChat(chatWithImages);
+    const completedWithImages = blockDeltaFrame({
+      type: "tool_call.completed",
+      blockId: "tool-image-1",
+      timestamp: 5000,
+      toolName: "image_gen",
+      imageResults: [imageResultA],
+    });
+    const progressWithPhase = blockDeltaFrame({
+      type: "tool_call.progress",
+      blockId: "tool-image-1",
+      timestamp: 4950,
+      update: "generating…",
+      imageGenerationPhase: "draft",
+    });
+    const resolutionUpdated = blockDeltaFrame({
+      type: "image_resolution.updated",
+      blockId: "resolution-evt",
+      timestamp: 5100,
+      messageId: "assistant-image-1",
+      entry: imageResolutions[0],
+    });
+
+    for (const { label, contract } of frozenSubscribeContracts) {
+      const snapshot = contract.serverFrameSchema.parse(snapshotFrame);
+      if (snapshot.kind !== "snapshot") {
+        throw new Error(`expected snapshot on ${label}`);
+      }
+      const assistant = snapshot.snapshot.chat.messages.find(
+        (message) => message.role === "assistant",
+      );
+      if (!assistant || assistant.role !== "assistant") {
+        throw new Error(`expected assistant message on ${label}`);
+      }
+      // Frozen assistant message has no imageResolutions key at all.
+      expect(assistant, label).not.toHaveProperty("imageResolutions");
+      const toolCall = assistant.blocks.find(
+        (block) => block.type === "tool_call",
+      );
+      if (!toolCall || toolCall.type !== "tool_call") {
+        throw new Error(`expected tool_call block on ${label}`);
+      }
+      expect(toolCall, label).not.toHaveProperty("imageResults");
+
+      const completed = contract.serverFrameSchema.parse(completedWithImages);
+      if (completed.kind !== "blockDelta") {
+        throw new Error(`expected blockDelta on ${label}`);
+      }
+      expect(completed.event.type, label).toBe("tool_call.completed");
+      expect(completed.event, label).not.toHaveProperty("imageResults");
+
+      const progress = contract.serverFrameSchema.parse(progressWithPhase);
+      if (progress.kind !== "blockDelta") {
+        throw new Error(`expected blockDelta on ${label}`);
+      }
+      expect(progress.event.type, label).toBe("tool_call.progress");
+      expect(progress.event, label).not.toHaveProperty("imageGenerationPhase");
+
+      // New event variant must not exist on any pre-image line.
+      expect(
+        contract.serverFrameSchema.safeParse(resolutionUpdated).success,
+        label,
+      ).toBe(false);
+    }
+  });
+
+  it("declares schemaVersion 1.6 and freezes chat against pre-image messages", () => {
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
+
+    // Runtime proof that V16 binds `chatSchemaPreImage`, not live `chatSchema`:
+    // a live host's image-bearing chat still parses, but every image field is
+    // stripped rather than accepted.
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithChat(chatWithImages),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    const assistant = parsed.snapshot.chat.messages.find(
+      (message) => message.role === "assistant",
+    );
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("expected assistant message");
+    }
+    expect(assistant).not.toHaveProperty("imageResolutions");
+    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    if (!toolCall || toolCall.type !== "tool_call") {
+      throw new Error("expected tool_call block");
+    }
+    expect(toolCall).not.toHaveProperty("imageResults");
+    // Live chat still carries pinnedUserProviderHandle / lastDeliveredRolesDigest
+    // on the 1.6 freeze (those predate image support).
+    expect(parsed.snapshot.chat).toHaveProperty("pinnedUserProviderHandle");
+    expect(parsed.snapshot.chat).toHaveProperty("lastDeliveredRolesDigest");
+  });
+});
+
+describe("chat.subscribe@1.7 registry membership", () => {
+  it("registers chat.subscribe major 1 latestMinor 7 as chatSubscribeV17", () => {
+    const entry = hostStreamRpcRegistry["chat.subscribe"];
+    expect(entry).toBeDefined();
+    expect(entry[1].latestMinor).toBe(7);
+    expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
+    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+  });
+});
+
+describe("chat.requestImageIngest is optional, not floor", () => {
+  it("is absent from RELEASED_FLOOR_METHOD_NAMES", () => {
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("chat.requestImageIngest");
+  });
+
+  it("is resolvable via hostRpcRegistry at 1.0 with an explicit degrade strategy", () => {
+    const entry = hostRpcRegistry["chat.requestImageIngest"];
+    expect(entry).toBeDefined();
+    expect(entry[1].latestMinor).toBe(0);
+    expect(entry[1].versions[0]).toBeDefined();
+    expect(Object.hasOwn(entry, "degrade")).toBe(true);
+  });
+
+  it("round-trips the request and response schemas", () => {
+    expect(
+      requestImageIngestRequestSchema.parse({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        messageId: "assistant-image-1",
+        source: "https://example.com/a.png",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      messageId: "assistant-image-1",
+      source: "https://example.com/a.png",
+    });
+
+    expect(requestImageIngestResponseSchema.parse({ accepted: true })).toEqual({
+      accepted: true,
+    });
+    expect(requestImageIngestResponseSchema.parse({ accepted: false })).toEqual(
+      {
+        accepted: false,
+      },
+    );
+  });
+
+  it("rejects an incomplete requestImageIngest request", () => {
+    expect(
+      requestImageIngestRequestSchema.safeParse({
+        epicId: "epic-1",
+        chatId: "chat-1",
+        messageId: "assistant-image-1",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("guiAgentModelCapabilitiesSchema (imageGeneration)", () => {
+  it("parses { imageGeneration: true } and defaults omitted imageGeneration to false", () => {
+    expect(
+      guiAgentModelCapabilitiesSchema.parse({ imageGeneration: true }),
+    ).toEqual({ imageGeneration: true });
+    expect(guiAgentModelCapabilitiesSchema.parse({})).toEqual({
+      imageGeneration: false,
+    });
+  });
+
+  it("leaves guiAgentModelOptionSchema.metadata as an open record", () => {
+    const parsed = guiAgentModelOptionSchema.parse({
+      harnessId: "codex",
+      slug: "gpt-5",
+      label: "GPT-5",
+      description: null,
+      contextWindow: 200000,
+      maxOutputTokens: 8192,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      metadata: {
+        capabilities: { imageGeneration: true, extraFutureFlag: "ok" },
+        anythingElse: 42,
+      },
+    });
+    expect(parsed.metadata).toEqual({
+      capabilities: { imageGeneration: true, extraFutureFlag: "ok" },
+      anythingElse: 42,
+    });
   });
 });

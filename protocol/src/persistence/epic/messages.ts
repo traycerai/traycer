@@ -1,6 +1,9 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
-import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  contentBlockSchema,
+  contentBlockSchemaPreImage,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   agentSenderSchema,
@@ -70,6 +73,40 @@ export const userMessageSchema = z
   });
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
+// Terminal outcome of one markdown-referenced image the host tried to
+// resolve. `resolved` ⇒ `attachmentHash`/`mediaType` are present; every other
+// state renders a chip (consent/error) and carries no attachment.
+export const imageResolutionStateSchema = z.enum([
+  "resolved",
+  "blocked",
+  "consent-required",
+  "oversized",
+  "not-found",
+]);
+export type ImageResolutionState = z.infer<typeof imageResolutionStateSchema>;
+
+/**
+ * One entry in an assistant message's durable image resolution record - the
+ * host's authoritative answer for one markdown-referenced image (`![alt](src)`
+ * in the assistant's text) found while streaming/persisting that message. The
+ * GUI renders purely from this record (hash present ⇒ blob-cache render;
+ * `consent-required` ⇒ click-to-load chip; any other non-resolved state ⇒
+ * error chip) rather than re-deriving resolution client-side, so background
+ * turns, re-opened chats, and multi-window rendering stay deterministic.
+ * `canonicalSource` is the key identity (`chat.requestImageIngest` targets an
+ * entry by it); `source` is the raw markdown reference as authored.
+ */
+export const imageResolutionEntrySchema = z.object({
+  source: z.string(),
+  canonicalSource: z.string(),
+  attachmentHash: z.string().nullable().default(null),
+  mediaType: z.string().nullable().default(null),
+  width: z.number().nullable().default(null),
+  height: z.number().nullable().default(null),
+  state: imageResolutionStateSchema,
+});
+export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
+
 export const assistantMessageSchema = z.object({
   role: z.literal("assistant"),
   /**
@@ -106,6 +143,14 @@ export const assistantMessageSchema = z.object({
    * Fast upgrade). `null` when the run used the harness default tier.
    */
   serviceTier: z.string().nullable().default(null),
+  /**
+   * Durable image resolution record for this message's markdown-referenced
+   * images (`chat.subscribe@1.7`), one entry per distinct `canonicalSource`.
+   * Defaulted so messages persisted before image support existed parse
+   * cleanly - a pre-1.7 message has no record, and its images render as
+   * consent chips (see `imageResolutionEntrySchema`).
+   */
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
 });
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
@@ -145,7 +190,7 @@ export const assistantMessageSchemaPreInReplyTo = z.object({
   role: z.literal("assistant"),
   messageId: z.string().min(1),
   sender: agentSenderSchemaPreInReplyTo,
-  blocks: z.array(contentBlockSchema),
+  blocks: z.array(contentBlockSchemaPreImage),
   startedAt: z.number().nullable().default(null),
   blocksVersion: z.number().int().nonnegative().optional(),
   timestamp: z.number(),
@@ -158,4 +203,38 @@ export const assistantMessageSchemaPreInReplyTo = z.object({
 export const messageSchemaPreInReplyTo = z.discriminatedUnion("role", [
   userMessageSchemaPreInReplyTo,
   assistantMessageSchemaPreInReplyTo,
+]);
+
+// ── Wire-freeze variant (pre-image) ─────────────────────────────────────────
+// Hand-frozen copy of `assistantMessageSchema` from before image support
+// existed, with `blocks` swapped for the frozen `contentBlockSchemaPreImage`
+// union. Bound to every released `chat.subscribe@1.0-1.6` minor (via the
+// frozen chat-tree schemas) so those lines structurally match the shipped
+// wire and can never observe `imageResults`/the image resolution record.
+// `sender` reuses the LIVE (`inReplyTo`-bearing) shape - `1.4` is the minor
+// that introduced it, and every minor this freeze binds (1.0-1.6) already
+// shipped after that point except 1.0-1.3, which bind their own
+// `assistantMessageSchemaPreInReplyTo` above instead. Field-for-field hand
+// copy, NOT `.omit()`, so a future message field cannot silently leak onto a
+// released wire line.
+export const assistantMessageSchemaPreImage = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreImage),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+});
+
+// `userMessageSchema` is reused live (unswapped): user-authored messages
+// never carry image results or a resolution record, so nothing about them
+// changes at the image-freeze point.
+export const messageSchemaPreImage = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreImage,
 ]);
