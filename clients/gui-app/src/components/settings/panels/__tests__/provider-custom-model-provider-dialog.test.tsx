@@ -156,6 +156,54 @@ describe("custom model provider dialog", () => {
     });
   });
 
+  it("shows a hand-edited declaration's error without waiting to be touched", () => {
+    // The READ side of the wire is loose on purpose - `opencode.json` is
+    // hand-editable, so a malformed base URL arrives here. An edit therefore
+    // starts with every field counted as edited: otherwise submit is disabled
+    // BY that value while the field beside it says nothing, which is the dead
+    // button this form's rules exist to avoid.
+    renderDialog({
+      initial: {
+        modelProviderId: "my-gateway",
+        name: "My gateway",
+        baseUrl: "api.example.test/v1",
+        modelIds: ["a"],
+      },
+      takenIds: ["my-gateway"],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    expect(
+      screen.getByText("Enter a full URL, including https://."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+    ).toBe(true);
+    // And it is fixable in place, which is the whole reason the row still
+    // renders instead of failing its parse.
+    type("Base URL", "https://api.example.test/v1");
+    expect(
+      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("refuses a prototype-pollution id before the host has to", () => {
+    // The host answers `__proto__` with `invalid_input`. The id pattern rejects
+    // it here first - underscores are not in the character class at all - so
+    // the message lands on the field rather than arriving as a form-level
+    // rejection of something the user cannot see the shape of.
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    type("Id", "__proto__");
+    expect(
+      screen.getByText("Use lowercase letters, numbers and dashes."),
+    ).toBeTruthy();
+  });
+
   it("keeps the form open and shows what the host rejected", () => {
     renderDialog({
       initial: null,

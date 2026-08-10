@@ -92,6 +92,7 @@ function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
     hasStoredCredential: false,
     canDisconnect: false,
     configDeclaredCustom: false,
+    custom: null,
     connected: false,
     methods: [],
     ...overrides,
@@ -401,6 +402,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: true,
             source: "config",
             configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
             canDisconnect: true,
           }),
         ],
@@ -678,6 +680,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: true,
             source: "config",
             configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
             canDisconnect: true,
           }),
         ],
@@ -691,6 +694,254 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       screen.getByText(/declaration stays in OpenCode's config file/),
     ).toBeTruthy();
     expect(screen.queryByText(/Remove the stored/)).toBeNull();
+  });
+
+  it("edits a declared provider from the values the host reported", () => {
+    // `updateCustom` carries the WHOLE block, so a form opened with nothing to
+    // prefill would submit blanks over a working declaration - the user would
+    // "edit the name" and silently lose their base URL and model list.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              modelIds: ["a", "b"],
+            },
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    expect(screen.getByLabelText("Base URL").getAttribute("value")).toBe(
+      "https://api.example.test/v1",
+    );
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "EU gateway" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "updateCustom",
+        modelProviderId: "my-gateway",
+        name: "EU gateway",
+        baseUrl: "https://api.example.test/v1",
+        modelIds: ["a", "b"],
+      },
+    });
+  });
+
+  it("re-enables a disabled declaration from its own values, no form", () => {
+    // The wire has no enable verb on purpose - a second way to say "on" could
+    // disagree with disconnect about what "off" means - so this is
+    // `updateCustom` with exactly what the row already holds.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: null,
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "updateCustom"] },
+    });
+    // Connect would demand a key for a provider whose credential is not the
+    // thing that was turned off.
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable My gateway" }),
+    );
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "updateCustom",
+        modelProviderId: "my-gateway",
+        name: "My gateway",
+        baseUrl: "https://api.example.test/v1",
+        modelIds: ["a"],
+      },
+    });
+  });
+
+  it("sends a hand-broken declaration to Edit rather than offering Re-enable", () => {
+    // `opencode.json` is hand-editable and the READ side reports what it finds,
+    // so a declared base URL can arrive malformed. One-click re-enable would
+    // send those broken values straight back and report a failure the user
+    // never had a chance to fix.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: null,
+            configDeclaredCustom: true,
+            custom: { baseUrl: "api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "updateCustom"] },
+    });
+    expect(
+      screen.queryByRole("button", { name: "Re-enable My gateway" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    // The error is on the FIELD immediately - submit is disabled by that value,
+    // and waiting for the user to touch it first would show a dead button
+    // beside the one thing that is wrong and say nothing about it.
+    expect(
+      screen.getByText("Enter a full URL, including https://."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("edits a declared custom row from the values the host reported", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              modelIds: ["a", "b"],
+            },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    // Prefilled from the row, not from blanks: `updateCustom` carries the whole
+    // block, so an empty form's Save would overwrite a working declaration.
+    expect(screen.getByLabelText("Model ids").textContent).toBe("a\nb");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "My gateway v2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "updateCustom",
+        modelProviderId: "my-gateway",
+        name: "My gateway v2",
+        baseUrl: "https://api.example.test/v1",
+        modelIds: ["a", "b"],
+      },
+    });
+  });
+
+  it("re-enables a disabled declaration with no form in between", () => {
+    // A declared row that is off re-enables through `updateCustom` with its OWN
+    // values - the wire has no enable verb, deliberately. Connect would demand
+    // a key for a provider whose credential is not what was turned off.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              modelIds: ["a"],
+            },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable My gateway" }),
+    );
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      action: {
+        action: "updateCustom",
+        modelProviderId: "my-gateway",
+        name: "My gateway",
+        baseUrl: "https://api.example.test/v1",
+        modelIds: ["a"],
+      },
+    });
+  });
+
+  it("offers Edit but NOT one-click re-enable for a broken declaration", () => {
+    // `opencode.json` is hand-editable and the read side reports what it finds.
+    // Sending those values straight back would report a failure the user never
+    // had a chance to fix; Edit opens the form on exactly what is wrong.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    expect(
+      screen.queryByRole("button", { name: "Re-enable My gateway" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Edit My gateway" }),
+    ).toBeTruthy();
+  });
+
+  it("offers no Edit when the host will not accept an update", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    expect(
+      screen.queryByRole("button", { name: "Edit My gateway" }),
+    ).toBeNull();
   });
 
   it("hides every connect affordance when the host advertises no write action", () => {

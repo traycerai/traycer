@@ -51,6 +51,58 @@ export const EMPTY_CUSTOM_PROVIDER_DRAFT: CustomProviderDraft = {
 };
 
 /**
+ * What a declared custom row is currently declared WITH, ready to prefill the
+ * edit form - or null for a row that is not a declared custom provider.
+ *
+ * Unvalidated on purpose. The read side of the wire is deliberately looser than
+ * the write side: `opencode.json` is hand-editable, so a declared base URL may
+ * be malformed and a model list may be junk. Refusing to carry those values
+ * here would leave Edit - the only surface that can fix them - with nothing to
+ * open, which is precisely the row that needs it.
+ */
+export function customProviderValuesOf(entry: {
+  readonly id: string;
+  readonly name: string;
+  readonly custom: {
+    readonly baseUrl: string;
+    readonly modelIds: readonly string[];
+  } | null;
+}): CustomProviderValues | null {
+  if (entry.custom === null) return null;
+  return {
+    modelProviderId: entry.id,
+    name: entry.name,
+    baseUrl: entry.custom.baseUrl,
+    modelIds: entry.custom.modelIds,
+  };
+}
+
+/**
+ * Whether a declared row could be re-enabled AS IS - `updateCustom` with its
+ * own values, no typing.
+ *
+ * False for a declaration the write side would reject (the hand-edited
+ * `opencode.json` case). Offering a one-click re-enable there would send the
+ * user's own broken values back and report a failure they had no chance to fix;
+ * the row offers Edit instead, which opens the form on exactly what is wrong.
+ */
+export function canReenableCustomProvider(
+  values: CustomProviderValues,
+): boolean {
+  return (
+    customProviderValues(
+      {
+        id: values.modelProviderId,
+        name: values.name,
+        baseUrl: values.baseUrl,
+        models: values.modelIds.join("\n"),
+      },
+      [],
+    ) !== null
+  );
+}
+
+/**
  * A provider id is a KEY in the provider's config object and an id the rest of
  * the catalog is addressed by, so it gets the conservative shape every such id
  * in that file already has: lowercase, digits, dashes.

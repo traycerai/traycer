@@ -35,7 +35,11 @@ import {
   sourceBadgeHint,
   sourceBadgeLabel,
 } from "./model-provider-connect-model";
-import type { CustomProviderValues } from "./model-provider-custom-draft";
+import {
+  canReenableCustomProvider,
+  customProviderValuesOf,
+  type CustomProviderValues,
+} from "./model-provider-custom-draft";
 import { ProviderCustomModelProviderDialog } from "./provider-custom-model-provider-dialog";
 import {
   filterModelProvidersByMethod,
@@ -198,6 +202,8 @@ function useCustomProviderForm(providerId: ProviderId): {
   readonly open: (initial: CustomProviderValues | null) => void;
   readonly close: () => void;
   readonly submit: (values: CustomProviderValues) => void;
+  /** Re-enable a declared row from its own values, with no form in between. */
+  readonly reenable: (values: CustomProviderValues) => void;
 } {
   const [state, setState] = useState<{
     readonly initial: CustomProviderValues | null;
@@ -216,8 +222,8 @@ function useCustomProviderForm(providerId: ProviderId): {
     setState(null);
   }, []);
 
-  const submit = useCallback(
-    (values: CustomProviderValues) => {
+  const send = useCallback(
+    (values: CustomProviderValues, declaring: boolean) => {
       setError(null);
       auth.mutate(
         {
@@ -226,10 +232,7 @@ function useCustomProviderForm(providerId: ProviderId): {
             // One shape, two verbs - the wire's own split. `updateCustom` is
             // only reachable for a row the host flagged `configDeclaredCustom`,
             // which is the same set of rows it will accept an update for.
-            action:
-              state?.initial === null || state === null
-                ? "createCustom"
-                : "updateCustom",
+            action: declaring ? "createCustom" : "updateCustom",
             ...values,
             modelIds: [...values.modelIds],
           },
@@ -238,15 +241,40 @@ function useCustomProviderForm(providerId: ProviderId): {
           onSuccess: (data) => {
             const failure = customSubmitError(data.result);
             setError(failure);
-            if (failure === null) setState(null);
+            // A failure lands the user in the form for THESE values, whether or
+            // not they came from one. A bare re-enable that the host refused
+            // otherwise reports itself on a row with no way to act on it, and
+            // the form is the surface that can.
+            setState(failure === null ? null : { initial: values });
           },
         },
       );
     },
-    [auth, providerId, state],
+    [auth, providerId],
   );
 
-  return { state, error, isPending: auth.isPending, open, close, submit };
+  const submit = useCallback(
+    (values: CustomProviderValues) => {
+      send(values, state === null || state.initial === null);
+    },
+    [send, state],
+  );
+  const reenable = useCallback(
+    (values: CustomProviderValues) => {
+      send(values, false);
+    },
+    [send],
+  );
+
+  return {
+    state,
+    error,
+    isPending: auth.isPending,
+    open,
+    close,
+    submit,
+    reenable,
+  };
 }
 
 export function ProviderModelProvidersTab(props: {
@@ -421,6 +449,9 @@ export function ProviderModelProvidersTab(props: {
             : null
         }
         canDisconnect={canDisconnect}
+        canUpdateCustom={capabilities.actions.includes("updateCustom")}
+        onEditCustom={customForm.open}
+        onReenableCustom={customForm.reenable}
         connectable={
           capabilities.actions.includes("connect") ||
           capabilities.actions.includes("oauth")
@@ -505,6 +536,9 @@ function ModelProvidersBody(props: {
   readonly filterEmptyDescription: string | null;
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
+  readonly canUpdateCustom: boolean;
+  readonly onEditCustom: (values: CustomProviderValues) => void;
+  readonly onReenableCustom: (values: CustomProviderValues) => void;
   readonly rowError: {
     readonly modelProviderId: string;
     readonly message: string;
@@ -625,6 +659,7 @@ function ModelProvidersBody(props: {
           providerLabel={props.providerLabel}
           canDisconnect={props.canDisconnect}
           connectable={props.connectable}
+          canUpdateCustom={props.canUpdateCustom}
           busy={props.busyModelProviderId === entry.id}
           rowError={
             props.rowError !== null &&
@@ -635,6 +670,8 @@ function ModelProvidersBody(props: {
           onConnect={() => {
             props.onConnect(entry);
           }}
+          onEditCustom={props.onEditCustom}
+          onReenableCustom={props.onReenableCustom}
           onDisconnect={() => {
             props.onDisconnect(entry);
           }}
@@ -644,17 +681,49 @@ function ModelProvidersBody(props: {
   );
 }
 
+/**
+ * The actions a declared custom row gets on top of the ordinary ones, or null
+ * for every other row.
+ *
+ * `reenable` is `updateCustom` with the row's OWN values - the wire has no
+ * enable verb, deliberately, because a second way to say "on" could disagree
+ * with disconnect about what "off" means. It is offered only when those values
+ * would survive the write side: `opencode.json` is hand-editable, so a
+ * declaration can arrive malformed, and a one-click re-enable there would send
+ * the user's broken values back and report a failure they never had a chance to
+ * fix. That row gets Edit alone, opened on exactly what is wrong.
+ */
+function customRowActions(
+  entry: ModelProviderEntry,
+  canUpdateCustom: boolean,
+): {
+  readonly values: CustomProviderValues;
+  readonly reenable: boolean;
+} | null {
+  if (!canUpdateCustom) return null;
+  const values = customProviderValuesOf(entry);
+  if (values === null) return null;
+  return {
+    values,
+    reenable: !entry.connected && canReenableCustomProvider(values),
+  };
+}
+
 function ModelProviderRow(props: {
   readonly entry: ModelProviderEntry;
   readonly providerLabel: string;
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
+  readonly canUpdateCustom: boolean;
   readonly busy: boolean;
   readonly rowError: string | null;
   readonly onConnect: () => void;
   readonly onDisconnect: () => void;
+  readonly onEditCustom: (values: CustomProviderValues) => void;
+  readonly onReenableCustom: (values: CustomProviderValues) => void;
 }): ReactNode {
   const { entry } = props;
+  const custom = customRowActions(entry, props.canUpdateCustom);
   // The affordance is gated on `canDisconnect` ALONE. `hasStoredCredential`
   // answers a different question ("does Traycer hold a credential for this?")
   // and a later host may answer the two differently - reading either one for
@@ -666,7 +735,11 @@ function ModelProviderRow(props: {
   // lets the user put a credential in place for when the variable is gone.
   // Everywhere else, connected means Disconnect and nothing beside it - which
   // is what "the same buttons under the same conditions" asks for.
-  const showConnect = props.connectable && !showDisconnect;
+  // A declared custom row that is off re-enables from its own values; asking it
+  // to Connect would demand a key for a provider whose credential is not the
+  // thing that was turned off.
+  const showConnect =
+    props.connectable && !showDisconnect && custom?.reenable !== true;
   return (
     <li className="w-full">
       <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 py-1.5">
@@ -705,6 +778,34 @@ function ModelProviderRow(props: {
             </TooltipWrapper>
           ) : null}
           {props.busy ? <MutedAgentSpinner /> : null}
+          {custom !== null ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={props.busy}
+              onClick={() => {
+                props.onEditCustom(custom.values);
+              }}
+              aria-label={`Edit ${entry.name}`}
+            >
+              Edit
+            </Button>
+          ) : null}
+          {custom?.reenable === true ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={props.busy}
+              onClick={() => {
+                props.onReenableCustom(custom.values);
+              }}
+              aria-label={`Re-enable ${entry.name}`}
+            >
+              Re-enable
+            </Button>
+          ) : null}
           {showConnect ? (
             <Button
               type="button"

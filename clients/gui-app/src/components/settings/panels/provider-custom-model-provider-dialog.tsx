@@ -64,8 +64,15 @@ export function ProviderCustomModelProviderDialog(props: {
   // rejects a bad base URL and an empty model list outright, so submit is
   // disabled while the draft is invalid - and a dead button with no visible
   // reason is the worst of both.
-  const [dirty, setDirty] = useState<ReadonlySet<CustomProviderField>>(
-    () => new Set(),
+  //
+  // An EDIT starts with every field already counted as edited. Those values
+  // came off a hand-editable config file, where the read side of the wire
+  // deliberately reports what it finds rather than what it would accept - so a
+  // malformed base URL arrives here, submit is disabled by it, and waiting for
+  // the user to touch that field first would show a dead button beside the one
+  // thing that is wrong and say nothing about it.
+  const [dirty, setDirty] = useState<ReadonlySet<CustomProviderField>>(() =>
+    editing ? new Set(["id", "name", "baseUrl", "models"]) : new Set(),
   );
   const markDirty = useCallback((field: CustomProviderField) => {
     setDirty((current) =>

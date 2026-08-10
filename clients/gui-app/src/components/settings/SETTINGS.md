@@ -931,6 +931,30 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       can never happen — a dead button with no visible reason is the failure
       that pairing those two rules avoids. A host rejection stays INLINE and
       keeps the form open: everything typed is still there to fix in place.
+    - **Edit prefills from the entry's `custom` values, and re-enable needs no
+      form at all.** `updateCustom` carries the whole block, so a dialog opened
+      with nothing to prefill would submit blanks over a working declaration —
+      the user would "edit the name" and silently lose their base URL and model
+      list. A disabled declaration (`connected: false`,
+      `configDeclaredCustom: true`) re-enables through `updateCustom` with its
+      OWN values: there is no enable verb on the wire, deliberately, because a
+      second way to say "on" could disagree with disconnect about what "off"
+      means. Connect is suppressed on those rows — it would demand a key for a
+      provider whose credential is not what was turned off.
+      The READ side of the wire is looser than the write side: `opencode.json`
+      is hand-editable, so a declared base URL can arrive malformed. Two
+      consequences, both deliberate. One-click re-enable is offered only when
+      the values would survive the write side; a broken declaration gets Edit
+      alone, because sending those values back would report a failure the user
+      never had a chance to fix. And an EDIT starts with every field counted as
+      edited, so that malformed value explains itself immediately instead of
+      disabling Save while the field beside it says nothing.
+      A failed write — from the form or from a bare re-enable — lands the user
+      in the form for those values. A re-enable that the host refused otherwise
+      reports itself on a row with no way to act on it.
+      `__proto__` never reaches the host: the id pattern has no underscores in
+      its character class, so it fails on the field. The host answers it with
+      `invalid_input` regardless.
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a

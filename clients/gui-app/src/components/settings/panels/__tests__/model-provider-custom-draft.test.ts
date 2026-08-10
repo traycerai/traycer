@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  canReenableCustomProvider,
   customProviderValues,
+  customProviderValuesOf,
   hasCustomProviderDraftError,
   parseCustomProviderModels,
   suggestCustomProviderId,
@@ -118,5 +120,54 @@ describe("custom provider values", () => {
 
   it("answers null rather than a half-built payload", () => {
     expect(customProviderValues(draft({ models: "" }), [])).toBeNull();
+  });
+});
+
+describe("declared values off an entry", () => {
+  it("carries what the host reported, unvalidated", () => {
+    // The READ side of the wire is looser than the write side on purpose:
+    // `opencode.json` is hand-editable. Refusing to carry a malformed value
+    // here would leave Edit - the only surface that can fix it - with nothing
+    // to open.
+    expect(
+      customProviderValuesOf({
+        id: "my-gateway",
+        name: "My gateway",
+        custom: { baseUrl: "api.example.test/v1", modelIds: ["a"] },
+      }),
+    ).toEqual({
+      modelProviderId: "my-gateway",
+      name: "My gateway",
+      baseUrl: "api.example.test/v1",
+      modelIds: ["a"],
+    });
+  });
+
+  it("answers null for a row that is not a declared custom one", () => {
+    expect(
+      customProviderValuesOf({ id: "openai", name: "OpenAI", custom: null }),
+    ).toBeNull();
+  });
+});
+
+describe("re-enable eligibility", () => {
+  const values = {
+    modelProviderId: "my-gateway",
+    name: "My gateway",
+    baseUrl: "https://api.example.test/v1",
+    modelIds: ["a"],
+  };
+
+  it("allows a declaration the write side would accept", () => {
+    expect(canReenableCustomProvider(values)).toBe(true);
+  });
+
+  it("refuses one the write side would reject", () => {
+    // Sending it back would report a failure the user never had a chance to
+    // fix; that row gets Edit instead.
+    expect(
+      canReenableCustomProvider({ ...values, baseUrl: "api.example.test/v1" }),
+    ).toBe(false);
+    expect(canReenableCustomProvider({ ...values, modelIds: [] })).toBe(false);
   });
 });
