@@ -40,6 +40,7 @@ import { ActiveProjectProfilePersistLifecycleBridge } from "@/providers/active-p
 import { ProfileTabWorkspacesPersistLifecycleBridge } from "@/providers/profile-tab-workspaces-persist-lifecycle-bridge";
 import { ProfileAutoSwitchBridge } from "@/providers/profile-auto-switch-bridge";
 import { ProfileTabWorkspaceBridge } from "@/providers/profile-tab-workspace-bridge";
+import { ProfileWorkspaceFoldersBridge } from "@/providers/profile-workspace-folders-bridge";
 import { HistoryMembershipCacheWarmer } from "@/components/profiles/history-membership-cache-warmer";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
@@ -220,6 +221,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                         <EpicTabExistenceReconciler />
                         <ProfileAutoSwitchBridge router={props.router} />
                         <ProfileTabWorkspaceBridge router={props.router} />
+                        <ProfileWorkspaceFoldersBridge />
                         <HistoryMembershipCacheWarmer />
                         <HostStreamProvider>
                           <HostScopeReady scope="default-host">

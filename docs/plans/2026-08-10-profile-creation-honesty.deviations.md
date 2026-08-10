@@ -1,0 +1,3 @@
+# Profile Creation Honesty — Deviations
+
+- **Task 3 — resolution path:** Plan said to reuse `use-resolved-workspace-folders-query.ts` to map paths → `WorkspaceFolderInfo`. That hook actually joins the *existing* workspace-store folders against host `resolvePathsByRepoIdentifiers` and returns `ResolvedFolder[]` for display — it does not resolve arbitrary profile paths into infos. Profile folders only store `{ path, hostId }`. Bridge projects them synchronously via `profileFoldersToWorkspaceFolderInfos` (`name` from path, `repoIdentifier: null`). No network mock needed; pure mapping is always "ready". Why: follow the code; full `prepareFolders` round-trip would reintroduce async host coupling for a path set the user already chose.
