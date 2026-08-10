@@ -41,8 +41,18 @@ function UsageHarnessSplitItem(props: {
   const color = scale.colorVar(row.harnessId);
   const percentLabel = `${(row.shareOfCost * 100).toFixed(1)}%`;
   return (
+    // Fluid rather than a fixed-width track. The row's fixed columns added
+    // up to ~380px of non-shrinking content, and its container
+    // (`SettingsModalContent`) is `overflow-x-hidden` - so once the pane got
+    // narrower than that, the cost and token values were CLIPPED rather than
+    // scrollable-to. The desktop shell's 960px minimum width leaves slack at
+    // 100% text size, but rem-based columns outgrow a px-sized pane under
+    // browser text-only zoom or an OS font-scaling setting, which is exactly
+    // the case the fluid-sizing rule exists for. Now the label shrinks and
+    // truncates, the value columns keep their aligned widths as minimums,
+    // and the trailing group wraps instead of disappearing.
     <li
-      className="flex items-center gap-3"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1"
       data-testid={`usage-harness-split-row-${row.harnessId}`}
     >
       <span
@@ -50,7 +60,7 @@ function UsageHarnessSplitItem(props: {
         className="h-2 w-2 shrink-0 rounded-full"
         style={{ backgroundColor: color }}
       />
-      <span className="w-24 shrink-0 truncate text-ui-sm text-foreground">
+      <span className="w-24 min-w-0 shrink truncate text-ui-sm text-foreground">
         {scale.labelFor(row.harnessId)}
       </span>
       <span
@@ -66,13 +76,13 @@ function UsageHarnessSplitItem(props: {
           }}
         />
       </span>
-      <span className="w-14 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">
+      <span className="min-w-14 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">
         {percentLabel}
       </span>
-      <span className="w-16 shrink-0 text-right tabular-nums text-ui-sm font-medium text-foreground">
+      <span className="min-w-16 shrink-0 text-right tabular-nums text-ui-sm font-medium text-foreground">
         {formatUsd(row.costUsd)}
       </span>
-      <span className="w-16 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">
+      <span className="min-w-16 shrink-0 text-right tabular-nums text-ui-xs text-muted-foreground">
         {row.tokens.toLocaleString()}
       </span>
     </li>

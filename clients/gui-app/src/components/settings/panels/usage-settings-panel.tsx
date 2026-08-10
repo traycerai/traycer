@@ -30,7 +30,16 @@ export function UsageSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Usage"
-      description="Token and cost usage across your agents on this host."
+      // Scope-neutral by design. The read's actual scope is a property of
+      // the RESPONSE, not of the section's placement: `servedBy: "cloud"`
+      // spans every device on the account, while `"local"` is this machine
+      // only. A static "on this host" was therefore a standing false claim
+      // for every cloud-served read, and nothing corrected it - the
+      // corrective note `servedByScopeNote` renders under the headline is
+      // deliberately `null` for cloud, because there the account-wide total
+      // is exactly what the reader expects. Leaving that helper as the one
+      // place scope is asserted keeps a single source of truth for it.
+      description="Token and cost usage across your agents."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
       headerAction={undefined}
