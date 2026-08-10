@@ -119,7 +119,12 @@ export function ProjectProfileSwitcher(): ReactNode {
           data-testid="project-profile-switcher-menu"
         >
           <DropdownMenuItem
-            onSelect={() => setActiveProfile(null)}
+            onSelect={() => {
+              setActiveProfile(null);
+              // Bridge also navigates home + clears strip focus; do both here
+              // so the click feels immediate even before the subscription runs.
+              void navigate({ to: "/", replace: true });
+            }}
             data-testid="project-profile-option-all"
           >
             <Layers className="size-3.5" aria-hidden />

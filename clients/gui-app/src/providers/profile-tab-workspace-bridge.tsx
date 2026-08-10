@@ -120,7 +120,8 @@ export function startProfileTabWorkspaceController(
    * Epic routes release home unless the epic is KNOWN to belong to the
    * incoming profile (unknown membership fails open: keep the user's context).
    * Draft routes release only when the draft is not part of the restored
-   * strip. Switching to "all-projects" never releases.
+   * strip. Entering "all-projects" is handled in swapToProfile (home + clear
+   * strip focus) so Settings/etc never paint under the aggregate home.
    */
   const releaseForeignActiveRoute = (
     bucket: string,
@@ -166,6 +167,19 @@ export function startProfileTabWorkspaceController(
         .saveLayout(activeBucket, readTabStripLayout());
       restoreBucket(nextBucket);
       activeBucket = nextBucket;
+      if (nextBucket === ALL_PROJECTS_TAB_BUCKET) {
+        // All projects home is the `/` route in route-adapter-layer. If a
+        // keep-alive surface (Settings, draft, epic) stays focused, it paints
+        // under that layer and the UI double-stacks. Clear focus + go home.
+        const layout = readTabStripLayout();
+        if (layout.activeItemId !== null) {
+          tabCommandCoordinator.restoreHydratedLayout({
+            ...layout,
+            activeItemId: null,
+          });
+        }
+        route.navigateHome();
+      }
     } finally {
       swapping = false;
     }

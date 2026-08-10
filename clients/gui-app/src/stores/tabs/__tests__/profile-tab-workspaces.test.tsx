@@ -415,7 +415,7 @@ describe("profile switch releases foreign active routes", () => {
     expect(navigateHome).not.toHaveBeenCalled();
   });
 
-  it("never releases when switching to all-projects", () => {
+  it("enters all-projects by navigating home and clearing strip focus", () => {
     const buzz = useProjectProfilesStore.getState().profiles[0];
     seedMembership("epic-foreign", ["/Users/x/Acme"]);
     useActiveProjectProfileStore.getState().setActiveProfile(buzz.id);
@@ -427,7 +427,8 @@ describe("profile switch releases foreign active routes", () => {
     act(() => {
       useActiveProjectProfileStore.getState().setActiveProfile(null);
     });
-    expect(navigateHome).not.toHaveBeenCalled();
+    expect(navigateHome).toHaveBeenCalledTimes(1);
+    expect(useTabsStore.getState().activeItemId).toBe(null);
   });
 
   it("releases a draft route that is not in the restored strip", () => {
