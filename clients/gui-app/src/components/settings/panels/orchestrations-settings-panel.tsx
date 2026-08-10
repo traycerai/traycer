@@ -27,10 +27,15 @@ import {
   useRunnerOrchestrationGroupsQuery,
   useRunnerOrchestrationCreateMutation,
   useRunnerOrchestrationDeleteMutation,
+  useRunnerOrchestrationGroupSaveMutation,
 } from "@/hooks/runner/use-runner-orchestration-queries";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
 import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
-import type { TraycerOrchestrationRole } from "@traycer-clients/shared/platform/runner-host";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import type {
+  TraycerModelGroup,
+  TraycerOrchestrationRole,
+} from "@traycer-clients/shared/platform/runner-host";
 
 export function OrchestrationsSettingsPanel() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -40,6 +45,7 @@ export function OrchestrationsSettingsPanel() {
   );
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
+  const [showCreateGroupForm, setShowCreateGroupForm] = useState(false);
 
   const binding = useOrchestrationBindingStore((s) => s.binding);
   const setEnabled = useOrchestrationBindingStore((s) => s.setEnabled);
@@ -64,6 +70,9 @@ export function OrchestrationsSettingsPanel() {
   const orchestrationNames = orchestrations.data ?? [];
   const groupNames = groups.data ?? [];
   const bindingRoles = bindingDetail.data?.roles ?? [];
+  // Effective group name for the editor (chip "default" uses undefined for
+  // models query = orchestration default; editor always needs a concrete file).
+  const editTargetGroup = selectedGroup ?? "default";
 
   return (
     <SettingsPanelShell
@@ -96,13 +105,14 @@ export function OrchestrationsSettingsPanel() {
             setSelectedRoleId(null);
           }}
           onSelectGroup={setSelectedGroup}
-          onToggleEditGroup={() =>
-            setEditingGroup(
-              editingGroup === selectedGroup
-                ? null
-                : (selectedGroup ?? "default"),
-            )
-          }
+          onEditGroup={() => {
+            setShowCreateGroupForm(false);
+            setEditingGroup(editTargetGroup);
+          }}
+          onStartCreateGroup={() => {
+            setEditingGroup(null);
+            setShowCreateGroupForm(true);
+          }}
         />
 
         <div className="min-w-0 flex-1 overflow-y-auto p-5">
@@ -110,6 +120,16 @@ export function OrchestrationsSettingsPanel() {
             <ModelGroupEditor
               groupName={editingGroup}
               onClose={() => setEditingGroup(null)}
+            />
+          ) : showCreateGroupForm ? (
+            <CreateModelGroupForm
+              existingNames={groupNames}
+              onCreated={(name) => {
+                setShowCreateGroupForm(false);
+                setSelectedGroup(name === "default" ? undefined : name);
+                setEditingGroup(name);
+              }}
+              onCancel={() => setShowCreateGroupForm(false)}
             />
           ) : (
             <DetailContent
@@ -152,7 +172,8 @@ function OrchestrationsSidebar(props: {
   readonly onCancelCreate: () => void;
   readonly onSelectName: (name: string) => void;
   readonly onSelectGroup: (group: string | undefined) => void;
-  readonly onToggleEditGroup: () => void;
+  readonly onEditGroup: () => void;
+  readonly onStartCreateGroup: () => void;
 }) {
   return (
     <div className="w-64 shrink-0 border-r border-border/40 overflow-y-auto">
@@ -209,15 +230,24 @@ function OrchestrationsSidebar(props: {
           <h3 className="text-ui-xs font-medium text-muted-foreground">
             Model groups
           </h3>
-          {props.selectedGroup !== undefined ? (
+          <div className="flex items-center gap-0.5">
             <button
-              onClick={props.onToggleEditGroup}
+              onClick={props.onStartCreateGroup}
+              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              aria-label="New model group"
+              title="Create model group"
+            >
+              <Plus className="size-3" />
+            </button>
+            <button
+              onClick={props.onEditGroup}
               className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               aria-label="Edit model group"
+              title="Edit selected model group (including default)"
             >
               <Pencil className="size-3" />
             </button>
-          ) : null}
+          </div>
         </div>
         <div className="flex flex-wrap gap-1">
           <GroupButton
@@ -237,7 +267,8 @@ function OrchestrationsSidebar(props: {
             ))}
         </div>
         <p className="mt-1.5 text-ui-xs text-muted-foreground">
-          Pick a group above, then the pencil opens the visual editor.
+          Pencil edits the selected group (default included). + creates a new
+          one.
         </p>
       </div>
     </div>
@@ -406,6 +437,180 @@ function CreateOrchestrationForm(props: {
             ? "Name already exists"
             : "Use kebab-case (a-z, 0-9, -)"}
         </p>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Create model group ─────────────────────────────────────────────────────
+
+const EMPTY_TIERS = {
+  premium: { description: "Premium / high-stakes roles", models: [] },
+  executor: { description: "Executor / implementer roles", models: [] },
+  economic: { description: "Economic / cheap bulk work", models: [] },
+} as const;
+
+function emptyModelGroup(name: string): TraycerModelGroup {
+  return {
+    name,
+    description: "",
+    rules: [],
+    tiers: {
+      premium: { ...EMPTY_TIERS.premium, models: [] },
+      executor: { ...EMPTY_TIERS.executor, models: [] },
+      economic: { ...EMPTY_TIERS.economic, models: [] },
+    },
+  };
+}
+
+function CreateModelGroupForm(props: {
+  readonly existingNames: readonly string[];
+  readonly onCreated: (name: string) => void;
+  readonly onCancel: () => void;
+}) {
+  const runnerHost = useRunnerHost();
+  const saveMutation = useRunnerOrchestrationGroupSaveMutation();
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [cloneFrom, setCloneFrom] = useState<string>("default");
+  const [error, setError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+
+  const nameValid =
+    name.length > 0 &&
+    /^[a-z0-9][a-z0-9-]*$/.test(name) &&
+    !props.existingNames.includes(name);
+
+  const handleSubmit = () => {
+    if (!nameValid || isCreating) return;
+    const traycerCli = runnerHost.traycerCli;
+    if (traycerCli === null) {
+      setError("CLI unavailable on this runner host.");
+      return;
+    }
+    setError(null);
+    setIsCreating(true);
+
+    void (async () => {
+      try {
+        let group: TraycerModelGroup;
+        if (cloneFrom === "") {
+          group = {
+            ...emptyModelGroup(name),
+            description: description.trim(),
+          };
+        } else {
+          const source = await traycerCli.orchestrationGroupShow({
+            name: cloneFrom,
+          });
+          if (source === null) {
+            throw new Error(`Source group "${cloneFrom}" not found.`);
+          }
+          group = {
+            ...source,
+            name,
+            description:
+              description.trim().length > 0
+                ? description.trim()
+                : source.description,
+          };
+        }
+        await new Promise<void>((resolve, reject) => {
+          saveMutation.mutate(
+            { name, group },
+            {
+              onSuccess: (ok) => {
+                if (ok) {
+                  resolve();
+                  return;
+                }
+                reject(new Error("Save failed."));
+              },
+              onError: () => reject(new Error("Create failed.")),
+            },
+          );
+        });
+        props.onCreated(name);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Create failed.");
+        setIsCreating(false);
+      }
+    })();
+  };
+
+  return (
+    <div className="flex max-w-md flex-col gap-3">
+      <div>
+        <h3 className="text-ui-base font-medium">New model group</h3>
+        <p className="text-ui-xs text-muted-foreground">
+          Creates{" "}
+          <code className="text-ui-xs">
+            ~/.traycer/model-groups/&lt;name&gt;.json
+          </code>
+          . Clone an existing group or start empty, then edit models.
+        </p>
+      </div>
+      <label className="flex flex-col gap-1">
+        <span className="text-ui-xs font-medium text-muted-foreground">
+          Name (kebab-case)
+        </span>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. coding-fast"
+          className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-ui-xs font-medium text-muted-foreground">
+          Description (optional)
+        </span>
+        <input
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-ui-xs font-medium text-muted-foreground">
+          Clone from
+        </span>
+        <select
+          value={cloneFrom}
+          onChange={(e) => setCloneFrom(e.target.value)}
+          className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
+        >
+          <option value="">Empty (blank tiers)</option>
+          {props.existingNames.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          onClick={handleSubmit}
+          disabled={!nameValid || isCreating}
+        >
+          {isCreating ? "Creating…" : "Create & edit"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={props.onCancel}>
+          Cancel
+        </Button>
+      </div>
+      {name.length > 0 && !nameValid ? (
+        <p className="text-ui-xs text-destructive">
+          {props.existingNames.includes(name)
+            ? "Name already exists"
+            : "Use kebab-case (a-z, 0-9, -)"}
+        </p>
+      ) : null}
+      {error !== null ? (
+        <p className="text-ui-xs text-destructive">{error}</p>
       ) : null}
     </div>
   );
