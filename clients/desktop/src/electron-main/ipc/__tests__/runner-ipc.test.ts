@@ -3189,6 +3189,7 @@ describe("RunnerIpcBridge", () => {
       payload: null,
       replaceKey: "app-local:host.error:failure-1",
       deliveryKey: "user-1:host.error:failure-1:40",
+      feedSource: "app-local" as const,
       foregroundAppLocal: {
         userId: "user-1",
         entry: { id: "host.error:failure-1", updatedAt: 40 },

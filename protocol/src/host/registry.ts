@@ -65,6 +65,7 @@ import {
   agentSelectionGuideGlobalSetV10,
   agentSendMessageV10,
   agentStopV10,
+  agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentConfigureDowngradeV20ToV10,
@@ -4058,6 +4059,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Brand-new v1.0 method on the same `degrade: unsupported` channel as
+  // `terminal.readOutput` above: a host predating the wrapper fork RPC simply
+  // lacks it, so a caller (the CLI) gets per-call upgrade guidance instead of
+  // a fatal handshake mismatch.
+  "agent.fork": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentForkV10,
           upgradeFromPreviousVersion: null,
         },
       },

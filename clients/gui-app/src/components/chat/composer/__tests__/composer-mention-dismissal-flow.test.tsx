@@ -283,30 +283,13 @@ describe("mention menu dismissal", () => {
   });
 });
 
-describe("mention engaged selection", () => {
-  it("lets an un-engaged Enter fall through to submit instead of inserting", async () => {
-    const { editor, pickerStore, submitCalls } = makeFixture();
-    editor.commands.insertContent("@src");
-    await flush();
-    publishItems(pickerStore, "src/foo.ts");
-    expect(pickerStore.getState().engaged).toBe(false);
-
-    pressKey(editor, "Enter");
-    await flush();
-
-    expect(mentionNodeCount(editor)).toBe(0);
-    expect(submitCalls.count).toBe(1);
-    expect(editor.state.doc.textContent).toBe("@src");
-  });
-
-  it("inserts on Enter after arrow-key engagement", async () => {
+describe("mention selection", () => {
+  it("accepts the highlighted item on Enter without prior arrow navigation", async () => {
     const { editor, pickerStore, submitCalls } = makeFixture();
     editor.commands.insertContent("@src");
     await flush();
     publishItems(pickerStore, "src/foo.ts");
 
-    pressKey(editor, "ArrowDown");
-    expect(pickerStore.getState().engaged).toBe(true);
     pressKey(editor, "Enter");
     await flush();
 
@@ -314,7 +297,21 @@ describe("mention engaged selection", () => {
     expect(submitCalls.count).toBe(0);
   });
 
-  it("accepts the highlighted item on Tab without prior engagement", async () => {
+  it("inserts on Enter after arrow-key navigation", async () => {
+    const { editor, pickerStore, submitCalls } = makeFixture();
+    editor.commands.insertContent("@src");
+    await flush();
+    publishItems(pickerStore, "src/foo.ts");
+
+    pressKey(editor, "ArrowDown");
+    pressKey(editor, "Enter");
+    await flush();
+
+    expect(mentionNodeCount(editor)).toBe(1);
+    expect(submitCalls.count).toBe(0);
+  });
+
+  it("accepts the highlighted item on Tab without prior navigation", async () => {
     const { editor, pickerStore, submitCalls } = makeFixture();
     editor.commands.insertContent("@src");
     await flush();
@@ -327,13 +324,12 @@ describe("mention engaged selection", () => {
     expect(submitCalls.count).toBe(0);
   });
 
-  it("resets engagement when the menu reopens for a new @ occurrence", async () => {
+  it("accepts the highlighted item when the menu reopens", async () => {
     const { editor, pickerStore, submitCalls } = makeFixture();
     editor.commands.insertContent("@src");
     await flush();
     publishItems(pickerStore, "src/foo.ts");
     pressKey(editor, "ArrowDown");
-    expect(pickerStore.getState().engaged).toBe(true);
     pressKey(editor, "Escape");
     await flush();
     expect(pickerStore.getState().open).toBe(false);
@@ -341,12 +337,11 @@ describe("mention engaged selection", () => {
     editor.commands.insertContent(" @lib");
     await flush();
     expect(pickerStore.getState().open).toBe(true);
-    expect(pickerStore.getState().engaged).toBe(false);
     publishItems(pickerStore, "lib/bar.ts");
 
     pressKey(editor, "Enter");
     await flush();
-    expect(mentionNodeCount(editor)).toBe(0);
-    expect(submitCalls.count).toBe(1);
+    expect(mentionNodeCount(editor)).toBe(1);
+    expect(submitCalls.count).toBe(0);
   });
 });

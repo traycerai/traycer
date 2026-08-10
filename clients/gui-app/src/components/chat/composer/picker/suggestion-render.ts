@@ -195,17 +195,12 @@ export function createComposerSuggestionRender<
         }
         if (event.key === "Enter") {
           if (event.shiftKey) return false;
-          if (state.items.length === 0) return false;
-          // Enter only commits a mention menu the user has ENGAGED (arrowed
-          // into); otherwise it is prose punctuation and falls through to the
-          // composer's normal Enter (send). Slash stays commit-on-Enter - a
-          // typed /command is deliberate, prose never starts with one.
-          if (state.kind === "mention" && !state.engaged) return false;
-          // Swallow the key on an inert row. Returning false would let Enter
-          // fall through to the composer and submit the message with the
-          // picker still open.
-          if (activePickerItemDisabledReason(state) !== null) return true;
-          return state.commitActiveItem();
+          // The visible highlight is the selection: Enter accepts it without
+          // requiring an otherwise invisible arrow-key "engagement" state.
+          // Swallow Enter even while loading or on an inert row so the prompt
+          // cannot submit with the picker still open.
+          state.commitActiveItem();
+          return true;
         }
         if (event.key === "Tab") {
           if (state.items.length === 0) return false;

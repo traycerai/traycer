@@ -27,6 +27,7 @@ import type {
   SupportSubmitReportRequest,
 } from "../../ipc-contracts/window-types";
 import type {
+  DesktopNotificationFeedSource,
   DesktopNotificationForegroundAppLocal,
   DesktopNotificationForegroundDisplay,
 } from "../../ipc-contracts/notification-types";
@@ -114,6 +115,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       payload: unknown,
       replaceKey: unknown,
       deliveryKey: unknown,
+      feedSource: unknown,
       foregroundAppLocal: unknown,
     ) => {
       assertString(title, "notifications.show");
@@ -134,9 +136,10 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
         payload,
         replaceKey,
         deliveryKey,
+        feedSource: parseNotificationFeedSource(feedSource),
         foregroundAppLocal: parsedForegroundAppLocal,
       };
-      showNativeNotification({
+      return showNativeNotification({
         title,
         body,
         replaceKey,
@@ -256,6 +259,21 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       );
     },
   );
+}
+
+function parseNotificationFeedSource(
+  value: unknown,
+): DesktopNotificationFeedSource | null {
+  if (value === null) return null;
+  if (
+    value === "host" ||
+    value === "cloud" ||
+    value === "app-local" ||
+    value === "global"
+  ) {
+    return value;
+  }
+  throw new Error("notifications.show requires a known feed source or null");
 }
 
 function parseForegroundAppLocal(

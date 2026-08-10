@@ -22,6 +22,7 @@ import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
+import { buildAgentForkCommand } from "./commands/agent-fork";
 import { buildAgentStopCommand } from "./commands/agent-stop";
 import { buildAgentListProfilesCommand } from "./commands/agent-list-profiles";
 import { buildAgentProfileRateLimitsCommand } from "./commands/agent-profile-rate-limits";
@@ -1490,6 +1491,11 @@ function registerAgentCommands(
   // act on the one profile the caller names - so `--profile` is required there.
   const profileRequiredHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'.";
+  // Fork's own omission default is 'inherit' (continue the SOURCE agent's
+  // profile byte-for-byte) - distinct from create's last-used preference
+  // lookup, so this cannot reuse `profileHelp`'s wording.
+  const forkProfileHelp =
+    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program
     .command("agent")
     .description("Agent inspection and communication for the calling agent");
@@ -1564,6 +1570,61 @@ function registerAgentCommands(
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        profile: typeof opts.profile === "string" ? opts.profile : null,
+        cwd: typeof opts.cwd === "string" ? opts.cwd : null,
+        workspacePaths: Array.isArray(opts.workspacePath)
+          ? opts.workspacePath.filter(
+              (entry): entry is string => typeof entry === "string",
+            )
+          : [],
+        workspaceEntries: Array.isArray(opts.workspaceEntry)
+          ? opts.workspaceEntry.filter(
+              (entry): entry is string => typeof entry === "string",
+            )
+          : [],
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("fork", readonlyHidden)
+      .description(
+        "Clone an existing local agent (GUI chat or Claude Code terminal session) into a new agent seeded from its latest available checkpoint.",
+      )
+      .requiredOption(
+        "--agent-id <id>",
+        "Source agent to fork. Accepts an unambiguous id prefix (unlike 'agent stop'/'agent archive', which take a full agent id).",
+      )
+      .option("--name <name>", "Display name for the forked agent")
+      .option(
+        "--permission-mode <mode>",
+        `GUI permission mode for the forked agent. ${A2A_PERMISSION_MODE_INSTRUCTION} Omit this flag to use \`full_access\`.`,
+      )
+      .option("--profile <ambient|id>", forkProfileHelp)
+      .option(
+        "--cwd <path>",
+        "Primary working directory for the forked agent. Use this with a path returned by 'traycer worktree create'. Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.",
+      )
+      .option(
+        "--workspace-path <path>",
+        "Additional existing path the forked agent may access. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--workspace-entry <workspace=path>",
+        "Exact workspace binding. Repeatable. Use /path alone for existing/local, or /source=/run for a worktree.",
+        collectRepeatedOption,
+        [],
+      ),
+    (opts) =>
+      buildAgentForkCommand({
+        epicId: null,
+        senderAgentId: null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : "",
+        name: typeof opts.name === "string" ? opts.name : null,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
         profile: typeof opts.profile === "string" ? opts.profile : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
