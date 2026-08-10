@@ -910,7 +910,7 @@ describe("findAdditivityViolation - second-round review hardening", () => {
     expect(rootAdditivityViolation(violation!).kind).toBe("array-bounds");
   });
 
-  it("flags lowering minItems and dropping uniqueItems", () => {
+  it("flags lowering minItems", () => {
     const lower = findAdditivityViolation(
       fingerprint(z.object({ rows: z.array(z.string()).min(2) })),
       fingerprint(z.object({ rows: z.array(z.string()).min(1) })),
@@ -919,6 +919,55 @@ describe("findAdditivityViolation - second-round review hardening", () => {
       null,
     );
     expect(rootAdditivityViolation(lower!).kind).toBe("array-bounds");
+  });
+
+  it("flags widening bounds on a ROOT array, not just a nested one", () => {
+    // Nested arrays keep their raw JSON Schema node (bounds intact), but the
+    // root is normalized through `convertJsonSchemaShape` - which used to drop
+    // the bound keywords, making this exact widening invisible.
+    // Root items must themselves be a supported shape, so this uses the
+    // array-of-objects form the registry actually carries.
+    const violation = findAdditivityViolation(
+      fingerprint(z.array(z.object({ id: z.string() })).max(1)),
+      fingerprint(z.array(z.object({ id: z.string() })).max(2)),
+      "lenient",
+      null,
+      null,
+    );
+    expect(violation?.kind).toBe("array-bounds");
+  });
+
+  it("accepts required -> defaulted, which the newer peer always emits", () => {
+    // Mirror image of `default -> optional`: the NEXT side must be read from
+    // the output tree, or its input rendering (which marks a defaulted field
+    // optional) would report a false `required-field`.
+    const previousSchema = z.object({ id: z.string() });
+    const nextSchema = z.object({ id: z.string().default("x") });
+    expect(
+      findAdditivityViolation(
+        fingerprint(previousSchema),
+        fingerprint(nextSchema),
+        "lenient",
+        toUnknownKeyTree(previousSchema),
+        toUnknownKeyTree(nextSchema),
+      ),
+    ).toBeNull();
+  });
+
+  it("does not report a false required-field when only one input tree is available", () => {
+    // The payload-additivity guard compares a stored fingerprint (no schema to
+    // re-render) against a live one, so `previousInput` is null. Requiredness
+    // must stay symmetric in that case.
+    const schema = z.object({ id: z.string().default("x"), n: z.number() });
+    expect(
+      findAdditivityViolation(
+        fingerprint(schema),
+        fingerprint(schema),
+        "lenient",
+        null,
+        toUnknownKeyTree(schema),
+      ),
+    ).toBeNull();
   });
 
   it("accepts tightening array bounds", () => {

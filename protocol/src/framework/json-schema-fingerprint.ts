@@ -41,10 +41,17 @@ export type AnyOfJsonSchema = {
   readonly variants: readonly JsonSchemaFingerprint[];
 };
 
-/** Array fingerprint (z.array). */
+/**
+ * Array fingerprint (z.array). Bounds are carried because they constrain the
+ * payload independently of `items`: normalizing them away would make a root
+ * array's `.max(1)` -> `.max(2)` widening invisible (nested arrays keep their
+ * raw JSON Schema node, so only the normalized root lost them).
+ */
 export type ArrayJsonSchema = {
   readonly type: "array";
   readonly items: JsonSchemaFingerprint;
+  readonly minItems?: number;
+  readonly maxItems?: number;
 };
 
 /**
@@ -183,8 +190,11 @@ function inputVariants(previousInput: unknown): readonly unknown[] {
 
 /**
  * Directional comparison of array-level constraints. A newer schema may only
- * tighten what it emits: a higher `maxItems`, a lower `minItems`, or dropping
- * `uniqueItems` all let it produce arrays the older schema refuses.
+ * tighten what it emits: a higher `maxItems` or a lower `minItems` lets it
+ * produce arrays the older schema refuses.
+ *
+ * `uniqueItems` is deliberately not compared - `z.set(...)` renders as `{}`
+ * under `unrepresentable: "any"`, so no schema in this repo can emit it.
  */
 function arrayBoundsRelaxation(
   previous: unknown,
@@ -194,12 +204,10 @@ function arrayBoundsRelaxation(
   const previousShape = previous as {
     minItems?: unknown;
     maxItems?: unknown;
-    uniqueItems?: unknown;
   } | null;
   const nextShape = next as {
     minItems?: unknown;
     maxItems?: unknown;
-    uniqueItems?: unknown;
   } | null;
   if (
     typeof previousShape !== "object" ||
@@ -223,9 +231,6 @@ function arrayBoundsRelaxation(
     if (typeof nextMin !== "number" || nextMin < previousMin) {
       return { kind: "array-bounds", detail: `${location} minItems` };
     }
-  }
-  if (previousShape.uniqueItems === true && nextShape.uniqueItems !== true) {
-    return { kind: "array-bounds", detail: `${location} uniqueItems` };
   }
   return null;
 }
@@ -373,9 +378,16 @@ function convertJsonSchemaShape(
   }
 
   if (node.type === "array" && node.items !== undefined) {
+    const bounds = node as { minItems?: unknown; maxItems?: unknown };
     return {
       type: "array",
       items: convertJsonSchemaShape(node.items, `${context}.items`),
+      ...(typeof bounds.minItems === "number"
+        ? { minItems: bounds.minItems }
+        : {}),
+      ...(typeof bounds.maxItems === "number"
+        ? { maxItems: bounds.maxItems }
+        : {}),
     };
   }
 
@@ -928,13 +940,21 @@ function findNodeAdditivityViolation(
     // Relaxing required -> optional is not additive: the newer peer may omit
     // the field, and the older schema rejects the payload outright.
     //
-    // Requiredness comes from the INPUT rendering, which is what the older
-    // peer actually enforces on a payload. The output rendering marks a
-    // `.default()` field required, so using it would reject the
-    // projection-safe `z.string().default("x")` -> `z.string().optional()`
-    // transition (the old schema accepts omission and fills the default).
-    const previousRequired = inputRequired(previousInput) ?? previousNode.required;
-    const nextRequired = new Set(inputRequired(nextInput) ?? nextNode.required);
+    // The two sides read from DIFFERENT renderings, deliberately:
+    //
+    // - PREVIOUS uses the INPUT tree - what the older peer ACCEPTS. Its output
+    //   rendering marks a `.default()` field required, which would reject the
+    //   projection-safe `z.string().default("x")` -> `z.string().optional()`
+    //   transition even though the old schema tolerates omission.
+    // - NEXT uses the OUTPUT fingerprint - what the newer peer EMITS. Its
+    //   input rendering marks a defaulted field optional, which would reject
+    //   the equally safe `z.string()` -> `z.string().default("x")`, even
+    //   though the newer peer always puts the field on the wire.
+    //
+    // Reading both from one side reintroduces one of those false positives.
+    const previousRequired =
+      inputRequired(previousInput) ?? previousNode.required;
+    const nextRequired = new Set(nextNode.required);
     for (const field of previousRequired) {
       if (!nextRequired.has(field)) {
         return { kind: "required-field", detail: dottedPath([...path, field]) };
