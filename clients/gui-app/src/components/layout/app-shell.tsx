@@ -39,11 +39,11 @@ export function AppShell(props: AppShellProps) {
   // not a property of any open tab.
   useChatForkEventQuery();
   // `/` is exclusively the landing surface (All projects home or the
-  // profile launch jump). Never paint keep-alive top-level surfaces there:
-  // if one leaks through (e.g. a Settings tab still focused), it stacks under
-  // the route-adapter layer and the UI double-renders. The flag is mirrored
-  // from the live router by LandingRouteBridge (bare test mounts default to
-  // false).
+  // profile launch jump). Keep-alive top-level surfaces must not paint there
+  // (a focused Settings/draft would stack under the route-adapter layer).
+  // Hidden via display:none — NOT unmounted: unmounting the host tears down
+  // EpicSessionProvider trees and remount order crashes InEpicSurface
+  // (useOpenEpicHandle before the provider exists).
   const isLandingRoute = useLandingRouteStore((s) => s.isLandingRoute);
 
   return (
@@ -57,17 +57,26 @@ export function AppShell(props: AppShellProps) {
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}
-                <div className="relative flex min-h-0 flex-1 overflow-hidden">
-                  <TopLevelSurfaceActivationProvider>
-                    {isLandingRoute ? null : <TopLevelTabHost />}
-                  </TopLevelSurfaceActivationProvider>
+              <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                <TopLevelSurfaceActivationProvider>
                   <div
-                    className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
-                    data-testid="route-adapter-layer"
+                    className={
+                      isLandingRoute
+                        ? "hidden"
+                        : "relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+                    }
+                    data-testid="top-level-tab-host-gate"
                   >
-                    {children}
+                    <TopLevelTabHost />
                   </div>
-                  {/* Single window-wide terminal mount: the gesture provider's
+                </TopLevelSurfaceActivationProvider>
+                <div
+                  className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
+                  data-testid="route-adapter-layer"
+                >
+                  {children}
+                </div>
+                {/* Single window-wide terminal mount: the gesture provider's
                     state must survive draft/split focus changes, so it lives
                     here rather than inside any one landing pane. The panel's
                     DOM is portaled into the selected pane's anchor, which owns
