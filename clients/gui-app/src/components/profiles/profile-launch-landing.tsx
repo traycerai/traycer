@@ -38,6 +38,11 @@ export function __resetProfileLaunchLandingForTesting(): void {
  *   hold activation until hydration; a later cache update must not clobber
  *   the queued epic with a draft).
  * - A non-empty strip means a live tab owns the surface; leave it alone.
+ *   The strip read MUST be reactive: on a profile switch the bridge swaps the
+ *   bucket asynchronously around the same render pass, so a one-shot
+ *   `getState()` read can still see the OUTGOING profile's tabs, bail out,
+ *   and never re-run — a permanent black screen (observed live: switching
+ *   into a profile whose bucket is empty).
  */
 export function ProfileLaunchLanding(): ReactNode {
   const navigate = useNavigate();
@@ -46,6 +51,7 @@ export function ProfileLaunchLanding(): ReactNode {
   });
   const activeProfile = useActiveProjectProfile();
   const itemsByEpicId = useHistoryMembershipCacheStore((s) => s.itemsByEpicId);
+  const stripLen = useTabsStore((s) => s.stripOrder.length);
   const jumpPendingRef = useRef(false);
 
   useEffect(() => {
@@ -75,9 +81,9 @@ export function ProfileLaunchLanding(): ReactNode {
     if (activeProfile === null) return;
     if (pathname !== "/") return;
     if (jumpPendingRef.current) return;
-    if (useTabsStore.getState().stripOrder.length > 0) return;
+    if (stripLen > 0) return;
     navigate({ to: "/draft/new", replace: true });
-  }, [activeProfile, itemsByEpicId, navigate, pathname]);
+  }, [activeProfile, itemsByEpicId, navigate, pathname, stripLen]);
 
   return null;
 }

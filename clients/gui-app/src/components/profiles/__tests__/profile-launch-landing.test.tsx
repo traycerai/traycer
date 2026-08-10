@@ -228,6 +228,42 @@ describe("ProfileLaunchLanding", () => {
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
   });
 
+  it("re-fires the draft fallback when the strip empties AFTER mount (profile-switch race)", async () => {
+    // Regression: switching profiles swaps the strip bucket asynchronously.
+    // The effect first runs with the OUTGOING profile's tabs still in the
+    // strip and bails; without a reactive strip read it never re-runs and
+    // the app sits on a black `/` forever.
+    const profile = useProjectProfilesStore.getState().profiles[0];
+    useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
+    useHistoryMembershipCacheStore.getState().setMembershipItems([
+      historyItem({
+        epicId: "foreign",
+        updatedAtMs: 100,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Bkza" }],
+      }),
+    ]);
+    useTabsStore.setState({
+      stripOrder: [{ kind: "epic", id: "outgoing-epic" }],
+    });
+
+    renderLanding();
+
+    // First pass: outgoing strip still owns the surface — no redirect.
+    await waitFor(() => {
+      expect(useTabsStore.getState().stripOrder.length).toBe(1);
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    // The bridge swap lands: incoming bucket is empty.
+    useTabsStore.setState({ stripOrder: [] });
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledTimes(1);
+    });
+    expectDraftRedirect();
+    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+  });
+
   it("never re-fires the draft redirect off the `/` pathname", async () => {
     // A failed /draft/new resolution re-renders RootLandingPage (and this
     // component) at /draft/new — the fallback must not loop.
