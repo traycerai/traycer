@@ -25,6 +25,11 @@ export function __resetProfileLaunchLandingForTesting(): void {
  * - No profile active, or profile owns no epic → consumes and stays home.
  * - The activation goes through the tab-navigation controller, which queues
  *   until tab hydration is ready, so launch timing races are safe.
+ * - Launch passes `openEpicIds: null` deliberately: at cold start, jumping to
+ *   the most recent owned epic IS the "continue where you left off" feature.
+ *   The closed-tab-stays-closed strip authority applies to PROFILE SWITCHING
+ *   (see project-profile-switcher), where reopening a just-closed tab is a
+ *   bug, not a convenience.
  */
 export function ProfileLaunchLanding(): ReactNode {
   const navigate = useNavigate();
@@ -41,6 +46,7 @@ export function ProfileLaunchLanding(): ReactNode {
     const intent = buildProfileLandingEpicIntent(
       activeProfile,
       Array.from(itemsByEpicId.values()),
+      null,
     );
     launchLandingConsumed = true;
     if (intent !== null) {

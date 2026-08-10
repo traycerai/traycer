@@ -190,8 +190,17 @@ export function startProfileTabWorkspaceController(
   });
 
   return () => {
+    // Flush a pending write-through BEFORE tearing down: quitting or
+    // reloading the window inside the debounce window must not lose the last
+    // tab change — a dropped close would resurrect the tab from the stale
+    // bucket on the next restore. The persist write is synchronous
+    // localStorage, so it is durable even during unload.
+    if (timer !== null) {
+      clearTimer();
+      timer = null;
+      saveActiveBucket();
+    }
     disposed = true;
-    clearTimer();
     unsubscribeProfile();
     unsubscribeTabs();
   };

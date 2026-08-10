@@ -6,7 +6,13 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
+import { useProfileTabWorkspacesStore } from "@/stores/profiles/profile-tab-workspaces-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
+import {
+  emptyTabStripLayout,
+  tabItemId,
+  type PersistedTabStripLayout,
+} from "@/stores/tabs/layout";
 import { ProjectProfileSwitcher } from "../project-profile-switcher";
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
@@ -64,6 +70,17 @@ function resetStores(): void {
   useProjectProfilesStore.getState().resetForTests();
   useActiveProjectProfileStore.getState().resetForTests();
   useHistoryMembershipCacheStore.getState().resetForTests();
+  useProfileTabWorkspacesStore.getState().resetForTests();
+}
+
+function stripWithEpic(epicId: string): PersistedTabStripLayout {
+  const ref = { kind: "epic" as const, id: epicId };
+  return {
+    ...emptyTabStripLayout(),
+    items: [{ kind: "tab", id: tabItemId(ref), ref }],
+    activeItemId: tabItemId(ref),
+    activationHistory: [ref],
+  };
 }
 
 describe("ProjectProfileSwitcher", () => {
@@ -136,9 +153,7 @@ describe("ProjectProfileSwitcher", () => {
       historyItem({
         epicId: "titanos-old",
         updatedAtMs: 100,
-        linkedWorkspaces: [
-          { hostId: "h1", workspacePath: "/Users/x/Acme" },
-        ],
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
       }),
       historyItem({
         epicId: "titanos-new",
@@ -184,6 +199,71 @@ describe("ProjectProfileSwitcher", () => {
 
     expect(useActiveProjectProfileStore.getState().activeProfileId).toBe(
       profiles[0].id,
+    );
+    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+  });
+
+  it("lands on the OPEN epic, never on a closed tab (anti-zombie)", async () => {
+    const user = userEvent.setup();
+    const profiles = useProjectProfilesStore.getState().profiles;
+    const titanos = profiles[0];
+    // The profile's strip has titanos-old open; titanos-new's tab was
+    // deliberately closed and must NOT be resurrected by entering the
+    // profile, even though it is the most recently updated owned epic.
+    useProfileTabWorkspacesStore
+      .getState()
+      .saveLayout(titanos.id, stripWithEpic("titanos-old"));
+    useHistoryMembershipCacheStore.getState().setMembershipItems([
+      historyItem({
+        epicId: "titanos-old",
+        updatedAtMs: 100,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+      }),
+      historyItem({
+        epicId: "titanos-new",
+        updatedAtMs: 200,
+        linkedWorkspaces: [
+          { hostId: "h1", workspacePath: "/Users/x/Acme/apps/web" },
+        ],
+      }),
+    ]);
+
+    renderSwitcher();
+    await user.click(await screen.findByTestId("project-profile-switcher"));
+    await user.click(
+      screen.getByTestId(`project-profile-option-${titanos.id}`),
+    );
+
+    expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(activateTabIntent).mock.calls[0];
+    expect(call[1]).toMatchObject({ kind: "open-epic", epicId: "titanos-old" });
+  });
+
+  it("stays on the current surface when the profile's strip is empty (all tabs closed)", async () => {
+    const user = userEvent.setup();
+    const profiles = useProjectProfilesStore.getState().profiles;
+    const titanos = profiles[0];
+    // The bucket exists but every tab was closed: entering the profile must
+    // not reopen anything.
+    useProfileTabWorkspacesStore
+      .getState()
+      .saveLayout(titanos.id, emptyTabStripLayout());
+    useHistoryMembershipCacheStore.getState().setMembershipItems([
+      historyItem({
+        epicId: "titanos-new",
+        updatedAtMs: 200,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+      }),
+    ]);
+
+    renderSwitcher();
+    await user.click(await screen.findByTestId("project-profile-switcher"));
+    await user.click(
+      screen.getByTestId(`project-profile-option-${titanos.id}`),
+    );
+
+    expect(useActiveProjectProfileStore.getState().activeProfileId).toBe(
+      titanos.id,
     );
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
   });

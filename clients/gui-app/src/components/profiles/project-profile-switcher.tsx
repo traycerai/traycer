@@ -16,7 +16,12 @@ import { activateTabIntent } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
 import { useActiveProjectProfileStore } from "@/stores/profiles/active-project-profile-store";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
+import {
+  profileTabBucket,
+  useProfileTabWorkspacesStore,
+} from "@/stores/profiles/profile-tab-workspaces-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
+import { flattenLayoutRefs } from "@/stores/tabs/layout";
 import { profileColorHex, profileIcon } from "./profile-options";
 import { ProjectProfileBadge } from "./project-profile-badge";
 import { ProjectProfileDialog } from "./project-profile-dialog";
@@ -38,13 +43,33 @@ export function ProjectProfileSwitcher(): ReactNode {
   // Entering a project jumps straight to its working surface: the most
   // recently updated epic the project owns. Projects with no owned epic yet
   // stay on the current surface (the locked composer is the right start).
+  //
+  // Anti-zombie rule: the profile's restored tab strip is the work-surface
+  // authority. Only an epic whose tab is still OPEN may be a landing target —
+  // otherwise switching into the profile reopens a tab the user deliberately
+  // closed and the write-through persists it again. A missing bucket (fresh
+  // profile) allows the cold-open jump; an existing strip — even an EMPTY
+  // one (all tabs closed) — means "stay".
   const selectProfile = (profile: ProjectProfile): void => {
     setActiveProfile(profile.id);
+    const restored =
+      useProfileTabWorkspacesStore.getState().layoutsByBucket[
+        profileTabBucket(profile.id)
+      ];
+    const openEpicIds =
+      restored === undefined
+        ? null
+        : new Set(
+            flattenLayoutRefs(restored)
+              .filter((ref) => ref.kind === "epic")
+              .map((ref) => ref.id),
+          );
     const intent = buildProfileLandingEpicIntent(
       profile,
       Array.from(
         useHistoryMembershipCacheStore.getState().itemsByEpicId.values(),
       ),
+      openEpicIds,
     );
     if (intent !== null) {
       activateTabIntent(navigate, intent, undefined);
@@ -54,9 +79,7 @@ export function ProjectProfileSwitcher(): ReactNode {
   const TriggerIcon =
     activeProfile === null ? Layers : profileIcon(activeProfile.icon);
   const triggerColor =
-    activeProfile === null
-      ? undefined
-      : profileColorHex(activeProfile.color);
+    activeProfile === null ? undefined : profileColorHex(activeProfile.color);
   const triggerLabel =
     activeProfile === null ? "All projects" : activeProfile.name;
 
@@ -75,9 +98,7 @@ export function ProjectProfileSwitcher(): ReactNode {
             <TriggerIcon
               className="size-3.5 shrink-0"
               style={
-                triggerColor === undefined
-                  ? undefined
-                  : { color: triggerColor }
+                triggerColor === undefined ? undefined : { color: triggerColor }
               }
               aria-hidden
             />

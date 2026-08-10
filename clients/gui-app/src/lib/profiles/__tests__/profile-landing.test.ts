@@ -58,12 +58,10 @@ describe("mostRecentOwnedEpic", () => {
       historyItem({
         epicId: "new-owned",
         updatedAtMs: 200,
-        linkedWorkspaces: [
-          { hostId: "h1", workspacePath: "/Users/x/Acme" },
-        ],
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
       }),
     ];
-    expect(mostRecentOwnedEpic(PROFILE, items)?.epicId).toBe("new-owned");
+    expect(mostRecentOwnedEpic(PROFILE, items, null)?.epicId).toBe("new-owned");
   });
 
   it("ignores foreign epics even when newer", () => {
@@ -71,9 +69,7 @@ describe("mostRecentOwnedEpic", () => {
       historyItem({
         epicId: "owned",
         updatedAtMs: 100,
-        linkedWorkspaces: [
-          { hostId: "h1", workspacePath: "/Users/x/Acme" },
-        ],
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
       }),
       historyItem({
         epicId: "foreign",
@@ -81,38 +77,106 @@ describe("mostRecentOwnedEpic", () => {
         linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Bkza" }],
       }),
     ];
-    expect(mostRecentOwnedEpic(PROFILE, items)?.epicId).toBe("owned");
+    expect(mostRecentOwnedEpic(PROFILE, items, null)?.epicId).toBe("owned");
   });
 
   it("ignores unscoped epics (no linked workspaces)", () => {
     const items = [
-      historyItem({ epicId: "unscoped", updatedAtMs: 999, linkedWorkspaces: [] }),
+      historyItem({
+        epicId: "unscoped",
+        updatedAtMs: 999,
+        linkedWorkspaces: [],
+      }),
     ];
-    expect(mostRecentOwnedEpic(PROFILE, items)).toBe(null);
+    expect(mostRecentOwnedEpic(PROFILE, items, null)).toBe(null);
   });
 
   it("returns null when the profile owns nothing", () => {
-    expect(mostRecentOwnedEpic(PROFILE, [])).toBe(null);
+    expect(mostRecentOwnedEpic(PROFILE, [], null)).toBe(null);
+  });
+
+  it("restricts candidates to the given id set (closed tabs never win)", () => {
+    const items = [
+      historyItem({
+        epicId: "closed-epic",
+        updatedAtMs: 999,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+      }),
+      historyItem({
+        epicId: "open-epic",
+        updatedAtMs: 100,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+      }),
+    ];
+    // The newer epic is owned but NOT in the open set: it was closed.
+    expect(
+      mostRecentOwnedEpic(PROFILE, items, new Set(["open-epic"]))?.epicId,
+    ).toBe("open-epic");
+  });
+
+  it("returns null for an empty restriction set (all tabs closed)", () => {
+    const items = [
+      historyItem({
+        epicId: "closed-epic",
+        updatedAtMs: 999,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+      }),
+    ];
+    expect(mostRecentOwnedEpic(PROFILE, items, new Set())).toBe(null);
   });
 });
 
 describe("buildProfileLandingEpicIntent", () => {
-  it("builds an open-epic intent for the most recent owned epic", () => {
-    const intent = buildProfileLandingEpicIntent(PROFILE, [
-      historyItem({
-        epicId: "owned",
-        updatedAtMs: 100,
-        linkedWorkspaces: [
-          { hostId: "h1", workspacePath: "/Users/x/Acme" },
-        ],
-      }),
-    ]);
+  const ownedItem = (): HistoryItem =>
+    historyItem({
+      epicId: "owned",
+      updatedAtMs: 100,
+      linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+    });
+
+  it("builds an open-epic intent for the most recent owned epic (cold open)", () => {
+    const intent = buildProfileLandingEpicIntent(PROFILE, [ownedItem()], null);
     expect(intent).not.toBe(null);
     expect(intent?.kind).toBe("open-epic");
     expect(intent?.epicId).toBe("owned");
   });
 
+  it("targets an OPEN epic even when a newer owned epic is closed", () => {
+    const items = [
+      ownedItem(),
+      historyItem({
+        epicId: "owned-closed",
+        updatedAtMs: 200,
+        linkedWorkspaces: [{ hostId: "h1", workspacePath: "/Users/x/Acme" }],
+      }),
+    ];
+    const intent = buildProfileLandingEpicIntent(
+      PROFILE,
+      items,
+      new Set(["owned"]),
+    );
+    expect(intent?.epicId).toBe("owned");
+  });
+
+  it("returns null when the open set has no owned epic (stay on surface)", () => {
+    const intent = buildProfileLandingEpicIntent(
+      PROFILE,
+      [ownedItem()],
+      new Set(["some-other-epic"]),
+    );
+    expect(intent).toBe(null);
+  });
+
+  it("returns null when the open set is empty (user closed every tab)", () => {
+    const intent = buildProfileLandingEpicIntent(
+      PROFILE,
+      [ownedItem()],
+      new Set(),
+    );
+    expect(intent).toBe(null);
+  });
+
   it("returns null when there is no owned epic", () => {
-    expect(buildProfileLandingEpicIntent(PROFILE, [])).toBe(null);
+    expect(buildProfileLandingEpicIntent(PROFILE, [], null)).toBe(null);
   });
 });

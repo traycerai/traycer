@@ -192,6 +192,33 @@ describe("profile tab workspaces controller", () => {
     ).toBeUndefined();
   });
 
+  it("dispose flushes a pending write-through (a close is never dropped)", () => {
+    seedCanvasEpic("tab-a", "epic-a", "Alpha");
+    seedStrip(layoutWithEpic("tab-a"));
+    dispose = startProfileTabWorkspaceController(stubRoute("/").route);
+
+    // Close the only tab: the write-through is debounced, not yet saved.
+    act(() => {
+      seedStrip(emptyTabStripLayout());
+    });
+    expect(
+      useProfileTabWorkspacesStore.getState().layoutsByBucket[
+        ALL_PROJECTS_TAB_BUCKET
+      ],
+    ).toBeUndefined();
+
+    // Teardown inside the debounce window must still persist the close.
+    dispose();
+    dispose = null;
+
+    const saved =
+      useProfileTabWorkspacesStore.getState().layoutsByBucket[
+        ALL_PROJECTS_TAB_BUCKET
+      ];
+    expect(saved).toBeDefined();
+    expect(flattenLayoutRefs(saved ?? emptyTabStripLayout())).toEqual([]);
+  });
+
   it("restoring a snapshot with an unknown epic ref heals without throw", () => {
     seedCanvasEpic("tab-known", "epic-known", "Known");
     // Save a layout that also references a tab that is not a live source.
@@ -256,10 +283,12 @@ describe("profile tab workspaces controller", () => {
       useActiveProjectProfileStore.getState().setActiveProfile("profile-a");
     });
 
-    expect(readTabStripLayout()).toEqual(expect.objectContaining({
-      items: layoutA.items,
-      activeItemId: layoutA.activeItemId,
-    }));
+    expect(readTabStripLayout()).toEqual(
+      expect.objectContaining({
+        items: layoutA.items,
+        activeItemId: layoutA.activeItemId,
+      }),
+    );
     // Outgoing all-projects bucket must not have been written from the
     // pre-hydration strip.
     expect(
