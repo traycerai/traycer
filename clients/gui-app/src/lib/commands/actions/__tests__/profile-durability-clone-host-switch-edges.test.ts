@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
@@ -216,6 +217,7 @@ function baseCloneArgs(
   return {
     epicId: "epic-1",
     tabId: "tab-1",
+    sourceChatId: "source-chat-1",
     sourceHostId: "source-host",
     targetHostId: "target-host",
     directory: fakeDirectory([]),
@@ -226,6 +228,7 @@ function baseCloneArgs(
       native: null,
     })),
     onProfileFallbackToAmbient: vi.fn(),
+    onHistoryUnavailable: vi.fn(),
     navigateNestedFocus: null,
     ...overrides,
   };
@@ -361,5 +364,122 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     // Cancelling before resolution suppresses the deferred
     // `openNewChatInActiveTile` call entirely.
     expect(createChat).not.toHaveBeenCalled();
+  });
+});
+
+// chat-sync-v2 ticket 34B1: the clone is a latest-checkpoint fork
+// (`forkSource: {boundary: "latest"}`) of the source chat, not an empty
+// chat. A source with no assistant turn yet has no checkpoint to fork
+// through - the host answers that as a typed refusal, and this flow retries
+// EXACTLY once without `forkSource` so the clone still lands.
+describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
+  const TARGET_DIRECTORY = fakeDirectory([
+    {
+      hostId: "target-host",
+      label: "Target",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:0/target",
+      version: "0.0.0-mock",
+      status: "available",
+    },
+  ]);
+
+  function checkpointUnavailableError(): HostRpcError {
+    return new HostRpcError({
+      code: "E_FORK_CHECKPOINT_UNAVAILABLE",
+      message:
+        "Cannot fork chat 'source-chat-1' because it has no assistant checkpoint yet.",
+      requestId: "req-fork-1",
+      method: "epic.createChat",
+      fatalDetails: null,
+    });
+  }
+
+  it("sends a latest-checkpoint forkSource on the first attempt", async () => {
+    const createChat = vi.fn<CreateChatCommand>();
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    const [request] = createChat.mock.calls[0];
+    expect(request.forkSource).toEqual({
+      boundary: "latest",
+      sourceChatId: "source-chat-1",
+    });
+  });
+
+  it("retries settings-only exactly once on a checkpoint-unavailable refusal, and reports it exactly once", async () => {
+    const calls: unknown[] = [];
+    const createChat: CreateChatCommand = (request, callbacks) => {
+      calls.push(request.forkSource);
+      if (request.forkSource !== null && request.forkSource !== undefined) {
+        callbacks.onError(checkpointUnavailableError());
+        return;
+      }
+      callbacks.onSuccess({ chatId: "cloned-chat" });
+    };
+    const onHistoryUnavailable = vi.fn();
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        onHistoryUnavailable,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Exactly two attempts - the fork attempt, then the settings-only
+    // retry - never a third: the retry's own request carries no
+    // `forkSource`, so it cannot produce this same refusal to retry on.
+    expect(calls).toEqual([
+      { boundary: "latest", sourceChatId: "source-chat-1" },
+      null,
+    ]);
+    expect(onHistoryUnavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry, and does not call onHistoryUnavailable, for an unrelated createChat failure", async () => {
+    const createChat = vi.fn<CreateChatCommand>((_request, callbacks) => {
+      callbacks.onError(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "host unreachable",
+          requestId: "req-fork-2",
+          method: "epic.createChat",
+          fatalDetails: null,
+        }),
+      );
+    });
+    const onHistoryUnavailable = vi.fn();
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        onHistoryUnavailable,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    expect(onHistoryUnavailable).not.toHaveBeenCalled();
   });
 });

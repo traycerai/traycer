@@ -48,6 +48,12 @@ export const RPC_ERROR_CODES = [
   // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
   // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
   "MESSAGE_TOO_LARGE",
+  // A latest-checkpoint fork (`epic.createChat`'s `forkSource: {boundary:
+  // "latest"}`, and the A2A `agent.fork`/`forkAgent` tool that shares the same
+  // seed builder) named a source chat with no assistant record to fork from
+  // yet. A precondition on the CALLER's chosen source, not a server fault -
+  // same additive degrade story as E_INVALID_ARGUMENT.
+  "E_FORK_CHECKPOINT_UNAVAILABLE",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

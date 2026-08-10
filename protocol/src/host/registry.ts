@@ -236,7 +236,9 @@ import {
   epicBatchDeleteV10,
   epicBatchUpdateRolesV10,
   epicCreateArtifactV10,
+  epicCreateChatUpgradeV10ToV11,
   epicCreateChatV10,
+  epicCreateChatV11,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -4522,11 +4524,17 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createChat": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCreateChatV10,
           upgradeFromPreviousVersion: null,
+        },
+        // v1.1: `forkSource` widened to name a latest-checkpoint boundary
+        // alongside the existing precise one (chat-sync-v2 ticket 34B1).
+        1: {
+          contract: epicCreateChatV11,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

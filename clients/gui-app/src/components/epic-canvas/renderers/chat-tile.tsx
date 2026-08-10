@@ -391,6 +391,7 @@ export function ChatDeadTileBannerContainer(
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
+    chatId: props.chatId,
     sourceHostId: props.sourceHostId,
     sourceSettings: chatRecord?.settings ?? null,
   });
@@ -408,6 +409,7 @@ export function ChatDeadTileBannerContainer(
 interface UseChatCloneOnHostSwitchArgs {
   readonly epicId: string;
   readonly tabId: string;
+  readonly chatId: string;
   readonly sourceHostId: string;
   readonly sourceSettings: ChatRunSettings | null;
 }
@@ -449,6 +451,7 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     cancelRef.current = cloneChatOnHostSwitch({
       epicId: args.epicId,
       tabId: args.tabId,
+      sourceChatId: args.chatId,
       sourceHostId: args.sourceHostId,
       targetHostId: target.hostId,
       directory: binding.directory,
@@ -459,9 +462,17 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
           "Continuing on the Terminal account - your profile isn't available on this host.",
         );
       },
+      onHistoryUnavailable: () => {
+        toast(
+          "This agent hasn't replied yet, so its history can't be carried - continuing with settings only.",
+        );
+      },
       navigateNestedFocus,
       createChat: (request, callbacks) => {
-        createChat.mutate(request, { onSuccess: callbacks.onSuccess });
+        createChat.mutate(request, {
+          onSuccess: callbacks.onSuccess,
+          onError: callbacks.onError,
+        });
       },
     });
   }, [
@@ -470,6 +481,7 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     navigateNestedFocus,
     args.epicId,
     args.tabId,
+    args.chatId,
     args.sourceHostId,
     args.sourceSettings,
   ]);

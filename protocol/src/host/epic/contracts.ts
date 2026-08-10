@@ -10,6 +10,7 @@ import {
   createArtifactRequestSchema,
   createArtifactResponseSchema,
   createChatRequestSchema,
+  createChatRequestSchemaV11,
   createChatResponseSchema,
   createCommentThreadRequestSchema,
   createCommentThreadResponseSchema,
@@ -314,6 +315,43 @@ export const epicCreateChatV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: createChatRequestSchema,
   responseSchema: createChatResponseSchema,
+});
+
+// v1.1 widens `forkSource` to a discriminated union (chat-sync-v2 ticket 34B1):
+// the existing precise-boundary shape, tagged `boundary: "assistantMessage"`,
+// beside a new `boundary: "latest"` variant that names only the source chat -
+// the host resolves the boundary itself via `buildLatestCheckpointForkSeed`.
+// This is a NEW MINOR, not an in-place edit of `epicCreateChatV10`: unlike
+// the cloud-chat-read methods introduced on this same train (whose {1,0}
+// never shipped), `epic.createChat@1.0` is already in released hosts, so its
+// shape is frozen. See `createChatForkSourceSchemaV11`'s doc in
+// `unary-schemas.ts`.
+export const epicCreateChatV11 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: createChatRequestSchemaV11,
+  responseSchema: createChatResponseSchema,
+});
+
+// A v1.0 request's `forkSource` (when present) is always the precise-boundary
+// shape - it is the ONLY shape v1.0 could ever send - so the upgrade tags it
+// `boundary: "assistantMessage"` and leaves every other field untouched.
+// `null`/`undefined` pass through unchanged (no fork requested). The response
+// is identical between the two minors.
+export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateChatV10,
+  typeof epicCreateChatV11
+>({
+  from: epicCreateChatV10.schemaVersion,
+  to: epicCreateChatV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    forkSource:
+      request.forkSource === null || request.forkSource === undefined
+        ? request.forkSource
+        : { boundary: "assistantMessage" as const, ...request.forkSource },
+  }),
+  upgradeResponse: (response) => response,
 });
 
 export const epicRenameChatV10 = defineRpcContract({

@@ -6,7 +6,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  CreateChatRequest,
+  CreateChatRequestV11,
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
@@ -40,7 +40,7 @@ import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persiste
  * one place that resolves "which host owns this new chat" and exactly
  * one place that fails loudly when no host is active.
  */
-export type CreateChatMutationInput = Omit<CreateChatRequest, "hostId">;
+export type CreateChatMutationInput = Omit<CreateChatRequestV11, "hostId">;
 interface CreateChatMutationContext {
   readonly hostId: string | null;
 }

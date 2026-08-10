@@ -1956,11 +1956,21 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   }, []);
 
   const handleConfirmClone = (): void => {
-    if (pendingCloneHostId === null || binding === null) return;
+    // `clone-on-switch` mode (and therefore this handler) is only offered
+    // for a chat surface - see the `HostWorkspaceSelector` render below - so
+    // `surface.ownerId` is the source chat's id whenever this actually runs.
+    if (
+      pendingCloneHostId === null ||
+      binding === null ||
+      surface.kind !== "chat"
+    ) {
+      return;
+    }
     if (cloneCancelRef.current !== null) cloneCancelRef.current();
     cloneCancelRef.current = cloneChatOnHostSwitch({
       epicId: surface.epicId,
       tabId: surface.tabId,
+      sourceChatId: surface.ownerId,
       sourceHostId: surface.hostId,
       targetHostId: pendingCloneHostId,
       directory: binding.directory,
@@ -1971,10 +1981,16 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           "Continuing on the Terminal account - your profile isn't available on this host.",
         );
       },
+      onHistoryUnavailable: () => {
+        toast(
+          "This agent hasn't replied yet, so its history can't be carried - continuing with settings only.",
+        );
+      },
       navigateNestedFocus,
       createChat: (request, callbacks) => {
         createChat.mutate(request, {
           onSuccess: callbacks.onSuccess,
+          onError: callbacks.onError,
         });
       },
     });
