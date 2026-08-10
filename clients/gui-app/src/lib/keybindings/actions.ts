@@ -388,7 +388,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "app.terminal.toggle",
     label: "Toggle terminal panel",
     description:
-      "Show or hide the terminal panel on the start page. Opening it with no terminals starts one in the pinned workspace folder.",
+      "Show or hide the terminal panel on the start page. When several directories are attached, choose where to open it.",
     category: "app",
     kind: "chord",
     defaultChord: "mod+j",
@@ -397,7 +397,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "app.terminal.new",
     label: "New terminal",
     description:
-      "Open a new terminal tab in the start page's terminal panel, revealing the panel if it is collapsed.",
+      "Open a new terminal tab in the start page's terminal panel, choosing a directory when several are attached.",
     category: "app",
     kind: "chord",
     defaultChord: "mod+shift+j",
