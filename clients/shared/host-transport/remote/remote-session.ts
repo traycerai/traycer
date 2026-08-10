@@ -62,6 +62,7 @@ import {
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostMethods } from "../negotiated-manifest-registry";
+import { resolveUnavailableMethodDegrade } from "../unavailable-method-degrade";
 import {
   CURRENT_MUX_VERSION,
   MuxFrameType,
@@ -475,21 +476,27 @@ export class RemoteSession<
 
     const clientCanonical = this.clientRpcMerged[method];
     const hostCanonical = connection.hostRpcMerged?.[method];
-    if (clientCanonical === undefined || hostCanonical === undefined) {
-      return Promise.reject(
-        new HostRpcError({
-          code: "RPC_ERROR",
-          message: `Method '${method}' is not in both manifests`,
-          requestId,
-          method,
-          fatalDetails: null,
-        }),
-      );
-    }
     const methodRegistry = indexMethodRegistry(
       this.options.rpcRegistry,
       method,
     );
+    if (clientCanonical === undefined || hostCanonical === undefined) {
+      // Now that optional methods no longer fatal the handshake, "this host
+      // doesn't have that method" is a NORMAL runtime outcome here, and it
+      // must honor the registry's declared degrade exactly as `WsRpcClient`
+      // does - callers key off the resulting `E_HOST_UNSUPPORTED` (e.g. the
+      // run-settings write queue suppresses only that code to fall back to
+      // legacy persist-on-next-send). A generic `RPC_ERROR` would surface as
+      // a real failure instead.
+      return this.executeUnavailableMethodDegrade(
+        method,
+        methodRegistry,
+        clientCanonical,
+        connection.hostRpcMerged ?? {},
+        params,
+        requestId,
+      );
+    }
 
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -991,6 +998,43 @@ export class RemoteSession<
       this.maybeReachReadyBoundary();
     }
     void connection;
+  }
+
+  /**
+   * A method this host never advertised. Applies the registry's DECLARED
+   * degrade through the shared policy (see `unavailable-method-degrade.ts`) -
+   * `E_HOST_UNSUPPORTED` for an `unsupported` declaration, or the declared
+   * floor fallback dispatched back through this same session.
+   */
+  private executeUnavailableMethodDegrade<
+    Method extends keyof RpcRegistry & string,
+  >(
+    method: Method,
+    methodRegistry: MethodVersionRegistry,
+    clientCanonical: SchemaVersion | undefined,
+    hostRpcMerged: ConnectionManifest,
+    params: RequestOfMethod<RpcRegistry, Method>,
+    requestId: string,
+  ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+    return resolveUnavailableMethodDegrade({
+      registry: this.options.rpcRegistry,
+      method,
+      methodRegistry,
+      clientCanonical,
+      clientManifest: this.clientRpcMerged,
+      hostManifest: hostRpcMerged,
+      params,
+      requestId,
+      // The fallback target is an ordinary negotiated method, so it re-enters
+      // the normal unary path (single-flight, scheduler, timeout) rather than
+      // a bespoke send - it cannot recurse, because a floor method the host
+      // advertises never lands back in this degrade.
+      execute: (input) =>
+        this.sendUnary(
+          input.method as Method,
+          input.params as RequestOfMethod<RpcRegistry, Method>,
+        ),
+    }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
   private handleOpenAck(

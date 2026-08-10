@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  defineFloorAwareVersionedRpcRegistry,
+  defineRpcContract,
   defineVersionedRpcRegistry,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
@@ -29,6 +31,7 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../host-messenger";
@@ -1090,6 +1093,69 @@ describe("RemoteSession negotiated-manifest publication", () => {
             ),
           WAIT,
         );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession absent optional method", () => {
+  // A method the client knows and the host never advertised. Before the
+  // floor/optional split this was unreachable - the handshake fataled on the
+  // skew - so the remote path had no degrade at all and would have answered a
+  // generic RPC_ERROR. Callers key off E_HOST_UNSUPPORTED (the run-settings
+  // write queue suppresses exactly that code to fall back to legacy
+  // persist-on-next-send), so a generic error reads as a real failure.
+  const unsupportedV10 = defineRpcContract({
+    method: "host.syntheticUnsupported",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ok: z.boolean() }),
+  });
+  // Typed as the erased `VersionedRpcRegistry` at the declaration (same shape
+  // as `emptyRpcRegistry` above) so the session can take it directly - the
+  // repo bans chained/`as unknown` assertions, and none is needed here.
+  const unsupportedRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry([] as const, {
+      "host.syntheticUnsupported": {
+        degrade: { kind: "unsupported" },
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: unsupportedV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "applies the declared unsupported degrade instead of a generic RPC_ERROR",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: unsupportedRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary("host.syntheticUnsupported", {})
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect((error as HostRpcError).code).toBe("E_HOST_UNSUPPORTED");
+        expect(
+          (error as HostRpcError).fatalDetails?.upgradeGuidance
+            ?.hostShouldUpgrade,
+        ).toBe(true);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
