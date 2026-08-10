@@ -19,7 +19,7 @@ layers for multi-project work and team templates.
 ## Upstream
 
 Upstream project: [traycerai/traycer](https://github.com/traycerai/traycer)  
-This fork: **[gavasques/traycer](https://github.com/gavasques/traycer)** (local product name: **Thanos Traycer**).
+This fork: **[gavasques/thanos-traycer](https://github.com/gavasques/thanos-traycer)** (local product name: **Thanos Traycer**).
 
 Sync policy here: merge `upstream/main` carefully — **never** `gh repo sync`
 (force-overwrites custom history).
