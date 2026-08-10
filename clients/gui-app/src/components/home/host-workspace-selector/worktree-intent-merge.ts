@@ -3,6 +3,7 @@ import type {
   WorktreeIntent,
   WorktreeFolderIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import { createWorktreeRetryIdentity } from "@/lib/worktree/worktree-retry-identity";
 
 /**
  * Updates the setup/teardown `scripts` override on the staged `worktree` entry
@@ -60,7 +61,15 @@ export function setWorktreeIntentEntryBranchName(
       entry.workspacePath === workspacePath &&
       entry.kind === "worktree" &&
       entry.branch.type === "new"
-        ? { ...entry, branch: { ...entry.branch, name } }
+        ? {
+            ...entry,
+            branch: {
+              ...entry.branch,
+              name,
+              collision: "random",
+              retryIdentity: createWorktreeRetryIdentity(),
+            },
+          }
         : entry,
     ),
   };
