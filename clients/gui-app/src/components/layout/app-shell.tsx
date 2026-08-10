@@ -17,6 +17,7 @@ import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dial
 import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
+import { useLandingRouteStore } from "@/stores/layout/landing-route-store";
 
 interface AppShellProps {
   children: ReactNode;
@@ -37,6 +38,13 @@ export function AppShell(props: AppShellProps) {
   // app-wide mount supplies that edge, because an episode is a HOST fact and
   // not a property of any open tab.
   useChatForkEventQuery();
+  // `/` is exclusively the landing surface (All projects home or the
+  // profile launch jump). Never paint keep-alive top-level surfaces there:
+  // if one leaks through (e.g. a Settings tab still focused), it stacks under
+  // the route-adapter layer and the UI double-renders. The flag is mirrored
+  // from the live router by LandingRouteBridge (bare test mounts default to
+  // false).
+  const isLandingRoute = useLandingRouteStore((s) => s.isLandingRoute);
 
   return (
     <PrimaryFocusCoordinatorProvider>
@@ -51,7 +59,7 @@ export function AppShell(props: AppShellProps) {
                   own their internal overflow, including the landing terminal. */}
                 <div className="relative flex min-h-0 flex-1 overflow-hidden">
                   <TopLevelSurfaceActivationProvider>
-                    <TopLevelTabHost />
+                    {isLandingRoute ? null : <TopLevelTabHost />}
                   </TopLevelSurfaceActivationProvider>
                   <div
                     className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"

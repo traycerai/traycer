@@ -15,6 +15,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import { LandingRouteBridge } from "@/components/layout/bridges/landing-route-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
@@ -65,6 +66,7 @@ export function RootComponent() {
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller. */}
       {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
+      {authStatus === "signed-in" ? <LandingRouteBridge /> : null}
       {authStatus === "signed-in" ? <EmptyProjectsHomeEnforcer /> : null}
       <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
