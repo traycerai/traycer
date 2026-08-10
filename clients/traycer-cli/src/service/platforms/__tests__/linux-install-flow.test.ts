@@ -185,7 +185,11 @@ describe("linux service install flow", () => {
   });
 
   it("replaces an existing unit with the OOM containment policy before reloading systemd", async () => {
-    await writeFile(unitFile(), "[Service]\nRestart=on-failure\n", "utf8");
+    await writeFile(
+      unitFile(),
+      "[Unit]\nDescription=stale-unit-fixture\n",
+      "utf8",
+    );
     const calls: RecordedCall[] = [];
     const unitsSeenAtReload: string[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -205,10 +209,11 @@ describe("linux service install flow", () => {
       "loginctl:enable-linger",
     ]);
     expect(unitsSeenAtReload).toHaveLength(1);
+    expect(unitsSeenAtReload[0]).not.toContain("stale-unit-fixture");
     expect(unitsSeenAtReload[0]).toContain("\nOOMPolicy=continue\n");
-    expect(await readFile(unitFile(), "utf8")).toContain(
-      "\nOOMPolicy=continue\n",
-    );
+    const unit = await readFile(unitFile(), "utf8");
+    expect(unit).not.toContain("stale-unit-fixture");
+    expect(unit).toContain("\nOOMPolicy=continue\n");
   });
 
   it("uninstall clears a failed unit entry after removing the file", async () => {
