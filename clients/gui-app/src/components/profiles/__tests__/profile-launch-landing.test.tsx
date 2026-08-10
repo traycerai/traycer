@@ -171,7 +171,7 @@ describe("ProfileLaunchLanding", () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it("goes to a fresh draft when no profile is active and the strip is empty", async () => {
+  it("does not navigate when no profile is active (All projects owns /)", async () => {
     useHistoryMembershipCacheStore.getState().setMembershipItems([
       historyItem({
         epicId: "owned",
@@ -185,10 +185,13 @@ describe("ProfileLaunchLanding", () => {
     renderLanding();
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalled();
+      // Effect settles (launch flag consumed); still no navigate.
+      expect(useHistoryMembershipCacheStore.getState().itemsByEpicId.size).toBe(
+        1,
+      );
     });
     expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
-    expectDraftRedirect();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it("goes to a fresh draft when the active project owns no epic", async () => {

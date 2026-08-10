@@ -27,13 +27,11 @@ export function __resetProfileLaunchLandingForTesting(): void {
  *   (see project-profile-switcher), where reopening a just-closed tab is a
  *   bug, not a convenience.
  *
- * Empty-strip fallback: the signed-in `/` route has NO surface of its own
- * (this component renders null) — the pre-hydration `beforeLoad` redirect to
- * `/draft/new` does not cover post-hydration arrivals, e.g. a profile switch
- * that released a foreign route onto an empty strip. Whenever the launch
- * decision above is settled (or was consumed earlier) and the strip is
- * EMPTY, standing on `/` would show a black void, so we go to a fresh draft:
- * the locked composer is the project's home. Guards:
+ * Empty-strip fallback (active profile only): when a profile is active and
+ * the strip is EMPTY, standing on `/` would show a black void, so we go to a
+ * fresh draft — the locked composer is the project's home. "All projects"
+ * (activeProfile === null) owns `/` as the aggregate home and never redirects.
+ * Other guards:
  * - Only from the `/` pathname: a failed `/draft/new` resolution re-renders
  *   this component (see DraftNewRoute) and must never re-fire the redirect.
  * - Never while a launch jump is queued in this mount (tab-navigation may
@@ -73,6 +71,8 @@ export function ProfileLaunchLanding(): ReactNode {
         }
       }
     }
+    // All projects owns `/` — never bounce to a draft from the null profile.
+    if (activeProfile === null) return;
     if (pathname !== "/") return;
     if (jumpPendingRef.current) return;
     if (useTabsStore.getState().stripOrder.length > 0) return;
