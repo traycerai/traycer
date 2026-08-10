@@ -57,7 +57,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
     name: "dev-team-full",
     description:
       "Time de dev Acme — orchestrator + senior_dev + revisor_360 + deploy_master + arbitro + junior_dev",
-    defaultModelGroup: "default",
+    defaultModelGroup: "roster-full",
     globalRules: [
       ...RULES_DEV,
       "Also follow ~/.traycer/playbooks/dev-team-full.md for process and artifacts",
@@ -218,7 +218,7 @@ Small, well-scoped tasks only. If the diff grows or touches auth/money/deploy, s
   {
     name: "critical",
     description: "Análise crítica — challenge assumptions, name risks, demand evidence",
-    defaultModelGroup: "default",
+    defaultModelGroup: "roster-full",
     globalRules: [
       ...RULES_DEV,
       "Prefer concrete findings over vague advice",
@@ -265,7 +265,7 @@ Argue the strongest case AGAINST the current plan or PR.
   {
     name: "basicos",
     description: "Tarefas simples e baratas — junior / trivial",
-    defaultModelGroup: "cheap",
+    defaultModelGroup: "roster-budget",
     globalRules: [
       "Keep scope tiny",
       "Escalate if auth, money, deploy, or large diff appears",
@@ -307,7 +307,7 @@ Implement the requested change cleanly and verify.
   {
     name: "dev-pair",
     description: "Par implementador + revisor — default genérico de feature work",
-    defaultModelGroup: "default",
+    defaultModelGroup: "roster-full",
     globalRules: [
       ...RULES_DEV,
       "Reviewer is a fresh cold read; implementer keeps context",

@@ -13,6 +13,16 @@ const TRAYCER_HOME = join(homedir(), ".traycer");
 const ORCHESTRATIONS_DIR = join(TRAYCER_HOME, "orchestrations");
 const MODEL_GROUPS_DIR = join(TRAYCER_HOME, "model-groups");
 
+/** Primary full roster — protected from delete; UI default chip. */
+export const PRIMARY_MODEL_GROUP = "roster-full";
+
+/** Legacy on-disk group names → current names. */
+const LEGACY_MODEL_GROUP_RENAMES: Readonly<Record<string, string>> = {
+  default: "roster-full",
+  cheap: "roster-budget",
+  premium: "roster-top",
+};
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface ModelEntry {
@@ -70,8 +80,44 @@ export interface Orchestration {
 
 // ─── Model Groups ───────────────────────────────────────────────────────────
 
+async function migrateLegacyModelGroupFiles(): Promise<void> {
+  try {
+    await mkdir(MODEL_GROUPS_DIR, { recursive: true });
+    const entries = await readdir(MODEL_GROUPS_DIR);
+    for (const file of entries) {
+      if (!file.endsWith(".json")) continue;
+      const oldName = file.replace(/\.json$/, "");
+      const newName = LEGACY_MODEL_GROUP_RENAMES[oldName];
+      if (newName === undefined) continue;
+      const src = join(MODEL_GROUPS_DIR, file);
+      const dst = join(MODEL_GROUPS_DIR, `${newName}.json`);
+      try {
+        await readFile(dst, "utf-8");
+        // Target already exists — drop legacy file only.
+        await rm(src, { force: true });
+        continue;
+      } catch {
+        // rename via read/write/unlink
+      }
+      const raw = await readFile(src, "utf-8");
+      let parsed: ModelGroup;
+      try {
+        parsed = JSON.parse(raw) as ModelGroup;
+      } catch {
+        continue;
+      }
+      const migrated: ModelGroup = { ...parsed, name: newName };
+      await writeFile(dst, JSON.stringify(migrated, null, 2) + "\n", "utf-8");
+      await rm(src, { force: true });
+    }
+  } catch {
+    // best-effort
+  }
+}
+
 export async function listModelGroups(): Promise<readonly string[]> {
   try {
+    await migrateLegacyModelGroupFiles();
     const entries = await readdir(MODEL_GROUPS_DIR);
     return entries
       .filter((f) => f.endsWith(".json"))
@@ -83,8 +129,15 @@ export async function listModelGroups(): Promise<readonly string[]> {
 }
 
 export async function readModelGroup(name: string): Promise<ModelGroup | null> {
+  const resolved =
+    LEGACY_MODEL_GROUP_RENAMES[name] !== undefined
+      ? LEGACY_MODEL_GROUP_RENAMES[name]
+      : name;
   try {
-    const raw = await readFile(join(MODEL_GROUPS_DIR, `${name}.json`), "utf-8");
+    const raw = await readFile(
+      join(MODEL_GROUPS_DIR, `${resolved}.json`),
+      "utf-8",
+    );
     return JSON.parse(raw) as ModelGroup;
   } catch {
     return null;
@@ -366,7 +419,7 @@ export async function createOrchestration(
       name,
       description,
       version: "1.0.0",
-      defaultModelGroup: "default",
+      defaultModelGroup: "roster-full",
       roles: [],
       artifactChain: [],
       globalRules: [],
@@ -542,7 +595,7 @@ export async function writeModelGroup(group: ModelGroup): Promise<boolean> {
 
 export async function deleteModelGroup(name: string): Promise<boolean> {
   const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed === "default") {
+  if (trimmed.length === 0 || trimmed === PRIMARY_MODEL_GROUP || trimmed === "default") {
     return false;
   }
   try {

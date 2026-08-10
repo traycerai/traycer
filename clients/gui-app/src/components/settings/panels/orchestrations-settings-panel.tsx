@@ -73,9 +73,9 @@ export function OrchestrationsSettingsPanel() {
   const orchestrationNames = orchestrations.data ?? [];
   const groupNames = groups.data ?? [];
   const bindingRoles = bindingDetail.data?.roles ?? [];
-  // Effective group name for the editor (chip "default" uses undefined for
+  // Effective group name for the editor (chip "roster-full" uses undefined for
   // models query = orchestration default; editor always needs a concrete file).
-  const editTargetGroup = selectedGroup ?? "default";
+  const editTargetGroup = selectedGroup ?? "roster-full";
   const deleteGroupMutation = useRunnerOrchestrationGroupDeleteMutation();
 
   return (
@@ -118,7 +118,7 @@ export function OrchestrationsSettingsPanel() {
             setShowCreateGroupForm(true);
           }}
           onDeleteGroup={() => {
-            if (selectedGroup === undefined || selectedGroup === "default") {
+            if (selectedGroup === undefined || selectedGroup === "roster-full") {
               return;
             }
             const name = selectedGroup;
@@ -143,7 +143,7 @@ export function OrchestrationsSettingsPanel() {
           }}
           canDeleteGroup={
             selectedGroup !== undefined &&
-            selectedGroup !== "default" &&
+            selectedGroup !== "roster-full" &&
             !deleteGroupMutation.isPending
           }
         />
@@ -159,7 +159,7 @@ export function OrchestrationsSettingsPanel() {
               existingNames={groupNames}
               onCreated={(name) => {
                 setShowCreateGroupForm(false);
-                setSelectedGroup(name === "default" ? undefined : name);
+                setSelectedGroup(name === "roster-full" ? undefined : name);
                 setEditingGroup(name);
               }}
               onCancel={() => setShowCreateGroupForm(false)}
@@ -278,7 +278,7 @@ function OrchestrationsSidebar(props: {
               onClick={props.onEditGroup}
               className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               aria-label="Edit model group"
-              title="Edit selected model group (including default)"
+              title="Edit selected model group (including roster-full)"
             >
               <Pencil className="size-3" />
             </button>
@@ -299,12 +299,12 @@ function OrchestrationsSidebar(props: {
         </div>
         <div className="flex flex-wrap gap-1">
           <GroupButton
-            label="default"
+            label="roster-full"
             isActive={props.selectedGroup === undefined}
             onClick={() => props.onSelectGroup(undefined)}
           />
           {props.groupNames
-            .filter((g) => g !== "default")
+            .filter((g) => g !== "roster-full")
             .map((g) => (
               <GroupButton
                 key={g}
@@ -315,8 +315,8 @@ function OrchestrationsSidebar(props: {
             ))}
         </div>
         <p className="mt-1.5 text-ui-xs text-muted-foreground">
-          Pencil edits (default included). + creates. Trash removes custom
-          groups only.
+          Groups = roster packs (not role tiers). roster-full is protected. +
+          creates · pencil edits · trash removes custom only.
         </p>
       </div>
     </div>
@@ -410,7 +410,7 @@ function CreateTimeBindingSection(props: {
         disabled={!props.enabled}
         className="w-full rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
       >
-        <option value="">default group</option>
+        <option value="">template default</option>
         {props.groupNames.map((g) => (
           <option key={g} value={g}>
             {g}
@@ -552,7 +552,7 @@ function CreateModelGroupForm(props: {
   const saveMutation = useRunnerOrchestrationGroupSaveMutation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [cloneFrom, setCloneFrom] = useState<string>("default");
+  const [cloneFrom, setCloneFrom] = useState<string>("roster-full");
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
