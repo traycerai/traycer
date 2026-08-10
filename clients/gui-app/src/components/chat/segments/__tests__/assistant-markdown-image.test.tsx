@@ -13,6 +13,7 @@ import {
   AssistantMarkdownImageNode,
   AssistantMarkdownImageProvider,
 } from "@/components/chat/segments/assistant-markdown-image";
+import { TraycerMarkdown } from "@/markdown";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
@@ -51,6 +52,8 @@ const BASE_CONTEXT: AssistantMarkdownImageContext = {
   resolutions: [],
   deduplicatedSources: new Set(),
 };
+
+const ASSISTANT_IMAGE_COMPONENTS = { img: AssistantMarkdownImageNode };
 
 function resolution(
   entry: ImageResolutionEntry,
@@ -339,6 +342,61 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(chip?.textContent).toContain(
       "Inline image is invalid or exceeds the 30 MB limit",
     );
+  });
+
+  it("rejects SVG bytes mislabeled as image/png", () => {
+    const mislabeled = `data:image/png;base64,${btoa("<svg></svg>")}`;
+    renderImage({ src: mislabeled, alt: undefined, context: undefined });
+
+    expect(
+      document.querySelector("[data-assistant-image-failure]")?.textContent,
+    ).toContain("Inline image is invalid or exceeds the 30 MB limit");
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+});
+
+describe("AssistantMarkdownImage markdown pipeline", () => {
+  it("preserves and resolves parser-normalized Windows backslash paths", async () => {
+    const encodedSource = "C:%5CUsers%5Canurag%5Cchart.png";
+    const canonicalSource = "C:\\Users\\anurag\\chart.png";
+    blobSrcState.value = {
+      status: "ready",
+      src: "blob:http://localhost/windows-chart",
+    };
+    const client = createQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <AssistantMarkdownImageProvider
+          context={{
+            ...BASE_CONTEXT,
+            resolutions: [
+              resolution(
+                resolvedEntry(encodedSource, { canonicalSource }),
+                "assistant-windows",
+              ),
+            ],
+          }}
+        >
+          <TraycerMarkdown
+            className={null}
+            proseSize="normal"
+            components={ASSISTANT_IMAGE_COMPONENTS}
+            remarkPlugins={null}
+            rehypePlugins={null}
+            quotable={false}
+            isStreaming={false}
+          >
+            {`![windows chart](${encodedSource})`}
+          </TraycerMarkdown>
+        </AssistantMarkdownImageProvider>
+      </QueryClientProvider>,
+    );
+
+    const image = await screen.findByRole("img", { name: "windows chart" });
+    expect(image.getAttribute("src")).toBe(
+      "blob:http://localhost/windows-chart",
+    );
+    expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
   });
 });
 

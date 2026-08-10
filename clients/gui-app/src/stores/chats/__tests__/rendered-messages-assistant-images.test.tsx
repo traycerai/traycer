@@ -223,6 +223,20 @@ function textSegmentContext(
   return text?.assistantImageContext ?? null;
 }
 
+function textSegmentContexts(
+  segments: ReadonlyArray<MessageSegment>,
+): ReadonlyArray<
+  NonNullable<
+    Extract<MessageSegment, { kind: "text" }>["assistantImageContext"]
+  >
+> {
+  return segments.flatMap((segment) =>
+    segment.kind === "text" && segment.assistantImageContext !== undefined
+      ? [segment.assistantImageContext]
+      : [],
+  );
+}
+
 describe("useRenderedMessages assistant image echo dedup", () => {
   it("deduplicates a prose image whose resolution hash matches a tool card imageResults hash", () => {
     const source = "/generated/cat.png";
@@ -246,7 +260,7 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     expect(context?.deduplicatedSources.has(source)).toBe(true);
   });
 
-  it("deduplicates by canonical source / tool filePath when hashes differ", () => {
+  it("does not deduplicate matching paths when the resolved hashes differ", () => {
     const authored = "./relative-cat.png";
     const canonical = "/abs/generated/cat.png";
     const assistant: Message = {
@@ -274,8 +288,8 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     const { result } = renderRenderedMessages({ messages: [assistant] });
     const context = textSegmentContext(result.current[0]?.segments ?? []);
     expect(context).not.toBeNull();
-    expect(context?.deduplicatedSources.has(authored)).toBe(true);
-    expect(context?.deduplicatedSources.has(canonical)).toBe(true);
+    expect(context?.deduplicatedSources.has(authored)).toBe(false);
+    expect(context?.deduplicatedSources.has(canonical)).toBe(false);
   });
 
   it("keeps pending prose images until the resolution record commits, then collapses", () => {
@@ -342,6 +356,89 @@ describe("useRenderedMessages assistant image echo dedup", () => {
 });
 
 describe("useRenderedMessages image resolution stable-row identity", () => {
+  it("keeps same-source resolutions scoped to their owning message", () => {
+    const source = "/workspace/shared.png";
+    const first: Message = {
+      ...assistantMessage("turn-shared", 2000),
+      messageId: "assistant-first",
+      blocks: [textBlock("text-first", 2001, `![first](${source})`)],
+      imageResolutions: [resolvedEntry(source, "hash-first", {})],
+    };
+    const second: Message = {
+      ...assistantMessage("turn-shared", 3000),
+      messageId: "assistant-second",
+      blocks: [textBlock("text-second", 3001, `![second](${source})`)],
+      imageResolutions: [resolvedEntry(source, "hash-second", {})],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [first, second] });
+    const contexts = textSegmentContexts(result.current[0]?.segments ?? []);
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0]?.resolutions[0]).toMatchObject({
+      messageId: "assistant-first",
+      entry: { attachmentHash: "hash-first" },
+    });
+    expect(contexts[1]?.resolutions[0]).toMatchObject({
+      messageId: "assistant-second",
+      entry: { attachmentHash: "hash-second" },
+    });
+  });
+
+  it("threads buffered resolutions onto an ordinary standalone live row", () => {
+    const source = "C:%5Cwork%5Cchart.png";
+    const entry = resolvedEntry(source, "hash-live", {
+      canonicalSource: "C:\\work\\chart.png",
+    });
+    const live = {
+      turnId: "turn-live",
+      sender: ASSISTANT_SENDER,
+      blocks: [textBlock("text-live", 2001, `![chart](${source})`)],
+      startedAt: 2000,
+      blocksVersion: 1,
+      imageResolutions: [
+        {
+          blockId: "text-live",
+          messageId: "assistant-live",
+          entry,
+        },
+      ],
+      imageResolutionsVersion: 1,
+      timestamp: 2001,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const driver = renderRenderedMessages({
+      liveAssistantMessage: live,
+      runStatus: "running",
+    });
+
+    const context = textSegmentContext(
+      driver.result.current[0]?.segments ?? [],
+    );
+    expect(context?.resolutions).toEqual([
+      { messageId: "assistant-live", entry },
+    ]);
+
+    driver.patch({
+      liveAssistantMessage: {
+        ...live,
+        imageResolutions: [
+          {
+            ...live.imageResolutions[0],
+            entry: { ...entry, attachmentHash: "hash-live-updated" },
+          },
+        ],
+        imageResolutionsVersion: 2,
+      },
+    });
+    const updated = textSegmentContext(
+      driver.result.current[0]?.segments ?? [],
+    );
+    expect(updated?.resolutions[0]?.entry.attachmentHash).toBe(
+      "hash-live-updated",
+    );
+  });
+
   it("rebuilds only the assistant row whose imageResolutions record changed", () => {
     const turnA: Message = {
       ...assistantMessage("turn-a", 2000),

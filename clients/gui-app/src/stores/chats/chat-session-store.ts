@@ -84,6 +84,7 @@ import type {
   Chat,
   ChatEvent,
   ContentBlock,
+  ImageResolutionEntry,
   InterviewAnswer,
   Message,
   UserMessageSender,
@@ -187,6 +188,12 @@ export interface LiveAssistantMessage {
    */
   readonly startedAt: number;
   readonly blocksVersion: number;
+  readonly imageResolutions: ReadonlyArray<{
+    readonly blockId: string;
+    readonly messageId: string;
+    readonly entry: ImageResolutionEntry;
+  }>;
+  readonly imageResolutionsVersion: number;
   readonly timestamp: number;
   /**
    * Reasoning effort + service tier the turn is running with, mirrored from
@@ -3006,7 +3013,47 @@ function applyImageResolutionDelta(
     (message) =>
       message.role === "assistant" && message.messageId === event.messageId,
   );
-  if (messageIndex < 0) return {};
+  if (messageIndex < 0) {
+    const activeTurn = state.activeTurn;
+    if (activeTurn === null) return {};
+    const liveAssistant = liveAssistantForActiveTurn(
+      state.liveAssistantMessage,
+      activeTurn,
+    );
+    if (
+      !liveAssistant.blocks.some((block) => block.blockId === event.blockId)
+    ) {
+      return {};
+    }
+    const resolutionIndex = liveAssistant.imageResolutions.findIndex(
+      (resolution) =>
+        resolution.messageId === event.messageId &&
+        resolution.entry.canonicalSource === event.entry.canonicalSource,
+    );
+    const imageResolutions =
+      resolutionIndex < 0
+        ? [
+            ...liveAssistant.imageResolutions,
+            {
+              blockId: event.blockId,
+              messageId: event.messageId,
+              entry: event.entry,
+            },
+          ]
+        : liveAssistant.imageResolutions.map((resolution, index) =>
+            index === resolutionIndex
+              ? { ...resolution, blockId: event.blockId, entry: event.entry }
+              : resolution,
+          );
+    return {
+      liveAssistantMessage: {
+        ...liveAssistant,
+        imageResolutions,
+        imageResolutionsVersion: liveAssistant.imageResolutionsVersion + 1,
+        timestamp: event.timestamp,
+      },
+    };
+  }
   const message = state.messages[messageIndex];
   if (message.role !== "assistant") return {};
   const entryIndex = message.imageResolutions.findIndex(
@@ -3508,7 +3555,9 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
-    imageResolutions: [],
+    imageResolutions: liveAssistant.imageResolutions.map(
+      (resolution) => resolution.entry,
+    ),
   };
 }
 
@@ -3585,6 +3634,8 @@ function liveAssistantForActiveTurn(
     blocks: [],
     startedAt: activeTurn.startedAt,
     blocksVersion: 0,
+    imageResolutions: [],
+    imageResolutionsVersion: 0,
     timestamp: activeTurn.updatedAt,
     reasoningEffort: activeTurn.reasoningEffort,
     serviceTier: activeTurn.serviceTier,

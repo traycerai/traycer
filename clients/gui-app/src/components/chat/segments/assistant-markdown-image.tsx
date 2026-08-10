@@ -67,19 +67,32 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
   }
   if (/^data:/i.test(trimmed)) {
     const match = RASTER_DATA_URL_PATTERN.exec(trimmed);
-    if (match === null || decodedBase64ByteLength(match[2]) === null) {
+    if (
+      match === null ||
+      decodedBase64ByteLength(match[2]) === null ||
+      !hasRasterMagic(match[1], match[2])
+    ) {
       return { kind: "invalid-data", src: trimmed };
     }
     return { kind: "data-raster", src: trimmed };
   }
+  const decoded = decodeImageSource(trimmed);
   if (
-    /^file:/i.test(trimmed) ||
-    WINDOWS_PATH_PATTERN.test(trimmed) ||
-    !URI_SCHEME_PATTERN.test(trimmed)
+    /^file:/i.test(decoded) ||
+    WINDOWS_PATH_PATTERN.test(decoded) ||
+    !URI_SCHEME_PATTERN.test(decoded)
   ) {
-    return { kind: "local", src: trimmed };
+    return { kind: "local", src: decoded };
   }
   return { kind: "unsupported", src: trimmed };
+}
+
+function decodeImageSource(source: string): string {
+  try {
+    return decodeURIComponent(source);
+  } catch {
+    return source;
+  }
 }
 
 function decodedBase64ByteLength(payload: string): number | null {
@@ -89,6 +102,35 @@ function decodedBase64ByteLength(payload: string): number | null {
   else if (payload.endsWith("=")) padding = 1;
   const byteLength = (payload.length / 4) * 3 - padding;
   return byteLength <= MAX_INLINE_IMAGE_BYTES ? byteLength : null;
+}
+
+function hasRasterMagic(mediaType: string, payload: string): boolean {
+  let prefix: string;
+  try {
+    prefix = atob(payload.slice(0, 16));
+  } catch {
+    return false;
+  }
+  const byte = (index: number): number => prefix.charCodeAt(index);
+  switch (mediaType.toLowerCase()) {
+    case "image/png":
+      return (
+        byte(0) === 0x89 &&
+        prefix.slice(1, 4) === "PNG" &&
+        byte(4) === 0x0d &&
+        byte(5) === 0x0a &&
+        byte(6) === 0x1a &&
+        byte(7) === 0x0a
+      );
+    case "image/jpeg":
+      return byte(0) === 0xff && byte(1) === 0xd8 && byte(2) === 0xff;
+    case "image/gif":
+      return prefix.startsWith("GIF87a") || prefix.startsWith("GIF89a");
+    case "image/webp":
+      return prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WEBP";
+    default:
+      return false;
+  }
 }
 
 function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {

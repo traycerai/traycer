@@ -1471,7 +1471,11 @@ interface AssistantTurnAccumulator {
   serviceTier: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
-  imageResolutions: AssistantMarkdownImageResolution[];
+  imageResolutionsByBlockId: Map<
+    string,
+    ReadonlyArray<AssistantMarkdownImageResolution>
+  >;
+  generatedImageHashes: Set<string>;
 }
 
 interface PersistedMessagesRenderInput {
@@ -1765,6 +1769,14 @@ function addAssistantMessageToAccumulator(
   const existing = turnAccumulator.get(turnKey);
   if (existing !== undefined) {
     ownedTurnBlocks(existing).push(...message.blocks);
+    addAssistantImageProjection(
+      existing,
+      message.blocks,
+      message.imageResolutions.map((entry) => ({
+        messageId: message.messageId,
+        entry,
+      })),
+    );
     existing.signatureParts.push(assistantRecordSignature(message));
     // A turn split across multiple AssistantMessage records (subagent flows,
     // legacy/migrated snapshots) must merge timestamps, not keep the FIRST
@@ -1786,16 +1798,10 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
-    existing.imageResolutions.push(
-      ...message.imageResolutions.map((entry) => ({
-        messageId: message.messageId,
-        entry,
-      })),
-    );
     existing.messageId = message.messageId;
     return;
   }
-  turnAccumulator.set(turnKey, {
+  const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
     sender: message.sender,
     startedAt: message.startedAt,
@@ -1808,11 +1814,35 @@ function addAssistantMessageToAccumulator(
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
     costUsd: message.usage?.costUsd ?? null,
-    imageResolutions: message.imageResolutions.map((entry) => ({
+    imageResolutionsByBlockId: new Map(),
+    generatedImageHashes: new Set(),
+  };
+  addAssistantImageProjection(
+    created,
+    message.blocks,
+    message.imageResolutions.map((entry) => ({
       messageId: message.messageId,
       entry,
     })),
-  });
+  );
+  turnAccumulator.set(turnKey, created);
+}
+
+function addAssistantImageProjection(
+  acc: AssistantTurnAccumulator,
+  blocks: ReadonlyArray<ContentBlock>,
+  resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+): void {
+  for (const block of blocks) {
+    if (block.type === "text") {
+      acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
+      continue;
+    }
+    if (block.type !== "tool_call") continue;
+    for (const result of block.imageResults) {
+      acc.generatedImageHashes.add(result.attachmentHash);
+    }
+  }
 }
 
 function minNullable(a: number | null, b: number | null): number | null {
@@ -1831,7 +1861,32 @@ function appendLiveAssistantBlocks(
   ownedTurnBlocks(acc).push(...liveAssistant.blocks);
   // The live record carries a monotonic version, so the streaming turn
   // re-signs in O(1) per delta instead of re-hashing its whole block list.
-  acc.signatureParts.push(`live:${liveAssistant.blocksVersion}`);
+  acc.signatureParts.push(
+    `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
+  );
+  addLiveAssistantImageProjection(acc, liveAssistant);
+}
+
+function addLiveAssistantImageProjection(
+  acc: AssistantTurnAccumulator,
+  liveAssistant: LiveAssistantMessage,
+): void {
+  addAssistantImageProjection(acc, liveAssistant.blocks, []);
+  const resolutionsByBlockId = new Map<
+    string,
+    AssistantMarkdownImageResolution[]
+  >();
+  for (const resolution of liveAssistant.imageResolutions) {
+    const resolutions = resolutionsByBlockId.get(resolution.blockId) ?? [];
+    resolutions.push({
+      messageId: resolution.messageId,
+      entry: resolution.entry,
+    });
+    resolutionsByBlockId.set(resolution.blockId, resolutions);
+  }
+  for (const [blockId, resolutions] of resolutionsByBlockId) {
+    acc.imageResolutionsByBlockId.set(blockId, resolutions);
+  }
 }
 
 /**
@@ -2150,11 +2205,8 @@ function renderAssistantTurnSlice(
       {
         epicId: input.epicId,
         chatId: input.chatId,
-        resolutions: input.acc.imageResolutions,
-        deduplicatedSources: deduplicatedAssistantImageSources(
-          input.acc.blocks,
-          input.acc.imageResolutions,
-        ),
+        resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
+        generatedImageHashes: input.acc.generatedImageHashes,
       },
     ),
     structuredContent: null,
@@ -2183,19 +2235,10 @@ function renderAssistantTurnSlice(
 }
 
 function deduplicatedAssistantImageSources(
-  blocks: ReadonlyArray<ContentBlock>,
+  generatedImageHashes: ReadonlySet<string>,
   resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
 ): ReadonlySet<string> {
-  const generatedHashes = new Set<string>();
-  const generatedSources = new Set<string>();
-  for (const block of blocks) {
-    if (block.type !== "tool_call") continue;
-    for (const result of block.imageResults) {
-      generatedHashes.add(result.attachmentHash);
-      if (result.filePath !== null) generatedSources.add(result.filePath);
-    }
-  }
-  if (generatedHashes.size === 0 && generatedSources.size === 0) {
+  if (generatedImageHashes.size === 0) {
     return NO_DEDUPLICATED_IMAGE_SOURCES;
   }
 
@@ -2203,13 +2246,7 @@ function deduplicatedAssistantImageSources(
   for (const resolution of resolutions) {
     const entry = resolution.entry;
     if (entry.state !== "resolved") continue;
-    if (
-      !generatedHashes.has(entry.attachmentHash) &&
-      !generatedSources.has(entry.canonicalSource) &&
-      !generatedSources.has(entry.source)
-    ) {
-      continue;
-    }
+    if (!generatedImageHashes.has(entry.attachmentHash)) continue;
     deduplicatedSources.add(entry.source);
     deduplicatedSources.add(entry.canonicalSource);
   }
@@ -2484,26 +2521,31 @@ function renderLiveAssistant(
   if (input.mergesIntoPersisted) {
     return [];
   }
+  const acc: AssistantTurnAccumulator = {
+    messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    sender: liveAssistant.sender,
+    startedAt: liveAssistant.startedAt,
+    timestamp: liveAssistant.timestamp,
+    // A standalone live row owns its list from the start: it is built fresh
+    // here each pass and never aliases a persisted record.
+    blocks: [...liveAssistant.blocks],
+    blocksOwned: true,
+    signatureParts: [
+      `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
+    ],
+    profileLabel:
+      input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
+    reasoningEffort: liveAssistant.reasoningEffort,
+    serviceTier: liveAssistant.serviceTier,
+    // A live turn has no final cost yet; it surfaces once the turn completes
+    // and re-renders via the persisted path. The live footer is suppressed.
+    costUsd: null,
+    imageResolutionsByBlockId: new Map(),
+    generatedImageHashes: new Set(),
+  };
+  addLiveAssistantImageProjection(acc, liveAssistant);
   return renderAssistantTurnRows({
-    acc: {
-      messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
-      sender: liveAssistant.sender,
-      startedAt: liveAssistant.startedAt,
-      timestamp: liveAssistant.timestamp,
-      // A standalone live row owns its list from the start: it is built fresh
-      // here each pass and never aliases a persisted record.
-      blocks: [...liveAssistant.blocks],
-      blocksOwned: true,
-      signatureParts: [`live:${liveAssistant.blocksVersion}`],
-      profileLabel:
-        input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
-      reasoningEffort: liveAssistant.reasoningEffort,
-      serviceTier: liveAssistant.serviceTier,
-      // A live turn has no final cost yet; it surfaces once the turn completes
-      // and re-renders via the persisted path. The live footer is suppressed.
-      costUsd: null,
-      imageResolutions: [],
-    },
+    acc,
     turnKey: liveAssistant.turnId,
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
@@ -2675,17 +2717,36 @@ function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
-  imageContext: NonNullable<
-    Extract<MessageSegment, { kind: "text" }>["assistantImageContext"]
-  >,
+  imageProjection: {
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly resolutionsByBlockId: ReadonlyMap<
+      string,
+      ReadonlyArray<AssistantMarkdownImageResolution>
+    >;
+    readonly generatedImageHashes: ReadonlySet<string>;
+  },
 ): ReadonlyArray<MessageSegment> {
   const flat: MessageSegment[] = [];
   for (const block of blocks) {
     const segment = blockToSegment(block);
     if (segment !== null) {
+      const resolutions =
+        imageProjection.resolutionsByBlockId.get(block.blockId) ?? [];
       flat.push(
         segment.kind === "text"
-          ? { ...segment, assistantImageContext: imageContext }
+          ? {
+              ...segment,
+              assistantImageContext: {
+                epicId: imageProjection.epicId,
+                chatId: imageProjection.chatId,
+                resolutions,
+                deduplicatedSources: deduplicatedAssistantImageSources(
+                  imageProjection.generatedImageHashes,
+                  resolutions,
+                ),
+              },
+            }
           : segment,
       );
     }
