@@ -591,6 +591,22 @@ describe("NewWorktreeForm — new-branch name", () => {
     });
   });
 
+  it("keeps a pre-policy staged branch on exact collision handling", () => {
+    branchesData = {
+      branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    renderForm(onEmit, STAGED_DEVELOPMENT_INTENT);
+
+    flushAutosave();
+
+    expect(onEmit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
+      "Saved",
+    );
+  });
+
   it("adopts an externally regenerated name and retry identity", () => {
     branchesData = {
       branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
@@ -1647,9 +1663,12 @@ describe("NewWorktreeForm — autosave lifecycle", () => {
     expect(onEmit).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the same focused input when the saved intent echoes back", () => {
+  it("keeps a manually edited branch name when the saved intent echoes back", async () => {
     branchesData = {
-      branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
+      branches: [
+        { name: "development", isCurrent: true, isRemoteOnly: false },
+        { name: "chore/cleanup", isCurrent: false, isRemoteOnly: false },
+      ],
       uncommittedFileCount: 0,
     };
     const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
@@ -1681,6 +1700,9 @@ describe("NewWorktreeForm — autosave lifecycle", () => {
     expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
       "Saved",
     );
+
+    await selectSource("chore/cleanup");
+    expect((name as HTMLInputElement).value).toBe("feat/changed");
   });
 
   it("cancels a pending save when typing returns to the staged value", () => {

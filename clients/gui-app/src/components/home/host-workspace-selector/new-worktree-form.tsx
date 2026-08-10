@@ -667,14 +667,20 @@ function stagedNewBranch(
 function newBranchCollisionState(
   branch: NewWorktreeBranch | null,
 ): Pick<NewBranchNameState, "collision" | "retryIdentity"> {
-  if (branch?.collision === "random") {
+  if (!branch) {
+    return {
+      collision: "random",
+      retryIdentity: createWorktreeRetryIdentity(),
+    };
+  }
+  if (branch.collision === "random") {
     return {
       collision: "random",
       retryIdentity: branch.retryIdentity,
     };
   }
   return {
-    collision: branch?.collision ?? "random",
+    collision: branch.collision ?? "fail",
     retryIdentity: createWorktreeRetryIdentity(),
   };
 }
@@ -683,13 +689,14 @@ function newBranchNameState(input: {
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly fallbackName: string;
   readonly forSource: string | null;
+  readonly edited: boolean;
   readonly stagedIntentKey: string | null;
 }): NewBranchNameState {
   const branch = stagedNewBranch(input.currentIntent);
   return {
     value: branch?.name ?? input.fallbackName,
     forSource: input.forSource,
-    edited: false,
+    edited: input.edited,
     ...newBranchCollisionState(branch),
     stagedIntentKey: input.stagedIntentKey,
   };
@@ -749,6 +756,7 @@ function useNewWorktreeFormState(
         defaultNewBranchName,
       ),
       forSource: selectedSourceId,
+      edited: false,
       stagedIntentKey,
     }),
   );
@@ -758,6 +766,7 @@ function useNewWorktreeFormState(
         currentIntent,
         fallbackName: nameState.value,
         forSource: selectedSourceId,
+        edited: nameState.edited,
         stagedIntentKey,
       }),
     );
@@ -775,6 +784,7 @@ function useNewWorktreeFormState(
           defaultNewBranchName,
         ),
         forSource: selectedSourceId,
+        edited: false,
         stagedIntentKey,
       }),
     );
