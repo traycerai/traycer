@@ -7,6 +7,12 @@ import {
   type UsageSummaryTotals,
 } from "@/lib/usage-analytics/cost-format";
 
+const ZERO_PROVENANCE_SPLIT: UsageSummaryTotals["provenanceSplit"] = {
+  providerReported: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  modelPriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  unpriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+};
+
 function totals(overrides: Partial<UsageSummaryTotals>): UsageSummaryTotals {
   return {
     factCount: 1,
@@ -17,7 +23,10 @@ function totals(overrides: Partial<UsageSummaryTotals>): UsageSummaryTotals {
       outputTokens: 0,
     },
     knownCostUsd: 0,
+    knownCacheSavingsUsd: 0,
+    knownReasoningTokens: 0,
     costProvenance: "providerReported",
+    provenanceSplit: ZERO_PROVENANCE_SPLIT,
     ...overrides,
   };
 }

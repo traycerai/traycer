@@ -44,6 +44,10 @@ export const usageSummaryBucketSchema = z.object({
   factCount: nonNegativeIntSchema,
   tokens: usageSummaryTokenTotalsSchema,
   knownCostUsd: z.number().finite(),
+  /** Sum of every non-null `cacheSavingsUsd` in this bucket. */
+  knownCacheSavingsUsd: z.number().finite(),
+  /** Sum of every non-null `reasoningTokens` in this bucket - informational only, never folded into `tokens`. */
+  knownReasoningTokens: nonNegativeIntSchema,
   costProvenance: usageSummaryCostProvenanceSchema,
 });
 
@@ -54,12 +58,63 @@ export const usageSummaryWindowBoundsSchema = z.object({
   endAtExclusive: nonNegativeIntSchema,
 });
 
+/** Cost + fact count + token count for one provenance rung - ticket 10's per-provenance cost split. */
+export const usageProvenanceSplitEntrySchema = z.object({
+  costUsd: z.number().finite(),
+  factCount: nonNegativeIntSchema,
+  tokenCount: nonNegativeIntSchema,
+});
+
+export const usageProvenanceSplitSchema = z.object({
+  unpriced: usageProvenanceSplitEntrySchema,
+  modelPriced: usageProvenanceSplitEntrySchema,
+  providerReported: usageProvenanceSplitEntrySchema,
+});
+
 export const usageSummaryTotalsSchema = z.object({
   factCount: nonNegativeIntSchema,
   tokens: usageSummaryTokenTotalsSchema,
   knownCostUsd: z.number().finite(),
+  /** Sum of every non-null `cacheSavingsUsd` in the window. */
+  knownCacheSavingsUsd: z.number().finite(),
+  /** Sum of every non-null `reasoningTokens` in the window - informational only, never folded into `tokens`. */
+  knownReasoningTokens: nonNegativeIntSchema,
   costProvenance: usageSummaryCostProvenanceSchema.nullable(),
+  /** Cost/fact-count/token-count split by the fact's OWN provenance (not the weakest-wins bucket label). */
+  provenanceSplit: usageProvenanceSplitSchema,
 });
+
+/** One chat's totals within the window - the per-chat grouping alongside the day×harness×model `buckets`. */
+export const usageSummaryChatBucketSchema = z.object({
+  chatId: z.string().min(1).max(191),
+  epicId: z.string().min(1).max(191),
+  factCount: nonNegativeIntSchema,
+  tokens: usageSummaryTokenTotalsSchema,
+  knownCostUsd: z.number().finite(),
+  knownCacheSavingsUsd: z.number().finite(),
+  knownReasoningTokens: nonNegativeIntSchema,
+  costProvenance: usageSummaryCostProvenanceSchema,
+});
+
+/** One logical-execution fact, shaped for the chat-scoped per-turn drill-down. */
+export const usageTurnRowSchema = z.object({
+  factId: z.string().min(1).max(191),
+  occurredAt: nonNegativeIntSchema,
+  harnessId: z.string().min(1).max(64),
+  model: z.string().min(1).max(255),
+  outcome: usageSummaryOutcomeSchema,
+  usageCompleteness: usageSummaryCompletenessSchema,
+  tokens: usageSummaryTokenTotalsSchema,
+  reasoningTokens: nonNegativeIntSchema.nullable(),
+  costUsd: z.number().finite().nullable(),
+  costProvenance: usageSummaryCostProvenanceSchema.nullable(),
+  cacheSavingsUsd: z.number().finite().nullable(),
+  toolCallCount: nonNegativeIntSchema,
+  toolCallErrorCount: nonNegativeIntSchema,
+});
+
+/** Newest-first-capped chat-scoped per-turn rows - see `USAGE_TURN_ROWS_MAX` on the host/server side. */
+export const USAGE_TURN_ROWS_MAX = 500;
 
 export const usageSummaryOutcomeBreakdownSchema = z.object({
   completed: nonNegativeIntSchema,
@@ -77,12 +132,20 @@ export const usageSummaryCompletenessBreakdownSchema = z.object({
 export const usageSummarySchema = z.object({
   window: usageSummaryWindowBoundsSchema,
   epicId: z.string().min(1).max(191).nullable(),
+  /** The requested `chatId` filter echoed back; `null` = no chat scoping. */
+  chatId: z.string().min(1).max(191).nullable(),
   totals: usageSummaryTotalsSchema,
   buckets: z.array(usageSummaryBucketSchema),
+  /** Sorted by `chatId`. Groups BY chat regardless of whether the request filtered to one chat. */
+  chatBuckets: z.array(usageSummaryChatBucketSchema),
   distinctEpicCount: nonNegativeIntSchema,
   distinctChatCount: nonNegativeIntSchema,
   outcomeBreakdown: usageSummaryOutcomeBreakdownSchema,
   usageCompletenessBreakdown: usageSummaryCompletenessBreakdownSchema,
+  /** Chat-scoped per-turn drill-down rows - populated only when the request carried a `chatId` filter (chat-scope-only by design). */
+  turnRows: z.array(usageTurnRowSchema).nullable(),
+  /** `true` when `turnRows` was capped and older turns were omitted. Always `false` when `turnRows` is `null`. */
+  turnRowsTruncated: z.boolean(),
 });
 
 export const usageCostCoverageSchema = z.object({
@@ -97,6 +160,23 @@ export const hostUsageSummaryRequestSchemaV10 = z
     timezone: z.string().min(1).max(100),
     windowDays: z.number().int().positive(),
     epicId: z.string().min(1).max(191).nullable(),
+    /**
+     * Ticket 10 addition - `.optional()` (unlike the original fields above,
+     * which are required-but-nullable) so a client built against the
+     * original v1.0 shape (no chat filter) still validates: the key can be
+     * absent entirely, not merely `null`. Chat implies its epic - not
+     * required alongside `epicId`. Host-side, the chat must belong to the
+     * authenticated caller.
+     */
+    chatId: z.string().min(1).max(191).nullable().optional(),
+    /**
+     * Ticket 10 addition, same `.optional()` compatibility reasoning as
+     * `chatId`. Absent = the original `windowDays`-bounded behavior.
+     * `"epic"` is valid only alongside a non-null `epicId`/`chatId` -
+     * bounded by that epic/chat's own fact span, never a general unbounded
+     * query.
+     */
+    window: z.enum(["epic"]).optional(),
   })
   .strict();
 export type HostUsageSummaryRequestV10 = z.infer<

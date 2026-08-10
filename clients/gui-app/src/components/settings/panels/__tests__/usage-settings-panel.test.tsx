@@ -30,6 +30,13 @@ afterEach(() => {
   resetNegotiatedManifests();
 });
 
+const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
+  {
+    providerReported: { costUsd: 0, factCount: 0, tokenCount: 0 },
+    modelPriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+    unpriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  };
+
 function makeUsageSummaryResponse(): UsageSummaryResponse {
   return {
     servedBy: "cloud",
@@ -41,6 +48,7 @@ function makeUsageSummaryResponse(): UsageSummaryResponse {
         endAtExclusive: 1,
       },
       epicId: null,
+      chatId: null,
       totals: {
         factCount: 2,
         tokens: {
@@ -50,7 +58,10 @@ function makeUsageSummaryResponse(): UsageSummaryResponse {
           outputTokens: 50,
         },
         knownCostUsd: 4.5,
+        knownCacheSavingsUsd: 0,
+        knownReasoningTokens: 0,
         costProvenance: "providerReported",
+        provenanceSplit: ZERO_PROVENANCE_SPLIT,
       },
       buckets: [
         {
@@ -65,9 +76,12 @@ function makeUsageSummaryResponse(): UsageSummaryResponse {
             outputTokens: 50,
           },
           knownCostUsd: 4.5,
+          knownCacheSavingsUsd: 0,
+          knownReasoningTokens: 0,
           costProvenance: "providerReported",
         },
       ],
+      chatBuckets: [],
       distinctEpicCount: 1,
       distinctChatCount: 1,
       outcomeBreakdown: {
@@ -77,6 +91,8 @@ function makeUsageSummaryResponse(): UsageSummaryResponse {
         abnormal_exit: 0,
       },
       usageCompletenessBreakdown: { measured: 2, partial: 0, absent: 0 },
+      turnRows: null,
+      turnRowsTruncated: false,
     },
     coverage: {
       pricedFactCount: 2,

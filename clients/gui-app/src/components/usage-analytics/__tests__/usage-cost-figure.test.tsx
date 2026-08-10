@@ -8,6 +8,12 @@ afterEach(cleanup);
 type Totals = UsageSummaryResponse["summary"]["totals"];
 type Coverage = UsageSummaryResponse["coverage"];
 
+const ZERO_PROVENANCE_SPLIT: Totals["provenanceSplit"] = {
+  providerReported: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  modelPriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  unpriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+};
+
 function totals(overrides: Partial<Totals>): Totals {
   return {
     factCount: 1,
@@ -18,7 +24,10 @@ function totals(overrides: Partial<Totals>): Totals {
       outputTokens: 0,
     },
     knownCostUsd: 10,
+    knownCacheSavingsUsd: 0,
+    knownReasoningTokens: 0,
     costProvenance: "providerReported",
+    provenanceSplit: ZERO_PROVENANCE_SPLIT,
     ...overrides,
   };
 }

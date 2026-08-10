@@ -15,6 +15,8 @@ function bucket(overrides: Partial<UsageBucket>): UsageBucket {
       outputTokens: 50,
     },
     knownCostUsd: 1,
+    knownCacheSavingsUsd: 0,
+    knownReasoningTokens: 0,
     costProvenance: "providerReported",
     ...overrides,
   };

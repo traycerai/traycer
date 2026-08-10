@@ -39,6 +39,13 @@ afterEach(() => {
   clientHolder.current = null;
 });
 
+const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
+  {
+    providerReported: { costUsd: 0, factCount: 0, tokenCount: 0 },
+    modelPriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+    unpriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  };
+
 function emptyUsageSummaryResponse(): UsageSummaryResponse {
   return {
     servedBy: "cloud",
@@ -50,6 +57,7 @@ function emptyUsageSummaryResponse(): UsageSummaryResponse {
         endAtExclusive: 1,
       },
       epicId: "epic-1",
+      chatId: null,
       totals: {
         factCount: 0,
         tokens: {
@@ -59,9 +67,13 @@ function emptyUsageSummaryResponse(): UsageSummaryResponse {
           outputTokens: 0,
         },
         knownCostUsd: 0,
+        knownCacheSavingsUsd: 0,
+        knownReasoningTokens: 0,
         costProvenance: null,
+        provenanceSplit: ZERO_PROVENANCE_SPLIT,
       },
       buckets: [],
+      chatBuckets: [],
       distinctEpicCount: 0,
       distinctChatCount: 0,
       outcomeBreakdown: {
@@ -71,6 +83,8 @@ function emptyUsageSummaryResponse(): UsageSummaryResponse {
         abnormal_exit: 0,
       },
       usageCompletenessBreakdown: { measured: 0, partial: 0, absent: 0 },
+      turnRows: null,
+      turnRowsTruncated: false,
     },
     coverage: {
       pricedFactCount: 0,

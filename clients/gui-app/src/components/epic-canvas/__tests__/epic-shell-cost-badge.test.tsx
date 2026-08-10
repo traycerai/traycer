@@ -52,6 +52,13 @@ type WorktreeListResponse = ResponseOfMethod<
   "worktree.listAllForHost"
 >;
 
+const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
+  {
+    providerReported: { costUsd: 0, factCount: 0, tokenCount: 0 },
+    modelPriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+    unpriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+  };
+
 function pricedUsageSummaryResponse(): UsageSummaryResponse {
   return {
     servedBy: "cloud",
@@ -63,6 +70,7 @@ function pricedUsageSummaryResponse(): UsageSummaryResponse {
         endAtExclusive: 1,
       },
       epicId: EPIC_ID,
+      chatId: null,
       totals: {
         factCount: 1,
         tokens: {
@@ -72,7 +80,10 @@ function pricedUsageSummaryResponse(): UsageSummaryResponse {
           outputTokens: 50,
         },
         knownCostUsd: 0.113,
+        knownCacheSavingsUsd: 0,
+        knownReasoningTokens: 0,
         costProvenance: "modelPriced",
+        provenanceSplit: ZERO_PROVENANCE_SPLIT,
       },
       buckets: [
         {
@@ -87,9 +98,12 @@ function pricedUsageSummaryResponse(): UsageSummaryResponse {
             outputTokens: 50,
           },
           knownCostUsd: 0.113,
+          knownCacheSavingsUsd: 0,
+          knownReasoningTokens: 0,
           costProvenance: "modelPriced",
         },
       ],
+      chatBuckets: [],
       distinctEpicCount: 1,
       distinctChatCount: 1,
       outcomeBreakdown: {
@@ -99,6 +113,8 @@ function pricedUsageSummaryResponse(): UsageSummaryResponse {
         abnormal_exit: 0,
       },
       usageCompletenessBreakdown: { measured: 1, partial: 0, absent: 0 },
+      turnRows: null,
+      turnRowsTruncated: false,
     },
     coverage: {
       pricedFactCount: 1,
