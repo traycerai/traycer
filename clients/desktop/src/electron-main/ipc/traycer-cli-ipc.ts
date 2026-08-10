@@ -392,6 +392,44 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationRoleSave,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationRoleSave");
+      const roleJson = requireString(raw, "role", "traycerOrchestrationRoleSave");
+      return runTraycerCliJson([
+        "orchestration",
+        "role",
+        "save",
+        "--name",
+        name,
+        "--data",
+        roleJson,
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationRoleDelete,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationRoleDelete");
+      const roleId = requireString(
+        raw,
+        "roleId",
+        "traycerOrchestrationRoleDelete",
+      );
+      return runTraycerCliJson([
+        "orchestration",
+        "role",
+        "delete",
+        "--name",
+        name,
+        "--role",
+        roleId,
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.traycerOrchestrationPrelude,
     async (_event, raw: unknown) => {
       const name = requireString(raw, "name", "traycerOrchestrationPrelude");

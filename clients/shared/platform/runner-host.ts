@@ -704,6 +704,21 @@ export interface ITraycerCli {
     readonly group: TraycerModelGroup;
   }): Promise<boolean>;
   orchestrationGroupDelete(input: { readonly name: string }): Promise<boolean>;
+  orchestrationRoleSave(input: {
+    readonly name: string;
+    readonly role: {
+      readonly id: string;
+      readonly label: string;
+      readonly description: string;
+      readonly tier: string;
+      readonly isRoot: boolean;
+      readonly responsibility: string;
+    };
+  }): Promise<TraycerOrchestrationRole | null>;
+  orchestrationRoleDelete(input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<boolean>;
   /**
    * One-shot context block for chat creation (`initialMessage` only).
    * Not used on subsequent sends.

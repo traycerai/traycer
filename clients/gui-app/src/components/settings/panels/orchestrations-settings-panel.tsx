@@ -5,12 +5,11 @@
  * (via the CLI bridge). Shows roles, model bindings, and artifact chain.
  * Model groups are editable as JSON.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Bot,
   ChevronRight,
   Cpu,
-  FileText,
   Pencil,
   Plus,
   Trash2,
@@ -25,10 +24,13 @@ import {
   useRunnerOrchestrationShowQuery,
   useRunnerOrchestrationModelsQuery,
   useRunnerOrchestrationGroupsQuery,
+  useRunnerOrchestrationResponsibilityQuery,
   useRunnerOrchestrationCreateMutation,
   useRunnerOrchestrationDeleteMutation,
   useRunnerOrchestrationGroupSaveMutation,
   useRunnerOrchestrationGroupDeleteMutation,
+  useRunnerOrchestrationRoleSaveMutation,
+  useRunnerOrchestrationRoleDeleteMutation,
 } from "@/hooks/runner/use-runner-orchestration-queries";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
 import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
@@ -336,11 +338,20 @@ function CreateTimeBindingSection(props: {
   readonly onRoleIdChange: (roleId: string) => void;
   readonly onModelGroupChange: (group: string | null) => void;
 }) {
+  const ready =
+    props.enabled &&
+    props.orchestrationName.length > 0 &&
+    props.roleId.length > 0 &&
+    props.roles.some((r) => r.id === props.roleId);
+
   return (
     <div className="border-b border-border/40 p-3">
-      <h3 className="mb-2 text-ui-xs font-medium text-muted-foreground">
+      <h3 className="mb-1 text-ui-xs font-medium text-muted-foreground">
         Inject at chat creation
       </h3>
+      <p className="mb-2 text-ui-xs text-muted-foreground">
+        1) Enable → 2) pick template → 3) pick role → 4) create a chat.
+      </p>
       <label className="mb-2 flex items-center gap-2 text-ui-xs">
         <input
           type="checkbox"
@@ -349,24 +360,36 @@ function CreateTimeBindingSection(props: {
         />
         Enabled
       </label>
+      <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+        Template
+      </label>
       <select
         value={props.orchestrationName}
         onChange={(e) => props.onOrchestrationNameChange(e.target.value)}
         disabled={!props.enabled}
         className="mb-1.5 w-full rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
       >
+        <option value="">Select template…</option>
         {props.orchestrationNames.map((name) => (
           <option key={name} value={name}>
             {name}
           </option>
         ))}
       </select>
+      <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+        Role
+      </label>
       <select
         value={props.roleId}
         onChange={(e) => props.onRoleIdChange(e.target.value)}
-        disabled={!props.enabled}
+        disabled={!props.enabled || props.roles.length === 0}
         className="mb-1.5 w-full rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
       >
+        <option value="">
+          {props.roles.length === 0
+            ? "Add a role in the template first…"
+            : "Select role…"}
+        </option>
         {props.roles.map((role) => (
           <option key={role.id} value={role.id}>
             {role.label}
@@ -374,6 +397,9 @@ function CreateTimeBindingSection(props: {
           </option>
         ))}
       </select>
+      <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+        Model group
+      </label>
       <select
         value={props.modelGroup ?? ""}
         onChange={(e) =>
@@ -391,8 +417,16 @@ function CreateTimeBindingSection(props: {
           </option>
         ))}
       </select>
-      <p className="mt-1.5 text-ui-xs text-muted-foreground">
-        Applied once on new chat / new epic — not on later sends.
+      <p
+        className={
+          ready
+            ? "mt-1.5 text-ui-xs text-emerald-600 dark:text-emerald-400"
+            : "mt-1.5 text-ui-xs text-muted-foreground"
+        }
+      >
+        {ready
+          ? "Ready — new chats get this role once at creation."
+          : "Applied once on new chat / new epic — not on later sends."}
       </p>
     </div>
   );
@@ -816,6 +850,16 @@ function OrchestrationDetail(props: {
 }) {
   const { detail, selectedRoleId, onSelectRole, models, modelsLoading } = props;
   const deleteMutation = useRunnerOrchestrationDeleteMutation();
+  const setRoleId = useOrchestrationBindingStore((s) => s.setRoleId);
+  const setOrchestrationName = useOrchestrationBindingStore(
+    (s) => s.setOrchestrationName,
+  );
+  const setEnabled = useOrchestrationBindingStore((s) => s.setEnabled);
+  const [roleEditor, setRoleEditor] = useState<
+    | { readonly mode: "closed" }
+    | { readonly mode: "create" }
+    | { readonly mode: "edit"; readonly role: TraycerOrchestrationRole }
+  >({ mode: "closed" });
 
   return (
     <div className="flex flex-col gap-5">
@@ -854,19 +898,75 @@ function OrchestrationDetail(props: {
 
       {/* Roles */}
       <div>
-        <h3 className="mb-2 text-ui-sm font-medium">Roles</h3>
-        <div className="flex flex-col gap-2">
-          {detail.roles.map((role) => (
-            <RoleCard
-              key={role.id}
-              role={role}
-              isSelected={selectedRoleId === role.id}
-              onSelect={() =>
-                onSelectRole(selectedRoleId === role.id ? null : role.id)
-              }
-            />
-          ))}
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-ui-sm font-medium">Roles</h3>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-ui-xs"
+            onClick={() => setRoleEditor({ mode: "create" })}
+          >
+            <Plus className="mr-1 size-3" />
+            Add role
+          </Button>
         </div>
+        <p className="mb-2 text-ui-xs text-muted-foreground">
+          A role is who the agent is on the first message (identity + rules).
+        </p>
+
+        {roleEditor.mode !== "closed" ? (
+          <RoleEditorForm
+            orchestrationName={props.name}
+            existingIds={detail.roles.map((r) => r.id)}
+            editing={
+              roleEditor.mode === "edit" ? roleEditor.role : null
+            }
+            onCancel={() => setRoleEditor({ mode: "closed" })}
+            onSaved={(roleId) => {
+              setRoleEditor({ mode: "closed" });
+              onSelectRole(roleId);
+              // Wire inject binding so the user doesn't hunt empty dropdowns.
+              setEnabled(true);
+              setOrchestrationName(props.name);
+              setRoleId(roleId);
+            }}
+          />
+        ) : null}
+
+        {detail.roles.length === 0 && roleEditor.mode === "closed" ? (
+          <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 p-4 text-center">
+            <p className="text-ui-sm text-muted-foreground">
+              No roles yet. Add the first role to unlock Inject at chat
+              creation.
+            </p>
+            <Button
+              size="sm"
+              className="mt-3"
+              onClick={() => setRoleEditor({ mode: "create" })}
+            >
+              <Plus className="mr-1 size-3" />
+              Create first role
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {detail.roles.map((role) => (
+              <RoleCard
+                key={role.id}
+                role={role}
+                isSelected={selectedRoleId === role.id}
+                onSelect={() =>
+                  onSelectRole(selectedRoleId === role.id ? null : role.id)
+                }
+                onEdit={() => setRoleEditor({ mode: "edit", role })}
+                orchestrationName={props.name}
+                onDeleted={() => {
+                  if (selectedRoleId === role.id) onSelectRole(null);
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Models for selected role */}
@@ -877,29 +977,37 @@ function OrchestrationDetail(props: {
       {/* Artifact chain */}
       <div>
         <h3 className="mb-2 text-ui-sm font-medium">Artifact chain</h3>
-        <div className="flex flex-wrap items-center gap-1 text-ui-xs text-muted-foreground">
-          {detail.artifactChain.map((step, i) => (
-            <span key={step.path}>
-              {i > 0 ? <span className="mx-1">→</span> : null}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono">
-                {step.path}
-              </code>
-            </span>
-          ))}
-        </div>
+        {detail.artifactChain.length === 0 ? (
+          <p className="text-ui-xs text-muted-foreground">None configured.</p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1 text-ui-xs text-muted-foreground">
+            {detail.artifactChain.map((step, i) => (
+              <span key={step.path}>
+                {i > 0 ? <span className="mx-1">→</span> : null}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                  {step.path}
+                </code>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Global rules */}
       <div>
         <h3 className="mb-2 text-ui-sm font-medium">Global rules</h3>
-        <ul className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
-          {detail.globalRules.map((rule) => (
-            <li key={rule} className="flex items-start gap-1.5">
-              <span className="mt-0.5 text-muted-foreground/60">•</span>
-              {rule}
-            </li>
-          ))}
-        </ul>
+        {detail.globalRules.length === 0 ? (
+          <p className="text-ui-xs text-muted-foreground">None configured.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
+            {detail.globalRules.map((rule) => (
+              <li key={rule} className="flex items-start gap-1.5">
+                <span className="mt-0.5 text-muted-foreground/60">•</span>
+                {rule}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
@@ -911,35 +1019,269 @@ function RoleCard(props: {
   readonly role: TraycerOrchestrationRole;
   readonly isSelected: boolean;
   readonly onSelect: () => void;
+  readonly onEdit: () => void;
+  readonly orchestrationName: string;
+  readonly onDeleted: () => void;
 }) {
   const { role, isSelected, onSelect } = props;
+  const deleteMutation = useRunnerOrchestrationRoleDeleteMutation();
+
   return (
-    <button
-      onClick={onSelect}
-      className={`rounded-lg border p-3 text-left transition-colors ${
+    <div
+      className={`rounded-lg border p-3 transition-colors ${
         isSelected
           ? "border-primary/50 bg-accent/30"
           : "border-border/40 hover:bg-accent/20"
       }`}
     >
-      <div className="flex items-center gap-2">
-        <Bot className="size-4 shrink-0" />
-        <span className="font-medium text-ui-sm">
-          {role.isRoot ? "★ " : ""}
-          {role.label}
-        </span>
-        <Badge variant="secondary" className="ml-auto text-ui-xs">
-          {role.tier}
-        </Badge>
+      <div className="flex items-start gap-2">
+        <button onClick={onSelect} className="min-w-0 flex-1 text-left">
+          <div className="flex items-center gap-2">
+            <Bot className="size-4 shrink-0" />
+            <span className="font-medium text-ui-sm">
+              {role.isRoot ? "★ " : ""}
+              {role.label}
+            </span>
+            <Badge variant="secondary" className="ml-auto text-ui-xs">
+              {role.tier}
+            </Badge>
+          </div>
+          <p className="mt-1 text-ui-xs text-muted-foreground">
+            {role.description.length > 0
+              ? role.description
+              : `id: ${role.id}`}
+          </p>
+        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={props.onEdit}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            aria-label={`Edit role ${role.label}`}
+            title="Edit role"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Delete role "${role.label}" (${role.id})?`,
+                )
+              ) {
+                return;
+              }
+              deleteMutation.mutate(
+                { name: props.orchestrationName, roleId: role.id },
+                { onSuccess: (ok) => {
+                    if (ok) props.onDeleted();
+                  } },
+              );
+            }}
+            disabled={deleteMutation.isPending}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-40"
+            aria-label={`Delete role ${role.label}`}
+            title="Delete role"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
       </div>
-      <p className="mt-1 text-ui-xs text-muted-foreground">
-        {role.description}
-      </p>
-      <div className="mt-1.5 flex items-center gap-1.5 text-ui-xs text-muted-foreground">
-        <FileText className="size-3" />
-        <span className="truncate">{role.responsibilityFile}</span>
+    </div>
+  );
+}
+
+const ROLE_TIERS = ["premium", "executor", "economic"] as const;
+
+function RoleEditorForm(props: {
+  readonly orchestrationName: string;
+  readonly existingIds: readonly string[];
+  readonly editing: TraycerOrchestrationRole | null;
+  readonly onCancel: () => void;
+  readonly onSaved: (roleId: string) => void;
+}) {
+  const isEdit = props.editing !== null;
+  const [id, setId] = useState(props.editing?.id ?? "");
+  const [label, setLabel] = useState(props.editing?.label ?? "");
+  const [description, setDescription] = useState(
+    props.editing?.description ?? "",
+  );
+  const [tier, setTier] = useState(props.editing?.tier ?? "executor");
+  const [isRoot, setIsRoot] = useState(props.editing?.isRoot ?? false);
+  const [responsibility, setResponsibility] = useState("");
+
+  const existingMd = useRunnerOrchestrationResponsibilityQuery(
+    props.orchestrationName,
+    props.editing?.id ?? "",
+  );
+
+  useEffect(() => {
+    if (!isEdit) return;
+    if (existingMd.data === undefined) return;
+    setResponsibility(existingMd.data ?? "");
+  }, [isEdit, existingMd.data]);
+
+  const saveMutation = useRunnerOrchestrationRoleSaveMutation();
+
+  const idValid =
+    isEdit ||
+    (/^[a-z][a-z0-9-]*$/.test(id) && !props.existingIds.includes(id));
+  const canSave =
+    idValid &&
+    label.trim().length > 0 &&
+    responsibility.trim().length > 0 &&
+    !saveMutation.isPending;
+
+  const handleSave = (): void => {
+    if (!canSave) return;
+    const roleId = isEdit && props.editing !== null ? props.editing.id : id.trim();
+    saveMutation.mutate(
+      {
+        name: props.orchestrationName,
+        role: {
+          id: roleId,
+          label: label.trim(),
+          description: description.trim(),
+          tier,
+          isRoot,
+          responsibility,
+        },
+      },
+      {
+        onSuccess: (data) => {
+          if (data !== null) props.onSaved(roleId);
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-border/60 bg-card p-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-ui-sm font-medium">
+          {isEdit ? "Edit role" : "New role"}
+        </h4>
+        <button
+          type="button"
+          onClick={props.onCancel}
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent"
+          aria-label="Cancel"
+        >
+          <X className="size-3.5" />
+        </button>
       </div>
-    </button>
+
+      {!isEdit ? (
+        <div>
+          <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+            Id (kebab-case)
+          </label>
+          <input
+            type="text"
+            value={id}
+            onChange={(e) => setId(e.target.value.toLowerCase())}
+            placeholder="analyst"
+            className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+          />
+          {id.length > 0 && !idValid ? (
+            <p className="mt-0.5 text-ui-xs text-destructive">
+              Use lowercase letters, numbers, hyphens. Must be unique.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div>
+        <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+          Display name
+        </label>
+        <input
+          type="text"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Critical Analyst"
+          className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+        />
+      </div>
+
+      <div>
+        <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+          Short description
+        </label>
+        <input
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Challenges assumptions and finds risks"
+          className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div>
+          <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+            Model tier
+          </label>
+          <select
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+          >
+            {ROLE_TIERS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
+        <label className="mt-4 flex items-center gap-2 text-ui-xs">
+          <input
+            type="checkbox"
+            checked={isRoot}
+            onChange={(e) => setIsRoot(e.target.checked)}
+          />
+          Primary role ★
+        </label>
+      </div>
+
+      <div>
+        <label className="mb-0.5 block text-ui-xs text-muted-foreground">
+          Responsibility (injected once at chat creation)
+        </label>
+        <textarea
+          value={responsibility}
+          onChange={(e) => setResponsibility(e.target.value)}
+          rows={8}
+          placeholder={`# ${label || "Role"}\nYou are a critical analyst. Challenge premises, name risks, and demand evidence.\nBe direct. Prefer concrete findings over vague advice.`}
+          className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 font-mono text-ui-xs leading-relaxed"
+        />
+        {isEdit && existingMd.isLoading ? (
+          <p className="mt-0.5 text-ui-xs text-muted-foreground">
+            Loading existing text…
+          </p>
+        ) : null}
+      </div>
+
+      <div className="flex justify-end gap-2 pt-1">
+        <Button size="sm" variant="ghost" onClick={props.onCancel}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={!canSave}
+          onClick={() => {
+            handleSave();
+          }}
+        >
+          {saveMutation.isPending
+            ? "Saving…"
+            : isEdit
+              ? "Save role"
+              : "Create role"}
+        </Button>
+      </div>
+    </div>
   );
 }
 

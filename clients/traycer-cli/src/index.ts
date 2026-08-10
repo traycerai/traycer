@@ -47,6 +47,8 @@ import {
   buildOrchestrationModelsCommand,
   buildOrchestrationPreludeCommand,
   buildOrchestrationResponsibilityCommand,
+  buildOrchestrationRoleDeleteCommand,
+  buildOrchestrationRoleSaveCommand,
   buildOrchestrationRolesCommand,
   buildOrchestrationShowCommand,
 } from "./commands/orchestration";
@@ -1454,6 +1456,36 @@ function registerOrchestrationCommands(program: Command): void {
     (opts) =>
       buildOrchestrationGroupDeleteCommand({
         name: typeof opts.name === "string" ? opts.name : null,
+      }),
+  );
+
+  const role = orch.command("role").description("Manage roles on an orchestration");
+
+  withRunner(
+    role
+      .command("save")
+      .description(
+        "Create or update a role + responsibility markdown (JSON via --data)",
+      )
+      .requiredOption("--name <name>", "Orchestration name")
+      .option("--data <json>", "Role JSON string"),
+    (opts) =>
+      buildOrchestrationRoleSaveCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        data: typeof opts.data === "string" ? opts.data : null,
+      }),
+  );
+
+  withRunner(
+    role
+      .command("delete")
+      .description("Delete a role from an orchestration")
+      .requiredOption("--name <name>", "Orchestration name")
+      .requiredOption("--role <id>", "Role id"),
+    (opts) =>
+      buildOrchestrationRoleDeleteCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
+        role: typeof opts.role === "string" ? opts.role : null,
       }),
   );
 }

@@ -74,6 +74,21 @@ export interface TraycerCliBridgeSurface {
     readonly group: TraycerModelGroup;
   }): Promise<boolean>;
   orchestrationGroupDelete(input: { readonly name: string }): Promise<boolean>;
+  orchestrationRoleSave(input: {
+    readonly name: string;
+    readonly role: {
+      readonly id: string;
+      readonly label: string;
+      readonly description: string;
+      readonly tier: string;
+      readonly isRoot: boolean;
+      readonly responsibility: string;
+    };
+  }): Promise<TraycerOrchestrationRole | null>;
+  orchestrationRoleDelete(input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<boolean>;
   orchestrationPrelude(input: {
     readonly name: string;
     readonly roleId: string;
@@ -195,6 +210,16 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
     orchestrationGroupDelete: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerOrchestrationGroupDelete,
+        input,
+      ) as Promise<boolean>,
+    orchestrationRoleSave: (input) =>
+      ipcRenderer.invoke(RunnerHostInvoke.traycerOrchestrationRoleSave, {
+        name: input.name,
+        role: JSON.stringify(input.role),
+      }) as Promise<TraycerOrchestrationRole | null>,
+    orchestrationRoleDelete: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerOrchestrationRoleDelete,
         input,
       ) as Promise<boolean>,
     orchestrationPrelude: (input) =>

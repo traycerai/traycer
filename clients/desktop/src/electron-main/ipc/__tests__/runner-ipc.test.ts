@@ -712,6 +712,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerOrchestrationGroupShow,
         RunnerHostInvoke.traycerOrchestrationGroupSave,
         RunnerHostInvoke.traycerOrchestrationGroupDelete,
+        RunnerHostInvoke.traycerOrchestrationRoleSave,
+        RunnerHostInvoke.traycerOrchestrationRoleDelete,
         RunnerHostInvoke.traycerOrchestrationPrelude,
         RunnerHostInvoke.migrationAnnounceRunning,
         RunnerHostInvoke.migrationGetRunningSnapshot,

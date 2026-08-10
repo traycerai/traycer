@@ -288,3 +288,41 @@ export function useRunnerOrchestrationGroupDeleteMutation() {
     onSuccess: invalidate,
   });
 }
+
+export function useRunnerOrchestrationRoleSaveMutation() {
+  const runnerHost = useRunnerHost();
+  const invalidate = useInvalidateOrchestrations();
+  return useMutation({
+    mutationFn: (input: {
+      name: string;
+      role: {
+        id: string;
+        label: string;
+        description: string;
+        tier: string;
+        isRoot: boolean;
+        responsibility: string;
+      };
+    }) => {
+      if (runnerHost.traycerCli === null) {
+        throw new Error("traycerCli unavailable");
+      }
+      return runnerHost.traycerCli.orchestrationRoleSave(input);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useRunnerOrchestrationRoleDeleteMutation() {
+  const runnerHost = useRunnerHost();
+  const invalidate = useInvalidateOrchestrations();
+  return useMutation({
+    mutationFn: (input: { name: string; roleId: string }) => {
+      if (runnerHost.traycerCli === null) {
+        throw new Error("traycerCli unavailable");
+      }
+      return runnerHost.traycerCli.orchestrationRoleDelete(input);
+    },
+    onSuccess: invalidate,
+  });
+}

@@ -984,6 +984,27 @@ export class MockTraycerCli implements ITraycerCli {
     return false;
   }
 
+  async orchestrationRoleSave(_input: {
+    readonly name: string;
+    readonly role: {
+      readonly id: string;
+      readonly label: string;
+      readonly description: string;
+      readonly tier: string;
+      readonly isRoot: boolean;
+      readonly responsibility: string;
+    };
+  }): Promise<null> {
+    return null;
+  }
+
+  async orchestrationRoleDelete(_input: {
+    readonly name: string;
+    readonly roleId: string;
+  }): Promise<boolean> {
+    return false;
+  }
+
   async orchestrationPrelude(_input: {
     readonly name: string;
     readonly roleId: string;

@@ -2,16 +2,19 @@ import {
   buildOrchestrationPrelude,
   createOrchestration,
   deleteOrchestration,
+  deleteOrchestrationRole,
   getModelsForRole,
   listModelGroups,
   listOrchestrations,
   readModelGroup,
   readOrchestration,
   readResponsibility,
+  upsertOrchestrationRole,
   writeModelGroup,
   deleteModelGroup,
   writeResponsibility,
   type ModelGroup,
+  type UpsertOrchestrationRoleInput,
 } from "../store/orchestration-store";
 import type { CommandFn } from "../runner/runner";
 
@@ -417,6 +420,115 @@ export function buildOrchestrationGroupDeleteCommand(opts: {
     return {
       data: { deleted: name },
       human: `Deleted model group: ${name}`,
+      exitCode: 0,
+    };
+  };
+}
+
+// `traycer orchestration role save --name <orch> --data <json>`
+// JSON: { id, label, description, tier, isRoot, responsibility }
+export function buildOrchestrationRoleSaveCommand(opts: {
+  readonly name: string | null;
+  readonly data: string | null;
+}): CommandFn {
+  return async (ctx) => {
+    const name = (opts.name ?? "").trim();
+    if (name.length === 0) {
+      return { data: null, human: "Error: --name is required", exitCode: 1 };
+    }
+    let raw = opts.data ?? "";
+    if (raw.length === 0 && !process.stdin.isTTY) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      }
+      raw = Buffer.concat(chunks).toString("utf-8");
+    }
+    if (raw.trim().length === 0) {
+      return {
+        data: null,
+        human: "Error: --data JSON (or stdin) is required",
+        exitCode: 1,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { data: null, human: "Error: invalid JSON in --data", exitCode: 1 };
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {
+        data: null,
+        human: "Error: --data must be a JSON object",
+        exitCode: 1,
+      };
+    }
+    const obj = parsed as Record<string, unknown>;
+    const input: UpsertOrchestrationRoleInput = {
+      id: typeof obj.id === "string" ? obj.id : "",
+      label: typeof obj.label === "string" ? obj.label : "",
+      description: typeof obj.description === "string" ? obj.description : "",
+      tier: typeof obj.tier === "string" ? obj.tier : "executor",
+      isRoot: obj.isRoot === true,
+      responsibility:
+        typeof obj.responsibility === "string" ? obj.responsibility : "",
+    };
+    if (input.id.length === 0) {
+      return { data: null, human: "Error: role id is required", exitCode: 1 };
+    }
+    const role = await upsertOrchestrationRole(name, input);
+    if (role === null) {
+      return {
+        data: null,
+        human: `Failed to save role ${input.id} on orchestration ${name}`,
+        exitCode: 1,
+      };
+    }
+    if (ctx.runtime.json) {
+      return { data: role, human: null, exitCode: 0 };
+    }
+    return {
+      data: role,
+      human: `Saved role ${role.id} on ${name}`,
+      exitCode: 0,
+    };
+  };
+}
+
+// `traycer orchestration role delete --name <orch> --role <id>`
+export function buildOrchestrationRoleDeleteCommand(opts: {
+  readonly name: string | null;
+  readonly role: string | null;
+}): CommandFn {
+  return async (ctx) => {
+    const name = (opts.name ?? "").trim();
+    const roleId = (opts.role ?? "").trim();
+    if (name.length === 0 || roleId.length === 0) {
+      return {
+        data: null,
+        human: "Error: --name and --role are required",
+        exitCode: 1,
+      };
+    }
+    const ok = await deleteOrchestrationRole(name, roleId);
+    if (!ok) {
+      return {
+        data: null,
+        human: `Failed to delete role ${roleId} on ${name}`,
+        exitCode: 1,
+      };
+    }
+    if (ctx.runtime.json) {
+      return {
+        data: { deleted: roleId, orchestration: name },
+        human: null,
+        exitCode: 0,
+      };
+    }
+    return {
+      data: { deleted: roleId, orchestration: name },
+      human: `Deleted role ${roleId} from ${name}`,
       exitCode: 0,
     };
   };

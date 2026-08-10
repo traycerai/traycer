@@ -374,6 +374,101 @@ export async function writeResponsibility(
   }
 }
 
+const ROLE_ID_RE = /^[a-z][a-z0-9-]*$/;
+
+export interface UpsertOrchestrationRoleInput {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly tier: string;
+  readonly isRoot: boolean;
+  /** Markdown body written to roles/<id>.md */
+  readonly responsibility: string;
+}
+
+/**
+ * Create or update a role + its responsibility markdown in one shot.
+ * Keeps orchestration.json and roles/<id>.md in lockstep for the GUI editor.
+ */
+export async function upsertOrchestrationRole(
+  orchestrationName: string,
+  input: UpsertOrchestrationRoleInput,
+): Promise<OrchestrationRole | null> {
+  const orch = await readOrchestration(orchestrationName);
+  if (orch === null) return null;
+
+  const id = input.id.trim();
+  if (!ROLE_ID_RE.test(id)) return null;
+
+  const label = input.label.trim().length > 0 ? input.label.trim() : id;
+  const description = input.description.trim();
+  const tier =
+    input.tier.trim().length > 0 ? input.tier.trim() : "executor";
+  const responsibilityFile = `roles/${id}.md`;
+
+  const nextRole: OrchestrationRole = {
+    id,
+    label,
+    description,
+    responsibilityFile,
+    tier,
+    isRoot: input.isRoot,
+    lifecycle: "persistent",
+    canCreateAgents: false,
+    canWriteArtifacts: [],
+    neverImplements: false,
+    modelPreference: [],
+  };
+
+  const existingIdx = orch.roles.findIndex((r) => r.id === id);
+  const roles =
+    existingIdx === -1
+      ? [...orch.roles, nextRole]
+      : orch.roles.map((r, i) => (i === existingIdx ? nextRole : r));
+
+  // At most one root role — if this one is root, clear the flag on others.
+  const normalizedRoles = input.isRoot
+    ? roles.map((r) => (r.id === id ? r : { ...r, isRoot: false }))
+    : roles;
+
+  const written = await writeOrchestration({
+    ...orch,
+    roles: normalizedRoles,
+  });
+  if (!written) return null;
+
+  const mdOk = await writeResponsibility(
+    orchestrationName,
+    id,
+    input.responsibility,
+  );
+  if (!mdOk) return null;
+  return nextRole;
+}
+
+export async function deleteOrchestrationRole(
+  orchestrationName: string,
+  roleId: string,
+): Promise<boolean> {
+  const orch = await readOrchestration(orchestrationName);
+  if (orch === null) return false;
+  const role = orch.roles.find((r) => r.id === roleId);
+  if (role === undefined) return false;
+
+  const nextRoles = orch.roles.filter((r) => r.id !== roleId);
+  const written = await writeOrchestration({ ...orch, roles: nextRoles });
+  if (!written) return false;
+
+  try {
+    await rm(join(ORCHESTRATIONS_DIR, orchestrationName, role.responsibilityFile), {
+      force: true,
+    });
+  } catch {
+    // JSON already updated — stale md is non-fatal.
+  }
+  return true;
+}
+
 export async function writeModelGroup(group: ModelGroup): Promise<boolean> {
   try {
     await mkdir(MODEL_GROUPS_DIR, { recursive: true });
