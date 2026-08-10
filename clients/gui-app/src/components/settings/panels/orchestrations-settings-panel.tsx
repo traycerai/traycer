@@ -1,23 +1,37 @@
 /**
- * Orchestrations settings panel — manage agent team templates.
+ * Orchestrations settings panel — agent teams for laypeople.
  *
- * Lists, creates, and deletes orchestrations from ~/.traycer/orchestrations/
- * (via the CLI bridge). Shows roles, model bindings, and artifact chain.
- * Model groups are editable as JSON.
+ * IA (top → bottom):
+ *  1. Active for new chats — the ON/OFF + team + starter + pack + preview.
+ *  2. Your teams — cards + Create team wizard.
+ *  3. Team detail — basics / members / member editor / models / Advanced.
+ *  4. Model packs — which concrete models fill each quality shelf.
+ *
+ * Rules enforced in UX: every team needs exactly one team lead (isRoot); the
+ * first member is forced lead; the last lead cannot be demoted or deleted.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
   ChevronRight,
   Cpu,
+  Crown,
   Pencil,
   Plus,
   Trash2,
   Users,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
   useRunnerOrchestrationListQuery,
@@ -40,16 +54,126 @@ import type {
   TraycerOrchestrationRole,
 } from "@traycer-clients/shared/platform/runner-host";
 
-export function OrchestrationsSettingsPanel() {
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<string | undefined>(
-    undefined,
-  );
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingGroup, setEditingGroup] = useState<string | null>(null);
-  const [showCreateGroupForm, setShowCreateGroupForm] = useState(false);
+const PRIMARY_PACK = "roster-full";
 
+/** tier id → layman label (model quality shelf inside a pack). */
+const QUALITY_OPTIONS = [
+  {
+    tier: "premium",
+    label: "Best",
+    hint: "Planning, review, final decisions — does not implement",
+  },
+  {
+    tier: "executor",
+    label: "Balanced",
+    hint: "Everyday building work",
+  },
+  {
+    tier: "economic",
+    label: "Cheap",
+    hint: "Small, quick tasks",
+  },
+] as const;
+
+function qualityLabel(tier: string): string {
+  return (
+    QUALITY_OPTIONS.find((q) => q.tier === tier)?.label ?? tier
+  );
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+export function OrchestrationsSettingsPanel() {
+  const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [editingPack, setEditingPack] = useState<string | null>(null);
+  const [showCreatePackForm, setShowCreatePackForm] = useState(false);
+
+  const teams = useRunnerOrchestrationListQuery();
+  const packs = useRunnerOrchestrationGroupsQuery();
+  const teamNames = teams.data ?? [];
+  const packNames = packs.data ?? [];
+
+  return (
+    <SettingsPanelShell
+      title="Orchestrations"
+      description="Teams define who your agents are. Turn one on so every new chat starts with the team lead’s brief — once, at creation."
+      fillHeight
+    >
+      <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-5">
+        <ActiveForNewChatsCard
+          teamNames={teamNames}
+          packNames={packNames}
+          onCreateTeam={() => setWizardOpen(true)}
+        />
+
+        <TeamsSection
+          teamNames={teamNames}
+          isLoading={teams.isLoading}
+          selectedTeam={selectedTeam}
+          onSelect={(name) => {
+            setSelectedTeam(name);
+            setSelectedMemberId(null);
+          }}
+          onCreateTeam={() => setWizardOpen(true)}
+        />
+
+        {selectedTeam !== null ? (
+          <TeamDetail
+            name={selectedTeam}
+            selectedMemberId={selectedMemberId}
+            onSelectMember={setSelectedMemberId}
+            onDeleted={() => setSelectedTeam(null)}
+          />
+        ) : null}
+
+        <ModelPacksSection
+          packNames={packNames}
+          editingPack={editingPack}
+          showCreateForm={showCreatePackForm}
+          onEditPack={setEditingPack}
+          onStartCreate={() => {
+            setEditingPack(null);
+            setShowCreatePackForm(true);
+          }}
+          onCloseEditor={() => setEditingPack(null)}
+          onCloseCreate={() => setShowCreatePackForm(false)}
+          onCreatedPack={(name) => {
+            setShowCreatePackForm(false);
+            setEditingPack(name);
+          }}
+        />
+      </div>
+
+      <CreateTeamWizard
+        open={wizardOpen}
+        packNames={packNames}
+        existingNames={teamNames}
+        onClose={() => setWizardOpen(false)}
+        onCreated={(name) => {
+          setWizardOpen(false);
+          setSelectedTeam(name);
+          setSelectedMemberId(null);
+        }}
+      />
+    </SettingsPanelShell>
+  );
+}
+
+// ─── 1. Active for new chats ────────────────────────────────────────────────
+
+function ActiveForNewChatsCard(props: {
+  readonly teamNames: readonly string[];
+  readonly packNames: readonly string[];
+  readonly onCreateTeam: () => void;
+}) {
   const binding = useOrchestrationBindingStore((s) => s.binding);
   const setEnabled = useOrchestrationBindingStore((s) => s.setEnabled);
   const setOrchestrationName = useOrchestrationBindingStore(
@@ -58,998 +182,567 @@ export function OrchestrationsSettingsPanel() {
   const setRoleId = useOrchestrationBindingStore((s) => s.setRoleId);
   const setModelGroup = useOrchestrationBindingStore((s) => s.setModelGroup);
 
-  const orchestrations = useRunnerOrchestrationListQuery();
-  const groups = useRunnerOrchestrationGroupsQuery();
-  const detail = useRunnerOrchestrationShowQuery(selectedName ?? "");
-  const bindingDetail = useRunnerOrchestrationShowQuery(
+  const teamQuery = useRunnerOrchestrationShowQuery(binding.orchestrationName);
+  const members = useMemo(
+    () => teamQuery.data?.roles ?? [],
+    [teamQuery.data],
+  );
+  const lead = members.find((r) => r.isRoot) ?? null;
+  const starter = members.find((r) => r.id === binding.roleId) ?? null;
+
+  // Picking a team preselects its lead as who starts the chat.
+  useEffect(() => {
+    if (binding.orchestrationName.length === 0) return;
+    if (teamQuery.data === undefined) return;
+    if (binding.roleId.length > 0 && starter !== null) return;
+    if (lead !== null) setRoleId(lead.id);
+  }, [
     binding.orchestrationName,
-  );
-  const models = useRunnerOrchestrationModelsQuery(
-    selectedName ?? "",
-    selectedRoleId ?? "",
-    selectedGroup,
-  );
+    binding.roleId,
+    teamQuery.data,
+    starter,
+    lead,
+    setRoleId,
+  ]);
 
-  const orchestrationNames = orchestrations.data ?? [];
-  const groupNames = groups.data ?? [];
-  const bindingRoles = bindingDetail.data?.roles ?? [];
-  // Effective group name for the editor (chip "roster-full" uses undefined for
-  // models query = orchestration default; editor always needs a concrete file).
-  const editTargetGroup = selectedGroup ?? "roster-full";
-  const deleteGroupMutation = useRunnerOrchestrationGroupDeleteMutation();
+  const hasTeam = binding.orchestrationName.length > 0;
+  const teamHasLead = lead !== null;
+
+  const status: "off" | "incomplete" | "no-lead" | "ready" = !binding.enabled
+    ? "off"
+    : !hasTeam || starter === null
+      ? "incomplete"
+      : !teamHasLead
+        ? "no-lead"
+        : "ready";
 
   return (
-    <SettingsPanelShell
-      title="Orchestrations"
-      description="Agent team templates with roles, responsibilities, and model bindings. Create-time binding injects the role context once when a chat is created — not on every message."
-      fillHeight
+    <section
+      className="rounded-xl border border-border/60 bg-card p-4"
+      data-testid="active-for-new-chats"
     >
-      <div className="flex h-full min-h-0">
-        <OrchestrationsSidebar
-          binding={binding}
-          orchestrationNames={orchestrationNames}
-          orchestrationLoading={orchestrations.isLoading}
-          bindingRoles={bindingRoles}
-          groupNames={groupNames}
-          showCreateForm={showCreateForm}
-          selectedName={selectedName}
-          selectedGroup={selectedGroup}
-          onEnabledChange={setEnabled}
-          onOrchestrationNameChange={setOrchestrationName}
-          onRoleIdChange={setRoleId}
-          onModelGroupChange={setModelGroup}
-          onToggleCreateForm={() => setShowCreateForm(!showCreateForm)}
-          onCreated={(name) => {
-            setShowCreateForm(false);
-            setSelectedName(name);
-          }}
-          onCancelCreate={() => setShowCreateForm(false)}
-          onSelectName={(name) => {
-            setSelectedName(name);
-            setSelectedRoleId(null);
-          }}
-          onSelectGroup={setSelectedGroup}
-          onEditGroup={() => {
-            setShowCreateGroupForm(false);
-            setEditingGroup(editTargetGroup);
-          }}
-          onStartCreateGroup={() => {
-            setEditingGroup(null);
-            setShowCreateGroupForm(true);
-          }}
-          onDeleteGroup={() => {
-            if (selectedGroup === undefined || selectedGroup === "roster-full") {
-              return;
-            }
-            const name = selectedGroup;
-            if (
-              !window.confirm(
-                `Delete model group "${name}"? This removes ~/.traycer/model-groups/${name}.json.`,
-              )
-            ) {
-              return;
-            }
-            deleteGroupMutation.mutate(
-              { name },
-              {
-                onSuccess: (ok) => {
-                  if (!ok) return;
-                  setEditingGroup(null);
-                  setShowCreateGroupForm(false);
-                  setSelectedGroup(undefined);
-                },
-              },
-            );
-          }}
-          canDeleteGroup={
-            selectedGroup !== undefined &&
-            selectedGroup !== "roster-full" &&
-            !deleteGroupMutation.isPending
-          }
-        />
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-ui-base font-medium">Active for new chats</h2>
+          <p className="mt-0.5 text-ui-xs text-muted-foreground">
+            When on, every new chat starts as the chosen member of this team —
+            applied once at creation, never repeated mid-chat.
+          </p>
+        </div>
+        <label className="flex shrink-0 items-center gap-2 text-ui-sm">
+          <input
+            type="checkbox"
+            checked={binding.enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            data-testid="active-binding-enabled"
+          />
+          Use a team when I start a new chat
+        </label>
+      </div>
 
-        <div className="min-w-0 flex-1 overflow-y-auto p-5">
-          {editingGroup !== null ? (
-            <ModelGroupEditor
-              groupName={editingGroup}
-              onClose={() => setEditingGroup(null)}
-            />
-          ) : showCreateGroupForm ? (
-            <CreateModelGroupForm
-              existingNames={groupNames}
-              onCreated={(name) => {
-                setShowCreateGroupForm(false);
-                setSelectedGroup(name === "roster-full" ? undefined : name);
-                setEditingGroup(name);
+      {binding.enabled ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="flex flex-col gap-1 text-ui-xs">
+            <span className="text-muted-foreground">Team</span>
+            <select
+              value={binding.orchestrationName}
+              onChange={(e) => {
+                const name = e.target.value;
+                setOrchestrationName(name);
+                // Preselect the team lead as who starts the chat.
+                setRoleId("");
               }}
-              onCancel={() => setShowCreateGroupForm(false)}
-            />
-          ) : (
-            <DetailContent
-              selectedName={selectedName}
-              isLoading={detail.isLoading}
-              data={detail.data ?? null}
-              selectedRoleId={selectedRoleId}
-              onSelectRole={setSelectedRoleId}
-              models={models.data ?? null}
-              modelsLoading={models.isLoading}
-              onDeleted={() => setSelectedName(null)}
-            />
-          )}
-        </div>
-      </div>
-    </SettingsPanelShell>
-  );
-}
-
-function OrchestrationsSidebar(props: {
-  readonly binding: {
-    readonly enabled: boolean;
-    readonly orchestrationName: string;
-    readonly roleId: string;
-    readonly modelGroup: string | null;
-  };
-  readonly orchestrationNames: readonly string[];
-  readonly orchestrationLoading: boolean;
-  readonly bindingRoles: readonly TraycerOrchestrationRole[];
-  readonly groupNames: readonly string[];
-  readonly showCreateForm: boolean;
-  readonly selectedName: string | null;
-  readonly selectedGroup: string | undefined;
-  readonly onEnabledChange: (enabled: boolean) => void;
-  readonly onOrchestrationNameChange: (name: string) => void;
-  readonly onRoleIdChange: (roleId: string) => void;
-  readonly onModelGroupChange: (group: string | null) => void;
-  readonly onToggleCreateForm: () => void;
-  readonly onCreated: (name: string) => void;
-  readonly onCancelCreate: () => void;
-  readonly onSelectName: (name: string) => void;
-  readonly onSelectGroup: (group: string | undefined) => void;
-  readonly onEditGroup: () => void;
-  readonly onStartCreateGroup: () => void;
-  readonly onDeleteGroup: () => void;
-  readonly canDeleteGroup: boolean;
-}) {
-  return (
-    <div className="w-64 shrink-0 border-r border-border/40 overflow-y-auto">
-      <CreateTimeBindingSection
-        enabled={props.binding.enabled}
-        orchestrationName={props.binding.orchestrationName}
-        roleId={props.binding.roleId}
-        modelGroup={props.binding.modelGroup}
-        orchestrationNames={props.orchestrationNames}
-        roles={props.bindingRoles}
-        groupNames={props.groupNames}
-        onEnabledChange={props.onEnabledChange}
-        onOrchestrationNameChange={props.onOrchestrationNameChange}
-        onRoleIdChange={props.onRoleIdChange}
-        onModelGroupChange={props.onModelGroupChange}
-      />
-
-      <div className="p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-ui-xs font-medium text-muted-foreground">
-            Templates
-          </h3>
-          <button
-            onClick={props.onToggleCreateForm}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            aria-label="New orchestration"
-          >
-            {props.showCreateForm ? (
-              <X className="size-3.5" />
-            ) : (
-              <Plus className="size-3.5" />
-            )}
-          </button>
-        </div>
-
-        {props.showCreateForm ? (
-          <CreateOrchestrationForm
-            existingNames={props.orchestrationNames}
-            onCreated={props.onCreated}
-            onCancel={props.onCancelCreate}
-          />
-        ) : null}
-
-        <OrchestrationList
-          isLoading={props.orchestrationLoading}
-          names={props.orchestrationNames}
-          selectedName={props.selectedName}
-          onSelect={props.onSelectName}
-        />
-      </div>
-
-      <div className="border-t border-border/40 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-ui-xs font-medium text-muted-foreground">
-            Model groups
-          </h3>
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={props.onStartCreateGroup}
-              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              aria-label="New model group"
-              title="Create model group"
+              className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              data-testid="active-binding-team"
             >
-              <Plus className="size-3" />
-            </button>
-            <button
-              onClick={props.onEditGroup}
-              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              aria-label="Edit model group"
-              title="Edit selected model group (including roster-full)"
+              <option value="">Choose a team…</option>
+              {props.teamNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-ui-xs">
+            <span className="text-muted-foreground">Who starts the chat</span>
+            <select
+              value={binding.roleId}
+              onChange={(e) => setRoleId(e.target.value)}
+              disabled={members.length === 0}
+              className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              data-testid="active-binding-role"
             >
-              <Pencil className="size-3" />
-            </button>
-            <button
-              onClick={props.onDeleteGroup}
-              disabled={!props.canDeleteGroup}
-              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-30"
-              aria-label="Delete model group"
-              title={
-                props.canDeleteGroup
-                  ? "Delete selected model group"
-                  : "Select a non-default group to delete"
+              <option value="">
+                {members.length === 0
+                  ? "This team has no members yet"
+                  : lead !== null
+                    ? `Team lead: ${lead.label} ★`
+                    : "Choose a member…"}
+              </option>
+              {members.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.label}
+                  {role.isRoot ? " ★ (lead)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-ui-xs">
+            <span className="text-muted-foreground">Model pack</span>
+            <select
+              value={binding.modelGroup ?? ""}
+              onChange={(e) =>
+                setModelGroup(e.target.value === "" ? null : e.target.value)
               }
+              className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              data-testid="active-binding-pack"
             >
-              <Trash2 className="size-3" />
-            </button>
-          </div>
+              <option value="">Use team’s pack</option>
+              {props.packNames.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
-        <div className="flex flex-wrap gap-1">
-          <GroupButton
-            label="roster-full"
-            isActive={props.selectedGroup === undefined}
-            onClick={() => props.onSelectGroup(undefined)}
-          />
-          {props.groupNames
-            .filter((g) => g !== "roster-full")
-            .map((g) => (
-              <GroupButton
-                key={g}
-                label={g}
-                isActive={props.selectedGroup === g}
-                onClick={() => props.onSelectGroup(g)}
-              />
-            ))}
-        </div>
-        <p className="mt-1.5 text-ui-xs text-muted-foreground">
-          Groups = roster packs (not role tiers). roster-full is protected. +
-          creates · pencil edits · trash removes custom only.
-        </p>
-      </div>
-    </div>
-  );
-}
+      ) : null}
 
-// ─── Create-time binding ────────────────────────────────────────────────────
-
-function CreateTimeBindingSection(props: {
-  readonly enabled: boolean;
-  readonly orchestrationName: string;
-  readonly roleId: string;
-  readonly modelGroup: string | null;
-  readonly orchestrationNames: readonly string[];
-  readonly roles: readonly TraycerOrchestrationRole[];
-  readonly groupNames: readonly string[];
-  readonly onEnabledChange: (enabled: boolean) => void;
-  readonly onOrchestrationNameChange: (name: string) => void;
-  readonly onRoleIdChange: (roleId: string) => void;
-  readonly onModelGroupChange: (group: string | null) => void;
-}) {
-  const ready =
-    props.enabled &&
-    props.orchestrationName.length > 0 &&
-    props.roleId.length > 0 &&
-    props.roles.some((r) => r.id === props.roleId);
-
-  return (
-    <div className="border-b border-border/40 p-3">
-      <h3 className="mb-1 text-ui-xs font-medium text-muted-foreground">
-        Inject at chat creation
-      </h3>
-      <p className="mb-2 text-ui-xs text-muted-foreground">
-        1) Enable → 2) pick template → 3) pick role → 4) create a chat.
-      </p>
-      <label className="mb-2 flex items-center gap-2 text-ui-xs">
-        <input
-          type="checkbox"
-          checked={props.enabled}
-          onChange={(e) => props.onEnabledChange(e.target.checked)}
-        />
-        Enabled
-      </label>
-      <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-        Template
-      </label>
-      <select
-        value={props.orchestrationName}
-        onChange={(e) => props.onOrchestrationNameChange(e.target.value)}
-        disabled={!props.enabled}
-        className="mb-1.5 w-full rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-      >
-        <option value="">Select template…</option>
-        {props.orchestrationNames.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
-      <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-        Role
-      </label>
-      <select
-        value={props.roleId}
-        onChange={(e) => props.onRoleIdChange(e.target.value)}
-        disabled={!props.enabled || props.roles.length === 0}
-        className="mb-1.5 w-full rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-      >
-        <option value="">
-          {props.roles.length === 0
-            ? "Add a role in the template first…"
-            : "Select role…"}
-        </option>
-        {props.roles.map((role) => (
-          <option key={role.id} value={role.id}>
-            {role.label}
-            {role.isRoot ? " ★" : ""}
-          </option>
-        ))}
-      </select>
-      <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-        Model group
-      </label>
-      <select
-        value={props.modelGroup ?? ""}
-        onChange={(e) =>
-          props.onModelGroupChange(
-            e.target.value === "" ? null : e.target.value,
-          )
-        }
-        disabled={!props.enabled}
-        className="w-full rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-      >
-        <option value="">template default</option>
-        {props.groupNames.map((g) => (
-          <option key={g} value={g}>
-            {g}
-          </option>
-        ))}
-      </select>
       <p
         className={
-          ready
-            ? "mt-1.5 text-ui-xs text-emerald-600 dark:text-emerald-400"
-            : "mt-1.5 text-ui-xs text-muted-foreground"
+          status === "ready"
+            ? "mt-3 rounded-md bg-emerald-500/10 px-3 py-2 text-ui-xs text-emerald-600 dark:text-emerald-400"
+            : status === "off"
+              ? "mt-3 text-ui-xs text-muted-foreground"
+              : "mt-3 rounded-md bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-600 dark:text-amber-400"
         }
+        data-testid="active-binding-preview"
       >
-        {ready
-          ? "Ready — new chats get this role once at creation."
-          : "Applied once on new chat / new epic — not on later sends."}
+        {status === "ready" && starter !== null
+          ? `Next new chat opens as ${starter.label}${starter.isRoot ? " ★ (team lead)" : ""} · ${binding.orchestrationName}. The brief is applied once when the chat is created — not on every message.`
+          : status === "off"
+            ? "New chats start blank — no team brief is applied."
+            : status === "no-lead"
+              ? `Team “${binding.orchestrationName}” has no team lead. Mark one member as lead below so new chats can use it.`
+              : props.teamNames.length === 0
+                ? "Almost there — create your first team to use it on new chats."
+                : "Almost there — choose a team and who starts the chat."}
       </p>
-    </div>
+
+      {binding.enabled && props.teamNames.length === 0 ? (
+        <Button
+          size="sm"
+          className="mt-2"
+          onClick={props.onCreateTeam}
+          data-testid="active-binding-create-team"
+        >
+          <Plus className="mr-1 size-3.5" />
+          Create your first team
+        </Button>
+      ) : null}
+    </section>
   );
 }
 
-// ─── Create form ────────────────────────────────────────────────────────────
+// ─── 2. Your teams ──────────────────────────────────────────────────────────
 
-function CreateOrchestrationForm(props: {
-  readonly existingNames: readonly string[];
-  readonly onCreated: (name: string) => void;
-  readonly onCancel: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [cloneFrom, setCloneFrom] = useState<string>("");
-  const createMutation = useRunnerOrchestrationCreateMutation();
-
-  const nameValid =
-    name.length > 0 &&
-    /^[a-z0-9][a-z0-9-]*$/.test(name) &&
-    !props.existingNames.includes(name);
-
-  const handleSubmit = () => {
-    if (!nameValid) return;
-    createMutation.mutate(
-      {
-        name,
-        description: description || undefined,
-        from: cloneFrom || undefined,
-      },
-      {
-        onSuccess: (data) => {
-          if (data !== null) props.onCreated(name);
-        },
-      },
-    );
-  };
-
-  return (
-    <div className="mb-3 flex flex-col gap-2 rounded-md border border-border/60 bg-card p-2.5">
-      <input
-        type="text"
-        placeholder="name (kebab-case)"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-      />
-      <input
-        type="text"
-        placeholder="description (optional)"
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-      />
-      <select
-        value={cloneFrom}
-        onChange={(e) => setCloneFrom(e.target.value)}
-        className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-      >
-        <option value="">New (empty)</option>
-        {props.existingNames.map((n) => (
-          <option key={n} value={n}>
-            Clone from {n}
-          </option>
-        ))}
-      </select>
-      <div className="flex gap-1.5">
-        <Button
-          size="sm"
-          onClick={handleSubmit}
-          disabled={!nameValid || createMutation.isPending}
-          className="text-ui-xs"
-        >
-          {createMutation.isPending ? "Creating..." : "Create"}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={props.onCancel}
-          className="text-ui-xs"
-        >
-          Cancel
-        </Button>
-      </div>
-      {name.length > 0 && !nameValid ? (
-        <p className="text-ui-xs text-destructive">
-          {props.existingNames.includes(name)
-            ? "Name already exists"
-            : "Use kebab-case (a-z, 0-9, -)"}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Create model group ─────────────────────────────────────────────────────
-
-const EMPTY_TIERS = {
-  premium: { description: "Premium / high-stakes roles", models: [] },
-  executor: { description: "Executor / implementer roles", models: [] },
-  economic: { description: "Economic / cheap bulk work", models: [] },
-} as const;
-
-function emptyModelGroup(name: string): TraycerModelGroup {
-  return {
-    name,
-    description: "",
-    rules: [],
-    tiers: {
-      premium: { ...EMPTY_TIERS.premium, models: [] },
-      executor: { ...EMPTY_TIERS.executor, models: [] },
-      economic: { ...EMPTY_TIERS.economic, models: [] },
-    },
-  };
-}
-
-function CreateModelGroupForm(props: {
-  readonly existingNames: readonly string[];
-  readonly onCreated: (name: string) => void;
-  readonly onCancel: () => void;
-}) {
-  const runnerHost = useRunnerHost();
-  const saveMutation = useRunnerOrchestrationGroupSaveMutation();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [cloneFrom, setCloneFrom] = useState<string>("roster-full");
-  const [error, setError] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
-
-  const nameValid =
-    name.length > 0 &&
-    /^[a-z0-9][a-z0-9-]*$/.test(name) &&
-    !props.existingNames.includes(name);
-
-  const handleSubmit = () => {
-    if (!nameValid || isCreating) return;
-    const traycerCli = runnerHost.traycerCli;
-    if (traycerCli === null) {
-      setError("CLI unavailable on this runner host.");
-      return;
-    }
-    setError(null);
-    setIsCreating(true);
-
-    void (async () => {
-      try {
-        let group: TraycerModelGroup;
-        if (cloneFrom === "") {
-          group = {
-            ...emptyModelGroup(name),
-            description: description.trim(),
-          };
-        } else {
-          const source = await traycerCli.orchestrationGroupShow({
-            name: cloneFrom,
-          });
-          if (source === null) {
-            throw new Error(`Source group "${cloneFrom}" not found.`);
-          }
-          group = {
-            ...source,
-            name,
-            description:
-              description.trim().length > 0
-                ? description.trim()
-                : source.description,
-          };
-        }
-        await new Promise<void>((resolve, reject) => {
-          saveMutation.mutate(
-            { name, group },
-            {
-              onSuccess: (ok) => {
-                if (ok) {
-                  resolve();
-                  return;
-                }
-                reject(new Error("Save failed."));
-              },
-              onError: () => reject(new Error("Create failed.")),
-            },
-          );
-        });
-        props.onCreated(name);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Create failed.");
-        setIsCreating(false);
-      }
-    })();
-  };
-
-  return (
-    <div className="flex max-w-md flex-col gap-3">
-      <div>
-        <h3 className="text-ui-base font-medium">New model group</h3>
-        <p className="text-ui-xs text-muted-foreground">
-          Creates{" "}
-          <code className="text-ui-xs">
-            ~/.traycer/model-groups/&lt;name&gt;.json
-          </code>
-          . Clone an existing group or start empty, then edit models.
-        </p>
-      </div>
-      <label className="flex flex-col gap-1">
-        <span className="text-ui-xs font-medium text-muted-foreground">
-          Name (kebab-case)
-        </span>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. coding-fast"
-          className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-ui-xs font-medium text-muted-foreground">
-          Description (optional)
-        </span>
-        <input
-          type="text"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-        />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-ui-xs font-medium text-muted-foreground">
-          Clone from
-        </span>
-        <select
-          value={cloneFrom}
-          onChange={(e) => setCloneFrom(e.target.value)}
-          className="rounded-md border border-border/40 bg-background px-2 py-1 text-ui-xs"
-        >
-          <option value="">Empty (blank tiers)</option>
-          {props.existingNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          onClick={handleSubmit}
-          disabled={!nameValid || isCreating}
-        >
-          {isCreating ? "Creating…" : "Create & edit"}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={props.onCancel}>
-          Cancel
-        </Button>
-      </div>
-      {name.length > 0 && !nameValid ? (
-        <p className="text-ui-xs text-destructive">
-          {props.existingNames.includes(name)
-            ? "Name already exists"
-            : "Use kebab-case (a-z, 0-9, -)"}
-        </p>
-      ) : null}
-      {error !== null ? (
-        <p className="text-ui-xs text-destructive">{error}</p>
-      ) : null}
-    </div>
-  );
-}
-
-// ─── Left: orchestration list ───────────────────────────────────────────────
-
-function OrchestrationList(props: {
+function TeamsSection(props: {
+  readonly teamNames: readonly string[];
   readonly isLoading: boolean;
-  readonly names: readonly string[];
-  readonly selectedName: string | null;
+  readonly selectedTeam: string | null;
   readonly onSelect: (name: string) => void;
+  readonly onCreateTeam: () => void;
 }) {
-  if (props.isLoading) {
-    return <p className="text-ui-xs text-muted-foreground">Loading...</p>;
-  }
-  if (props.names.length === 0) {
-    return (
-      <p className="text-ui-xs text-muted-foreground">
-        No orchestrations found.
-      </p>
-    );
-  }
   return (
-    <div className="flex flex-col gap-1">
-      {props.names.map((name) => (
-        <button
-          key={name}
-          onClick={() => props.onSelect(name)}
-          className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-sm transition-colors ${
-            props.selectedName === name
-              ? "bg-accent text-accent-foreground"
-              : "text-foreground hover:bg-accent/50"
-          }`}
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <div>
+          <h2 className="text-ui-base font-medium">Your teams</h2>
+          <p className="text-ui-xs text-muted-foreground">
+            A team is a reusable set of agent members with one team lead.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          onClick={props.onCreateTeam}
+          data-testid="create-team"
         >
-          <Users className="size-3.5 shrink-0" />
-          <span className="truncate">{name}</span>
-          <ChevronRight className="ml-auto size-3 shrink-0 text-muted-foreground" />
-        </button>
-      ))}
-    </div>
+          <Plus className="mr-1 size-3.5" />
+          Create team
+        </Button>
+      </div>
+
+      {props.isLoading ? (
+        <p className="text-ui-sm text-muted-foreground">Loading…</p>
+      ) : props.teamNames.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 p-6 text-center">
+          <Users className="mx-auto mb-2 size-6 text-muted-foreground" />
+          <p className="text-ui-sm text-muted-foreground">
+            No agent teams yet. A team is a set of AI roles you can reuse on
+            every new chat.
+          </p>
+          <Button
+            size="sm"
+            className="mt-3"
+            onClick={props.onCreateTeam}
+            data-testid="create-first-team"
+          >
+            <Plus className="mr-1 size-3.5" />
+            Create team
+          </Button>
+        </div>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {props.teamNames.map((name) => (
+            <TeamCard
+              key={name}
+              name={name}
+              isSelected={props.selectedTeam === name}
+              onSelect={() => props.onSelect(name)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
-// ─── Model group button ─────────────────────────────────────────────────────
-
-function GroupButton(props: {
-  readonly label: string;
-  readonly isActive: boolean;
-  readonly onClick: () => void;
+function TeamCard(props: {
+  readonly name: string;
+  readonly isSelected: boolean;
+  readonly onSelect: () => void;
 }) {
+  const query = useRunnerOrchestrationShowQuery(props.name);
+  const roles = query.data?.roles ?? [];
+  const lead = roles.find((r) => r.isRoot) ?? null;
+
+  const statusText =
+    roles.length === 0
+      ? "Empty — add a team lead"
+      : lead === null
+        ? "Needs a team lead"
+        : `${roles.length} member${roles.length === 1 ? "" : "s"} · ★ ${lead.label}`;
+
   return (
     <button
-      onClick={props.onClick}
-      className={`rounded-md px-2 py-1 text-ui-xs transition-colors ${
-        props.isActive
-          ? "bg-primary text-primary-foreground"
-          : "bg-muted text-muted-foreground hover:bg-muted/80"
+      type="button"
+      onClick={props.onSelect}
+      className={`flex items-center gap-3 rounded-lg border p-3 text-left transition-colors ${
+        props.isSelected
+          ? "border-primary/50 bg-accent/30"
+          : "border-border/40 hover:bg-accent/20"
       }`}
+      data-testid={`team-card-${props.name}`}
     >
-      {props.label}
+      <Users className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-ui-sm font-medium">{props.name}</div>
+        <div
+          className={`truncate text-ui-xs ${
+            lead === null ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
+          }`}
+        >
+          {statusText}
+        </div>
+      </div>
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
     </button>
   );
 }
 
-// ─── Right: detail content ──────────────────────────────────────────────────
+// ─── 3. Team detail ─────────────────────────────────────────────────────────
 
-function DetailContent(props: {
-  readonly selectedName: string | null;
-  readonly isLoading: boolean;
-  readonly data: {
-    readonly description: string;
-    readonly defaultModelGroup: string;
-    readonly roles: readonly TraycerOrchestrationRole[];
-    readonly artifactChain: readonly { readonly path: string }[];
-    readonly globalRules: readonly string[];
-  } | null;
-  readonly selectedRoleId: string | null;
-  readonly onSelectRole: (roleId: string | null) => void;
-  readonly models: {
-    readonly role: TraycerOrchestrationRole;
-    readonly modelGroup: string;
-    readonly tier: string;
-    readonly models: readonly {
-      readonly harnessId: string;
-      readonly model: string;
-      readonly effort: string | null;
-      readonly family: string;
-      readonly note: string;
-    }[];
-  } | null;
-  readonly modelsLoading: boolean;
-  readonly onDeleted: () => void;
-}): ReactNode {
-  const { selectedName, isLoading, data } = props;
-
-  if (selectedName === null) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-ui-sm text-muted-foreground">
-          Select an orchestration to view its roles and model bindings.
-        </p>
-      </div>
-    );
-  }
-  if (isLoading) {
-    return <p className="text-ui-sm text-muted-foreground">Loading...</p>;
-  }
-  if (data === null) {
-    return (
-      <p className="text-ui-sm text-muted-foreground">
-        Orchestration not found.
-      </p>
-    );
-  }
-
-  return (
-    <OrchestrationDetail
-      name={selectedName}
-      detail={data}
-      selectedRoleId={props.selectedRoleId}
-      onSelectRole={props.onSelectRole}
-      models={props.models}
-      modelsLoading={props.modelsLoading}
-      onDeleted={props.onDeleted}
-    />
-  );
-}
-
-// ─── Detail view ────────────────────────────────────────────────────────────
-
-function OrchestrationDetail(props: {
+function TeamDetail(props: {
   readonly name: string;
-  readonly detail: {
-    readonly description: string;
-    readonly defaultModelGroup: string;
-    readonly roles: readonly TraycerOrchestrationRole[];
-    readonly artifactChain: readonly { readonly path: string }[];
-    readonly globalRules: readonly string[];
-  };
-  readonly selectedRoleId: string | null;
-  readonly onSelectRole: (roleId: string | null) => void;
-  readonly models: {
-    readonly role: TraycerOrchestrationRole;
-    readonly modelGroup: string;
-    readonly tier: string;
-    readonly models: readonly {
-      readonly harnessId: string;
-      readonly model: string;
-      readonly effort: string | null;
-      readonly family: string;
-      readonly note: string;
-    }[];
-  } | null;
-  readonly modelsLoading: boolean;
+  readonly selectedMemberId: string | null;
+  readonly onSelectMember: (id: string | null) => void;
   readonly onDeleted: () => void;
 }) {
-  const { detail, selectedRoleId, onSelectRole, models, modelsLoading } = props;
-  const deleteMutation = useRunnerOrchestrationDeleteMutation();
-  const setRoleId = useOrchestrationBindingStore((s) => s.setRoleId);
+  const detail = useRunnerOrchestrationShowQuery(props.name);
+  const deleteTeam = useRunnerOrchestrationDeleteMutation();
+  const setEnabled = useOrchestrationBindingStore((s) => s.setEnabled);
   const setOrchestrationName = useOrchestrationBindingStore(
     (s) => s.setOrchestrationName,
   );
-  const setEnabled = useOrchestrationBindingStore((s) => s.setEnabled);
-  const [roleEditor, setRoleEditor] = useState<
+  const setRoleId = useOrchestrationBindingStore((s) => s.setRoleId);
+  const setModelGroup = useOrchestrationBindingStore((s) => s.setModelGroup);
+
+  const [memberEditor, setMemberEditor] = useState<
     | { readonly mode: "closed" }
     | { readonly mode: "create" }
     | { readonly mode: "edit"; readonly role: TraycerOrchestrationRole }
   >({ mode: "closed" });
 
+  const models = useRunnerOrchestrationModelsQuery(
+    props.name,
+    props.selectedMemberId ?? "",
+    undefined,
+  );
+
+  if (detail.isLoading) {
+    return <p className="text-ui-sm text-muted-foreground">Loading…</p>;
+  }
+  const data = detail.data;
+  if (data === null || data === undefined) {
+    return (
+      <p className="text-ui-sm text-muted-foreground">Team not found.</p>
+    );
+  }
+
+  const roles = data.roles;
+  const lead = roles.find((r) => r.isRoot) ?? null;
+  const leadCount = roles.filter((r) => r.isRoot).length;
+
   return (
-    <div className="flex flex-col gap-5">
-      {/* Header */}
-      <div>
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-title-md font-semibold">{props.name}</h2>
-            <p className="mt-1 text-ui-sm text-muted-foreground">
-              {detail.description}
-            </p>
+    <section
+      className="rounded-xl border border-border/60 bg-card p-4"
+      data-testid="team-detail"
+    >
+      {/* A. Basics */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-ui-base font-semibold">{props.name}</h2>
+          <p className="mt-0.5 text-ui-sm text-muted-foreground">
+            {data.description.length > 0 ? data.description : "No description."}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge variant="outline">Model pack: {data.defaultModelGroup}</Badge>
+            {lead !== null ? (
+              <Badge variant="outline">★ Lead: {lead.label}</Badge>
+            ) : (
+              <Badge
+                variant="outline"
+                className="border-amber-500/50 text-amber-600 dark:text-amber-400"
+              >
+                No team lead
+              </Badge>
+            )}
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              deleteMutation.mutate(
-                { name: props.name },
-                { onSuccess: () => props.onDeleted() },
-              );
-            }}
-            disabled={deleteMutation.isPending}
-            className="text-ui-xs text-destructive hover:text-destructive"
-          >
-            <Trash2 className="mr-1 size-3" />
-            {deleteMutation.isPending ? "Deleting..." : "Delete"}
-          </Button>
         </div>
-        <div className="mt-2 flex items-center gap-2">
-          <Badge variant="outline">
-            Model group: {detail.defaultModelGroup}
-          </Badge>
-          <Badge variant="outline">{detail.roles.length} roles</Badge>
-        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0"
+          onClick={() => {
+            setEnabled(true);
+            setOrchestrationName(props.name);
+            setRoleId(lead?.id ?? "");
+            setModelGroup(null);
+            toast.success(`New chats will start with ${props.name}.`);
+          }}
+          disabled={lead === null}
+          title={
+            lead === null
+              ? "Add a team lead first"
+              : "Use this team for new chats"
+          }
+          data-testid="use-team-for-new-chats"
+        >
+          Use for new chats
+        </Button>
       </div>
 
-      {/* Roles */}
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-ui-sm font-medium">Roles</h3>
+      {/* B. Members */}
+      <div className="mt-4">
+        <div className="mb-1.5 flex items-center justify-between">
+          <h3 className="text-ui-sm font-medium">Team members</h3>
           <Button
             size="sm"
             variant="outline"
             className="h-7 text-ui-xs"
-            onClick={() => setRoleEditor({ mode: "create" })}
+            onClick={() => setMemberEditor({ mode: "create" })}
+            data-testid="add-member"
           >
             <Plus className="mr-1 size-3" />
-            Add role
+            Add member
           </Button>
         </div>
         <p className="mb-2 text-ui-xs text-muted-foreground">
-          A role is who the agent is on the first message (identity + rules).
+          Every team needs exactly one team lead ★ — the member who runs the
+          chat.
         </p>
 
-        {roleEditor.mode !== "closed" ? (
-          <RoleEditorForm
-            orchestrationName={props.name}
-            existingIds={detail.roles.map((r) => r.id)}
-            editing={
-              roleEditor.mode === "edit" ? roleEditor.role : null
-            }
-            onCancel={() => setRoleEditor({ mode: "closed" })}
+        {memberEditor.mode !== "closed" ? (
+          <MemberEditorForm
+            teamName={props.name}
+            roles={roles}
+            editing={memberEditor.mode === "edit" ? memberEditor.role : null}
+            onCancel={() => setMemberEditor({ mode: "closed" })}
             onSaved={(roleId) => {
-              setRoleEditor({ mode: "closed" });
-              onSelectRole(roleId);
-              // Wire inject binding so the user doesn't hunt empty dropdowns.
-              setEnabled(true);
-              setOrchestrationName(props.name);
-              setRoleId(roleId);
+              setMemberEditor({ mode: "closed" });
+              props.onSelectMember(roleId);
             }}
           />
         ) : null}
 
-        {detail.roles.length === 0 && roleEditor.mode === "closed" ? (
+        {roles.length === 0 && memberEditor.mode === "closed" ? (
           <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 p-4 text-center">
             <p className="text-ui-sm text-muted-foreground">
-              No roles yet. Add the first role to unlock Inject at chat
-              creation.
+              No members yet. Add the team lead first.
             </p>
             <Button
               size="sm"
               className="mt-3"
-              onClick={() => setRoleEditor({ mode: "create" })}
+              onClick={() => setMemberEditor({ mode: "create" })}
+              data-testid="create-first-member"
             >
               <Plus className="mr-1 size-3" />
-              Create first role
+              Add team lead
             </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            {detail.roles.map((role) => (
-              <RoleCard
+            {roles.map((role) => (
+              <MemberCard
                 key={role.id}
+                teamName={props.name}
                 role={role}
-                isSelected={selectedRoleId === role.id}
+                isOnlyLead={role.isRoot && leadCount === 1}
+                isLastMember={roles.length === 1}
+                isSelected={props.selectedMemberId === role.id}
                 onSelect={() =>
-                  onSelectRole(selectedRoleId === role.id ? null : role.id)
+                  props.onSelectMember(
+                    props.selectedMemberId === role.id ? null : role.id,
+                  )
                 }
-                onEdit={() => setRoleEditor({ mode: "edit", role })}
-                orchestrationName={props.name}
-                onDeleted={() => {
-                  if (selectedRoleId === role.id) onSelectRole(null);
-                }}
+                onEdit={() => setMemberEditor({ mode: "edit", role })}
               />
             ))}
           </div>
         )}
       </div>
 
-      {/* Models for selected role */}
-      {selectedRoleId !== null ? (
-        <ModelsSection models={models} isLoading={modelsLoading} />
+      {/* D. Models preview */}
+      {props.selectedMemberId !== null ? (
+        <div className="mt-4">
+          <ModelsPreview
+            models={models.data ?? null}
+            isLoading={models.isLoading}
+          />
+        </div>
       ) : null}
 
-      {/* Artifact chain */}
-      <div>
-        <h3 className="mb-2 text-ui-sm font-medium">Artifact chain</h3>
-        {detail.artifactChain.length === 0 ? (
-          <p className="text-ui-xs text-muted-foreground">None configured.</p>
-        ) : (
-          <div className="flex flex-wrap items-center gap-1 text-ui-xs text-muted-foreground">
-            {detail.artifactChain.map((step, i) => (
-              <span key={step.path}>
-                {i > 0 ? <span className="mx-1">→</span> : null}
-                <code className="rounded bg-muted px-1 py-0.5 font-mono">
-                  {step.path}
-                </code>
-              </span>
-            ))}
+      {/* E. Advanced */}
+      <details className="mt-4 rounded-lg border border-border/40 p-3">
+        <summary className="cursor-pointer text-ui-sm font-medium text-muted-foreground">
+          Advanced
+        </summary>
+        <div className="mt-3 flex flex-col gap-3">
+          <div>
+            <h4 className="mb-1 text-ui-xs font-medium">Global rules</h4>
+            {data.globalRules.length === 0 ? (
+              <p className="text-ui-xs text-muted-foreground">
+                None configured.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
+                {data.globalRules.map((rule) => (
+                  <li key={rule} className="flex items-start gap-1.5">
+                    <span className="mt-0.5 text-muted-foreground/60">•</span>
+                    {rule}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        )}
-      </div>
-
-      {/* Global rules */}
-      <div>
-        <h3 className="mb-2 text-ui-sm font-medium">Global rules</h3>
-        {detail.globalRules.length === 0 ? (
-          <p className="text-ui-xs text-muted-foreground">None configured.</p>
-        ) : (
-          <ul className="flex flex-col gap-1 text-ui-xs text-muted-foreground">
-            {detail.globalRules.map((rule) => (
-              <li key={rule} className="flex items-start gap-1.5">
-                <span className="mt-0.5 text-muted-foreground/60">•</span>
-                {rule}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
+          <div>
+            <h4 className="mb-1 text-ui-xs font-medium">File handoff paths</h4>
+            {data.artifactChain.length === 0 ? (
+              <p className="text-ui-xs text-muted-foreground">
+                None configured.
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1 text-ui-xs text-muted-foreground">
+                {data.artifactChain.map((step, i) => (
+                  <span key={step.path}>
+                    {i > 0 ? <span className="mx-1">→</span> : null}
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                      {step.path}
+                    </code>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="border-t border-border/40 pt-3">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-ui-xs text-destructive hover:text-destructive"
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    `Delete team "${props.name}"? This removes its members and files.`,
+                  )
+                ) {
+                  return;
+                }
+                deleteTeam.mutate(
+                  { name: props.name },
+                  { onSuccess: () => props.onDeleted() },
+                );
+              }}
+              disabled={deleteTeam.isPending}
+              data-testid="delete-team"
+            >
+              <Trash2 className="mr-1 size-3" />
+              {deleteTeam.isPending ? "Deleting…" : "Delete team"}
+            </Button>
+          </div>
+        </div>
+      </details>
+    </section>
   );
 }
 
-// ─── Role card ──────────────────────────────────────────────────────────────
+// ─── Member card ────────────────────────────────────────────────────────────
 
-function RoleCard(props: {
+function MemberCard(props: {
+  readonly teamName: string;
   readonly role: TraycerOrchestrationRole;
+  readonly isOnlyLead: boolean;
+  readonly isLastMember: boolean;
   readonly isSelected: boolean;
   readonly onSelect: () => void;
   readonly onEdit: () => void;
-  readonly orchestrationName: string;
-  readonly onDeleted: () => void;
 }) {
-  const { role, isSelected, onSelect } = props;
-  const deleteMutation = useRunnerOrchestrationRoleDeleteMutation();
+  const { role } = props;
+  const deleteMember = useRunnerOrchestrationRoleDeleteMutation();
+
+  const deleteBlocked = props.isOnlyLead && !props.isLastMember;
+  const deleteTitle = deleteBlocked
+    ? "This member is the team lead — mark another member as lead first"
+    : "Remove member";
 
   return (
     <div
       className={`rounded-lg border p-3 transition-colors ${
-        isSelected
+        props.isSelected
           ? "border-primary/50 bg-accent/30"
           : "border-border/40 hover:bg-accent/20"
       }`}
+      data-testid={`member-card-${role.id}`}
     >
       <div className="flex items-start gap-2">
-        <button onClick={onSelect} className="min-w-0 flex-1 text-left">
+        <button onClick={props.onSelect} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-2">
-            <Bot className="size-4 shrink-0" />
+            {role.isRoot ? (
+              <Crown className="size-4 shrink-0 text-amber-500" aria-label="Team lead" />
+            ) : (
+              <Bot className="size-4 shrink-0" />
+            )}
             <span className="font-medium text-ui-sm">
-              {role.isRoot ? "★ " : ""}
               {role.label}
+              {role.isRoot ? " ★" : ""}
             </span>
             <Badge variant="secondary" className="ml-auto text-ui-xs">
-              {role.tier}
+              {qualityLabel(role.tier)}
             </Badge>
           </div>
           <p className="mt-1 text-ui-xs text-muted-foreground">
-            {role.description.length > 0
-              ? role.description
-              : `id: ${role.id}`}
+            {role.description.length > 0 ? role.description : `id: ${role.id}`}
           </p>
         </button>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -1057,32 +750,30 @@ function RoleCard(props: {
             type="button"
             onClick={props.onEdit}
             className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            aria-label={`Edit role ${role.label}`}
-            title="Edit role"
+            aria-label={`Edit member ${role.label}`}
+            title="Edit member"
           >
             <Pencil className="size-3.5" />
           </button>
           <button
             type="button"
             onClick={() => {
-              if (
-                !window.confirm(
-                  `Delete role "${role.label}" (${role.id})?`,
-                )
-              ) {
-                return;
-              }
-              deleteMutation.mutate(
-                { name: props.orchestrationName, roleId: role.id },
-                { onSuccess: (ok) => {
-                    if (ok) props.onDeleted();
-                  } },
+              if (deleteBlocked) return;
+              if (!window.confirm(`Remove member “${role.label}”?`)) return;
+              deleteMember.mutate(
+                { name: props.teamName, roleId: role.id },
+                {
+                  onSuccess: (ok) => {
+                    if (ok) props.onSelect();
+                  },
+                },
               );
             }}
-            disabled={deleteMutation.isPending}
+            disabled={deleteMember.isPending || deleteBlocked}
             className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-40"
-            aria-label={`Delete role ${role.label}`}
-            title="Delete role"
+            aria-label={`Remove member ${role.label}`}
+            title={deleteTitle}
+            data-testid={`remove-member-${role.id}`}
           >
             <Trash2 className="size-3.5" />
           </button>
@@ -1092,105 +783,101 @@ function RoleCard(props: {
   );
 }
 
-const ROLE_TIERS = [
-  {
-    id: "premium",
-    label: "premium · T1",
-    hint: "Plan / review / arbitrate — does not implement",
-  },
-  {
-    id: "executor",
-    label: "executor · T2",
-    hint: "Quality implementation",
-  },
-  {
-    id: "economic",
-    label: "economic · T3",
-    hint: "Trivial / fast / cheap",
-  },
-] as const;
+// ─── Member editor ──────────────────────────────────────────────────────────
 
-function RoleEditorForm(props: {
-  readonly orchestrationName: string;
-  readonly existingIds: readonly string[];
+const LEAD_SEED = `# Team Lead
+You lead this team. Plan the work, assign subtasks when needed,
+keep decisions clear, and deliver a concrete result.
+`;
+
+function MemberEditorForm(props: {
+  readonly teamName: string;
+  readonly roles: readonly TraycerOrchestrationRole[];
   readonly editing: TraycerOrchestrationRole | null;
   readonly onCancel: () => void;
   readonly onSaved: (roleId: string) => void;
 }) {
   const isEdit = props.editing !== null;
+  const isFirstMember = props.roles.length === 0;
+  const leadCount = props.roles.filter((r) => r.isRoot).length;
+  const editingIsOnlyLead =
+    isEdit && props.editing.isRoot && leadCount === 1;
+
   const [id, setId] = useState(props.editing?.id ?? "");
   const [label, setLabel] = useState(props.editing?.label ?? "");
   const [description, setDescription] = useState(
     props.editing?.description ?? "",
   );
   const [tier, setTier] = useState(props.editing?.tier ?? "executor");
-  const [isRoot, setIsRoot] = useState(props.editing?.isRoot ?? false);
-  const [responsibility, setResponsibility] = useState("");
-
-  const existingMd = useRunnerOrchestrationResponsibilityQuery(
-    props.orchestrationName,
-    props.editing?.id ?? "",
+  const [isLead, setIsLead] = useState(
+    props.editing?.isRoot ?? isFirstMember,
+  );
+  const [responsibility, setResponsibility] = useState(
+    isFirstMember ? LEAD_SEED : "",
   );
 
-  useEffect(() => {
-    if (!isEdit) return;
-    if (existingMd.data === undefined) return;
-    const raw = existingMd.data as unknown;
-    // Defensive: older CLI returned { content }, current returns plain string.
-    const text =
-      typeof raw === "string"
-        ? raw
-        : raw !== null &&
-            typeof raw === "object" &&
-            "content" in raw &&
-            typeof (raw as { content: unknown }).content === "string"
-          ? (raw as { content: string }).content
-          : "";
-    setResponsibility(text);
-  }, [isEdit, existingMd.data]);
+  const existingMd = useRunnerOrchestrationResponsibilityQuery(
+    props.teamName,
+    props.editing?.id ?? "",
+  );
+  const [mdSeeded, setMdSeeded] = useState(!isEdit);
+  if (isEdit && !mdSeeded && existingMd.data !== undefined) {
+    const raw = existingMd.data;
+    setResponsibility(typeof raw === "string" ? raw : "");
+    setMdSeeded(true);
+  }
 
   const saveMutation = useRunnerOrchestrationRoleSaveMutation();
 
-  const responsibilityText =
-    typeof responsibility === "string" ? responsibility : "";
-
+  const existingIds = props.roles.map((r) => r.id);
+  const autoSlug = slugify(label);
+  const effectiveId = isEdit && props.editing !== null ? props.editing.id : id.length > 0 ? id : autoSlug;
   const idValid =
     isEdit ||
-    (/^[a-z][a-z0-9_-]*$/.test(id) && !props.existingIds.includes(id));
+    (/^[a-z][a-z0-9_-]*$/.test(effectiveId) && !existingIds.includes(effectiveId));
+  // Lead rule: editing the only lead cannot un-lead.
+  const leadBlocked = editingIsOnlyLead && !isLead;
   const canSave =
     idValid &&
+    effectiveId.length > 0 &&
     label.trim().length > 0 &&
-    responsibilityText.trim().length > 0 &&
+    responsibility.trim().length > 0 &&
+    !leadBlocked &&
     !saveMutation.isPending;
 
   const handleSave = (): void => {
     if (!canSave) return;
-    const roleId = isEdit && props.editing !== null ? props.editing.id : id.trim();
     saveMutation.mutate(
       {
-        name: props.orchestrationName,
+        name: props.teamName,
         role: {
-          id: roleId,
+          id: effectiveId,
           label: label.trim(),
           description: description.trim(),
           tier,
-          isRoot,
-          responsibility: responsibilityText,
+          isRoot: isFirstMember ? true : isLead,
+          responsibility,
         },
       },
       {
         onSuccess: (data) => {
-          if (data !== null) props.onSaved(roleId);
+          if (data !== null) props.onSaved(effectiveId);
+        },
+        onError: () => {
+          toast.error("Couldn’t save the member. Try again.");
         },
       },
     );
   };
 
   return (
-    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-border/60 bg-card p-3">
+    <div
+      className="mb-3 flex flex-col gap-2 rounded-lg border border-border/60 bg-background p-3"
+      data-testid="member-editor"
+    >
       <div className="flex items-center justify-between">
         <h4 className="text-ui-sm font-medium">
-          {isEdit ? "Edit role" : "New role"}
+          {isEdit ? "Edit member" : isFirstMember ? "Add the team lead" : "Add member"}
         </h4>
         <button
           type="button"
@@ -1202,26 +889,6 @@ function RoleEditorForm(props: {
         </button>
       </div>
 
-      {!isEdit ? (
-        <div>
-          <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-            Id (kebab-case)
-          </label>
-          <input
-            type="text"
-            value={id}
-            onChange={(e) => setId(e.target.value.toLowerCase())}
-            placeholder="analyst or senior_dev"
-            className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
-          />
-          {id.length > 0 && !idValid ? (
-            <p className="mt-0.5 text-ui-xs text-destructive">
-              Use lowercase letters, numbers, _ or -. Must be unique.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
       <div>
         <label className="mb-0.5 block text-ui-xs text-muted-foreground">
           Display name
@@ -1230,64 +897,89 @@ function RoleEditorForm(props: {
           type="text"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="Critical Analyst"
-          className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+          placeholder="Code Reviewer"
+          className="w-full rounded-md border border-border/40 bg-card px-2 py-1.5 text-ui-sm"
+          data-testid="member-label"
         />
       </div>
 
       <div>
         <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-          Short description
+          Short job description
         </label>
         <input
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Challenges assumptions and finds risks"
-          className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+          placeholder="Reviews diffs and blocks risky changes"
+          className="w-full rounded-md border border-border/40 bg-card px-2 py-1.5 text-ui-sm"
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-start gap-4">
         <div>
           <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-            Model tier (= roster tier)
+            Model quality
           </label>
           <select
             value={tier}
             onChange={(e) => setTier(e.target.value)}
-            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+            className="rounded-md border border-border/40 bg-card px-2 py-1.5 text-ui-sm"
+            data-testid="member-quality"
           >
-            {ROLE_TIERS.map((t) => (
-              <option key={t.id} value={t.id} title={t.hint}>
-                {t.label}
+            {QUALITY_OPTIONS.map((q) => (
+              <option key={q.tier} value={q.tier} title={q.hint}>
+                {q.label}
               </option>
             ))}
           </select>
-          <p className="mt-0.5 max-w-xs text-ui-xs text-muted-foreground">
-            {ROLE_TIERS.find((t) => t.id === tier)?.hint ?? ""}
+          <p className="mt-0.5 max-w-56 text-ui-xs text-muted-foreground">
+            {QUALITY_OPTIONS.find((q) => q.tier === tier)?.hint ?? ""}
           </p>
         </div>
-        <label className="mt-4 flex items-center gap-2 text-ui-xs">
+
+        <label
+          className={`mt-4 flex items-center gap-2 text-ui-xs ${
+            isFirstMember || editingIsOnlyLead
+              ? "text-muted-foreground"
+              : ""
+          }`}
+          title={
+            isFirstMember
+              ? "The first member is always the team lead"
+              : editingIsOnlyLead
+                ? "This is the only lead — mark another member as lead first"
+                : "This member runs the chat"
+          }
+        >
           <input
             type="checkbox"
-            checked={isRoot}
-            onChange={(e) => setIsRoot(e.target.checked)}
+            checked={isFirstMember ? true : isLead}
+            disabled={isFirstMember || (editingIsOnlyLead && isLead)}
+            onChange={(e) => setIsLead(e.target.checked)}
+            data-testid="member-is-lead"
           />
-          Primary role ★
+          This is the team lead ★
         </label>
       </div>
+      {leadBlocked ? (
+        <p className="text-ui-xs text-amber-600 dark:text-amber-400">
+          Every team needs a team lead. Mark another member as lead before
+          demoting this one.
+        </p>
+      ) : null}
 
       <div>
         <label className="mb-0.5 block text-ui-xs text-muted-foreground">
-          Responsibility (injected once at chat creation)
+          What they do (applied once when the chat starts)
         </label>
         <textarea
-          value={responsibilityText}
+          value={responsibility}
           onChange={(e) => setResponsibility(e.target.value)}
-          rows={8}
-          placeholder={`# ${label || "Role"}\nYou are a critical analyst. Challenge premises, name risks, and demand evidence.\nBe direct. Prefer concrete findings over vague advice.`}
-          className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 font-mono text-ui-xs leading-relaxed"
+          rows={7}
+          placeholder={`# ${label || "Member"}\nWhat this member owns, how they decide, and what they never do.`}
+          className="w-full rounded-md border border-border/40 bg-card px-2 py-1.5 font-mono text-ui-xs leading-relaxed"
+          data-testid="member-responsibility"
         />
         {isEdit && existingMd.isLoading ? (
           <p className="mt-0.5 text-ui-xs text-muted-foreground">
@@ -1296,6 +988,24 @@ function RoleEditorForm(props: {
         ) : null}
       </div>
 
+      <details className="text-ui-xs text-muted-foreground">
+        <summary className="cursor-pointer">Technical id (optional)</summary>
+        <input
+          type="text"
+          value={id}
+          onChange={(e) => setId(e.target.value.toLowerCase())}
+          placeholder={autoSlug || "code-reviewer"}
+          disabled={isEdit}
+          className="mt-1 w-full rounded-md border border-border/40 bg-card px-2 py-1.5 font-mono text-ui-xs disabled:opacity-50"
+          data-testid="member-id"
+        />
+        {id.length > 0 && !idValid ? (
+          <p className="mt-0.5 text-ui-xs text-destructive">
+            Lowercase letters, numbers, _ or -. Must be unique in this team.
+          </p>
+        ) : null}
+      </details>
+
       <div className="flex justify-end gap-2 pt-1">
         <Button size="sm" variant="ghost" onClick={props.onCancel}>
           Cancel
@@ -1303,24 +1013,25 @@ function RoleEditorForm(props: {
         <Button
           size="sm"
           disabled={!canSave}
-          onClick={() => {
-            handleSave();
-          }}
+          onClick={handleSave}
+          data-testid="member-save"
         >
           {saveMutation.isPending
             ? "Saving…"
             : isEdit
-              ? "Save role"
-              : "Create role"}
+              ? "Save member"
+              : isFirstMember
+                ? "Add team lead"
+                : "Add member"}
         </Button>
       </div>
     </div>
   );
 }
 
-// ─── Models section ─────────────────────────────────────────────────────────
+// ─── Models preview ─────────────────────────────────────────────────────────
 
-function ModelsSection(props: {
+function ModelsPreview(props: {
   readonly models: {
     readonly modelGroup: string;
     readonly tier: string;
@@ -1336,79 +1047,689 @@ function ModelsSection(props: {
 }) {
   if (props.isLoading) {
     return (
-      <div>
-        <h3 className="mb-2 text-ui-sm font-medium">
-          <Cpu className="mr-1.5 inline size-4" />
-          Available models
-        </h3>
-        <p className="text-ui-xs text-muted-foreground">Loading models...</p>
-      </div>
+      <p className="text-ui-xs text-muted-foreground">Loading models…</p>
     );
   }
   if (props.models === null) {
     return (
-      <div>
-        <h3 className="mb-2 text-ui-sm font-medium">
-          <Cpu className="mr-1.5 inline size-4" />
-          Available models
-        </h3>
-        <p className="text-ui-xs text-muted-foreground">
-          No models found for this role.
-        </p>
-      </div>
+      <p className="text-ui-xs text-muted-foreground">
+        No models found for this member.
+      </p>
     );
   }
-
   const { modelGroup, tier, models: modelList } = props.models;
-
   return (
     <div>
       <h3 className="mb-2 text-ui-sm font-medium">
         <Cpu className="mr-1.5 inline size-4" />
-        Available models
+        Models this member will use
       </h3>
+      <p className="mb-1.5 text-ui-xs text-muted-foreground">
+        From pack {modelGroup} · {qualityLabel(tier)} shelf
+      </p>
       <div className="flex flex-col gap-1">
-        <p className="text-ui-xs text-muted-foreground">
-          Group: {modelGroup} | Tier: {tier}
-        </p>
         {modelList.map((m, i) => (
-          <ModelRow key={`${m.harnessId}/${m.model}`} model={m} index={i} />
+          <div
+            key={`${m.harnessId}/${m.model}`}
+            className="flex items-center gap-2 rounded-md border border-border/30 px-2.5 py-1.5 text-ui-xs"
+          >
+            <span className="text-muted-foreground">{i + 1}.</span>
+            <code className="font-mono">
+              {m.harnessId}/{m.model}
+            </code>
+            {m.effort !== null && m.effort !== "" ? (
+              <Badge variant="outline" className="text-ui-xs">
+                {m.effort}
+              </Badge>
+            ) : null}
+            <Badge variant="secondary" className="text-ui-xs">
+              {m.family}
+            </Badge>
+            {m.note !== "" ? (
+              <span className="ml-auto truncate text-muted-foreground">
+                {m.note}
+              </span>
+            ) : null}
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-// ─── Model row ──────────────────────────────────────────────────────────────
+// ─── 4. Model packs ─────────────────────────────────────────────────────────
 
-function ModelRow(props: {
-  readonly model: {
-    readonly harnessId: string;
-    readonly model: string;
-    readonly effort: string | null;
-    readonly family: string;
-    readonly note: string;
-  };
-  readonly index: number;
+function ModelPacksSection(props: {
+  readonly packNames: readonly string[];
+  readonly editingPack: string | null;
+  readonly showCreateForm: boolean;
+  readonly onEditPack: (name: string | null) => void;
+  readonly onStartCreate: () => void;
+  readonly onCloseEditor: () => void;
+  readonly onCloseCreate: () => void;
+  readonly onCreatedPack: (name: string) => void;
 }) {
-  const { model: m, index: i } = props;
+  const [selectedPack, setSelectedPack] = useState<string>(PRIMARY_PACK);
+  const deletePack = useRunnerOrchestrationGroupDeleteMutation();
+
+  const canDelete =
+    selectedPack !== PRIMARY_PACK && !deletePack.isPending;
+
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border/30 px-2.5 py-1.5 text-ui-xs">
-      <span className="text-muted-foreground">{i + 1}.</span>
-      <code className="font-mono">
-        {m.harnessId}/{m.model}
-      </code>
-      {m.effort !== null && m.effort !== "" ? (
-        <Badge variant="outline" className="text-ui-xs">
-          {m.effort}
-        </Badge>
+    <section
+      className="rounded-xl border border-border/60 bg-card p-4"
+      data-testid="model-packs"
+    >
+      <h2 className="text-ui-base font-medium">Model packs</h2>
+      <p className="mt-0.5 text-ui-xs text-muted-foreground">
+        Which concrete models fill each quality shelf (Best / Balanced /
+        Cheap). {PRIMARY_PACK} is protected.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {props.packNames.map((name) => (
+          <button
+            key={name}
+            type="button"
+            onClick={() => setSelectedPack(name)}
+            className={`rounded-md px-2 py-1 text-ui-xs transition-colors ${
+              selectedPack === name
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+            data-testid={`pack-chip-${name}`}
+          >
+            {name}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={props.onStartCreate}
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="New model pack"
+          title="Create model pack"
+          data-testid="create-pack"
+        >
+          <Plus className="size-3" />
+        </button>
+        <button
+          type="button"
+          onClick={() => props.onEditPack(selectedPack)}
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Edit model pack"
+          title="Edit selected pack"
+          data-testid="edit-pack"
+        >
+          <Pencil className="size-3" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!canDelete) return;
+            if (
+              !window.confirm(
+                `Delete model pack “${selectedPack}”? This removes ~/.traycer/model-groups/${selectedPack}.json.`,
+              )
+            ) {
+              return;
+            }
+            deletePack.mutate(
+              { name: selectedPack },
+              {
+                onSuccess: (ok) => {
+                  if (ok) setSelectedPack(PRIMARY_PACK);
+                },
+              },
+            );
+          }}
+          disabled={!canDelete}
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-40"
+          aria-label="Delete model pack"
+          title={
+            canDelete
+              ? "Delete selected pack"
+              : `${PRIMARY_PACK} is protected`
+          }
+          data-testid="delete-pack"
+        >
+          <Trash2 className="size-3" />
+        </button>
+      </div>
+
+      {props.editingPack !== null ? (
+        <div className="mt-3">
+          <ModelGroupEditor
+            groupName={props.editingPack}
+            onClose={props.onCloseEditor}
+          />
+        </div>
       ) : null}
-      <Badge variant="secondary" className="text-ui-xs">
-        {m.family}
-      </Badge>
-      {m.note !== "" ? (
-        <span className="ml-auto truncate text-muted-foreground">{m.note}</span>
+      {props.showCreateForm ? (
+        <div className="mt-3">
+          <CreateModelGroupForm
+            existingNames={props.packNames}
+            onCreated={props.onCreatedPack}
+            onCancel={props.onCloseCreate}
+          />
+        </div>
       ) : null}
+    </section>
+  );
+}
+
+// ─── Create team wizard ─────────────────────────────────────────────────────
+
+interface WizardMember {
+  readonly label: string;
+  readonly tier: string;
+  readonly responsibility: string;
+}
+
+function CreateTeamWizard(props: {
+  readonly open: boolean;
+  readonly packNames: readonly string[];
+  readonly existingNames: readonly string[];
+  readonly onClose: () => void;
+  readonly onCreated: (name: string) => void;
+}) {
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [pack, setPack] = useState<string>(PRIMARY_PACK);
+  const [leadLabel, setLeadLabel] = useState("");
+  const [leadTier, setLeadTier] = useState<string>("premium");
+  const [leadResponsibility, setLeadResponsibility] = useState(LEAD_SEED);
+  const [members, setMembers] = useState<readonly WizardMember[]>([]);
+  const [useForNewChats, setUseForNewChats] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const createTeam = useRunnerOrchestrationCreateMutation();
+  const saveRole = useRunnerOrchestrationRoleSaveMutation();
+  const setEnabled = useOrchestrationBindingStore((s) => s.setEnabled);
+  const setOrchestrationName = useOrchestrationBindingStore(
+    (s) => s.setOrchestrationName,
+  );
+  const setRoleId = useOrchestrationBindingStore((s) => s.setRoleId);
+  const setModelGroup = useOrchestrationBindingStore((s) => s.setModelGroup);
+
+  const slug = slugify(name);
+  const nameValid = slug.length > 0 && !props.existingNames.includes(slug);
+  const leadValid =
+    leadLabel.trim().length > 0 && leadResponsibility.trim().length > 0;
+
+  const reset = (): void => {
+    setStep(1);
+    setName("");
+    setDescription("");
+    setPack(PRIMARY_PACK);
+    setLeadLabel("");
+    setLeadTier("premium");
+    setLeadResponsibility(LEAD_SEED);
+    setMembers([]);
+    setUseForNewChats(true);
+    setBusy(false);
+    setError(null);
+  };
+
+  const close = (): void => {
+    reset();
+    props.onClose();
+  };
+
+  const finish = async (): Promise<void> => {
+    if (!nameValid || !leadValid) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createTeam.mutateAsync({
+        name: slug,
+        description: description.trim() === "" ? undefined : description.trim(),
+        from: undefined,
+      });
+      if (created === null) throw new Error("create failed");
+
+      const lead = await saveRole.mutateAsync({
+        name: slug,
+        role: {
+          id: "orchestrator",
+          label: leadLabel.trim(),
+          description: "Team lead — runs the chat",
+          tier: leadTier,
+          isRoot: true,
+          responsibility: leadResponsibility,
+        },
+      });
+      if (lead === null) throw new Error("lead save failed");
+
+      for (const [index, member] of members.entries()) {
+        const id = slugify(member.label) || `member-${index + 1}`;
+        const saved = await saveRole.mutateAsync({
+          name: slug,
+          role: {
+            id,
+            label: member.label.trim(),
+            description: "",
+            tier: member.tier,
+            isRoot: false,
+            responsibility: member.responsibility,
+          },
+        });
+        if (saved === null) throw new Error(`member ${member.label} failed`);
+      }
+
+      if (useForNewChats) {
+        setEnabled(true);
+        setOrchestrationName(slug);
+        setRoleId("orchestrator");
+        setModelGroup(null);
+      }
+
+      toast.success(`Team “${slug}” created with ${leadLabel.trim()} as lead.`);
+      reset();
+      props.onCreated(slug);
+    } catch {
+      setError("Something failed mid-creation. Open the team and finish setup.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+    >
+      <DialogContent className="sm:max-w-lg" data-testid="create-team-wizard">
+        <DialogHeader>
+          <DialogTitle>
+            Create team — step {step} of 4
+          </DialogTitle>
+          <DialogDescription>
+            {step === 1
+              ? "Name your team"
+              : step === 2
+                ? "Add the team lead"
+                : step === 3
+                  ? "Add more members (optional)"
+                  : "Use this team for new chats?"}
+          </DialogDescription>
+        </DialogHeader>
+
+        {step === 1 ? (
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">Team name</span>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="titanos-squad"
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+                data-testid="wizard-team-name"
+              />
+              {name.length > 0 ? (
+                <span className="text-muted-foreground">
+                  id: {slug || "…"}
+                  {!nameValid && slug.length > 0 ? " (already taken)" : ""}
+                </span>
+              ) : null}
+            </label>
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">
+                What is this team for?
+              </span>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Ships Acme features with review and deploy gates"
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">Model pack</span>
+              <select
+                value={pack}
+                onChange={(e) => setPack(e.target.value)}
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              >
+                {props.packNames.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
+
+        {step === 2 ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-ui-xs text-muted-foreground">
+              Every team needs exactly one team lead ★ — the member who runs
+              the chat and coordinates the others.
+            </p>
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">Lead display name</span>
+              <input
+                type="text"
+                value={leadLabel}
+                onChange={(e) => setLeadLabel(e.target.value)}
+                placeholder="Orchestrator"
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+                data-testid="wizard-lead-label"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">Model quality</span>
+              <select
+                value={leadTier}
+                onChange={(e) => setLeadTier(e.target.value)}
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              >
+                {QUALITY_OPTIONS.map((q) => (
+                  <option key={q.tier} value={q.tier}>
+                    {q.label} — {q.hint}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">
+                What the lead does (applied once when the chat starts)
+              </span>
+              <textarea
+                value={leadResponsibility}
+                onChange={(e) => setLeadResponsibility(e.target.value)}
+                rows={7}
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 font-mono text-ui-xs leading-relaxed"
+                data-testid="wizard-lead-responsibility"
+              />
+            </label>
+          </div>
+        ) : null}
+
+        {step === 3 ? (
+          <WizardExtraMembers members={members} onChange={setMembers} />
+        ) : null}
+
+        {step === 4 ? (
+          <div className="flex flex-col gap-3">
+            <label className="flex items-center gap-2 text-ui-sm">
+              <input
+                type="checkbox"
+                checked={useForNewChats}
+                onChange={(e) => setUseForNewChats(e.target.checked)}
+                data-testid="wizard-use-for-new-chats"
+              />
+              Use {slug || "this team"} for new chats (starts as{" "}
+              {leadLabel || "the lead"} ★)
+            </label>
+            <p className="text-ui-xs text-muted-foreground">
+              You can change this anytime in “Active for new chats” or on the
+              chip next to the composer.
+            </p>
+          </div>
+        ) : null}
+
+        {error !== null ? (
+          <p className="text-ui-xs text-destructive">{error}</p>
+        ) : null}
+
+        <div className="mt-2 flex items-center justify-between">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              if (step === 1) close();
+              else setStep((step - 1) as 1 | 2 | 3 | 4);
+            }}
+            disabled={busy}
+          >
+            {step === 1 ? "Cancel" : "Back"}
+          </Button>
+          {step < 4 ? (
+            <Button
+              size="sm"
+              disabled={
+                busy ||
+                (step === 1 && !nameValid) ||
+                (step === 2 && !leadValid)
+              }
+              onClick={() => setStep((step + 1) as 1 | 2 | 3 | 4)}
+              data-testid="wizard-next"
+            >
+              {step === 3 ? "Skip / Continue" : "Next"}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void finish();
+              }}
+              data-testid="wizard-finish"
+            >
+              {busy ? "Creating…" : "Create team"}
+            </Button>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WizardExtraMembers(props: {
+  readonly members: readonly WizardMember[];
+  readonly onChange: (members: readonly WizardMember[]) => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [tier, setTier] = useState("executor");
+  const [responsibility, setResponsibility] = useState("");
+
+  const canAdd = label.trim().length > 0 && responsibility.trim().length > 0;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {props.members.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          {props.members.map((m, i) => (
+            <div
+              key={`${m.label}-${i}`}
+              className="flex items-center gap-2 rounded-md border border-border/40 px-2 py-1.5 text-ui-xs"
+            >
+              <Bot className="size-3.5" />
+              <span className="font-medium">{m.label}</span>
+              <Badge variant="secondary" className="ml-auto text-ui-xs">
+                {qualityLabel(m.tier)}
+              </Badge>
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() =>
+                  props.onChange(props.members.filter((_, j) => j !== i))
+                }
+                aria-label={`Remove ${m.label}`}
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-ui-xs text-muted-foreground">
+          Optional — you can add members later from the team page.
+        </p>
+      )}
+
+      <div className="rounded-md border border-border/40 p-2.5">
+        <div className="flex flex-col gap-2">
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="Member name (e.g. Code Reviewer)"
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+            data-testid="wizard-member-label"
+          />
+          <select
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+          >
+            {QUALITY_OPTIONS.map((q) => (
+              <option key={q.tier} value={q.tier}>
+                {q.label} — {q.hint}
+              </option>
+            ))}
+          </select>
+          <textarea
+            value={responsibility}
+            onChange={(e) => setResponsibility(e.target.value)}
+            rows={4}
+            placeholder="# What they do"
+            className="rounded-md border border-border/40 bg-background px-2 py-1.5 font-mono text-ui-xs leading-relaxed"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!canAdd}
+            onClick={() => {
+              if (!canAdd) return;
+              props.onChange([
+                ...props.members,
+                {
+                  label: label.trim(),
+                  tier,
+                  responsibility,
+                },
+              ]);
+              setLabel("");
+              setTier("executor");
+              setResponsibility("");
+            }}
+            data-testid="wizard-add-member"
+          >
+            <Plus className="mr-1 size-3" />
+            Add member
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Create model group ─────────────────────────────────────────────────────
+
+function CreateModelGroupForm(props: {
+  readonly existingNames: readonly string[];
+  readonly onCreated: (name: string) => void;
+  readonly onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [cloneFrom, setCloneFrom] = useState<string>(PRIMARY_PACK);
+  const runnerHost = useRunnerHost();
+  const saveMutation = useRunnerOrchestrationGroupSaveMutation();
+  const groupNames = props.existingNames;
+
+  const nameValid =
+    /^[a-z][a-z0-9-]*$/.test(name) && !props.existingNames.includes(name);
+
+  const handleCreate = (): void => {
+    if (!nameValid) return;
+    const cli = runnerHost.traycerCli;
+    const write = (base: TraycerModelGroup): void => {
+      saveMutation.mutate(
+        { name, group: { ...base, name } },
+        {
+          onSuccess: (ok) => {
+            if (ok) props.onCreated(name);
+          },
+        },
+      );
+    };
+    const fallback: TraycerModelGroup = {
+      name,
+      description: "",
+      rules: [],
+      tiers: {},
+    };
+    if (cli === null) {
+      write(fallback);
+      return;
+    }
+    void cli
+      .orchestrationGroupShow({ name: cloneFrom })
+      .then((group) => write(group ?? fallback))
+      .catch(() => write(fallback));
+  };
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-background p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-ui-base font-medium">New model pack</h3>
+        <button
+          type="button"
+          onClick={props.onCancel}
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-ui-xs text-muted-foreground">
+          Pack name (kebab-case)
+        </label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value.toLowerCase())}
+          placeholder="my-pack"
+          className="w-full rounded-md border border-border/40 bg-card px-2.5 py-1.5 text-ui-sm"
+        />
+        {name.length > 0 && !nameValid ? (
+          <p className="mt-1 text-ui-xs text-destructive">
+            Use lowercase letters, numbers, hyphens. Must be unique.
+          </p>
+        ) : null}
+      </div>
+
+      <div>
+        <label className="mb-1 block text-ui-xs text-muted-foreground">
+          Start from
+        </label>
+        <select
+          value={cloneFrom}
+          onChange={(e) => setCloneFrom(e.target.value)}
+          className="w-full rounded-md border border-border/40 bg-card px-2.5 py-1.5 text-ui-sm"
+        >
+          {groupNames.map((g) => (
+            <option key={g} value={g}>
+              {g}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-ui-xs text-muted-foreground">
+          Copies all tiers; you edit after.
+        </p>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={props.onCancel}>
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={!nameValid || saveMutation.isPending}
+          onClick={handleCreate}
+        >
+          {saveMutation.isPending ? "Creating..." : "Create"}
+        </Button>
+      </div>
     </div>
   );
 }
