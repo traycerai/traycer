@@ -75,6 +75,7 @@ import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { effectiveOrchestrationBinding } from "@/lib/orchestration/effective-orchestration-binding";
 import { maybeInjectOrchestrationPreludeAtCreate } from "@/lib/orchestration/inject-orchestration-prelude";
 import {
   orderFoldersPrimaryFirst,
@@ -297,10 +298,11 @@ export function useLandingComposerActions(): LandingComposerActions {
         args.slashCatalog,
       );
       // One-shot at chat creation only — identity/responsibility for the role.
+      // Landing epic.create always uses the global binding (epicId null).
       const submittedContent = await maybeInjectOrchestrationPreludeAtCreate(
         submittedUserContent,
         runnerHost?.traycerCli ?? null,
-        null,
+        effectiveOrchestrationBinding(null),
       );
       const profile = useAuthStore.getState().profile;
 

@@ -31,6 +31,15 @@ const DIRTY_CONTENT: JsonContent = {
 
 const testState = vi.hoisted(() => ({
   createChat: vi.fn(),
+  orchestrationPrelude: vi.fn(
+    async (_args: {
+      readonly name: string;
+      readonly roleId: string;
+      readonly group: string | undefined;
+    }) => ({
+      text: "<!-- traycer-orchestration-prelude -->\nrole text\n<!-- /traycer-orchestration-prelude -->",
+    }),
+  ),
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   ingesting: false,
@@ -128,6 +137,9 @@ vi.mock("@/providers/use-runner-host", () => ({
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths: readonly string[]) =>
         Promise.resolve(paths),
+    },
+    traycerCli: {
+      orchestrationPrelude: testState.orchestrationPrelude,
     },
   }),
 }));
@@ -231,11 +243,16 @@ beforeEach(() => {
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent("epic-1", DIRTY_CONTENT);
   useNewConversationModalStore.getState().setComposerMode("epic-1", "chat");
+  testState.orchestrationPrelude.mockClear();
+  testState.orchestrationPrelude.mockResolvedValue({
+    text: "<!-- traycer-orchestration-prelude -->\nrole text\n<!-- /traycer-orchestration-prelude -->",
+  });
 });
 
 afterEach(() => {
   cleanup();
   testState.createChat.mockClear();
+  testState.orchestrationPrelude.mockClear();
   testState.bodySubmit = null;
   testState.installEditor = null;
   testState.ingesting = false;
@@ -445,6 +462,102 @@ describe("NewConversationModalBody direct submit gate", () => {
     // Submit is async (create-time orchestration prelude injection) — flush.
     await act(async () => {});
     expect(testState.createChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("create-time injection uses the per-epic orchestration override", async () => {
+    const {
+      useOrchestrationEpicOverridesStore,
+    } = await import(
+      "@/stores/orchestration/orchestration-epic-overrides-store"
+    );
+    useOrchestrationEpicOverridesStore.getState().resetForTests();
+    useOrchestrationEpicOverridesStore.getState().setEpicOverride("epic-1", {
+      enabled: true,
+      orchestrationName: "x",
+      roleId: "y",
+      modelGroup: "cheap",
+    });
+
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={ACTIVE_TILE_PLACEMENT}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Submit new conversation" }),
+    );
+    await act(async () => {});
+
+    expect(testState.orchestrationPrelude).toHaveBeenCalledWith({
+      name: "x",
+      roleId: "y",
+      group: "cheap",
+    });
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    // Without a signed-in userId, initialMessage is null (auth not mocked in
+    // this suite); the injection path is proven by orchestrationPrelude args
+    // and create still proceeding. Content with markers is covered by the
+    // inject unit tests.
+    const createArgs = testState.createChat.mock.calls[0]?.[0] as {
+      readonly epicId: string;
+    };
+    expect(createArgs.epicId).toBe("epic-1");
+
+    useOrchestrationEpicOverridesStore.getState().resetForTests();
+  });
+
+  it("create-time injection falls back to the global binding without override", async () => {
+    const {
+      useOrchestrationEpicOverridesStore,
+    } = await import(
+      "@/stores/orchestration/orchestration-epic-overrides-store"
+    );
+    const { useOrchestrationBindingStore } = await import(
+      "@/stores/orchestration/orchestration-binding-store"
+    );
+    useOrchestrationEpicOverridesStore.getState().resetForTests();
+    useOrchestrationBindingStore.getState().setBinding({
+      enabled: true,
+      orchestrationName: "dev-team-full",
+      roleId: "orchestrator",
+      modelGroup: null,
+    });
+
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={ACTIVE_TILE_PLACEMENT}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Submit new conversation" }),
+    );
+    await act(async () => {});
+
+    expect(testState.orchestrationPrelude).toHaveBeenCalledWith({
+      name: "dev-team-full",
+      roleId: "orchestrator",
+      group: undefined,
+    });
   });
 });
 

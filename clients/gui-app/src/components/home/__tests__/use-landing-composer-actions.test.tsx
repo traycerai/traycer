@@ -37,7 +37,42 @@ const landingMocks = vi.hoisted(() => ({
     version: "0.0.0-test",
     status: "available",
   })),
+  injectCalls: [] as Array<{
+    bindingOverride: {
+      enabled: boolean;
+      orchestrationName: string;
+      roleId: string;
+      modelGroup: string | null;
+    } | null;
+  }>,
 }));
+
+vi.mock("@/lib/orchestration/inject-orchestration-prelude", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/lib/orchestration/inject-orchestration-prelude")
+    >();
+  return {
+    ...actual,
+    maybeInjectOrchestrationPreludeAtCreate: async (
+      content: JsonContent,
+      traycerCli: unknown,
+      bindingOverride: {
+        enabled: boolean;
+        orchestrationName: string;
+        roleId: string;
+        modelGroup: string | null;
+      } | null,
+    ) => {
+      landingMocks.injectCalls.push({ bindingOverride });
+      return actual.maybeInjectOrchestrationPreludeAtCreate(
+        content,
+        traycerCli as never,
+        bindingOverride,
+      );
+    },
+  };
+});
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => landingMocks.navigate,
@@ -115,6 +150,7 @@ describe("useLandingComposerActions", () => {
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
+    landingMocks.injectCalls = [];
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
@@ -228,6 +264,46 @@ describe("useLandingComposerActions", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     expect(toast.error).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  it("epic.create injection uses the global orchestration binding (epicId null)", async () => {
+    const { useOrchestrationBindingStore } = await import(
+      "@/stores/orchestration/orchestration-binding-store"
+    );
+    useOrchestrationBindingStore.getState().setBinding({
+      enabled: true,
+      orchestrationName: "dev-team-full",
+      roleId: "orchestrator",
+      modelGroup: null,
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(landingMocks.injectCalls.length).toBeGreaterThan(0);
+    });
+    expect(landingMocks.injectCalls[0]?.bindingOverride).toMatchObject({
+      enabled: true,
+      orchestrationName: "dev-team-full",
+      roleId: "orchestrator",
+      modelGroup: null,
+    });
 
     queryClient.clear();
   });

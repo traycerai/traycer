@@ -84,6 +84,7 @@ import {
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import { effectiveOrchestrationBinding } from "@/lib/orchestration/effective-orchestration-binding";
 import { maybeInjectOrchestrationPreludeAtCreate } from "@/lib/orchestration/inject-orchestration-prelude";
 import {
   deriveFolderlessAllowedWorkspaceAvailability,
@@ -757,10 +758,11 @@ export function NewConversationModalBody(props: {
       pickerStore.getState().knownSlashCommands,
     );
     // One-shot at chat creation only — never on later sends in this chat.
+    // Prefer per-epic override when present; else global binding.
     const content = await maybeInjectOrchestrationPreludeAtCreate(
       userContent,
       runnerHost.traycerCli,
-      null,
+      effectiveOrchestrationBinding(epicId),
     );
     const chatId = uuidv4();
     const messageId = uuidv4();
