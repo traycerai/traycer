@@ -347,6 +347,7 @@ import {
   hostNotificationsFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedMarkRead,
+  hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
   hostNotificationsCloudFeedClear,
   hostNotificationsCloudFeedClearAll,
@@ -3659,6 +3660,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsCloudFeedResolve,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.cloudFeed.markAllRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedMarkAllRead,
           upgradeFromPreviousVersion: null,
         },
       },
