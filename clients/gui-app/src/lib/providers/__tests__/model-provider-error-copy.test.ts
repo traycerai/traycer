@@ -112,3 +112,27 @@ describe("config_unreadable", () => {
     ).toContain("line 12");
   });
 });
+
+describe("detail normalization on the LIST helper", () => {
+  // The two helpers implement the same rule separately, so covering it through
+  // the auth one only proved the auth one. These are the cases that would go
+  // unnoticed if the list copy ever drifted: a whitespace-only detail is the
+  // shape that turns a useful message into a blank line.
+  it("falls back to the table for a blank or whitespace detail", () => {
+    expect(modelProviderListErrorMessage("server_unavailable", "")).toBe(
+      modelProviderListErrorMessage("server_unavailable", null),
+    );
+    expect(modelProviderListErrorMessage("server_unavailable", "   \n ")).toBe(
+      modelProviderListErrorMessage("server_unavailable", null),
+    );
+  });
+
+  it("prefers the host's detail, trimmed", () => {
+    expect(
+      modelProviderListErrorMessage(
+        "config_unreadable",
+        "  opencode.json: unexpected token at line 12  ",
+      ),
+    ).toBe("opencode.json: unexpected token at line 12");
+  });
+});
