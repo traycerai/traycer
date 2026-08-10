@@ -17,7 +17,8 @@ export interface OrchestrationBindingPopoverProps {
 }
 
 /**
- * Orchestration binding editor. epicId non-null → per-epic override.
+ * Orchestration binding editor body (rendered inside a Popover portal).
+ * epicId non-null → per-epic override.
  * epicId null → writes the global default store directly (new-chat composer:
  * the auto-selected default you can change or turn off before creating).
  */
@@ -61,12 +62,12 @@ export function OrchestrationBindingPopover(
 
   return (
     <div
-      className="absolute bottom-full left-0 z-50 mb-1 w-72 rounded-md border border-border bg-popover p-3 shadow-md"
+      className="flex w-72 flex-col gap-2"
       data-testid="orchestration-binding-popover"
       role="dialog"
       aria-label="Orchestration binding"
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-ui-sm font-medium">
           {isGlobal ? "Orchestration (default for new chats)" : "Orchestration"}
         </span>
@@ -80,12 +81,12 @@ export function OrchestrationBindingPopover(
         </button>
       </div>
       {isGlobal ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
+        <p className="text-ui-xs text-muted-foreground">
           New chats start with this role. Turn off for a blank agent.
         </p>
       ) : null}
 
-      <label className="mb-2 flex items-center gap-2 text-ui-xs">
+      <label className="flex items-center gap-2 text-ui-xs">
         <input
           type="checkbox"
           checked={binding.enabled}
@@ -97,7 +98,7 @@ export function OrchestrationBindingPopover(
         Enabled
       </label>
 
-      <label className="mb-2 flex flex-col gap-1 text-ui-xs">
+      <label className="flex flex-col gap-1 text-ui-xs">
         <span className="text-muted-foreground">Team</span>
         <select
           className="rounded-md border border-border bg-background px-2 py-1"
@@ -131,7 +132,7 @@ export function OrchestrationBindingPopover(
         </select>
       </label>
 
-      <label className="mb-2 flex flex-col gap-1 text-ui-xs">
+      <label className="flex flex-col gap-1 text-ui-xs">
         <span className="text-muted-foreground">Role</span>
         <select
           className="rounded-md border border-border bg-background px-2 py-1"
@@ -155,7 +156,7 @@ export function OrchestrationBindingPopover(
         </select>
       </label>
 
-      <label className="mb-3 flex flex-col gap-1 text-ui-xs">
+      <label className="flex flex-col gap-1 text-ui-xs">
         <span className="text-muted-foreground">Model group</span>
         <select
           className="rounded-md border border-border bg-background px-2 py-1"
