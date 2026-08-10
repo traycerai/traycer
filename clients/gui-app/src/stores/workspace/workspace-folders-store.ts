@@ -30,6 +30,13 @@ interface WorkspaceFoldersStore {
   addResolvedFolders: (
     folders: ReadonlyArray<WorkspaceFolderInfo>,
   ) => ReadonlyArray<string>;
+  /**
+   * Wholesale replace of the composer workspace set (profile-switch path).
+   * Sets primary to the first folder via resolvePrimaryPath(nextPaths, null).
+   */
+  replaceResolvedFolders: (
+    folders: ReadonlyArray<WorkspaceFolderInfo>,
+  ) => void;
   removeFolder: (folderPath: string) => void;
   setPrimaryFolder: (folderPath: string) => void;
 }
@@ -51,6 +58,44 @@ export const useWorkspaceFoldersStore = create<WorkspaceFoldersStore>()(
         set((state) => mergeWorkspaceFolderInfo(state, folders));
         const afterSet = new Set(get().folders);
         return before.filter((path) => !afterSet.has(path));
+      },
+      replaceResolvedFolders: (folders) => {
+        set(() => {
+          const nextInfoByPath: Record<string, WorkspaceFolderInfo> = {};
+          const nextFolders: string[] = [];
+          const seen = new Set<string>();
+          for (const folder of folders) {
+            const path = folder.path.trim();
+            if (path.length === 0 || seen.has(path)) continue;
+            seen.add(path);
+            nextFolders.push(path);
+            nextInfoByPath[path] = {
+              path,
+              name: folder.name,
+              repoIdentifier: folder.repoIdentifier,
+              hostId: folder.hostId,
+            };
+          }
+          // Cap like add/rehydrate: never silently promote by dropping primary
+          // first — here primary is always the first path, so front-trim keeps
+          // it when we exceed MAX_FOLDERS.
+          const cappedFolders = trimFoldersPreservingPrimary(
+            nextFolders,
+            nextFolders[0] ?? null,
+            MAX_FOLDERS,
+          );
+          const cappedSet = new Set(cappedFolders);
+          const cappedInfo = Object.fromEntries(
+            Object.entries(nextInfoByPath).filter(([path]) =>
+              cappedSet.has(path),
+            ),
+          );
+          return {
+            folders: cappedFolders,
+            folderInfoByPath: cappedInfo,
+            primaryPath: resolvePrimaryPath(cappedFolders, null),
+          };
+        });
       },
       removeFolder: (folderPath) => {
         set((state) => {

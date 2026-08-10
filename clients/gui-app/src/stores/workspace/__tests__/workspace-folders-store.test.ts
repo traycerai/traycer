@@ -227,4 +227,46 @@ describe("useWorkspaceFoldersStore", () => {
     expect(state.folders).toEqual([]);
     expect(state.primaryPath).toBeNull();
   });
+
+  describe("replaceResolvedFolders", () => {
+    it("swaps the set, drops stale info entries, and sets primary to the first path", () => {
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders([
+          folderInfo("/old-a"),
+          folderInfo("/old-b"),
+        ]);
+      useWorkspaceFoldersStore.getState().setPrimaryFolder("/old-b");
+
+      useWorkspaceFoldersStore
+        .getState()
+        .replaceResolvedFolders([
+          folderInfo("/new-x"),
+          folderInfo("/new-y"),
+        ]);
+
+      const state = useWorkspaceFoldersStore.getState();
+      expect(state.folders).toEqual(["/new-x", "/new-y"]);
+      expect(state.primaryPath).toBe("/new-x");
+      expect(Object.keys(state.folderInfoByPath).sort()).toEqual([
+        "/new-x",
+        "/new-y",
+      ]);
+      expect(state.folderInfoByPath["/old-a"]).toBeUndefined();
+      expect(state.folderInfoByPath["/old-b"]).toBeUndefined();
+    });
+
+    it("replace with [] clears folders/info and primary → null", () => {
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders([folderInfo("/a"), folderInfo("/b")]);
+
+      useWorkspaceFoldersStore.getState().replaceResolvedFolders([]);
+
+      const state = useWorkspaceFoldersStore.getState();
+      expect(state.folders).toEqual([]);
+      expect(state.folderInfoByPath).toEqual({});
+      expect(state.primaryPath).toBeNull();
+    });
+  });
 });
