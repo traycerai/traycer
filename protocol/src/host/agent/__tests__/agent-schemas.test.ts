@@ -318,6 +318,68 @@ describe("agent host schemas", () => {
     });
   });
 
+  it("accepts the live agent.list v7 runConfig shape", () => {
+    const response = listAgentsResponseSchema.parse({
+      caller: { agentId: "agent-1", canSendMessages: true },
+      scope: "user",
+      agents: [
+        {
+          id: "agent-1",
+          parentId: null,
+          hostId: "host-1",
+          isLocal: true,
+          surface: "gui",
+          harnessId: "codex",
+          isSelf: true,
+          title: null,
+          capabilities: { readTranscript: true, sendMessage: true },
+          active: false,
+          folderPaths: [],
+          isWorktree: false,
+          runConfig: {
+            model: { kind: "concrete", slug: "gpt-5.6-codex" },
+            reasoningEffort: "high",
+            fastMode: true,
+            profileSelection: { kind: "profile", profileId: "secret" },
+            provenance: { model: "explicit" },
+          },
+        },
+      ],
+    });
+
+    expect(response.agents[0].runConfig).toEqual({
+      model: { kind: "concrete", slug: "gpt-5.6-codex" },
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+  });
+
+  it("default-fills runConfig to null for a v7 host row without the field", () => {
+    const response = listAgentsResponseSchema.parse({
+      caller: { agentId: "agent-1", canSendMessages: true },
+      scope: "user",
+      agents: [
+        {
+          id: "agent-1",
+          parentId: null,
+          hostId: "host-1",
+          isLocal: true,
+          surface: "gui",
+          harnessId: "codex",
+          isSelf: true,
+          title: null,
+          capabilities: { readTranscript: true, sendMessage: true },
+          active: false,
+          folderPaths: [],
+          isWorktree: false,
+        },
+      ],
+    });
+
+    expect(response.agents[0].runConfig).toBeNull();
+    expect(response.agents[0]).toHaveProperty("runConfig", null);
+  });
+
   it("accepts the agent selection/config response shapes", () => {
     expect(
       agentSelectionGuideResponseSchema.parse({
