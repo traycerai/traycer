@@ -63,6 +63,59 @@ describe("<UsageDailyChart /> legend filter", () => {
     ).toBe("true");
   });
 
+  it("keeps the legend reachable when a refetch narrows the window to the hidden series", () => {
+    // `hiddenSeries` outlives a prop change, so a response that drops every
+    // other harness would otherwise leave a chart of zeroed bars with no
+    // control to un-hide the one series left.
+    const { rerender } = render(
+      <UsageDailyChart columns={columns} scale={scale} metric="cost" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "codex" }));
+
+    const codexOnly = buildUsageSeriesScale(["codex"]);
+    rerender(
+      <UsageDailyChart
+        columns={buildUsageChartColumns(
+          ["2026-08-01"],
+          [bucket({ harnessId: "codex", knownCostUsd: 5 })],
+          codexOnly,
+          "cost",
+        )}
+        scale={codexOnly}
+        metric="cost"
+      />,
+    );
+
+    // Every bar is zeroed right now, so the chip is the only way back - it
+    // has to still be on screen even though one series alone would normally
+    // suppress the legend.
+    const chip = screen.getByRole("button", { name: "codex" });
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(chip);
+
+    // Nothing is filtered any more, so the single-series suppression applies
+    // again - the legend going away IS the proof the series came back.
+    expect(screen.queryByTestId("usage-daily-chart-legend")).toBeNull();
+  });
+
+  it("hides the legend for a single series that is not filtered out", () => {
+    const soloScale = buildUsageSeriesScale(["claude"]);
+    render(
+      <UsageDailyChart
+        columns={buildUsageChartColumns(
+          ["2026-08-01"],
+          [bucket({ harnessId: "claude" })],
+          soloScale,
+          "cost",
+        )}
+        scale={soloScale}
+        metric="cost"
+      />,
+    );
+    expect(screen.queryByTestId("usage-daily-chart-legend")).toBeNull();
+  });
+
   it("toggles a hidden series back on when clicked again", () => {
     render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
     const codexChip = screen.getByRole("button", { name: "codex" });

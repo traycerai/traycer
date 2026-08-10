@@ -81,7 +81,14 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
         </div>
       </div>
       <XAxis days={columns.map((column) => column.day)} tickEvery={tickEvery} />
-      {scale.order.length >= 2 ? (
+      {/* The `>= 2` gate keeps a one-chip legend off a single-series chart,
+          where filtering is meaningless. It must not apply when that lone
+          series is HIDDEN, though: `hiddenSeries` outlives a prop change, so
+          a refetch that narrows the window to only the hidden harness would
+          otherwise zero every bar (see `applyUsageSeriesVisibility`) while
+          removing the only control that can bring it back. */}
+      {scale.order.length >= 2 ||
+      scale.order.some((seriesKey) => hiddenSeries.has(seriesKey)) ? (
         <UsageChartLegend
           scale={scale}
           hiddenSeries={hiddenSeries}
