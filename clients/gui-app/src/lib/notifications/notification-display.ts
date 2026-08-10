@@ -1,7 +1,9 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 import type {
+  NotificationFeedSource,
   NotificationForegroundAppLocal,
   NotificationForegroundDisplay,
+  NotificationShowOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { createElement } from "react";
 import { toast } from "sonner";
@@ -18,10 +20,21 @@ import type {
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
+  notificationEntityFromPayload,
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
-import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
-import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
+import {
+  isDocumentFocused,
+  readFocusedHostNotificationPresenceEntity,
+} from "@/lib/notifications/notification-presence";
+import {
+  buildNotificationActivationEnvelope,
+  parseNotificationActivationPayload,
+  type ParsedNotificationActivationPayload,
+} from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
 
 export interface NotificationDisplayTarget {
@@ -36,6 +49,29 @@ interface NativeNotificationDisplayOptions {
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
+/**
+ * Renders a notification another window's native pass relayed here because
+ * this window holds app focus.
+ *
+ * A relay carries the SENDER's pre-composed display: one title and body built
+ * from the rows that survived the sender's own focus filter, with only the
+ * first row's payload attached. The receiver therefore cannot re-derive what
+ * it should have shown - which is why a batched relay could otherwise land
+ * here describing a sibling chat while silently re-counting the very row this
+ * window suppressed.
+ *
+ * So a FEED relay is not rendered at all. Every window holds its own feed
+ * subscription, so those rows are already arriving here directly, filtered by
+ * THIS window's focus, with per-row content the sender's summary cannot
+ * reproduce. The relay is pure duplication - unless our own feed is not
+ * delivering, in which case it is the only copy we will get and the entity
+ * gate decides it.
+ *
+ * App-local rows are the opposite: they live in the originating renderer's
+ * store and reach no other window, so their relay is the delivery. Legacy and
+ * unparseable payloads render too - a redundant toast is a nuisance, a
+ * swallowed failure is data loss.
+ */
 export function displayForwardedForegroundNotification(
   display: NotificationForegroundDisplay,
   target: {
@@ -43,6 +79,14 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
+  const parsed =
+    display.payload === null
+      ? null
+      : parseNotificationActivationPayload(display.payload);
+  if (isFeedRelay(display, parsed)) {
+    if (ownFeedIsDelivering(relayedFeedSource(display, parsed))) return;
+    if (suppressedByFocusedEntity(parsed)) return;
+  }
   const actionable = display.payload !== null;
   const title = actionable
     ? createElement(
@@ -76,18 +120,127 @@ export function displayForwardedForegroundNotification(
   target.playChime();
 }
 
+/**
+ * Whether a relayed display is a feed row, which every window receives on its
+ * own subscription.
+ *
+ * Only app-local displays are excluded, and they are identified POSITIVELY -
+ * by `foregroundAppLocal`, which their path always sets, or by an app-local
+ * envelope. Everything else counts as a feed row, deliberately including a
+ * display whose activation payload is `null`: `payloadFromHostEntry` degrades
+ * an unrecognized payload (a newer host's shape, a cross-kind row) to null
+ * while the row's durable `epicId`/`chatId` stay authoritative. Treating
+ * those as unattributable would hand precisely the rows the entity gate
+ * cannot inspect straight past it - and the receiving window's own feed
+ * copy, which IS gated on the durable columns, would be the one suppressed.
+ */
+function isFeedRelay(
+  display: NotificationForegroundDisplay,
+  parsed: ParsedNotificationActivationPayload | null,
+): boolean {
+  if (display.foregroundAppLocal !== null) return false;
+  if (display.feedSource !== null) return display.feedSource !== "app-local";
+  if (parsed === null) return true;
+  return !(parsed.kind === "v1" && parsed.envelope.feed.source === "app-local");
+}
+
+/**
+ * The feed that produced a relayed display. The display's own `feedSource`
+ * field is authoritative: it is stamped from the row at send time and
+ * survives payload degradation, which the activation envelope does not - a
+ * row whose payload degraded to null ships a null envelope, and deriving
+ * provenance from it would erase "cloud" exactly on the rows the coverage
+ * check below must not hand to the local feed. The envelope is kept as a
+ * fallback for a display minted without the field.
+ */
+function relayedFeedSource(
+  display: NotificationForegroundDisplay,
+  parsed: ParsedNotificationActivationPayload | null,
+): NotificationFeedSource | null {
+  if (display.feedSource !== null) return display.feedSource;
+  return parsed?.kind === "v1" ? parsed.envelope.feed.source : null;
+}
+
+/**
+ * Whether this window's own feed subscription can reproduce the relayed row -
+ * meaning ignoring the relay loses nothing, because the row is already
+ * arriving here directly.
+ *
+ * A stream can go terminal without the window noticing, and then the relay is
+ * the only copy of the row this window will ever see - dropping it as
+ * "redundant" would make a broken feed silently swallow notifications too.
+ *
+ * Reproducibility is directional across the two feeds. The cloud feed carries
+ * every host row (each host replicates up), so a delivering cloud feed covers
+ * host-source and unattributable relays too. The v1 local feed carries only
+ * THIS machine's rows, so it never covers a cloud-source relay: windows can
+ * transiently disagree on feed mode (capability negotiation is per-window),
+ * and a cloud arrival relayed from a cloud-mode window can name a remote
+ * host's occurrence the local feed will never emit - and once this window
+ * upgrades, that occurrence lands inside its silent baseline snapshot.
+ */
+function ownFeedIsDelivering(source: NotificationFeedSource | null): boolean {
+  const cloud = useCloudNotificationsStore.getState();
+  if (cloud.connectionState === "connected" && cloud.hasSnapshot) return true;
+  if (source === "cloud") return false;
+  const host = useHostNotificationsStore.getState();
+  // Transport `open` is not usability: the host stream reports open before its
+  // first snapshot lands, and a baseline snapshot never calls the channel
+  // emission. Relays dropped in that window would be the only copy of an
+  // occurrence this renderer had. `summary` is the host analogue of the cloud
+  // `hasSnapshot` flag - applied with each snapshot and nulled again whenever
+  // the transport leaves `open`, so it cannot go stale across a reconnect.
+  return host.connectionStatus === "open" && host.summary !== null;
+}
+
 export function displayNotificationRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
+  displayFeedRows(rows, target, originHostId, feedRowsDeliveryKey(rows));
+}
+
+/**
+ * Displays feed rows under an explicit delivery identity. Separate from
+ * `displayNotificationRows` because a caller that shows a FOCUS-FILTERED
+ * subset must still name the whole arrival: see `displayHostChannelEmission`.
+ */
+function displayFeedRows(
+  rows: ReadonlyArray<MergedNotificationRow>,
+  target: NotificationDisplayTarget,
+  originHostId: string | null,
+  deliveryKey: string | null,
+): void {
   void displayNotificationRowsAwaitNative(rows, target, {
-    deliveryKey: null,
+    deliveryKey,
     originHostId,
     foregroundAppLocal: null,
   }).catch(() => {
     // The feed remains authoritative; a failed native toast is non-critical.
   });
+}
+
+/**
+ * Every window subscribed to a feed reports the same arrival to the native
+ * pass, so without a delivery key the main process treats N windows as N
+ * notifications and shows an OS banner per window. The key collapses that to
+ * one banner per occurrence, whichever window reports it first. (Duplicate
+ * in-app toasts are handled upstream instead, by ignoring feed relays - see
+ * `displayForwardedForegroundNotification`.)
+ *
+ * Identity is the feed's own `occurrenceKeyForNotification` - never a
+ * hand-rolled one. A host row reuses its semantic id across occurrences, so
+ * `(feedId, createdAt)` alone would let a prompt reopened inside one
+ * `Date.now()` tick collide with the prompt it superseded and be suppressed;
+ * `sourceRef` is what separates them. The JSON encoding is delimiter-safe,
+ * which is also why a batch nests the keys instead of joining them.
+ */
+function feedRowsDeliveryKey(
+  rows: ReadonlyArray<MergedNotificationRow>,
+): string | null {
+  if (rows.length === 0) return null;
+  return JSON.stringify(rows.map(occurrenceKeyForNotification));
 }
 
 async function displayNotificationRowsAwaitNative(
@@ -105,7 +258,7 @@ async function displayNotificationRowsAwaitNative(
           feed: { source: content.row.source, id: content.row.sourceId },
           originHostId: options.originHostId,
         });
-  let nativeDisplay: Promise<void>;
+  let nativeDisplay: Promise<NotificationShowOutcome>;
   try {
     nativeDisplay = target.showNotification({
       title: content.title,
@@ -113,20 +266,37 @@ async function displayNotificationRowsAwaitNative(
       payload: nativePayload,
       replaceKey: content.replaceKey,
       deliveryKey: options.deliveryKey,
+      // Provenance for the receive-side relay gates, independent of the
+      // activation payload: the payload degrades to null for unrecognized
+      // rows, and a batch's rows share one source (batches only come from
+      // the v1 host emission).
+      feedSource: content.row.source,
       foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
     renderNotificationToast(content, target);
     throw error;
   }
-  renderNotificationToast(content, target);
-  await nativeDisplay;
+  const renderChimed = renderNotificationToast(content, target);
+  const outcome = await nativeDisplay;
+  // `undeliverable`: the platform cannot present notifications and no window
+  // was focused, so nothing was shown or relayed and the burnt delivery key
+  // makes it unretryable - this window (the ledger's single winner; every
+  // other window heard `duplicate`) owns the only audible cue there will be.
+  // The single-voice guard is the RECORDED fact that the render-time chime
+  // ran, never a second focus read: focus can flip while the outcome is
+  // pending, and a re-read would double-chime on focused-then-blurred and
+  // stay silent on blurred-then-focused.
+  if (outcome === "undeliverable" && !renderChimed) {
+    target.playChime();
+  }
 }
 
+/** Renders the in-app toast and returns whether the focus-gated chime ran. */
 function renderNotificationToast(
   content: NotificationToastContent,
   target: NotificationDisplayTarget,
-): void {
+): boolean {
   const isActionable = content.row.payload !== null;
   const toastTitle = isActionable
     ? createElement(
@@ -157,7 +327,54 @@ function renderNotificationToast(
     description: isActionable ? undefined : content.body,
     id: content.replaceKey,
   });
+  // Only the CHIME is focus-gated, never the toast. The main process treats a
+  // focused sender as already-delivered and relays nothing back to it, so a
+  // renderer that skipped its own toast on an independent focus read would
+  // leave the arrival with no surface at all whenever focus landed between
+  // the two checks - and the burnt delivery key makes that unretryable.
+  // Rendering unconditionally keeps delivery a single decision (the main
+  // process picks banner or relay) and leaves the renderer only this one,
+  // which is never the sole delivery: an unseen toast is harmless, while a
+  // chime from a window nobody is looking at is not.
+  if (!isDocumentFocused()) return false;
   target.playChime();
+  return true;
+}
+
+/**
+ * Whether a FALLBACK relay - one this window is rendering because its own
+ * feed is not delivering - is addressed to the entity currently in focus.
+ * Reached only on that path; when our feed is live the relay is ignored
+ * outright. A payload that names no entity (degraded or unparseable) cannot
+ * be gated and therefore renders: on a broken feed, a redundant toast beats
+ * silence.
+ */
+function suppressedByFocusedEntity(
+  parsed: ParsedNotificationActivationPayload | null,
+): boolean {
+  const route = activationRoute(parsed);
+  if (route === null) return false;
+  const entity = notificationEntityFromPayload(route);
+  if (entity === null) return false;
+  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  return (
+    focusedEntity !== null &&
+    notificationEntityMatchesPresence(entity, focusedEntity)
+  );
+}
+
+function activationRoute(
+  parsed: ParsedNotificationActivationPayload | null,
+): NotificationPayload | null {
+  if (parsed === null) return null;
+  switch (parsed.kind) {
+    case "v1":
+      return parsed.envelope.route;
+    case "legacy":
+      return parsed.payload;
+    case "unknown":
+      return null;
+  }
 }
 
 /**
@@ -167,28 +384,34 @@ function renderNotificationToast(
  * lands on the entity, or presence can go stale mid-hold. This gate re-checks
  * live focus at display time so the tab you are looking at never toasts about
  * its own activity; rows for other entities still display.
+ *
+ * The delivery key names the WHOLE emission, never this window's visible
+ * subset. An emission is one batched display, and each window filters it by
+ * its own focus - so a subset-derived key would differ between a window that
+ * dropped the focused row and one that kept it, the two would fail to
+ * deduplicate, and the focused window would show its own filtered toast plus
+ * the relayed full batch, chiming twice. Delivery identity has to survive
+ * focus filtering to collapse the fan-out it exists to collapse.
  */
 export function displayHostChannelEmission(
   entries: ReadonlyArray<HostNotificationEntryV21>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
+  const rows = entries.map(rowFromHostEntry);
+  const emissionDeliveryKey = feedRowsDeliveryKey(rows);
   const focusedEntity = readFocusedHostNotificationPresenceEntity();
-  const visibleEntries =
+  const visibleRows =
     focusedEntity === null
-      ? entries
-      : entries.filter((entry) => {
-          const entity = notificationEntityFromHostEntry(entry);
+      ? rows
+      : rows.filter((_row, index) => {
+          const entity = notificationEntityFromHostEntry(entries[index]);
           return (
             entity === null ||
             !notificationEntityMatchesPresence(entity, focusedEntity)
           );
         });
-  displayNotificationRows(
-    visibleEntries.map(rowFromHostEntry),
-    target,
-    originHostId,
-  );
+  displayFeedRows(visibleRows, target, originHostId, emissionDeliveryKey);
 }
 
 /** Whole cloud snapshots carry no emission frame, so accepted post-baseline

@@ -71,7 +71,7 @@ export function readFocusedHostNotificationPresenceEntity(): HostNotificationsPr
   return readActiveHostNotificationPresenceEntity();
 }
 
-function isDocumentFocused(): boolean {
+export function isDocumentFocused(): boolean {
   return typeof document !== "undefined" && document.hasFocus();
 }
 

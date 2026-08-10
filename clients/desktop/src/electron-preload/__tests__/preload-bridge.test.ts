@@ -353,6 +353,7 @@ describe("preload foreground-notification buffering", () => {
       payload: null,
       replaceKey: "app-local:host.error:failure-1",
       deliveryKey: "user-1:host.error:failure-1:40",
+      feedSource: "app-local",
       foregroundAppLocal: {
         userId: "user-1",
         entry: { id: "host.error:failure-1", updatedAt: 40 },

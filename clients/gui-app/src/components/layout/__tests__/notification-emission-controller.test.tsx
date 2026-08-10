@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import {
   act,
   cleanup,
@@ -367,6 +368,7 @@ describe("NotificationEmissionController", () => {
         body: backgroundEntry.detail,
         payload: null,
         replaceKey: `app-local:${backgroundEntry.id}`,
+        feedSource: "app-local",
         deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
         foregroundAppLocal: {
           userId: version.userId,
@@ -429,6 +431,7 @@ describe("NotificationEmissionController", () => {
           body: foreignEntry.detail ?? "",
           payload: null,
           replaceKey: `app-local:${foreignEntry.id}`,
+          feedSource: "app-local",
           deliveryKey: `${version.userId}:${version.notificationId}:${version.updatedAt}`,
           foregroundAppLocal: {
             userId: version.userId,
@@ -560,8 +563,9 @@ describe("NotificationEmissionController", () => {
   });
 
   it("waits for native display success before persisting the receipt", async () => {
-    let resolveDisplay: (() => void) | null = null;
-    const displayPending = new Promise<void>((resolve) => {
+    let resolveDisplay: ((outcome: NotificationShowOutcome) => void) | null =
+      null;
+    const displayPending = new Promise<NotificationShowOutcome>((resolve) => {
       resolveDisplay = resolve;
     });
     const runnerHost = createRunnerHost();
@@ -593,7 +597,7 @@ describe("NotificationEmissionController", () => {
     expect(hasAppLocalDisplayReceipt(version)).toBe(false);
 
     act(() => {
-      resolveDisplay?.();
+      resolveDisplay?.("presented");
     });
     await waitFor(() => {
       expect(
@@ -605,8 +609,9 @@ describe("NotificationEmissionController", () => {
   });
 
   it("does not recreate a cleared receipt when native display completes after sign-out", async () => {
-    let resolveDisplay: (() => void) | null = null;
-    const displayPending = new Promise<void>((resolve) => {
+    let resolveDisplay: ((outcome: NotificationShowOutcome) => void) | null =
+      null;
+    const displayPending = new Promise<NotificationShowOutcome>((resolve) => {
       resolveDisplay = resolve;
     });
     const runnerHost = createRunnerHost();
@@ -638,7 +643,7 @@ describe("NotificationEmissionController", () => {
       expect(useAppLocalNotificationsStore.getState().activeUserId).toBeNull();
     });
     await act(async () => {
-      resolveDisplay?.();
+      resolveDisplay?.("presented");
       await displayPending;
     });
 
@@ -646,8 +651,9 @@ describe("NotificationEmissionController", () => {
   });
 
   it("acknowledges an in-flight receipt after a direct user switch", async () => {
-    let resolveDisplay: (() => void) | null = null;
-    const displayPending = new Promise<void>((resolve) => {
+    let resolveDisplay: ((outcome: NotificationShowOutcome) => void) | null =
+      null;
+    const displayPending = new Promise<NotificationShowOutcome>((resolve) => {
       resolveDisplay = resolve;
     });
     const runnerHost = createRunnerHost();
@@ -681,7 +687,7 @@ describe("NotificationEmissionController", () => {
       );
     });
     await act(async () => {
-      resolveDisplay?.();
+      resolveDisplay?.("presented");
       await displayPending;
     });
 
