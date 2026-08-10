@@ -327,14 +327,14 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
     // them. The major is spelled out because `downgradeResponseAcrossMajors`
     // resolves it at the type level, so it cannot be read off the registry at
-    // runtime - it has to be bumped by hand every time a release freezes the
-    // current line (v5.0 at `cli-v1.1.8`, v6.0 at `cli-v1.1.9`, v7.0 when the
-    // Model Providers tab opened v8.0, so v8.0 now). The latest major also
-    // carries `nativeCapabilities` and `native`, which this downgrade strips
-    // alongside `profiles`.
+    // runtime - it has to be bumped by hand every time a new major opens
+    // (v5.0 and v6.0 were each frozen by a release; v7.0 is the newest line
+    // and is not released yet). The latest major also carries
+    // `nativeCapabilities` and `native`, which this downgrade strips alongside
+    // `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      7,
       2,
       { providers: [stateWithProfile], native: null },
     );
@@ -391,7 +391,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      7,
       3,
       { providers: [stateWithProfile], native: null },
     );

@@ -66,12 +66,13 @@ export type ProviderIdV20 = z.infer<typeof providerIdSchemaV20>;
  * v7.0 opened for `terminalLogin` and the `native` list carrier, not for a
  * provider).
  *
- * Frozen the moment v8.0 opened, rather than left pointing at the live enum,
+ * Frozen at the integration cut, rather than left pointing at the live enum,
  * because that pointer is precisely how `omp` first tried to ride v5.0 and how
  * the provider-pack-registry fields grew v6.0: a line stays correct only until
  * the next thing lands on the live schema. A new provider extends
- * `providerIdSchema` and reaches v7.0 clients through the v8→v7 bridge, which
- * drops what this enum does not name.
+ * `providerIdSchema` reaches v7.0 clients only through the bridge that the
+ * next major above v7.0 will have to carry - this enum is what it will drop
+ * against.
  *
  * Lives here rather than beside the v3.0-v6.0 snapshots in
  * `provider-schemas.ts` because the frozen v7.0 NATIVE payloads
@@ -98,7 +99,7 @@ export const providerIdSchemaV70 = z.enum([
   "hermes",
   "omp",
   // `huggingface` is ON this line, not projected away from it. It reached the
-  // live enum after the v8.0 freeze cut, and v7.0 is unreleased - no non-RC
+  // live enum after the freeze cut, and v7.0 is unreleased - no non-RC
   // `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract - so
   // growing v7.0 in place was legitimate, exactly as `config_unreadable` was.
   // `downgradeProviderCliStateListToV60` says the same thing from the other
@@ -107,7 +108,7 @@ export const providerIdSchemaV70 = z.enum([
   //
   // Same expiry as everywhere else in this transition: once a release ships a
   // major-7 contract, a provider added to the live enum must be projected away
-  // by the v8→v7 bridge instead of mirrored here.
+  // by the bridge down from the next major instead of mirrored here.
   "huggingface",
 ]);
 export type ProviderIdV70 = z.infer<typeof providerIdSchemaV70>;

@@ -23,8 +23,6 @@ import {
   nativeListQuerySchemaV70,
   nativeListResultSchema,
   nativeListResultSchemaV70,
-  projectProviderNativeCapabilitiesToV70,
-  tryProjectProviderNativeCapabilitiesToV70,
   providerMcpCapabilitiesSchema,
   providerMcpCapabilitiesSchemaV70,
   providerMcpServerSchema,
@@ -36,6 +34,7 @@ import {
   providerSkillSchema,
   providerSkillSchemaV70,
   providerModelProvidersCapabilitiesSchema,
+  providerModelProvidersCapabilitiesSchemaV70,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70,
   providerEnvOverrideScopeSchema,
@@ -78,12 +77,22 @@ import {
  * Model Providers protocol ticket coverage (T1).
  *
  * The load-bearing claim this file exists to hold: the `modelProviders` tab id
- * can never reach a client that negotiated `providers.list@7.0` or lower. It is
- * not an additive value there. `supportedTabs` is an array of a CLOSED enum
- * nested inside `nativeCapabilities`, and `providerCliStateSchema` decodes that
- * whole object through one `.catch(DEFAULT)` - so an unknown member does not
- * degrade to "tab ignored", it takes MCP, Plugins and Skills down with it for
- * that provider.
+ * can only reach a decoder that knows it.
+ *
+ * Two facts make that true, and both are asserted below rather than assumed.
+ * v7.0 is the LIVE line and is unreleased, so the member is mirrored onto it -
+ * there is no peer in the field that negotiated v7.0 without it. And no
+ * `providers.list` line below v7.0 models `nativeCapabilities` in any form, so
+ * every older major drops the whole capability object rather than meeting a
+ * tab id it cannot parse.
+ *
+ * The second fact is what makes the first safe, and it is worth stating why:
+ * `supportedTabs` is an array of a CLOSED enum nested inside
+ * `nativeCapabilities`, which `providerCliStateSchema` decodes through one
+ * `.catch(DEFAULT)`. A member an older decoder could not read would not
+ * degrade to "tab ignored" - it would take MCP, Plugins and Skills down with
+ * it. No such decoder exists today; the day one does, a projection is owed,
+ * and the enum-equality test below is what asks for it.
  */
 
 /**
@@ -146,7 +155,7 @@ const SKILLS_CAPABILITIES = {
   },
 };
 
-/** What an `opencode` host on v8.0 advertises once the tab is live. */
+/** What an `opencode` host advertises once the tab is live. */
 const OPENCODE_CAPABILITIES = providerNativeCapabilitiesSchema.parse({
   supportedTabs: ["general", "env", "usage", "mcp", "skills", "modelProviders"],
   mcp: MCP_CAPABILITIES,
@@ -200,18 +209,21 @@ const liveResponse = providersListResponseSchema.parse({
 });
 
 describe("modelProviders tab id and capability block", () => {
-  it("is on the live tab enum and absent from the frozen v7.0 one", () => {
+  it("is on the live tab enum and mirrored onto the frozen v7.0 one", () => {
+    // Mirrored, not projected away: v7.0 is unreleased, so growing it in place
+    // costs nobody a bridge - the same call `config_unreadable` and
+    // `huggingface` got.
     expect(providerSettingsTabSchema.safeParse("modelProviders").success).toBe(
       true,
     );
     expect(
       providerSettingsTabSchemaV70.safeParse("modelProviders").success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("requires the capability key rather than tolerating an absent one", () => {
     // Required-and-nullable, like its mcp/plugins/skills siblings. An absent
-    // key would fail the whole capability object on a v8.0 client, which the
+    // key would fail the whole capability object on a v7.0 client, which the
     // state-level `.catch()` then serves as the empty default - so a producer
     // that forgets the fill must fail here, loudly, not in the field.
     expect(
@@ -246,119 +258,57 @@ describe("modelProviders tab id and capability block", () => {
     ).toBe(false);
   });
 
-  it("carries modelProviders: null on both defaults, in the shape of their own line", () => {
+  it("carries modelProviders: null on both defaults", () => {
+    // Both, now that the member rides v7.0. The two defaults stay separate
+    // objects so the frozen line keeps its own snapshot the day they diverge.
     expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES.modelProviders).toBeNull();
-    expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70).not.toHaveProperty(
-      "modelProviders",
-    );
+    expect(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70.modelProviders).toBeNull();
   });
 });
 
-describe("the v7.0 collapse this transition exists to prevent", () => {
-  it("shows what an unprojected tab id would cost a v7.0 client", () => {
-    // NOT a downgrade - the raw payload, handed to the frozen v7.0 state as if
-    // the bridge had simply reparsed it. The tab id fails the enum, the array
-    // fails, the capability object fails, and `.catch()` serves the empty
-    // default: MCP and Skills are gone, silently, for that provider.
-    const collapsed = providerCliStateSchemaV70.parse({
-      ...providerState("opencode"),
-      nativeCapabilities: OPENCODE_CAPABILITIES,
-    });
-    expect(collapsed.nativeCapabilities).toEqual(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
-    );
-    expect(collapsed.nativeCapabilities.mcp).toBeNull();
-    expect(collapsed.nativeCapabilities.skills).toBeNull();
-  });
 
-  it("projects the tab away instead, keeping every other capability intact", () => {
-    const projected =
-      projectProviderNativeCapabilitiesToV70(OPENCODE_CAPABILITIES);
-    expect(projected.supportedTabs).toEqual([
-      "general",
-      "env",
-      "usage",
-      "mcp",
-      "skills",
-    ]);
-    expect(projected).not.toHaveProperty("modelProviders");
-    expect(projected.mcp).toEqual(OPENCODE_CAPABILITIES.mcp);
-    expect(projected.skills).toEqual(OPENCODE_CAPABILITIES.skills);
-    expect(providerNativeCapabilitiesSchemaV70.safeParse(projected).success).toBe(
-      true,
-    );
-  });
-});
-
-describe("providers.list 8.0 -> 7.0", () => {
-  it("hands a v7.0 client byte-identical capabilities for a provider without the tab", () => {
-    // The parity claim in its strongest form: a provider that never advertised
-    // the new tab must come out of the v8 wire exactly as it went in on v7.
-    const downgraded = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      liveResponse,
-    );
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    const claudeRow = downgraded.value.providers.find(
-      (provider) => provider.providerId === "claude-code",
-    );
-    expect(claudeRow?.nativeCapabilities).toEqual(
-      providerNativeCapabilitiesSchemaV70.parse({
-        supportedTabs: ["general", "env", "usage", "mcp"],
-        mcp: MCP_CAPABILITIES,
-        plugins: null,
-        skills: null,
-      }),
-    );
-  });
-
-  it("cuts the tab id and the block from the provider that does advertise them", () => {
-    const downgraded = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      liveResponse,
-    );
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    const opencodeRow = downgraded.value.providers.find(
+describe("the tab id can only reach a decoder that knows it", () => {
+  it("carries modelProviders on v7.0, which is the only line that models tabs", () => {
+    // No projection, because there is nothing below to project onto: v7.0 is
+    // the first and only `providers.list` line that models
+    // `nativeCapabilities` at all.
+    const opencodeRow = liveResponse.providers.find(
       (provider) => provider.providerId === "opencode",
     );
-    expect(opencodeRow?.nativeCapabilities.supportedTabs).not.toContain(
+    expect(opencodeRow?.nativeCapabilities.supportedTabs).toContain(
       "modelProviders",
-    );
-    expect(opencodeRow?.nativeCapabilities).not.toHaveProperty(
-      "modelProviders",
-    );
-    // The rest of the row survives - this is a projection, not the collapse.
-    expect(opencodeRow?.nativeCapabilities.mcp).toEqual(
-      OPENCODE_CAPABILITIES.mcp,
-    );
-    expect(opencodeRow?.nativeCapabilities.skills).toEqual(
-      OPENCODE_CAPABILITIES.skills,
     );
     expect(
-      providersListResponseSchemaV70.safeParse(downgraded.value).success,
+      providersListResponseSchemaV70.safeParse(liveResponse).success,
     ).toBe(true);
   });
 
-  it("keeps the string out of the serialized v7.0 payload entirely", () => {
-    const downgraded = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      liveResponse,
-    );
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    expect(JSON.stringify(downgraded.value)).not.toContain("modelProviders");
+  it("drops the whole capability object for a v6.0 client, tab and all", () => {
+    // The hazard the tab id posed was never the id itself - it was a decoder
+    // that models `supportedTabs` and cannot read a member. v6.0 models no
+    // capability object, so the reparse takes the entire field, and the string
+    // cannot reach the wire at any older major.
+    for (const targetMajor of [1, 2, 3, 4, 5, 6] as const) {
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        7,
+        targetMajor,
+        liveResponse,
+      );
+      expect(downgraded.ok, `v${targetMajor}.0`).toBe(true);
+      if (!downgraded.ok) continue;
+      expect(downgraded.value.providers[0]).not.toHaveProperty(
+        "nativeCapabilities",
+      );
+      expect(
+        JSON.stringify(downgraded.value),
+        `v${targetMajor}.0`,
+      ).not.toContain("modelProviders");
+    }
   });
 });
 
-describe("providers.list 8.0 -> every older major", () => {
+describe("providers.list 7.0 -> every older major", () => {
   const FROZEN_RESPONSES = {
     1: providersListResponseSchemaV10,
     2: providersListResponseSchemaV20,
@@ -369,20 +319,20 @@ describe("providers.list 8.0 -> every older major", () => {
     7: providersListResponseSchemaV70,
   } as const;
 
-  it.each([1, 2, 3, 4, 5, 6, 7] as const)(
-    "8.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
+  it.each([1, 2, 3, 4, 5, 6] as const)(
+    "7.0 -> v%i.0 is registered, succeeds, and reparses through that line's frozen schema",
     (targetMajor) => {
       // Every major gets a DIRECT path (the registry composes nothing), so a
       // missing key here is not a degraded response - it is no response that
       // peer can decode at all.
       expect(
-        hostRpcRegistry["providers.list"][8].downgradePathsFromLatest[
-          targetMajor
+        hostRpcRegistry["providers.list"][7].downgradePathsFromLatest[
+          targetMajor as 1 | 2 | 3 | 4 | 5 | 6
         ],
       ).toBeDefined();
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         targetMajor,
         liveResponse,
       );
@@ -401,7 +351,7 @@ describe("providers.list 8.0 -> every older major", () => {
     // drop it wholesale and the ids survive untouched.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      7,
       6,
       liveResponse,
     );
@@ -416,41 +366,32 @@ describe("providers.list 8.0 -> every older major", () => {
   });
 });
 
-describe("providers.list every older major -> 8.0", () => {
-  it("fills modelProviders: null as an OWN key on the v7 -> v8 hop", () => {
+describe("providers.list every older major -> 7.0", () => {
+  it("fills modelProviders: null as an OWN key on the v6 -> v7 hop", () => {
     // A missing key and an explicit null are what a consumer gate has to tell
     // apart, and `upgradeResponseToVersion` chains bridges by cast with no
     // re-parse - so the fill has to be real, not a schema default that never
-    // runs.
+    // runs. v6.0 models no capability object at all, so this hop invents the
+    // whole thing from the v7.0-shaped default.
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
+      { major: 6, minor: 0 },
       { major: 7, minor: 0 },
-      { major: 8, minor: 0 },
-      providersListResponseSchemaV70.parse({
-        providers: [
-          {
-            ...providerState("opencode"),
-            nativeCapabilities: {
-              supportedTabs: ["general", "env", "mcp"],
-              mcp: MCP_CAPABILITIES,
-              plugins: null,
-              skills: null,
-            },
-          },
-        ],
-        native: null,
+      providersListResponseSchemaV60.parse({
+        providers: [providerState("opencode")],
       }),
     );
     const capabilities = upgraded.providers[0].nativeCapabilities;
     expect(Object.keys(capabilities)).toContain("modelProviders");
     expect(capabilities.modelProviders).toBeNull();
-    // Everything the v7.0 host did advertise is untouched by the fill.
-    expect(capabilities.mcp).toEqual(OPENCODE_CAPABILITIES.mcp);
-    expect(providersListResponseSchema.safeParse(upgraded).success).toBe(true);
+    expect(capabilities).toEqual(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70);
+    expect(
+      providersListResponseSchemaV70.safeParse(upgraded).success,
+    ).toBe(true);
   });
 
   it.each([1, 2, 3, 4, 5, 6] as const)(
-    "upgrades a v%i.0 response to 8.0 with modelProviders null",
+    "upgrades a v%i.0 response to 7.0 with modelProviders null",
     (sourceMajor) => {
       const frozen = {
         1: providersListResponseSchemaV10,
@@ -463,7 +404,7 @@ describe("providers.list every older major -> 8.0", () => {
       const upgraded = upgradeResponseToVersion(
         hostRpcRegistry["providers.list"],
         { major: sourceMajor, minor: 0 },
-        { major: 8, minor: 0 },
+        { major: 7, minor: 0 },
         frozen.parse({ providers: [providerState("codex")] }),
       );
       expect(
@@ -2002,8 +1943,9 @@ describe("the v7.0 freeze goes all the way down", () => {
   // Live-vs-frozen equality per subtree. Green today because the copies agree;
   // red the day a live subtree grows, which routes the "what does a v7.0
   // client see?" decision to whoever grew it. Do NOT satisfy a failure by
-  // editing the V70 copy - extend the v8→v7 projection to say explicitly what
-  // gets projected away.
+  // editing the V70 copy - while v7.0 is unreleased the answer is to mirror
+  // the growth into it, and once it is released, to write the projection that
+  // says what a v7.0 peer sees instead.
   const PAIRS = [
     ["mcp capabilities", providerMcpCapabilitiesSchema, providerMcpCapabilitiesSchemaV70],
     [
@@ -2031,6 +1973,20 @@ describe("the v7.0 freeze goes all the way down", () => {
       providerEnvOverrideScopeSchema,
       providerEnvOverrideScopeSchemaV70,
     ],
+    // The two that now carry `modelProviders` on both sides. They are the
+    // reason this transition needed no new major: mirrored while unreleased,
+    // and held identical here so the mirror cannot rot.
+    ["settings tab ids", providerSettingsTabSchema, providerSettingsTabSchemaV70],
+    [
+      "model-providers capabilities",
+      providerModelProvidersCapabilitiesSchema,
+      providerModelProvidersCapabilitiesSchemaV70,
+    ],
+    [
+      "native capabilities",
+      providerNativeCapabilitiesSchema,
+      providerNativeCapabilitiesSchemaV70,
+    ],
   ] as const;
 
   it.each(PAIRS)(
@@ -2049,7 +2005,7 @@ describe("the v7.0 freeze goes all the way down", () => {
     //
     // `config_unreadable` reached the LIVE native error enum after this line
     // was cut. The reflex answer - frozen copy predates it, so project it away
-    // on the v8→v7 bridge - is wrong here: NO released tag ships
+    // - is wrong here: NO released tag ships
     // `providers.list@7.0`. Every non-RC host/cli/desktop tag tops out below
     // it, so v7.0 is unreleased and growing it in place was legitimate,
     // exactly as the registry fields grew v6.0 before `cli-v1.1.9` shipped
@@ -2058,7 +2014,7 @@ describe("the v7.0 freeze goes all the way down", () => {
     // Versions protect peers in the FIELD. There is no peer that negotiated
     // v7.0 and cannot read this code - the release that first ships v7.0 ships
     // it too. So the bridge needs no projection, and the frozen snapshot is
-    // "v7.0 as of the moment v8.0 opened", which includes this member.
+    // "v7.0 as of the moment the freeze was cut", which includes this member.
     //
     // This stops being true the day a release ships v7.0. After that, a code
     // added to the live enum needs a real projection decision, and the
@@ -2072,7 +2028,7 @@ describe("the v7.0 freeze goes all the way down", () => {
     ).toBe(true);
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      8,
+      7,
       7,
       {
         providers: [],
@@ -2092,20 +2048,24 @@ describe("the v7.0 freeze goes all the way down", () => {
     });
   });
 
-  it("the tab projection agrees with the frozen enum, member for member", () => {
-    // `projectTabToV70` is an exhaustive SWITCH, so a new live tab fails to
-    // compile until someone decides its side of the cut. What a switch cannot
-    // check is whether that decision matches the frozen enum - so this does:
-    // every live tab the projection keeps must be one v7.0 can decode, and
-    // every tab it drops must be one v7.0 cannot.
+  it("has no tab the frozen v7.0 line cannot decode", () => {
+    // There is no tab PROJECTION because there is nothing to project onto: no
+    // `providers.list` line below v7.0 models `nativeCapabilities` at all, so
+    // every downgrade drops the whole capability object and the tab enum's
+    // only decoder is v7.0 itself.
+    //
+    // What has to hold instead is that the two enums agree. The day a line
+    // above v7.0 opens, this test goes red for every tab that line adds - and
+    // THAT is when a projection has to be written, filtering the array rather
+    // than reparsing it.
+    expect(providerSettingsTabSchemaV70.options).toEqual(
+      providerSettingsTabSchema.options,
+    );
     for (const tab of providerSettingsTabSchema.options) {
-      const kept = projectProviderNativeCapabilitiesToV70({
-        ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-        supportedTabs: [tab],
-      }).supportedTabs;
-      expect(kept, tab).toEqual(
-        providerSettingsTabSchemaV70.safeParse(tab).success ? [tab] : [],
-      );
+      expect(
+        providerSettingsTabSchemaV70.safeParse(tab).success,
+        tab,
+      ).toBe(true);
     }
   });
 
@@ -2138,74 +2098,14 @@ describe("the v7.0 freeze goes all the way down", () => {
   });
 });
 
-describe("an unrepresentable row degrades per row, never per response", () => {
-  // The two contracts were quietly in conflict: the projection fails closed,
-  // and `downgradeProviderCliStateToV70` documents `| null` per row. Calling
-  // the strict form inside the row's `safeParse` argument list let the throw
-  // escape past that contract - one bad provider failed the whole
-  // `providers.list` response for that peer.
-  //
-  // Runtime resolution: the row contract wins. Build-time loudness stays with
-  // the equality guard above, which is the only mechanism that reaches the
-  // person who grew the enum.
-
-  /**
-   * A capability object v7.0 cannot represent: an unknown `mcp` transport.
-   *
-   * Built by MUTATING a genuinely-parsed object rather than by casting one
-   * into existence. Live and frozen agree today, so the value this test needs
-   * is one only a FUTURE live enum can produce - and the point is to prove the
-   * bridge degrades on such a value, not to introduce a type escape for it.
-   * `transports` is a plain array on the parsed result, so pushing an
-   * unrecognized member reproduces exactly what a widened live enum would send.
-   */
-  function unrepresentableCapabilities(): ProviderNativeCapabilities {
-    const capabilities = providerNativeCapabilitiesSchema.parse(
-      structuredClone(OPENCODE_CAPABILITIES),
-    );
-    const mcp = capabilities.mcp;
-    if (mcp === null) throw new Error("fixture must carry mcp capabilities");
-    const transports: string[] = mcp.transports;
-    transports.push("websocket");
-    return capabilities;
-  }
-  const unrepresentable = unrepresentableCapabilities();
-
-  it("the strict projection still throws - the loud form is unchanged", () => {
-    expect(() =>
-      projectProviderNativeCapabilitiesToV70(unrepresentable),
-    ).toThrow();
-  });
-
-  it("the degrading projection answers null instead", () => {
-    expect(tryProjectProviderNativeCapabilitiesToV70(unrepresentable)).toBeNull();
-  });
-
-  it("drops only the offending row and still serves every healthy provider", () => {
-    const bad = { ...opencodeState, nativeCapabilities: unrepresentable };
-    const downgraded = downgradeResponseAcrossMajors(
-      hostRpcRegistry["providers.list"],
-      8,
-      7,
-      { providers: [bad, claudeState], native: null },
-    );
-    // The assertion that matters: `ok`, not a thrown error. Before the split
-    // this call threw and the peer got nothing at all.
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    expect(
-      downgraded.value.providers.map((provider) => provider.providerId),
-    ).toEqual(["claude-code"]);
-  });
-});
 
 describe("no downgrade hop fails a whole response over one unsupported provider", () => {
-  // The class the v8 -> v6 hop belonged to. `z.array` fails WHOLE on one bad
+  // The class the v7 -> v6 hop belongs to. `z.array` fails WHOLE on one bad
   // element, so a frozen line's id enum rejecting a newer provider does not
   // drop that provider - it throws the entire `providers.list` response for
   // that peer, taking every healthy provider with it.
   //
-  // Latent since v8.0 opened and reachable the instant `huggingface` merged.
+  // Reachable the instant `huggingface` joined the live id enum.
   // Asserted across EVERY hop rather than the one that was wrong, because the
   // next provider id will arrive the same way this one did.
   const FROZEN_RESPONSES = {
@@ -2225,12 +2125,12 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
     nativeCapabilities: OPENCODE_CAPABILITIES,
   });
 
-  it.each([1, 2, 3, 4, 5, 6, 7] as const)(
-    "8.0 -> v%i.0 answers rather than throwing when the list carries a newer provider",
+  it.each([1, 2, 3, 4, 5, 6] as const)(
+    "7.0 -> v%i.0 answers rather than throwing when the list carries a newer provider",
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        8,
+        7,
         targetMajor,
         { providers: [newestProvider, claudeState], native: null },
       );
@@ -2246,7 +2146,8 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
         (provider) => provider.providerId,
       );
       expect(ids).toContain("claude-code");
-      expect(ids.includes("huggingface")).toBe(targetMajor >= 7);
+      // `huggingface` is post-v6.0, so no older line names it.
+      expect(ids).not.toContain("huggingface");
     },
   );
 });

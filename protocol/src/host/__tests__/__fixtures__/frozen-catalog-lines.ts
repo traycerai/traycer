@@ -5632,7 +5632,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   ],
                   "mcp": null,
                   "plugins": null,
-                  "skills": null
+                  "skills": null,
+                  "modelProviders": null
                 },
                 "type": "object",
                 "properties": {
@@ -5646,7 +5647,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "usage",
                         "mcp",
                         "plugins",
-                        "skills"
+                        "skills",
+                        "modelProviders"
                       ]
                     }
                   },
@@ -6075,13 +6077,43 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "type": "null"
                       }
                     ]
+                  },
+                  "modelProviders": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "actions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "connect",
+                                "oauth",
+                                "disconnect",
+                                "createCustom",
+                                "updateCustom"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "actions"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
                   "supportedTabs",
                   "mcp",
                   "plugins",
-                  "skills"
+                  "skills",
+                  "modelProviders"
                 ],
                 "additionalProperties": false
               }

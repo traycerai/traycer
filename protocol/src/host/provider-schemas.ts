@@ -39,10 +39,8 @@ import {
   nativeListResultSchemaV70,
   nativeMutationResultSchema,
   nativeMutationSchema,
-  tryProjectProviderNativeCapabilitiesToV70,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaV70,
-  upgradeNativeCapabilitiesFromV70,
   type ModelProviderAuthAction,
   type ModelProviderAuthCancelContext,
   type ModelProviderAuthPollContext,
@@ -985,19 +983,18 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
- * Live `providers.list@8.0` request. Optional `native` list/discover query
+ * Live `providers.list@7.0` request. Optional `native` list/discover query
  * folds the mcp/plugins/skills list verbs onto this carrier. Callers on any
  * earlier line predate it, so the v6.0 -> v7.0 upgrade fills `native: null`
  * ("classic caller, no native query").
  *
- * `native` rides v7.0 and up. It was authored against the live request object
+ * `native` rides v7.0. It was authored against the live request object
  * while v6.0 was still unreleased, which silently grew the already-shipped
  * v4.0/v5.0/v6.0 request lines too; `host-v1.1.10` then froze those three
  * lines without it, because the commit that added it was not in the release
  * cherry-pick. Every line below v7.0 is pinned to
- * `providersListRequestSchemaBeforeV70`, and v7.0 itself to
- * `providersListRequestSchemaV70`, for that reason - do not point a shipped
- * line back at this schema.
+ * `providersListRequestSchemaBeforeV70` for that reason - do not point a
+ * shipped line back at this schema.
  */
 export const providersListRequestSchema = z.object({
   forceAuthRefresh: z.boolean().optional(),
@@ -1020,14 +1017,14 @@ export type ProvidersListRequestBeforeV70 = z.infer<
 
 /**
  * Frozen request shape for the v7.0 line - identical to the live one today,
- * pinned anyway. v8.0 adds nothing to the request, so this looks like pure
+ * pinned anyway. Nothing has grown the request since, so this looks like pure
  * ceremony; it is the same ceremony that was skipped when `native` was written
  * straight onto the live request and grew three released lines at once. The
  * pin costs one schema and removes the whole class.
  *
  * `native` points at `nativeListQuerySchemaV70`, not the live query. The query
  * is a discriminated union over a closed set of `kind`s carrying a closed
- * provider-id enum: a v8.0 caller's new arm, or a new provider id inside an
+ * provider-id enum: a newer caller's extra arm, or a new provider id inside an
  * existing one, is a value a v7.0 host rejects outright rather than ignores.
  * Pinning the outer object while leaving that union live would have frozen the
  * two fields that cannot grow and left the one that can.
@@ -1041,7 +1038,7 @@ export type ProvidersListRequestV70 = z.infer<
 >;
 
 /**
- * `providers.list@8.0` response. Always returns the classic provider catalog;
+ * `providers.list@7.0` response. Always returns the classic provider catalog;
  * when the request carried a `native` query, `native` holds the list/discover
  * result (or a typed native error). Classic callers receive `native: null`.
  */
@@ -1054,7 +1051,7 @@ export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 // ── Frozen v7.0 provider state ─────────────────────────────────────────────
 //
 // Every schema `providerCliStateSchemaV70` reaches, hand-copied as the v7.0
-// line stood when v8.0 opened - the integration cut, not a release: v7.0 is
+// line stood at the freeze cut - an integration boundary, not a release: v7.0 is
 // not yet released (see the frozen-native-payloads section in
 // `provider-native-schemas.ts` for what that does and does not license). The
 // rule this section is written to, and the reason it is this long: NOTHING
@@ -2510,8 +2507,8 @@ export type DowngradableToV10ProviderState = (
   profiles?: ProviderCliState["profiles"];
   // Widened to the frozen v7.0 capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
-  // snapshots: the v8→v1 and v7→v1 bridges feed this function from two
-  // different lines, and the strict v1.0 parse strips the field either way.
+  // snapshots: callers reach this function holding either shape, and the
+  // strict v1.0 parse strips the field either way.
   nativeCapabilities?: ProviderNativeCapabilities | ProviderNativeCapabilitiesV70;
   managedInstallState?: ProviderCliState["managedInstallState"];
   versionVisibility?: ProviderCliState["versionVisibility"];
@@ -2632,81 +2629,12 @@ export function downgradeProviderCliStateListToV50(
 }
 
 /**
- * Project a live provider state onto the frozen v7.0 shape.
- *
- * The one bridge in this file that is NOT a plain filter-by-reparse, and it
- * cannot be. Every older line drops `nativeCapabilities` wholesale - none of
- * their frozen shapes model it - so a reparse is enough there. v7.0 DOES model
- * it, and the v8.0 growth inside it includes a new `supportedTabs` member.
- * Hand a `"modelProviders"` tab id to `providerCliStateSchemaV70` and the
- * enum fails, the array fails, the capability object fails, and the field's
- * own `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70)` serves the empty
- * default - so a v7.0 client silently loses MCP, Plugins and Skills for that
- * provider. Projecting the capabilities FIRST is what makes the reparse safe.
- *
- * Returns `null` for a provider outside the frozen v7.0 id set, matching
- * `downgradeProviderCliStateToV10`'s contract; the list wrapper filters those.
- */
-export function downgradeProviderCliStateToV70(
-  state: ProviderCliState,
-): ProviderCliStateV70 | null {
-  // `tryProject...`, not the strict form. The strict projection throws on a
-  // descriptor v7.0 cannot represent, and calling it inside the `safeParse`
-  // argument list below let that throw escape PAST this function's `| null`
-  // contract - one unrepresentable provider failed the entire
-  // `providers.list` response for that peer, taking every healthy provider
-  // with it. Per-row degradation wins at runtime; the build-time equality
-  // guard in `provider-model-providers-compat.test.ts` is what makes an
-  // unprojected enum loud (see `tryProjectProviderNativeCapabilitiesToV70`).
-  const nativeCapabilities = tryProjectProviderNativeCapabilitiesToV70(
-    state.nativeCapabilities,
-  );
-  if (nativeCapabilities === null) return null;
-  const parsed = providerCliStateSchemaV70.safeParse({
-    ...state,
-    nativeCapabilities,
-  });
-  return parsed.success ? parsed.data : null;
-}
-
-export function downgradeProviderCliStateListToV70(
-  states: readonly ProviderCliState[],
-): ProviderCliStateV70[] {
-  return states.flatMap((state) => {
-    const downgraded = downgradeProviderCliStateToV70(state);
-    return downgraded === null ? [] : [downgraded];
-  });
-}
-
-/**
- * Lift a frozen v7.0 state onto the live shape, filling the capability block
- * v7.0 never carried. Used by the v7 -> v8 upgrade bridge, the first hop whose
- * target models `modelProviders`.
- */
-export function upgradeProviderCliStateV70ToLatest(
-  state: ProviderCliStateV70,
-): ProviderCliState {
-  return providerCliStateSchema.parse({
-    ...state,
-    nativeCapabilities: upgradeNativeCapabilitiesFromV70(
-      state.nativeCapabilities,
-    ),
-  });
-}
-
-export function upgradeProviderCliStateListV70ToLatest(
-  states: readonly ProviderCliStateV70[],
-): ProviderCliState[] {
-  return states.map(upgradeProviderCliStateV70ToLatest);
-}
-
-/**
  * Lift a frozen v6.0 state onto the FROZEN v7.0 shape (not the live one).
  *
  * The v6 -> v7 hop's target is v7.0, so its fill has to land there: pointing
- * it at the live shape would have the bridge emit a v8.0-shaped capability
- * object as its "v7.0" value, and every later hop would then be reading a
- * shape no v7.0 contract can carry. `DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70`
+ * it at the live shape would have the bridge emit whatever the live capability
+ * object happens to be as its "v7.0" value, which stays correct only while the
+ * two agree. `DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70`
  * is the same "old host never had this feature" reading its live counterpart
  * carries - a v6.0 host advertised no native capabilities at all.
  */
@@ -2776,8 +2704,9 @@ export function upgradeProviderMutationCliStateV20ToLatest(
 
 // The `providers.list` counterparts of the mutation upgrade above used to live
 // here as `upgradeProviderCliStateToLatest` / `...ListToLatest`. They were the
-// v6 -> v7 hop's fill, and "latest" was the wrong anchor for a per-hop bridge:
-// the moment v8.0 opened, that name silently meant a shape v7.0 cannot carry.
+// v6 -> v7 hop's fill, and "latest" is the wrong anchor for a per-hop bridge:
+// the day a major opens above v7.0, that name silently means a shape v7.0
+// cannot carry.
 // `upgradeProviderCliStateToV70` / `...ListToV70` above name their target line
 // instead, which is the only thing a bridge is ever allowed to aim at.
 

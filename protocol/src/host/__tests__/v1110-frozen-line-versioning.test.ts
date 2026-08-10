@@ -99,36 +99,38 @@ describe("epic.createTuiAgent 1.0 <-> 1.1", () => {
   });
 });
 
-const frozenProvidersRequest = { forceAuthRefresh: true };
+const releasedProvidersRequest = { forceAuthRefresh: true };
 
-// v7.0 is now a frozen line of its own, and its request is the FIRST that
-// models `native` - so it cannot share the pre-v7.0 schema or the pre-v7.0
-// expectations. The loops below select both per major rather than stopping at
-// 6, which would have left the newest frozen request line untested.
+// v7.0 is the newest line and the only one whose request models `native`, so
+// it cannot share the pre-v7.0 schema or the pre-v7.0 expectations. Majors 1-6
+// are the ones with peers in the field; v7.0 has none yet (no non-RC tag
+// carries a major-7 contract), which is why nothing downgrades INTO it and the
+// strip loop stops at 6.
 //
-// "Frozen", not "released": majors 1-6 are both, but v7.0 is frozen at the
-// v8.0 integration cut and has not shipped in a non-RC release yet. The bridge
-// coverage is identical either way - a frozen line's bridges have to be right
-// before the release that makes them load-bearing, not after.
-const OLDER_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6] as const;
-const ALL_FROZEN_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6, 7] as const;
+// Its request is read here through `providersListRequestSchemaV70` - the
+// inactive pin, held identical to the live schema by the equality guard in
+// `provider-model-providers-compat.test.ts`. Reading the pin rather than the
+// live schema is the point: the day this line is released, the pin becomes the
+// contract, so it is the shape worth asserting against now.
+const RELEASED_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6] as const;
+const ALL_REQUEST_MAJORS = [1, 2, 3, 4, 5, 6, 7] as const;
 
-function frozenRequestSchemaFor(major: number) {
+function requestSchemaFor(major: number) {
   return major >= 7
     ? providersListRequestSchemaV70
     : providersListRequestSchemaBeforeV70;
 }
 
-describe("providers.list request lines 1.0..7.0 <-> latest", () => {
-  it("frozen callers at every major upgrade to canonical with native:null", () => {
-    for (const major of ALL_FROZEN_REQUEST_MAJORS) {
-      const parsed = frozenRequestSchemaFor(major).parse(
-        frozenProvidersRequest,
+describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
+  it("callers at every major upgrade to canonical with native:null", () => {
+    for (const major of ALL_REQUEST_MAJORS) {
+      const parsed = requestSchemaFor(major).parse(
+        releasedProvidersRequest,
       );
       const canonical = upgradeRequestToVersion(
         providersListRegistry,
         { major, minor: 0 },
-        { major: 8, minor: 0 },
+        { major: 7, minor: 0 },
         parsed,
       );
       // Same expectation at every major, reached two different ways: below
@@ -142,7 +144,7 @@ describe("providers.list request lines 1.0..7.0 <-> latest", () => {
     }
   });
 
-  it("a new latest-major client downgrades its request to every older frozen major without leaking native", () => {
+  it("a v7.0 client downgrades its request to every older major without leaking native", () => {
     const canonical = providersListRequestSchema.parse({
       forceAuthRefresh: true,
       native: {
@@ -152,10 +154,10 @@ describe("providers.list request lines 1.0..7.0 <-> latest", () => {
         workspaceRoot: null,
       },
     });
-    for (const major of OLDER_REQUEST_MAJORS) {
+    for (const major of RELEASED_REQUEST_MAJORS) {
       const down = downgradeRequestAcrossMajors(
         providersListRegistry,
-        8,
+        7,
         major,
         canonical,
       );
@@ -225,43 +227,36 @@ describe("providers.list request lines 1.0..7.0 <-> latest", () => {
   };
 
   it.each(Object.entries(V70_QUERY_CASES))(
-    "keeps a %s native query intact on the 8.0 -> 7.0 request hop",
+    "the inactive v7.0 request pin round-trips a %s native query losslessly",
     (_kind, native) => {
-      // The inverse of the strip assertion above, and the reason that loop
-      // stops at 6: v7.0 is the one older line whose request models `native`,
-      // so stripping here would silently drop a v7.0 caller's list query.
+      // NOT a bridge test. v7.0 is the newest line, so there is no hop into
+      // it - `providersListV70` serves the live schemas and the `...V70`
+      // copies are the snapshot it gets pinned to later. What has to hold now
+      // is that the snapshot can carry every arm, because the day it goes
+      // live is the day an arm it mangles starts mangling real traffic.
       const canonical = providersListRequestSchema.parse({
         forceAuthRefresh: true,
         native,
       });
-      const down = downgradeRequestAcrossMajors(
-        providersListRegistry,
-        8,
-        7,
-        canonical,
-      );
-      expect(down.ok).toBe(true);
-      if (!down.ok) return;
-      // Deep-equal against the ORIGINAL payload, not against a re-parse of the
-      // result: a dropped `serverName` would survive a reparse (the field is
-      // required, so it would fail - but a dropped `forceRefresh` or a
-      // defaulted one would not) and the round-trip has to be lossless, not
-      // merely valid.
-      expect(down.value.native).toEqual(native);
-      expect(
-        providersListRequestSchemaV70.safeParse(down.value).success,
-      ).toBe(true);
+      const pinned = providersListRequestSchemaV70.safeParse(canonical);
+      expect(pinned.success).toBe(true);
+      if (!pinned.success) return;
+      // Deep-equal against the ORIGINAL payload, not merely "it parsed": a
+      // dropped `serverName` would fail a reparse (it is required), but a
+      // dropped or defaulted `forceRefresh` would not - and the pin has to be
+      // lossless, not just valid.
+      expect(pinned.data.native).toEqual(native);
     },
   );
 
-  it("response round-trip 8.0 -> 6.0 -> 8.0 still parses at both ends", () => {
+  it("response round-trip 7.0 -> 6.0 -> 7.0 still parses at both ends", () => {
     const canonicalResponse = providersListResponseSchema.parse({
       providers: [],
       native: null,
     });
     const down = downgradeResponseAcrossMajors(
       providersListRegistry,
-      8,
+      7,
       6,
       canonicalResponse,
     );
@@ -274,7 +269,7 @@ describe("providers.list request lines 1.0..7.0 <-> latest", () => {
     const back = upgradeResponseToVersion(
       providersListRegistry,
       { major: 6, minor: 0 },
-      { major: 8, minor: 0 },
+      { major: 7, minor: 0 },
       providersListResponseSchemaV60.parse(down.value),
     );
     expect(back.native).toBeNull();

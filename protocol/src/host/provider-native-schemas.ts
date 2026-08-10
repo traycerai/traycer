@@ -487,9 +487,9 @@ export const providerNativeCapabilitiesSchema = z.object({
    * is not the `opencode` module.
    *
    * Required-and-nullable, exactly like its three siblings, rather than
-   * `.optional()`: this field rides `providers.list@8.0` and every hop that
+   * `.optional()`: this field rides `providers.list@7.0` and every hop that
    * lands on the live shape fills it explicitly
-   * (`upgradeNativeCapabilitiesFromV70`). Making it optional would let a
+   * every hop that lands on this shape. Making it optional would let a
    * missing fill pass type-checking and reach the wire as an absent key, which
    * the whole-object `.catch()` on `providerCliStateSchema` then turns into a
    * silent collapse of the entire capability object - the failure mode this
@@ -1871,27 +1871,31 @@ export type ModelProviderAuthResult = z.infer<
 // ── Frozen v7.0 native payloads ────────────────────────────────────────────
 //
 // Everything `providers.list@7.0` carries in its `native` request/response and
-// its `nativeCapabilities` descriptor, hand-copied as that line stood when
-// v8.0 opened. `provider-schemas.ts` wires the v7.0 request/response and the
-// v7.0 state to THESE and nothing above them.
+// its `nativeCapabilities` descriptor, hand-copied as that line stands today.
 //
-// WHEN this line was frozen matters, because v7.0 is NOT yet released - no
-// non-RC `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract. The
-// cut point is the v8.0 integration, not a release, and it is early on
-// purpose: v5.0 and v6.0 were each still pointing at the live schemas on the
-// day a release shipped them, and both grew a released line before anyone
-// noticed. Freezing at the integration cut costs nothing and removes that
-// window.
+// An INACTIVE pin. `providersListV70` serves the LIVE schemas, because v7.0 is
+// the newest line and that is what every other method's newest contract does.
+// These copies are what it will be repointed to the day v7.0 is released or a
+// newer major opens above it; until then an equality guard in
+// `provider-model-providers-compat.test.ts` holds them identical.
+//
+// Cut early on purpose, and the early cut is the whole value: v5.0 and v6.0
+// were each still pointing at the live schemas on the day a release shipped
+// them, and both grew a released line before anyone noticed. A snapshot
+// written in advance makes the eventual pin a one-line change against a copy
+// that is already correct, instead of an archaeology exercise at release time.
+// It does not stop growth - growth on an unreleased line is legal - it only
+// requires writing that growth in both places.
 //
 // Two consequences follow, and they pull in opposite directions:
 //
 //  - Until the first non-RC release ships 7.0, there is no peer in the field
-//    decoding these shapes, so a genuine v7.0-line addition may be mirrored
-//    here rather than projected away. `config_unreadable` is the
-//    worked example - see `providerNativeErrorCodeSchemaV70`.
+//    decoding these shapes, so a genuine v7.0-line addition is mirrored here
+//    rather than projected away. `config_unreadable`, `huggingface` and the
+//    `modelProviders` tab member are the worked examples.
 //  - From that release onward, the rule hardens: an addition to a live
-//    counterpart must NOT be mirrored here, and the v8→v7 projection has to
-//    say explicitly what a v7.0 peer sees instead.
+//    counterpart must NOT be mirrored here, and the bridge down from the next
+//    major has to say explicitly what a v7.0 peer sees instead.
 //
 // Either way the copies stay hand-written. Naming a schema `...V70` while it
 // still points into the live tree is not a freeze - it is a freeze-shaped
@@ -1919,8 +1923,7 @@ export type ProviderNativeScopeV70 = z.infer<
  * down because it reads like a mistake.
  *
  * It reached the live enum after this line was cut, and the reflex answer -
- * "the frozen copy predates it, so project it away on the v8→v7 bridge" - is
- * wrong here. No released tag ships `providers.list@7.0` at all: every non-RC
+ * "the frozen copy predates it, so project it away" - is wrong here. No released tag ships `providers.list@7.0` at all: every non-RC
  * `host-v*`/`cli-v*`/`desktop-v*` tag tops out below it. v7.0 is UNRELEASED,
  * so growing it in place was legitimate - exactly as
  * `providerManagedInstallStateSchema` grew v6.0 while no release shipped it,
@@ -1933,12 +1936,12 @@ export type ProviderNativeScopeV70 = z.infer<
  * protecting nobody, and would leave this snapshot describing a v7.0 that
  * never existed.
  *
- * The freeze still stands: v7.0 is pinned as of the moment v8.0 opened, and
+ * The freeze still stands: v7.0 is pinned as of the freeze cut, and
  * that moment includes this member. What does NOT follow is that later growth
  * is free - once a NON-RC release ships a major-7 contract, this line has
  * peers in the field and an addition to the live enum must be projected on the
- * v8→v7 bridge instead of mirrored here. Same activation point the section
- * header above describes.
+ * bridge down from the next major instead of mirrored here. Same activation
+ * point the section header above describes.
  */
 export const providerNativeErrorCodeSchemaV70 = z.enum([
   "duplicate_name",
@@ -1972,6 +1975,22 @@ export const providerSettingsTabSchemaV70 = z.enum([
   "mcp",
   "plugins",
   "skills",
+  // `modelProviders` is ON this line, mirrored rather than projected away, for
+  // the reason `config_unreadable` and `huggingface` are: v7.0 is unreleased -
+  // no non-RC `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract -
+  // so growing it in place is legal and costs nobody a bridge.
+  //
+  // It is also what makes the tab id safe at all. The hazard was never the id
+  // itself but a line that MODELS `supportedTabs` and cannot decode a member:
+  // no line below v7.0 models `nativeCapabilities` in any form, so the only
+  // decoder of this enum is v7.0 itself, and v7.0 knows the member.
+  //
+  // Same expiry as the rest of this section: once a non-RC release ships a
+  // major-7 contract, a tab added to the live enum must be projected away for
+  // v7.0 peers rather than mirrored here - and that projection has to filter
+  // `supportedTabs` rather than reparse it, because the array's enum rejects
+  // WHOLE and the capability object's `.catch()` then serves an empty default.
+  "modelProviders",
 ]);
 export type ProviderSettingsTabV70 = z.infer<
   typeof providerSettingsTabSchemaV70
@@ -2052,6 +2071,18 @@ export const providerPluginsCapabilitiesSchemaV70 = z.object({
     setEnabled: z.array(providerNativeScopeSchemaV70),
   }),
   traycerSessionToolsNotice: z.boolean(),
+});
+
+export const providerModelProvidersCapabilityActionSchemaV70 = z.enum([
+  "connect",
+  "oauth",
+  "disconnect",
+  "createCustom",
+  "updateCustom",
+]);
+
+export const providerModelProvidersCapabilitiesSchemaV70 = z.object({
+  actions: z.array(providerModelProvidersCapabilityActionSchemaV70),
 });
 
 export const providerSkillsCapabilitiesSchemaV70 = z.object({
@@ -2184,9 +2215,11 @@ export const providerSkillSchemaV70 = z.object({
 
 /**
  * The `native` query as `providers.list@7.0` accepts it. A discriminated union
- * on `kind`, so a v8.0 caller inventing a sixth arm is a value a v7.0 host
- * rejects outright - which is why the v8→v7 request bridge parses through this
- * rather than passing the live value along.
+ * on `kind`, and a closed provider-id enum inside every arm, so growth in
+ * either is a value a v7.0 host rejects outright rather than ignores - which
+ * is why this line is pinned to a copy at all. Pinning the outer request while
+ * leaving the union live would have frozen the two fields that cannot grow and
+ * left the one that can.
  */
 export const nativeListQuerySchemaV70 = z
   .discriminatedUnion("kind", [
@@ -2282,6 +2315,7 @@ export const providerNativeCapabilitiesSchemaV70 = z.object({
   mcp: providerMcpCapabilitiesSchemaV70.nullable(),
   plugins: providerPluginsCapabilitiesSchemaV70.nullable(),
   skills: providerSkillsCapabilitiesSchemaV70.nullable(),
+  modelProviders: providerModelProvidersCapabilitiesSchemaV70.nullable(),
 });
 export type ProviderNativeCapabilitiesV70 = z.infer<
   typeof providerNativeCapabilitiesSchemaV70
@@ -2298,6 +2332,7 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
     mcp: null,
     plugins: null,
     skills: null,
+    modelProviders: null,
   };
 
 /**
@@ -2325,108 +2360,19 @@ export const DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70: ProviderNativeCapabilitie
  * whoever grew the enum by a red test rather than a field incident.
  */
 /**
- * One tab's projection onto v7.0: itself, or `null` when v7.0 has no such tab.
+ * There is no v7.0 capability PROJECTION, and its absence is the shape of this
+ * transition rather than an omission.
  *
- * An exhaustive switch, deliberately, rather than the filter this replaces.
- * That filter narrowed with `(tab): tab is ProviderSettingsTabV70 => tab !==
- * "modelProviders"` - an ASSERTING predicate whose body only happened to be
- * true. Add a second live-only tab and it keeps compiling while quietly
- * promising v7.0 a tab id it cannot decode, which is the whole failure this
- * transition exists to prevent, reintroduced by the projection itself.
+ * A projection exists to answer "what does an older peer see?", and for
+ * `supportedTabs` there is no older peer to answer for: no `providers.list`
+ * line below v7.0 models `nativeCapabilities` in any form, so every downgrade
+ * from v7.0 drops the whole capability object by reparsing through a shape
+ * that never had it. The tab id can only reach a decoder that knows it.
  *
- * A switch over the live union has no such slack: a new member fails to
- * compile until someone writes down which side of the cut it falls on. The
- * frozen enum is not consulted here, so the two could in principle disagree -
- * `provider-model-providers-compat.test.ts` pins them against each other.
+ * That stops being true the moment a line above v7.0 opens. Then v7.0 becomes
+ * a line with peers AND a modeled `supportedTabs`, and the bridge down to it
+ * must FILTER the tab array rather than reparse it - `z.array(enum)` rejects
+ * whole on one unknown member, the capability object fails with it, and the
+ * `.catch()` on the state serves an empty default, so a v7.0 client would lose
+ * MCP, Plugins and Skills rather than lose one tab it never knew.
  */
-function projectTabToV70(
-  tab: ProviderSettingsTab,
-): ProviderSettingsTabV70 | null {
-  switch (tab) {
-    case "general":
-    case "env":
-    case "usage":
-    case "mcp":
-    case "plugins":
-    case "skills":
-      return tab;
-    case "modelProviders":
-      return null;
-  }
-}
-
-function v70CapabilityInput(capabilities: ProviderNativeCapabilities): unknown {
-  const { modelProviders: _modelProviders, ...rest } = capabilities;
-  return {
-    ...rest,
-    supportedTabs: capabilities.supportedTabs.flatMap((tab) => {
-      const projected = projectTabToV70(tab);
-      return projected === null ? [] : [projected];
-    }),
-  };
-}
-
-/**
- * Strict projection: throws when the descriptor cannot be represented on v7.0.
- *
- * The loud form, for callers that have no row to degrade and would rather stop
- * than guess. The `providers.list` bridge does NOT use it - see
- * {@link tryProjectProviderNativeCapabilitiesToV70} for why, and for which
- * contract wins at runtime.
- */
-export function projectProviderNativeCapabilitiesToV70(
-  capabilities: ProviderNativeCapabilities,
-): ProviderNativeCapabilitiesV70 {
-  return providerNativeCapabilitiesSchemaV70.parse(
-    v70CapabilityInput(capabilities),
-  );
-}
-
-/**
- * Degrading projection: `null` when the descriptor cannot be represented on
- * v7.0, so a caller that owns a per-ROW contract can honour it.
- *
- * This is what `downgradeProviderCliStateToV70` uses, and the split exists
- * because the two concerns were quietly in conflict: the projection was
- * written to fail closed, and the bridge that calls it documents a
- * `| null`-per-row contract. Calling the strict form inside the row's
- * `safeParse` argument list let the throw escape PAST that contract, so one
- * unrepresentable provider took down the entire `providers.list` response for
- * that peer - every other provider with it.
- *
- * At runtime the row contract wins. Losing one provider row is a bounded,
- * visible failure; losing the whole catalog turns a settings page into an
- * error for a defect in a single entry.
- *
- * Failing closed is NOT abandoned - it moves to build time, where it belongs.
- * `provider-model-providers-compat.test.ts` pins live-vs-frozen agreement for
- * every frozen subtree, so a live enum that grows without a projection
- * decision goes red in CI (it already has, once, for `config_unreadable`).
- * That is the loudness mechanism; a production throw was never going to reach
- * the person who grew the enum.
- */
-export function tryProjectProviderNativeCapabilitiesToV70(
-  capabilities: ProviderNativeCapabilities,
-): ProviderNativeCapabilitiesV70 | null {
-  const parsed = providerNativeCapabilitiesSchemaV70.safeParse(
-    v70CapabilityInput(capabilities),
-  );
-  return parsed.success ? parsed.data : null;
-}
-
-/**
- * Lift a frozen v7.0 capability descriptor onto the live shape. A v7.0 host
- * predates the Model Providers surface entirely, so `null` ("this provider
- * cannot manage upstream credentials") is the honest projection - the same
- * "old host never had this feature" reading as the `profiles: []` fill on the
- * v3→v4 hop.
- *
- * Spelled out here rather than left to a live reparse because
- * `upgradeResponseToVersion` chains bridge callbacks by cast, with no parse
- * step in between: an unfilled key stays absent all the way to the consumer.
- */
-export function upgradeNativeCapabilitiesFromV70(
-  capabilities: ProviderNativeCapabilitiesV70,
-): ProviderNativeCapabilities {
-  return { ...capabilities, modelProviders: null };
-}
