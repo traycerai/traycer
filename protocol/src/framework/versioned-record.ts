@@ -262,7 +262,16 @@ function assertSchemaCompatibility(
         const previous = schemas[name][major][previousMinor];
         const current = schemas[name][major][currentMinor];
 
-        const violation = findAdditivityViolation(previous, current);
+        // Records stay lenient on value growth: readers are versioned
+        // through the same upgrade-chain discipline, and record history
+        // predates the response-lane strictness.
+        const violation = findAdditivityViolation(
+          previous,
+          current,
+          "lenient",
+          toUnknownKeyTree(line.versions[previousMinor].contract.schema),
+          toUnknownKeyTree(line.versions[currentMinor].contract.schema),
+        );
         if (violation !== null) {
           throw new Error(
             `Minor ${major}.${currentMinor} for record '${name}' ${describeAdditivityViolation(violation)} from ${major}.${previousMinor}`,
@@ -281,7 +290,18 @@ function assertSchemaCompatibility(
       const currentLatest =
         schemas[name][currentMajor][currentLine.latestMinor];
 
-      if (findBreakingChange(previousLatest, currentLatest) === null) {
+      if (
+        findBreakingChange(
+          previousLatest,
+          currentLatest,
+          toUnknownKeyTree(
+            previousLine.versions[previousLine.latestMinor].contract.schema,
+          ),
+          toUnknownKeyTree(
+            currentLine.versions[currentLine.latestMinor].contract.schema,
+          ),
+        ) === null
+      ) {
         throw new Error(
           `Major bump ${previousMajor} -> ${currentMajor} for record '${name}' is not a breaking change (could have shipped as a minor)`,
         );
@@ -305,6 +325,7 @@ export type {
   ObjectJsonSchema,
 } from "./json-schema-fingerprint";
 import {
+  toUnknownKeyTree,
   describeAdditivityViolation,
   findAdditivityViolation,
   findBreakingChange,
