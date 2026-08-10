@@ -23,11 +23,23 @@ export type UsageSummaryResponse = ResponseOfMethod<
 export function buildUsageSummaryRequest(input: {
   readonly windowDays: UsageSummaryWindowDays;
   readonly epicId: string | null;
+  /** Ticket 10 addition. Chat implies its epic - `epicId` need not also be set. */
+  readonly chatId?: string | null;
+  /**
+   * Ticket 10 addition. `"epic"` bounds the read to the epic/chat's own fact
+   * span instead of `windowDays` - only valid alongside a non-null `epicId`
+   * or `chatId`. `windowDays` is still sent unconditionally (the request
+   * schema requires it either way) even though the host ignores it for this
+   * window kind.
+   */
+  readonly window?: "epic";
 }): UsageSummaryRequest {
   return {
     timezone: getViewerTimeZone(),
     windowDays: input.windowDays,
     epicId: input.epicId,
+    chatId: input.chatId ?? undefined,
+    window: input.window,
   };
 }
 

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -25,23 +25,19 @@ import {
 } from "@/lib/registries/epic-session-registry";
 
 /**
- * Regression coverage for ticket-7 fixup-01: the epic cost badge rendered
- * fine against a hand-mocked `useHostClient` in isolation, but never
- * appeared in the live app. `epic-cost-badge.test.tsx` (and
- * `epic-shell.test.tsx`, which stubs `EpicConnectionPill` and never
- * negotiates `host.usage.summary`) both mock `@/lib/host` at the module
- * boundary - neither exercises the REAL `<EpicCostBadge>` mounted at its
- * real position inside the REAL `<EpicShell>` tree with a REAL host RPC
- * round trip. This file does: a real `HostClient` + `MockHostMessenger`
- * behind the same `useHostClient`/`useHostBinding` seam, driven through the
- * actual `EpicSessionProvider` + `EpicShell` composition, so a wiring bug
- * anywhere in that path - not just inside `EpicCostBadge` itself - fails
- * this test the way it failed live verification.
+ * Ticket 12 successor to `epic-shell-cost-badge.test.tsx` (ticket-7
+ * fixup-01's regression coverage): the AMBIENT badge is gone by design, so
+ * its "renders a stuck-pending query self-heals via poll" scenario no
+ * longer has a subject. What survives is the mount-composition discipline
+ * that test existed to prove - a real `<EpicShell>` / `<EpicSessionProvider>`
+ * tree over a real `HostClient` + `MockHostMessenger`, not a module-mocked
+ * substitute - now applied to the numberless entry point and the dialog it
+ * opens on demand.
  */
 
 const HOST_ID = mockLocalHostEntry.hostId;
-const EPIC_ID = "epic-cost-badge-live";
-const TAB_ID = "epic-cost-badge-live-tab";
+const EPIC_ID = "epic-usage-entry-point-live";
+const TAB_ID = "epic-usage-entry-point-live-tab";
 
 type UsageSummaryResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -129,17 +125,8 @@ function emptyWorktreeListResponse(): WorktreeListResponse {
   return { worktrees: [], nextCursor: null };
 }
 
-// Mutable so individual tests can swap in a handler that fails the FIRST call
-// (simulating a coordinator control-flow cancellation) without rebuilding the
-// whole `HostClient`/`EpicSessionProvider` harness per test.
-const usageSummaryHandler = {
-  current: (): UsageSummaryResponse => pricedUsageSummaryResponse(),
-};
+const usageSummaryCallCount = { current: 0 };
 
-// A real `HostClient` bound to the mock local host and driven through a real
-// `MockHostMessenger`, so `host.usage.summary` actually dispatches by method
-// instead of a blanket stub response - the same seam every other production
-// consumer of `useHostClient()` goes through.
 const liveHostClient = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
   invalidator: { invalidateHostScope: () => undefined },
@@ -147,7 +134,10 @@ const liveHostClient = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `req-${Math.random().toString(36).slice(2, 8)}`,
     handlers: {
-      "host.usage.summary": () => usageSummaryHandler.current(),
+      "host.usage.summary": () => {
+        usageSummaryCallCount.current += 1;
+        return pricedUsageSummaryResponse();
+      },
       "worktree.listAllForHost": () => emptyWorktreeListResponse(),
     },
   }),
@@ -161,10 +151,6 @@ const authService = {
   revalidateCurrentContext: vi.fn(() => Promise.resolve({ kind: "valid" })),
 };
 
-// Mirrors `epic-shell.test.tsx`'s seam: `@/lib/host` mocked so the shell
-// mounts without the full `HostRuntimeProvider` bootstrap - but backed by the
-// REAL `HostClient` above (not an ad hoc plain object), so `useHostClient()`
-// and `useReactiveActiveHostId()` behave exactly as they do in production.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -199,9 +185,6 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   }),
 }));
 
-// Irrelevant to this regression (its own Y.Doc-backed sync state, no host
-// RPC) - stubbed exactly like `epic-shell.test.tsx` so failures here can only
-// come from the cost badge / host-RPC path this file exists to exercise.
 vi.mock("@/components/epic-canvas/panels/epic-connection-pill", () => ({
   EpicConnectionPill: () => <div data-testid="epic-connection-pill" />,
 }));
@@ -273,10 +256,7 @@ function installControlledFactory(): {
 } {
   const streams: ControlledStream[] = [];
   __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
-    const stream: ControlledStream = {
-      callbacks,
-      closeCount: 0,
-    };
+    const stream: ControlledStream = { callbacks, closeCount: 0 };
     streams.push(stream);
     return {
       applyUpdate: () => undefined,
@@ -289,9 +269,7 @@ function installControlledFactory(): {
       },
     };
   });
-  return {
-    streams: () => streams,
-  };
+  return { streams: () => streams };
 }
 
 function renderShell(queryClient: QueryClient) {
@@ -306,12 +284,12 @@ function renderShell(queryClient: QueryClient) {
   );
 }
 
-describe("<EpicShell /> cost badge - real host RPC round trip", () => {
+describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
   beforeEach(() => {
     window.localStorage.clear();
     __getOpenEpicRegistryForTests().disposeAll();
     __setEpicStreamClientFactoryForTests(null);
-    usageSummaryHandler.current = () => pricedUsageSummaryResponse();
+    usageSummaryCallCount.current = 0;
   });
 
   afterEach(() => {
@@ -321,7 +299,7 @@ describe("<EpicShell /> cost badge - real host RPC round trip", () => {
     resetNegotiatedManifests();
   });
 
-  it("renders the cost badge once the session is live and the host has negotiated host.usage.summary", async () => {
+  it("renders a numberless entry point once the session is live and the host has negotiated host.usage.summary - never fetching ambiently", async () => {
     recordNegotiatedHostMethods(HOST_ID, ["host.usage.summary"]);
     const controlled = installControlledFactory();
     const queryClient = new QueryClient({
@@ -340,58 +318,18 @@ describe("<EpicShell /> cost badge - real host RPC round trip", () => {
         buildSnapshot("Live Epic"),
       );
 
-    // The connection pill (stubbed) is the existing signal that the status
-    // row itself has mounted with `snapshotLoaded: true` - same gate the
-    // cost badge sits behind.
-    await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
-    });
-
-    expect((await screen.findByTestId("epic-cost-badge")).textContent).toBe(
-      "$0.11",
-    );
-
-    queryClient.clear();
-  });
-
-  it("still renders nothing when the host has not negotiated host.usage.summary - unsupported stays silent, not a crash", async () => {
-    // No `recordNegotiatedHostMethods` call for this host: fails closed.
-    const controlled = installControlledFactory();
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false, gcTime: 0, staleTime: 60_000 },
-      },
-    });
-
-    renderShell(queryClient);
-
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null);
-    controlled
-      .streams()[0]
-      .callbacks.onSnapshot(
-        buildMeta("Live Epic", "editor"),
-        buildSnapshot("Live Epic"),
-      );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
-    });
-
-    // Give the (disabled) query a tick to settle before asserting absence.
+    const entryPoint = await screen.findByTestId("epic-usage-entry-point");
+    expect(entryPoint.textContent).toBe("");
+    // Give any accidental ambient fetch a tick to fire before asserting it
+    // never did - the whole point of the on-demand redesign.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByTestId("epic-cost-badge")).toBeNull();
+    expect(usageSummaryCallCount.current).toBe(0);
+    expect(screen.queryByTestId("epic-usage-dialog")).toBeNull();
 
     queryClient.clear();
   });
 
-  it("picks up the badge once negotiation completes AFTER the pane has already mounted - not stuck in its first-render disabled state", async () => {
-    // Mirrors the real boot order: the epic pane can mount and reach
-    // `snapshotLoaded` before the WS handshake's negotiated-manifest write
-    // for this OPTIONAL method lands - `host.usage.summary` is not part of
-    // the released floor, so nothing blocks the pane on it. This is the
-    // exact "disabled-query mirror" / "never re-evaluates" suspect from the
-    // fixup ticket: does the badge's query actually flip on once `supported`
-    // goes true, or is it wedged from its first (unsupported) render?
+  it("renders nothing when the host has not negotiated host.usage.summary - unsupported stays silent, not a crash", async () => {
     const controlled = installControlledFactory();
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -412,44 +350,21 @@ describe("<EpicShell /> cost badge - real host RPC round trip", () => {
     await waitFor(() => {
       expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
     });
-    expect(screen.queryByTestId("epic-cost-badge")).toBeNull();
-
-    // Negotiation lands well after the pane is already up and settled.
-    recordNegotiatedHostMethods(HOST_ID, ["host.usage.summary"]);
-
-    expect((await screen.findByTestId("epic-cost-badge")).textContent).toBe(
-      "$0.11",
-    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId("epic-usage-entry-point")).toBeNull();
 
     queryClient.clear();
   });
 
-  it("self-heals from a coordinator control-flow cancellation on its first fetch, instead of staying stuck pending forever", async () => {
-    // Reproduces the fixup ticket's actual root cause mechanically:
-    // `HostClient` cancels an in-flight request on a host-bind/auth-context
-    // transition by throwing `HostRequestControlFlowError`, which
-    // `withHostQueryErrorBoundary` (host-query-error-boundary.ts) turns into
-    // a SILENT, REVERTING `CancelledError` - the query lands back on
-    // `data: undefined, error: null`, and this method's OLD `poll: null`
-    // policy left it there permanently (no window-focus/reconnect refetch,
-    // no periodic refetch, nothing else watching it). The badge - unlike its
-    // always-enabled siblings - only starts fetching once `supported` flips
-    // true, which is exactly the startup window such a transition is most
-    // likely to land in. `poll: { kind: "fixed", intervalMs: 15 * MINUTE }`
-    // is the self-heal: without it this test times out with the badge
-    // permanently absent; with it, the badge appears once the interval fires
-    // a fresh fetch that succeeds.
-    vi.useFakeTimers();
+  it("opens the scoped panel on click and fetches the real cost figure only then", async () => {
     recordNegotiatedHostMethods(HOST_ID, ["host.usage.summary"]);
-    usageSummaryHandler.current = () => {
-      throw new HostRequestControlFlowError("authority-superseded");
-    };
     const controlled = installControlledFactory();
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false, gcTime: 0, staleTime: 60_000 },
       },
     });
+    const user = userEvent.setup();
 
     renderShell(queryClient);
 
@@ -461,26 +376,15 @@ describe("<EpicShell /> cost badge - real host RPC round trip", () => {
         buildSnapshot("Live Epic"),
       );
 
-    await vi.waitFor(() => {
-      expect(screen.getByTestId("epic-connection-pill")).not.toBeNull();
-    });
-    // The first fetch was silently cancelled and reverted: still nothing to
-    // show, and nothing has thrown or surfaced an error card - matches the
-    // documented "unsupported/zero-usage" render-nothing shape from the
-    // outside, even though the actual state is neither.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(screen.queryByTestId("epic-cost-badge")).toBeNull();
+    const entryPoint = await screen.findByTestId("epic-usage-entry-point");
+    expect(usageSummaryCallCount.current).toBe(0);
 
-    // Now let the handler succeed - the interval firing is what has to pick
-    // this up, since nothing else will retry a silently-reverted query.
-    usageSummaryHandler.current = () => pricedUsageSummaryResponse();
-    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    await user.click(entryPoint);
 
-    await vi.waitFor(() => {
-      expect(screen.getByTestId("epic-cost-badge").textContent).toBe("$0.11");
-    });
+    const costFigure = await screen.findByTestId("usage-cost-figure");
+    expect(costFigure.textContent).toContain("$0.11");
+    expect(usageSummaryCallCount.current).toBeGreaterThan(0);
 
     queryClient.clear();
-    vi.useRealTimers();
   });
 });

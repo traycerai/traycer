@@ -1319,6 +1319,14 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     those turns still contribute silent zeros to every token sum, which
     would otherwise misread as "no caching happened" rather than "nothing
     was reported".
+  - **Ticket 12 removed the ambient epic-canvas cost badge** (this panel's
+    former `UsageSummaryPanel` reuse target,
+    `epic-canvas/panels/epic-cost-badge.tsx`) per the user ruling that no
+    dollar figure belongs ambient anywhere. The epic canvas status row now
+    carries a numberless `EpicUsageEntryPoint` instead, opening
+    `EpicUsageDialog` (headline, small trend chart, by-chat/agent breakdown,
+    window options including "entire epic") on click - see that panel's own
+    doc comments, not this file, since it is not a Settings surface.
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking
