@@ -94,6 +94,7 @@ import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-inten
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import { OrchestrationBindingChip } from "@/components/orchestration/orchestration-binding-chip";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -682,15 +683,18 @@ export function NewConversationModalBody(props: {
     [hostClient, hostId],
   );
   const workspaceControls = (
-    <ActiveHostWorkspaceControls
-      disabled={false}
-      stagingKey={stagingKey}
-      layout="inline"
-      workspaceSeed={draftWorkspace}
-      seedIntent={latestWorkspaceSeed?.intent ?? null}
-      seedIntentOverride={null}
-      hostScope={workspaceHostScope}
-    />
+    <div className="flex flex-wrap items-center gap-2">
+      <ActiveHostWorkspaceControls
+        disabled={false}
+        stagingKey={stagingKey}
+        layout="inline"
+        workspaceSeed={draftWorkspace}
+        seedIntent={latestWorkspaceSeed?.intent ?? null}
+        seedIntentOverride={null}
+        hostScope={workspaceHostScope}
+      />
+      <OrchestrationBindingChip epicId={epicId} />
+    </div>
   );
   const switcher = (
     <ComposerModeSwitcher
