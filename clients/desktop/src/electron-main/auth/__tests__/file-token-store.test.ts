@@ -48,6 +48,16 @@ const IDENTITY = {
  */
 const WATCHER_DELIVERY_TIMEOUT_MS = 10_000;
 
+/**
+ * Per-test timeouts below are `N * WATCHER_DELIVERY_TIMEOUT_MS +
+ * TEST_TIMEOUT_BUFFER_MS`, not a bare sum: the enclosing Vitest timer starts
+ * before the `signIn`/`rotate`/write calls that precede each `vi.waitFor`,
+ * so a sum-only budget leaves zero room for those calls, their assertions,
+ * or (for the debounce test) the extra 120 ms post-wait sleep. Sized well
+ * above that fixed overhead rather than tuned to the minimum that passes.
+ */
+const TEST_TIMEOUT_BUFFER_MS = 5_000;
+
 vi.mock("electron", () => ({
   app: {
     getPath: (): string => join(tmpdir(), "traycer-file-token-store-userdata"),
@@ -442,7 +452,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     // Two sequential WATCHER_DELIVERY_TIMEOUT_MS waits: give the test itself
     // headroom above their sum, or Vitest's 5s default per-test timeout aborts
     // the test before either wait's own (longer) deadline can take effect.
-    2 * WATCHER_DELIVERY_TIMEOUT_MS,
+    2 * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
   );
 
   it("signIn on a second instance supersedes a prior sign-out tombstone", async () => {
@@ -534,7 +544,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
         expect(last.revision).toBeGreaterThanOrEqual(1);
         dispose();
       },
-      WATCHER_DELIVERY_TIMEOUT_MS,
+      WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
     );
 
     it(
@@ -571,7 +581,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
         });
         dispose();
       },
-      2 * WATCHER_DELIVERY_TIMEOUT_MS,
+      2 * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
     );
 
     it(
@@ -616,7 +626,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
         expect(changes.at(-1)?.userId).toBe(IDENTITY.id);
         dispose();
       },
-      WATCHER_DELIVERY_TIMEOUT_MS,
+      WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
     );
   });
 });
