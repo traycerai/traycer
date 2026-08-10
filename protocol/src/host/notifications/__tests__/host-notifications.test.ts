@@ -28,6 +28,7 @@ import {
   hostNotificationsCloudFeedEntryRequestSchema,
   hostNotificationsCloudFeedClearAllRequestSchema,
   hostNotificationsCloudFeedMutationResponseSchema,
+  hostNotificationsCloudFeedMarkAllReadResponseSchema,
   hostNotificationsCloudFeedMarkRead,
   hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
@@ -839,7 +840,7 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
     ).toBe(false);
   });
 
-  it("answers a mutation with a status and a version that is null exactly when unavailable", () => {
+  it("answers released per-entry mutations with a status and a version that is null exactly when unavailable", () => {
     expect(
       hostNotificationsCloudFeedMutationResponseSchema.parse({
         status: "applied",
@@ -853,11 +854,11 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
       }),
     ).toEqual({ status: "unavailable", version: null });
     expect(
-      hostNotificationsCloudFeedMutationResponseSchema.parse({
+      hostNotificationsCloudFeedMutationResponseSchema.safeParse({
         status: "unsupported",
         version: null,
-      }),
-    ).toEqual({ status: "unsupported", version: null });
+      }).success,
+    ).toBe(false);
     expect(
       hostNotificationsCloudFeedMutationResponseSchema.safeParse({
         status: "applied",
@@ -870,6 +871,15 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
         version: 9,
       }).success,
     ).toBe(false);
+  });
+
+  it("answers the additive cloud mark-all-read operation as unsupported", () => {
+    expect(
+      hostNotificationsCloudFeedMarkAllReadResponseSchema.parse({
+        status: "unsupported",
+        version: null,
+      }),
+    ).toEqual({ status: "unsupported", version: null });
   });
 
   it("registers the whole family on the unary registry as optional methods", () => {

@@ -1187,11 +1187,32 @@ export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
 /**
  * `unavailable` means the relay could not reach the cloud, and NOTHING was
  * changed anywhere - the host deliberately keeps no local shadow of the cloud
- * feed to mutate optimistically. `unsupported` means an older cloud server
- * accepted the envelope but could not acknowledge this optional operation; a
- * client may use a released compatibility path. Neither is an applied mutation.
+ * feed to mutate optimistically. Neither is an applied mutation.
  */
 export const hostNotificationsCloudFeedMutationResponseSchema = z
+  .object({
+    status: z.enum(["applied", "unavailable"]),
+    /** The feed version after the mutation; `null` when unavailable. */
+    version: z.number().int().nonnegative().nullable(),
+  })
+  .superRefine((value, context) => {
+    if ((value.status === "applied") === (value.version !== null)) return;
+    context.addIssue({
+      code: "custom",
+      path: ["version"],
+      message: "version must be non-null exactly when status is applied",
+    });
+  });
+export type HostNotificationsCloudFeedMutationResponse = z.infer<
+  typeof hostNotificationsCloudFeedMutationResponseSchema
+>;
+
+/**
+ * The atomic bulk operation is additive. `unsupported` means an older cloud
+ * server accepted its envelope but could not acknowledge this new operation;
+ * the client may then use the released per-entry compatibility path.
+ */
+export const hostNotificationsCloudFeedMarkAllReadResponseSchema = z
   .object({
     status: z.enum(["applied", "unavailable", "unsupported"]),
     /** The feed version after the mutation; `null` when it was not applied. */
@@ -1205,8 +1226,8 @@ export const hostNotificationsCloudFeedMutationResponseSchema = z
       message: "version must be non-null exactly when status is applied",
     });
   });
-export type HostNotificationsCloudFeedMutationResponse = z.infer<
-  typeof hostNotificationsCloudFeedMutationResponseSchema
+export type HostNotificationsCloudFeedMarkAllReadResponse = z.infer<
+  typeof hostNotificationsCloudFeedMarkAllReadResponseSchema
 >;
 
 export const hostNotificationsCloudFeedMarkRead = defineRpcContract({
@@ -1234,7 +1255,7 @@ export const hostNotificationsCloudFeedMarkAllRead = defineRpcContract({
   method: "host.notifications.cloudFeed.markAllRead",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsCloudFeedMarkAllReadRequestSchema,
-  responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+  responseSchema: hostNotificationsCloudFeedMarkAllReadResponseSchema,
 });
 
 export const hostNotificationsCloudFeedClearAll = defineRpcContract({

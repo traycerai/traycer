@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -556,17 +556,24 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     useCloudNotificationsStore.getState().setConnectionState("unavailable");
   };
   const handleCloudMutationResult = (data: {
-    readonly status: "applied" | "unavailable" | "unsupported";
+    readonly status: "applied" | "unavailable";
   }): void => {
     if (data.status === "unavailable") markCloudUnavailable();
   };
-  const captureCloudMutationContext = (): CloudFeedMutationContext => ({
-    hostId: client?.getActiveHostId() ?? null,
-    sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
-  });
-  const isCurrentCloudMutation = (context: CloudFeedMutationContext): boolean =>
-    client?.getActiveHostId() === context.hostId &&
-    useCloudNotificationsStore.getState().sessionEpoch === context.sessionEpoch;
+  const captureCloudMutationContext = useCallback(
+    (): CloudFeedMutationContext => ({
+      hostId: client?.getActiveHostId() ?? null,
+      sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
+    }),
+    [client],
+  );
+  const isCurrentCloudMutation = useCallback(
+    (context: CloudFeedMutationContext): boolean =>
+      client?.getActiveHostId() === context.hostId &&
+      useCloudNotificationsStore.getState().sessionEpoch ===
+        context.sessionEpoch,
+    [client],
+  );
   const cloudMarkRead = useHostMutation<
     HostRpcRegistry,
     "host.notifications.cloudFeed.markRead",
@@ -604,8 +611,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       mutationKey: notificationsMutationKeys.cloudMarkAllRead(),
       onMutate: captureCloudMutationContext,
       onSuccess: (data, _variables, context) => {
-        if (isCurrentCloudMutation(context)) {
-          handleCloudMutationResult(data);
+        if (!isCurrentCloudMutation(context)) return;
+        if (data.status === "applied") {
+          handleCloudMutationResult({ status: "applied" });
+        } else if (data.status === "unavailable") {
+          handleCloudMutationResult({ status: "unavailable" });
         }
       },
       onError: (error, _variables, context) => {
@@ -1058,16 +1068,21 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
+          const fallbackContext = captureCloudMutationContext();
           cloudState.markAllReadLocally(Date.now());
           const fallBackToEntryMutations = async (): Promise<void> => {
             // An older cloud server cannot atomically include rows it did not
             // render, but it can preserve the released per-entry behavior for
             // every renderable row.
             for (const entryId of fallbackEntryIds) {
+              if (!isCurrentCloudMutation(fallbackContext)) return;
               try {
                 await cloudMarkRead.mutateAsync({ entryId });
               } catch {
-                return;
+                // Each per-entry marker is independent and idempotent. A
+                // transient failure must not prevent later entries from being
+                // persisted on the older relay.
+                continue;
               }
             }
           };
@@ -1214,6 +1229,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       client,
       feedMode,
       cloudVersion,
+      captureCloudMutationContext,
+      isCurrentCloudMutation,
       cloudMarkRead,
       cloudMarkAllRead,
       cloudResolve,

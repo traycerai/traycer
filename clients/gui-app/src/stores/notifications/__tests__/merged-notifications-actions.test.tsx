@@ -1192,6 +1192,99 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     );
   });
 
+  it("continues the compatibility fallback after one entry write fails", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string, params: unknown) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.resolve({ status: "unsupported", version: null });
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        if (isRecord(params) && params["entryId"] === "entry-a") {
+          return Promise.reject(new Error("transient entry write failure"));
+        }
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-b" },
+      );
+    });
+  });
+
+  it("does not replay a bulk compatibility fallback into a replacement cloud session", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    let resolveMarkAll:
+      | ((result: {
+          readonly status: "unsupported";
+          readonly version: null;
+        }) => void)
+      | undefined;
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return new Promise((resolve) => {
+          resolveMarkAll = resolve;
+        });
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+    act(() => {
+      useCloudNotificationsStore.getState().reset();
+    });
+    if (resolveMarkAll === undefined) {
+      throw new Error("expected pending cloud mark-all request");
+    }
+    const resolvePendingMarkAll = resolveMarkAll;
+    await act(async () => {
+      resolvePendingMarkAll({ status: "unsupported", version: null });
+      await Promise.resolve();
+    });
+
+    expect(
+      hostRequestMock.mock.calls.filter(
+        (call) => call[0] === "host.notifications.cloudFeed.markRead",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("does not mark a newer cloud snapshot from a stale action closure", () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";
