@@ -27,14 +27,10 @@ import {
   useRunnerOrchestrationGroupsQuery,
   useRunnerOrchestrationCreateMutation,
   useRunnerOrchestrationDeleteMutation,
-  useRunnerOrchestrationGroupSaveMutation,
 } from "@/hooks/runner/use-runner-orchestration-queries";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
-import type {
-  TraycerModelGroup,
-  TraycerOrchestrationRole,
-} from "@traycer-clients/shared/platform/runner-host";
+import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
+import type { TraycerOrchestrationRole } from "@traycer-clients/shared/platform/runner-host";
 
 export function OrchestrationsSettingsPanel() {
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -85,7 +81,6 @@ export function OrchestrationsSettingsPanel() {
           showCreateForm={showCreateForm}
           selectedName={selectedName}
           selectedGroup={selectedGroup}
-          editingGroup={editingGroup}
           onEnabledChange={setEnabled}
           onOrchestrationNameChange={setOrchestrationName}
           onRoleIdChange={setRoleId}
@@ -108,20 +103,26 @@ export function OrchestrationsSettingsPanel() {
                 : (selectedGroup ?? "default"),
             )
           }
-          onCloseEditGroup={() => setEditingGroup(null)}
         />
 
         <div className="min-w-0 flex-1 overflow-y-auto p-5">
-          <DetailContent
-            selectedName={selectedName}
-            isLoading={detail.isLoading}
-            data={detail.data ?? null}
-            selectedRoleId={selectedRoleId}
-            onSelectRole={setSelectedRoleId}
-            models={models.data ?? null}
-            modelsLoading={models.isLoading}
-            onDeleted={() => setSelectedName(null)}
-          />
+          {editingGroup !== null ? (
+            <ModelGroupEditor
+              groupName={editingGroup}
+              onClose={() => setEditingGroup(null)}
+            />
+          ) : (
+            <DetailContent
+              selectedName={selectedName}
+              isLoading={detail.isLoading}
+              data={detail.data ?? null}
+              selectedRoleId={selectedRoleId}
+              onSelectRole={setSelectedRoleId}
+              models={models.data ?? null}
+              modelsLoading={models.isLoading}
+              onDeleted={() => setSelectedName(null)}
+            />
+          )}
         </div>
       </div>
     </SettingsPanelShell>
@@ -142,7 +143,6 @@ function OrchestrationsSidebar(props: {
   readonly showCreateForm: boolean;
   readonly selectedName: string | null;
   readonly selectedGroup: string | undefined;
-  readonly editingGroup: string | null;
   readonly onEnabledChange: (enabled: boolean) => void;
   readonly onOrchestrationNameChange: (name: string) => void;
   readonly onRoleIdChange: (roleId: string) => void;
@@ -153,7 +153,6 @@ function OrchestrationsSidebar(props: {
   readonly onSelectName: (name: string) => void;
   readonly onSelectGroup: (group: string | undefined) => void;
   readonly onToggleEditGroup: () => void;
-  readonly onCloseEditGroup: () => void;
 }) {
   return (
     <div className="w-64 shrink-0 border-r border-border/40 overflow-y-auto">
@@ -237,13 +236,9 @@ function OrchestrationsSidebar(props: {
               />
             ))}
         </div>
-
-        {props.editingGroup !== null ? (
-          <ModelGroupEditor
-            groupName={props.editingGroup}
-            onClose={props.onCloseEditGroup}
-          />
-        ) : null}
+        <p className="mt-1.5 text-ui-xs text-muted-foreground">
+          Pick a group above, then the pencil opens the visual editor.
+        </p>
       </div>
     </div>
   );
@@ -473,81 +468,6 @@ function GroupButton(props: {
     >
       {props.label}
     </button>
-  );
-}
-
-// ─── Model group editor ─────────────────────────────────────────────────────
-
-function ModelGroupEditor(props: {
-  readonly groupName: string;
-  readonly onClose: () => void;
-}) {
-  const runnerHost = useRunnerHost();
-  const [json, setJson] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const saveMutation = useRunnerOrchestrationGroupSaveMutation();
-
-  // Load the group JSON on mount
-  if (json === null && runnerHost.traycerCli !== null) {
-    void runnerHost.traycerCli
-      .orchestrationGroupShow({ name: props.groupName })
-      .then((group) => {
-        if (group !== null) {
-          setJson(JSON.stringify(group, null, 2));
-        }
-      });
-  }
-
-  const handleSave = () => {
-    if (json === null) return;
-    try {
-      const parsed = JSON.parse(json) as TraycerModelGroup;
-      setError(null);
-      saveMutation.mutate(
-        { name: props.groupName, group: parsed },
-        { onSuccess: () => props.onClose() },
-      );
-    } catch {
-      setError("Invalid JSON");
-    }
-  };
-
-  return (
-    <div className="mt-2 flex flex-col gap-1.5 rounded-md border border-border/60 bg-card p-2">
-      <div className="flex items-center justify-between">
-        <span className="text-ui-xs font-medium">{props.groupName}.json</span>
-        <button
-          onClick={props.onClose}
-          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-3" />
-        </button>
-      </div>
-      {json === null ? (
-        <p className="text-ui-xs text-muted-foreground">Loading...</p>
-      ) : (
-        <>
-          <textarea
-            value={json}
-            onChange={(e) => setJson(e.target.value)}
-            rows={12}
-            className="w-full rounded-md border border-border/40 bg-background px-2 py-1.5 font-mono text-ui-xs leading-relaxed"
-            spellCheck={false}
-          />
-          {error !== null ? (
-            <p className="text-ui-xs text-destructive">{error}</p>
-          ) : null}
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={saveMutation.isPending}
-            className="self-start text-ui-xs"
-          >
-            {saveMutation.isPending ? "Saving..." : "Save"}
-          </Button>
-        </>
-      )}
-    </div>
   );
 }
 
