@@ -307,7 +307,7 @@ describe("NewConversationModalBody focus round-trip (MED4)", () => {
 });
 
 describe("NewConversationModalBody direct submit gate", () => {
-  it("submits a new chat with Cmd+Enter from anywhere in the modal", () => {
+  it("submits a new chat with Cmd+Enter from anywhere in the modal", async () => {
     render(
       <NewConversationModalBody
         epicId="epic-1"
@@ -325,6 +325,8 @@ describe("NewConversationModalBody direct submit gate", () => {
 
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
+    // Submit is async (create-time orchestration prelude injection) — flush.
+    await act(async () => {});
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 
@@ -360,7 +362,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     expect(testState.bodyAttachmentPresence?.("missing-hash")).toBe(false);
   });
 
-  it("blocks the actual new-conversation submit path while image ingestion is pending", () => {
+  it("blocks the actual new-conversation submit path while image ingestion is pending", async () => {
     testState.ingesting = true;
     const view = render(
       <NewConversationModalBody
@@ -397,11 +399,13 @@ describe("NewConversationModalBody direct submit gate", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Submit new conversation" }),
     );
+    // Submit is async (create-time orchestration prelude injection) — flush.
+    await act(async () => {});
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 
   // Finding 3: pure path-resolution must also hold submit open.
-  it("blocks the actual new-conversation submit path while file-path resolution is pending", () => {
+  it("blocks the actual new-conversation submit path while file-path resolution is pending", async () => {
     testState.resolvingPaths = true;
     const view = render(
       <NewConversationModalBody
@@ -438,6 +442,8 @@ describe("NewConversationModalBody direct submit gate", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Submit new conversation" }),
     );
+    // Submit is async (create-time orchestration prelude injection) — flush.
+    await act(async () => {});
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 });
