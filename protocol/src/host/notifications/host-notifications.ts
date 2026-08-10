@@ -1174,6 +1174,17 @@ export type HostNotificationsCloudFeedClearAllRequest = z.infer<
 >;
 
 /**
+ * Mark every notification read in the cloud snapshot the user was looking at.
+ * The shape matches clear-all because both operations are bounded by observed
+ * feed membership rather than a host timestamp.
+ */
+export const hostNotificationsCloudFeedMarkAllReadRequestSchema =
+  hostNotificationsCloudFeedClearAllRequestSchema;
+export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
+  typeof hostNotificationsCloudFeedMarkAllReadRequestSchema
+>;
+
+/**
  * `unavailable` means the relay could not reach the cloud, and NOTHING was
  * changed anywhere - the host deliberately keeps no local shadow of the cloud
  * feed to mutate optimistically. The client keeps showing the rows it has and
@@ -1215,6 +1226,13 @@ export const hostNotificationsCloudFeedClear = defineRpcContract({
   method: "host.notifications.cloudFeed.clear",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsCloudFeedEntryRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+});
+
+export const hostNotificationsCloudFeedMarkAllRead = defineRpcContract({
+  method: "host.notifications.cloudFeed.markAllRead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedMarkAllReadRequestSchema,
   responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
 });
 

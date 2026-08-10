@@ -1056,28 +1056,21 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     expect(hostRequestMock).not.toHaveBeenCalled();
   });
 
-  it("optimistically marks the cloud feed at once while serializing mark-all RPCs", async () => {
+  it("uses one observed-version mark-all for renderable and summary-only unread entries", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";
-    const settleRequests: Array<() => void> = [];
     hostRequestMock.mockImplementation((method: string) => {
-      if (method === "host.notifications.cloudFeed.markRead") {
-        return new Promise((resolve) => {
-          settleRequests.push(() => {
-            resolve({ status: "applied", version: 2 });
-          });
-        });
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.resolve({ status: "applied", version: 2 });
       }
       return defaultHostRequest(method);
     });
     useCloudNotificationsStore.getState().applySnapshot({
-      rows: [
-        cloudDone("entry-a", 1, null),
-        cloudDone("entry-b", 2, null),
-        cloudDone("entry-c", 3, null),
-      ],
-      summary: { totalCount: 3, unreadCount: 3, attentionCount: 0 },
-      version: 1,
+      // The second unread entry exists in the raw cloud feed but was omitted
+      // by the relay's renderer conversion, so it appears only in the summary.
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
     });
     const { result } = renderHook(() => useMergedNotificationsActions(), {
       wrapper: createWrapper(),
@@ -1094,36 +1087,16 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       ),
     ).toBe(true);
     await waitFor(() => {
-      expect(
-        hostRequestMock.mock.calls.filter(
-          (call) => call[0] === "host.notifications.cloudFeed.markRead",
-        ),
-      ).toHaveLength(1);
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
     });
-
-    act(() => {
-      settleRequests[0]?.();
-    });
-    await waitFor(() => {
-      expect(
-        hostRequestMock.mock.calls.filter(
-          (call) => call[0] === "host.notifications.cloudFeed.markRead",
-        ),
-      ).toHaveLength(2);
-    });
-    act(() => {
-      settleRequests[1]?.();
-    });
-    await waitFor(() => {
-      expect(
-        hostRequestMock.mock.calls.filter(
-          (call) => call[0] === "host.notifications.cloudFeed.markRead",
-        ),
-      ).toHaveLength(3);
-    });
-    act(() => {
-      settleRequests[2]?.();
-    });
+    expect(
+      hostRequestMock.mock.calls.filter(
+        (call) => call[0] === "host.notifications.cloudFeed.markRead",
+      ),
+    ).toHaveLength(0);
   });
 
   it("ignores a cloud command completion from a replaced ownership epoch", async () => {

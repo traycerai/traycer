@@ -76,6 +76,7 @@ import {
   type HostNotificationsResolveRequest,
   type HostNotificationsCloudFeedRow,
   type HostNotificationsCloudFeedEntryRequest,
+  type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -585,6 +586,30 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
     },
   });
+  const cloudMarkAllRead = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.cloudFeed.markAllRead",
+    CloudFeedMutationContext,
+    HostNotificationsCloudFeedMarkAllReadRequest
+  >({
+    client,
+    method: "host.notifications.cloudFeed.markAllRead",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.cloudMarkAllRead(),
+      onMutate: captureCloudMutationContext,
+      onSuccess: (data, _variables, context) => {
+        if (isCurrentCloudMutation(context)) {
+          handleCloudMutationResult(data);
+        }
+      },
+      onError: (_error, _variables, context) => {
+        if (context !== undefined && isCurrentCloudMutation(context)) {
+          markCloudUnavailable();
+        }
+      },
+    },
+  });
   const cloudResolve = useHostMutation<
     HostRpcRegistry,
     "host.notifications.cloudFeed.resolve",
@@ -1012,32 +1037,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         });
       },
       markAllAsRead: () => {
-        if (feedMode === "cloud") {
-          const readAt = Date.now();
-          const unreadEntryIds: string[] = [];
-          for (const row of Object.values(
-            useCloudNotificationsStore.getState().rows,
-          )) {
-            if (row !== undefined && row.entry.readAt === null) {
-              unreadEntryIds.push(row.entryId);
-              useCloudNotificationsStore
-                .getState()
-                .markReadLocally(row.entryId, readAt);
-            }
-          }
-          // Optimistic set-once markers land as one immediate UI update, then
-          // the wire work is serialized so a large cross-device feed cannot
-          // burst hundreds of unary requests through one host connection.
-          void (async (): Promise<void> => {
-            for (const entryId of unreadEntryIds) {
-              try {
-                await cloudMarkRead.mutateAsync({ entryId });
-              } catch {
-                // The mutation's onError owns availability state. Continue so
-                // one failed entry does not prevent later entries being sent.
-              }
-            }
-          })();
+        if (feedMode === "cloud" && cloudVersion !== null) {
+          useCloudNotificationsStore.getState().markAllReadLocally(Date.now());
+          cloudMarkAllRead.mutate({ observedVersion: cloudVersion });
           return;
         }
         if (feedMode !== "local") return;
@@ -1171,6 +1173,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       feedMode,
       cloudVersion,
       cloudMarkRead,
+      cloudMarkAllRead,
       cloudResolve,
       cloudClear,
       cloudClearAll,
