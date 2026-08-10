@@ -719,11 +719,10 @@ export const agentListUpgradeV6ToV7 = defineUpgradePath<
 >({
   from: { major: 6, minor: 0 },
   to: { major: 7, minor: 0 },
-  // A v6.0 response without Hugging Face agents is a valid v7.0 response
-  // (purely additive), and the request shape is identical - both upgrades are
-  // identity.
+  // The request shape is identical. Parsing the response through the live v7
+  // schema default-fills `runConfig: null` on every released v6 row.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => listAgentsResponseSchema.parse(response),
 });
 
 export const agentListDowngradeV7ToV6 = defineDowngradePath<

@@ -668,7 +668,7 @@ export type ListHarnessModelsResponse = z.infer<
  * (`agent.sendMessage`) reject them with `RECEIVER_NOT_LOCAL` until the
  * relay/mailbox transport lands.
  */
-export const agentSummarySchema = z.object({
+const releasedAgentSummarySchema = z.object({
   id: z.string(),
   parentId: z.string().nullable(),
   hostId: z.string(),
@@ -710,6 +710,20 @@ export const agentSummarySchema = z.object({
    */
   isWorktree: z.boolean(),
 });
+
+export const agentRunConfigSchema = z.object({
+  model: z.union([
+    z.object({ kind: z.literal("concrete"), slug: z.string() }),
+    z.object({ kind: z.literal("provider-default") }),
+  ]),
+  reasoningEffort: z.string().nullable(),
+  fastMode: z.boolean().nullable(),
+});
+export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
+
+export const agentSummarySchema = releasedAgentSummarySchema.extend({
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 
 export const listAgentsScopeSchema = z.enum(["user", "all"]);
@@ -738,7 +752,7 @@ export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 // build time, so an old CLI would hit a strict enum on those rows. v1.0 is
 // frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
 // callers. Do not add new harnesses here - use the existing v2 bridge.
-export const agentSummarySchemaV10 = agentSummarySchema.extend({
+export const agentSummarySchemaV10 = releasedAgentSummarySchema.extend({
   harnessId: harnessIdSchema
     .extract(["claude", "codex", "opencode", "traycer", "cursor"])
     .nullable(),
@@ -754,7 +768,7 @@ export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 // predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
 // actually shipped (before Amp). Do not add new harnesses here - use the
 // existing version bridges.
-export const agentSummarySchemaV20 = agentSummarySchema.extend({
+export const agentSummarySchemaV20 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV20.nullable(),
 });
 export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
@@ -768,7 +782,7 @@ export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 // would hit a strict enum on those rows. v3.0 is frozen here as actually
 // shipped (with Amp). Do not add new harnesses here - use the existing
 // version bridges.
-export const agentSummarySchemaV30 = agentSummarySchema.extend({
+export const agentSummarySchemaV30 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV30.nullable(),
 });
 export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
@@ -783,7 +797,7 @@ export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
 // shipped (with Devin/Pi); the v5.0 line carries Hermes/omp rows and v5→v4 /
 // v5→v3 / v5→v2 / v5→v1 bridges drop them for older callers. Do not add new
 // harnesses here - use the existing v5 bridge.
-export const agentSummarySchemaV40 = agentSummarySchema.extend({
+export const agentSummarySchemaV40 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV40.nullable(),
 });
 export const listAgentsResponseSchemaV40 = listAgentsResponseSchema.extend({
@@ -799,7 +813,7 @@ export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
 // shipped; the v6.0 line carries omp rows and v6→v5 … v6→v1 bridges drop them
 // for older callers. Do not add new harnesses here - use the existing v6
 // bridge.
-export const agentSummarySchemaV50 = agentSummarySchema.extend({
+export const agentSummarySchemaV50 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV50.nullable(),
 });
 export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
@@ -815,7 +829,7 @@ export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
 // shipped; the v7.0 line carries Hugging Face rows and v7→v6 … v7→v1 bridges
 // drop them for older callers. Do not add new harnesses here - use the
 // existing v7 bridge.
-export const agentSummarySchemaV60 = agentSummarySchema.extend({
+export const agentSummarySchemaV60 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV60.nullable(),
 });
 export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
