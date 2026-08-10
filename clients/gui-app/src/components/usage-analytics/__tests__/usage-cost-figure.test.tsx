@@ -105,7 +105,9 @@ describe("UsageCostFigure", () => {
     fireEvent.focus(screen.getByText("$10.00*"));
 
     const tooltip = screen.getByRole("tooltip");
-    expect(tooltip.textContent).toMatch(/estimate based on public list prices/i);
+    expect(tooltip.textContent).toMatch(
+      /estimate based on public list prices/i,
+    );
     expect(tooltip.textContent).toContain("$7.00");
     expect(tooltip.textContent).toContain("$3.00");
     expect(tooltip.textContent).toMatch(/1 turn had no pricing available/i);
