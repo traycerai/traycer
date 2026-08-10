@@ -125,7 +125,13 @@ jobs:
           # indistinguishable from "no OOM records" - both render as an empty
           # section, which is the one ambiguity this step exists to remove.
           if dmesg -T >/tmp/dmesg.txt 2>/dev/null || dmesg >/tmp/dmesg.txt 2>/dev/null; then
-            if grep -iE "killed process|out of memory|oom[-_]kill" /tmp/dmesg.txt | tail -40; then
+            # Test grep with -q SEPARATELY from printing. `grep ... | tail`
+            # reports tail's status, which is 0 even when grep matched
+            # nothing - so the pipeline form would claim OOM records exist
+            # every time. A diagnostic that invents the very finding it is
+            # meant to adjudicate is worse than no diagnostic at all.
+            if grep -qiE "killed process|out of memory|oom[-_]kill" /tmp/dmesg.txt; then
+              grep -iE "killed process|out of memory|oom[-_]kill" /tmp/dmesg.txt | tail -40
               echo "(OOM records found above)"
             else
               echo "dmesg READ OK, and it contains NO OOM/kill records."
