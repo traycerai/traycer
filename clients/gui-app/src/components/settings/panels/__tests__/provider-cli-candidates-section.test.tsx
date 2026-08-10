@@ -1,28 +1,77 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  ProviderAdvisory,
   ProviderCliCandidate,
   ProviderCliState,
   ProviderManagedInstallState,
+  ProviderManagedVersions,
+  ProviderNextRunBinary,
   ProviderSelection,
   ProviderVersionVisibility,
-  ProviderAdvisory,
 } from "@traycer/protocol/host/provider-schemas";
+import { createElement, type ReactNode } from "react";
 import { ProviderCliCandidatesSection } from "@/components/settings/panels/provider-cli-candidates-section";
+import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD } from "@/components/settings/panels/provider-pack-version-manager-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+
+type CapturedVersionManagerProps = {
+  readonly hostId: string | null;
+  readonly packId: string;
+  readonly packDisplayName: string;
+  readonly managedVersions: ProviderManagedVersions;
+};
 
 const mocks = vi.hoisted(() => ({
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
   ensurePackMutate: vi.fn(),
+  hostSupportsMethod: false,
+  useHostSupportsMethod: vi.fn(
+    (hostId: string | null, _method: string): boolean => {
+      // Mirrors the real boolean form: no host ⇒ not yet/never supported.
+      if (hostId === null) return false;
+      return mocks.hostSupportsMethod;
+    },
+  ),
+  lastVersionManagerProps: null as CapturedVersionManagerProps | null,
+  versionManagerPanel: vi.fn(
+    (props: CapturedVersionManagerProps): ReactNode => {
+      mocks.lastVersionManagerProps = props;
+      return createElement("div", {
+        "data-testid": "version-manager-panel",
+        "data-pack-id": props.packId,
+      });
+    },
+  ),
 }));
+
+// Shallow-mount capture for Manage versions open path. Keep the capability
+// constant export so gate tests still import the real method name.
+vi.mock(
+  "@/components/settings/panels/provider-pack-version-manager-panel",
+  () => ({
+    PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD:
+      "providers.usePackVersion" as const,
+    ProviderPackVersionManagerPanel: (props: CapturedVersionManagerProps) =>
+      mocks.versionManagerPanel(props),
+  }),
+);
 
 vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   useProvidersEnsurePack: () => ({
     mutate: mocks.ensurePackMutate,
     isPending: false,
   }),
+}));
+
+// Capability gate for Manage versions — evaluated against the scoped hostId
+// prop, never an ambient active-host hook.
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (hostId: string | null, method: string): boolean =>
+    mocks.useHostSupportsMethod(hostId, method),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
@@ -63,12 +112,24 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
 }));
 
 /**
- * T3 renderer coverage: install-progress rendering, the "Bundled"/"Managed"
- * candidate label swap, the D6 PATH-unblock composite notice, and the
- * version-visibility caption - each verified both when the host populates
- * the new provider-pack-registry fields and when it omits them entirely (old
- * host tolerance).
+ * B5-T1 table rework coverage: managed install progress, retired standalone
+ * notices, PATH-row advisory tooltip, Active chip from nextRunBinary, and
+ * Manage versions capability gating — plus older empty-candidate / old-host
+ * tolerance cases that this section still owns.
  */
+
+const TEST_HOST_ID = "host-test";
+
+function emptyManagedVersions(): ProviderManagedVersions {
+  return {
+    autoDownload: true,
+    pinnedVersion: null,
+    updateAvailable: null,
+    sharedWithProviders: [],
+    totalSizeBytes: null,
+    available: [],
+  };
+}
 
 function bundledCandidate(
   overrides: Partial<ProviderCliCandidate>,
@@ -103,6 +164,9 @@ function providerState(args: {
   readonly managedInstallState?: ProviderManagedInstallState | null;
   readonly versionVisibility?: ProviderVersionVisibility | null;
   readonly advisory?: ProviderAdvisory | null;
+  readonly nextRunBinary?: ProviderNextRunBinary | null;
+  readonly packId?: string | null;
+  readonly managedVersions?: ProviderManagedVersions | null;
 }): ProviderCliState {
   const state: ProviderCliState = {
     providerId: args.providerId === undefined ? "claude-code" : args.providerId,
@@ -142,6 +206,13 @@ function providerState(args: {
       ? { versionVisibility: args.versionVisibility }
       : {}),
     ...(args.advisory !== undefined ? { advisory: args.advisory } : {}),
+    ...(args.nextRunBinary !== undefined
+      ? { nextRunBinary: args.nextRunBinary }
+      : {}),
+    ...(args.packId !== undefined ? { packId: args.packId } : {}),
+    ...(args.managedVersions !== undefined
+      ? { managedVersions: args.managedVersions }
+      : {}),
   };
 }
 
@@ -149,21 +220,29 @@ function providerState(args: {
 // `fn(x?: T)` and `fn(x = …)`. Existing call sites use `renderSection`; the
 // multi-provider case (traycer borrowing opencode) uses `renderSectionWith`.
 function renderSection(state: ProviderCliState): void {
-  renderSectionWith(state, [state]);
+  renderSectionWith(state, [state], TEST_HOST_ID);
 }
 
 function renderSectionWith(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
+  hostId: string | null,
 ): void {
   render(
     <TooltipProvider>
-      <ProviderCliCandidatesSection state={state} providers={providers} />
+      <ProviderCliCandidatesSection
+        state={state}
+        providers={providers}
+        hostId={hostId}
+      />
     </TooltipProvider>,
   );
 }
+
 afterEach(() => {
   cleanup();
+  mocks.hostSupportsMethod = false;
+  mocks.lastVersionManagerProps = null;
   vi.clearAllMocks();
 });
 
@@ -252,7 +331,7 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
         }),
       ],
     });
-    renderSectionWith(traycer, [traycer, opencode]);
+    renderSectionWith(traycer, [traycer, opencode], TEST_HOST_ID);
 
     expect(
       screen.getByRole("radio", { name: "Select /usr/local/bin/opencode" }),
@@ -324,20 +403,24 @@ describe("ProviderCliCandidatesSection: managed-install progress states", () => 
     expect(screen.getByText("Not installed")).toBeDefined();
   });
 
-  it("shows install progress with percent while downloading, and does not dim the row", () => {
+  it("shows install progress with version and percent while downloading", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: false })],
-      managedInstallState: { status: "downloading", percent: 42 },
+      managedInstallState: {
+        status: "downloading",
+        percent: 42,
+        version: "1.18.11",
+      },
     });
     renderSection(state);
     expect(screen.getByText("Managed")).toBeDefined();
-    // Deliberate copy change: this cell now goes through the shared
-    // `providerPackPreparingShortLabel` (which says "Preparing…") rather than
-    // formatting `managedInstallState` itself. The local wording was the reason
-    // it could drift - and it did, rendering a literal "Installing… %" for a
-    // null percent that every other surface already handled.
-    expect(screen.getByText("Preparing… 42%")).toBeDefined();
+    // Managed row owns its install subject: version + percent, never a bare
+    // "Preparing…" that drifts from the version-manager progress copy.
+    expect(screen.getByText("Installing v1.18.11 · 42%")).toBeDefined();
+    expect(
+      screen.getByRole("progressbar", { name: "Installing v1.18.11 · 42%" }),
+    ).toBeDefined();
   });
 
   it("shows the resolved version once installed", () => {
@@ -352,72 +435,27 @@ describe("ProviderCliCandidatesSection: managed-install progress states", () => 
   });
 });
 
-describe("ProviderCliCandidatesSection: D6 PATH-unblock composite state", () => {
-  it("shows the PATH-unblock notice when selection is managed, install is in progress, and a PATH binary is available", () => {
+describe("ProviderCliCandidatesSection: former standalone notice lines are gone", () => {
+  it("never renders the retired PATH-unblock sentence", () => {
+    // Replaced by the host-driven Active chip. Client-side inference of
+    // "Running from PATH · installing managed copy" was wrong for
+    // closure-coupled packs and is no longer a surface on this screen.
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [
         bundledCandidate({ available: false }),
         pathCandidate({ available: true }),
       ],
-      managedInstallState: { status: "downloading", percent: 10 },
-    });
-    renderSection(state);
-    expect(
-      screen.getByText("Running from PATH · installing managed copy"),
-    ).toBeDefined();
-  });
-
-  it("does not show the notice when the managed pack is merely absent with no download in flight yet (reachable first-boot state)", () => {
-    const state = providerState({
-      selected: { kind: "bundled" },
-      candidates: [
-        bundledCandidate({ available: false }),
-        pathCandidate({ available: true }),
-      ],
-      managedInstallState: { status: "absent" },
-    });
-    renderSection(state);
-    expect(
-      screen.queryByText("Running from PATH · installing managed copy"),
-    ).toBeNull();
-  });
-
-  it("does not show the notice once the managed pack is installed", () => {
-    const state = providerState({
-      selected: { kind: "bundled" },
-      candidates: [
-        bundledCandidate({ available: true, version: "1.0.0" }),
-        pathCandidate({ available: true }),
-      ],
-      managedInstallState: { status: "installed" },
-    });
-    renderSection(state);
-    expect(
-      screen.queryByText("Running from PATH · installing managed copy"),
-    ).toBeNull();
-  });
-
-  it("does not show the notice when no PATH binary is available", () => {
-    const state = providerState({
-      selected: { kind: "bundled" },
-      candidates: [bundledCandidate({ available: false })],
-      managedInstallState: { status: "downloading", percent: 10 },
-    });
-    renderSection(state);
-    expect(
-      screen.queryByText("Running from PATH · installing managed copy"),
-    ).toBeNull();
-  });
-
-  it("does not show the notice when the user explicitly selected PATH (not a fallback)", () => {
-    const state = providerState({
-      selected: { kind: "path" },
-      candidates: [
-        bundledCandidate({ available: false }),
-        pathCandidate({ available: true }),
-      ],
-      managedInstallState: { status: "downloading", percent: 10 },
+      managedInstallState: {
+        status: "downloading",
+        percent: 10,
+        version: "1.18.11",
+      },
+      nextRunBinary: {
+        kind: "path",
+        path: "/usr/local/bin/claude",
+        version: "1.0.0",
+      },
     });
     renderSection(state);
     expect(
@@ -426,16 +464,17 @@ describe("ProviderCliCandidatesSection: D6 PATH-unblock composite state", () => 
   });
 });
 
-describe("ProviderCliCandidatesSection: version-visibility caption", () => {
-  it("renders the plural, direction-free caption for multiple differing sessions", () => {
+describe("ProviderCliCandidatesSection: version-visibility on Managed row", () => {
+  it("renders the plural caption under Managed for multiple differing sessions", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: true, version: "1.0.0" })],
+      managedInstallState: { status: "installed", version: "1.0.0" },
       versionVisibility: { differingSessionCount: 3 },
     });
     renderSection(state);
     expect(
-      screen.getByText("3 other sessions are using a different version."),
+      screen.getByText("3 running sessions use a different version."),
     ).toBeDefined();
   });
 
@@ -443,11 +482,12 @@ describe("ProviderCliCandidatesSection: version-visibility caption", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: true, version: "1.0.0" })],
+      managedInstallState: { status: "installed", version: "1.0.0" },
       versionVisibility: { differingSessionCount: 1 },
     });
     renderSection(state);
     expect(
-      screen.getByText("1 other session is using a different version."),
+      screen.getByText("1 running session uses a different version."),
     ).toBeDefined();
   });
 
@@ -455,56 +495,90 @@ describe("ProviderCliCandidatesSection: version-visibility caption", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: true, version: "1.0.0" })],
+      managedInstallState: { status: "installed", version: "1.0.0" },
       versionVisibility: { differingSessionCount: 0 },
     });
     renderSection(state);
-    expect(screen.queryByText(/using a different version/i)).toBeNull();
+    expect(screen.queryByText(/different version/i)).toBeNull();
   });
 });
 
 /**
- * The status cell for a managed pack that is NOT simply installed.
+ * Managed-row status cell for non-installed managed pack state.
  *
- * Both bugs here shared a shape: this table renders `managedInstallState`
- * itself instead of going through the shared readiness helpers, so it drifted
- * from every other surface that shows the same state.
+ * B5-T1 formats downloading from raw managedInstallState (version + percent).
+ * Errors are the short cell copy "Install failed" — the standalone detail
+ * sentence above the table is intentionally gone.
  */
 describe("ProviderCliCandidatesSection: managed install status cell", () => {
-  it("never renders a bare percent sign when progress is unknown", () => {
+  it("shows indeterminate Installing v<version>… when percent is null", () => {
     // `percent` is nullable and null is a REAL state: a queued pack has seen no
     // bytes, and a pack whose download a live sibling host owns is genuinely in
-    // progress with no observable count on this side. The raw interpolation
-    // rendered the literal "Installing… %".
+    // progress with no observable count on this side. Null must never stall or
+    // error — it is an honest indeterminate install.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [bundledCandidate({ available: false })],
+      managedInstallState: {
+        status: "downloading",
+        percent: null,
+        version: "1.18.11",
+      },
+    });
+    renderSection(state);
+    expect(screen.getByText("Installing v1.18.11…")).toBeDefined();
+    expect(
+      screen.getByRole("progressbar", { name: "Installing v1.18.11…" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/Installing… %/u)).toBeNull();
+    expect(screen.queryByText(/null/u)).toBeNull();
+    expect(screen.queryByText(/Setup failed|Install failed/u)).toBeNull();
+  });
+
+  it("uses a graceful generic install label when version is missing", () => {
+    // `managedInstallState.version` is optional on the wire. A missing key is
+    // "version not reported", never a stringified undefined in the cell.
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: false })],
       managedInstallState: { status: "downloading", percent: null },
     });
     renderSection(state);
-    expect(screen.queryByText(/Installing… %/u)).toBeNull();
-    expect(screen.queryByText(/null/u)).toBeNull();
-    // ...and it still says something. Rendering nothing would be the other way
-    // to pass the assertions above.
-    expect(screen.getByText(/Installing…|Preparing…/u)).toBeDefined();
+    expect(screen.queryByText(/undefined/u)).toBeNull();
+    expect(screen.queryByText(/Installing vundefined/u)).toBeNull();
+    expect(screen.getByText(/^Installing…$/u)).toBeDefined();
   });
 
-  it("still shows the percent when one is known", () => {
-    // The control: a guard that suppressed every percent would pass the test
-    // above and silently remove working progress reporting.
+  it("uses a graceful generic percent label when version is missing but percent is known", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: false })],
       managedInstallState: { status: "downloading", percent: 42 },
     });
     renderSection(state);
+    expect(screen.queryByText(/undefined/u)).toBeNull();
+    expect(screen.getByText("Installing · 42%")).toBeDefined();
+  });
+
+  it("still shows the percent when one is known", () => {
+    // The control: a guard that suppressed every percent would pass the null
+    // case above and silently remove working progress reporting.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [bundledCandidate({ available: false })],
+      managedInstallState: {
+        status: "downloading",
+        percent: 42,
+        version: "1.18.11",
+      },
+    });
+    renderSection(state);
     expect(screen.getByText(/42%/u)).toBeDefined();
   });
 
-  it("names the reason for a failed pack instead of a bare 'Not installed'", () => {
-    // The arm that did not exist. Everything that points a stuck user at this
-    // screen - the picker tooltip, the host's own RPC error - assumed it would
-    // be readable once they arrived; it rendered red "Not installed" with no
-    // reason and no way forward.
+  it("shows Install failed with Retry for a retryable error (no standalone detail)", () => {
+    // Cell copy is the short "Install failed". The former row-level reason
+    // sentence is intentionally gone from this screen.
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: false })],
@@ -516,13 +590,8 @@ describe("ProviderCliCandidatesSection: managed install status cell", () => {
       },
     });
     renderSection(state);
-    expect(screen.getByText(/Setup failed/u)).toBeDefined();
-    // P2. The assertion this test's own name always claimed. "Setup failed" is
-    // the status CELL, which has one truncating grid column and can never carry
-    // more; for a year that was the whole of what this screen said, while the
-    // test read as though the reason were covered. The reason is a row-level
-    // notice now, and this is what fails if it goes away again.
-    expect(screen.getByText(/not enough disk space/iu)).toBeDefined();
+    expect(screen.getByText("Install failed")).toBeDefined();
+    expect(screen.queryByText(/not enough disk space/iu)).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 
@@ -562,25 +631,16 @@ describe("ProviderCliCandidatesSection: managed install status cell", () => {
         },
       });
       renderSection(state);
-      expect(screen.getByText(/Setup failed/u)).toBeDefined();
+      expect(screen.getByText("Install failed")).toBeDefined();
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     },
   );
 });
 
 /**
- * P2/P4. The branch that had no coverage, and could not have had any.
- *
- * This section used to construct its own `ProviderPackPreparing` with
- * `fallbackRunnable: false` written in at both render sites, so
- * `providerPackBlocksExecution` was true by construction on this screen. Every
- * test above passes `candidates: [bundledCandidate({ available: false })]` and
- * therefore agrees with the hardcode by accident - which is why the whole
- * fabrication survived review twice. Mutation probing cannot find a branch that
- * no fixture reaches; only a fixture that reaches it can.
- *
- * Every case here differs from its neighbour above in ONE way: a candidate that
- * actually runs. That is the entire input to the derivation.
+ * A pack that failed behind a working PATH binary still says "Install failed"
+ * on the Managed cell (raw managed subject). The former B5-T3 short labels
+ * "Update failed" / "Setup failed" are not this table's cell copy.
  */
 describe("ProviderCliCandidatesSection: a pack that failed behind a working binary", () => {
   function failedPackWithPathFallback(): ProviderCliState {
@@ -599,34 +659,27 @@ describe("ProviderCliCandidatesSection: a pack that failed behind a working bina
     });
   }
 
-  it("says the provider is ready rather than that setup failed", () => {
-    // The user's Claude Code runs fine from PATH. "Setup failed" in front of
-    // them is simply false, and on an offline first launch it was every
-    // pin-carrying provider on the machine at once.
+  it("shows Install failed for both blocking and non-blocking managed errors", () => {
     renderSection(failedPackWithPathFallback());
-    expect(screen.getByText(/Ready · managed install failed/u)).toBeDefined();
+    expect(screen.getByText("Install failed")).toBeDefined();
+    expect(screen.queryByText(/^Update failed$/u)).toBeNull();
     expect(screen.queryByText(/^Setup failed$/u)).toBeNull();
+    // Standalone reason detail is intentionally gone.
+    expect(screen.queryByText(/could not be reached/iu)).toBeNull();
   });
 
-  it("still names the reason - a quiet failure is not a hidden one", () => {
-    // The provider working does not make the failure uninteresting. It makes it
-    // non-blocking, which is a different thing.
+  it("does not paint the non-blocking status cell as an error colour", () => {
+    // PATH fallback makes the row available enough that the cell is not
+    // marked unavailable. Asserted on the class because that is what the user
+    // sees - there is no accessible role that carries colour.
     renderSection(failedPackWithPathFallback());
-    expect(screen.getByText(/could not be reached/iu)).toBeDefined();
-  });
-
-  it("does not paint the status cell as an error", () => {
-    // The contradiction P4 is really about: red is a claim, and the sentence
-    // inside the red was "Ready". Asserted on the class because that is what
-    // the user sees - there is no accessible role or text that carries colour.
-    renderSection(failedPackWithPathFallback());
-    const cell = screen.getByText(/Ready · managed install failed/u);
+    const cell = screen.getByText("Install failed");
     expect(cell.className).not.toMatch(/text-destructive/u);
+    const versionCell = cell.closest(".text-destructive");
+    expect(versionCell).toBeNull();
   });
 
-  it("keeps the blocking case red, so the assertion above is not vacuous", () => {
-    // The other half of the same predicate. Without this, deleting the
-    // conditional entirely would leave the test above green.
+  it("dims the blocking error case, so the assertion above is not vacuous", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [bundledCandidate({ available: false })],
@@ -638,33 +691,39 @@ describe("ProviderCliCandidatesSection: a pack that failed behind a working bina
       },
     });
     renderSection(state);
-    expect(screen.getByText(/Setup failed/u).className).toMatch(
-      /text-destructive/u,
-    );
+    const cell = screen.getByText("Install failed");
+    expect(cell.closest(".text-destructive")).not.toBeNull();
   });
 
-  it("reports the download as non-blocking too, not only the failure", () => {
-    // `fallbackRunnable` was fabricated at BOTH render sites. Fixing one and
-    // leaving the other would still show "Preparing…" - a wait the user does
-    // not have - on a provider they can use right now.
+  it("reports the managed row's own install progress while a PATH binary can still run", () => {
+    // The Managed row shows only its install subject — not a fused
+    // "Ready · installing" line. A PATH fallback is the Active chip's job,
+    // not the status cell's.
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [
         bundledCandidate({ available: false }),
         pathCandidate({ available: true }),
       ],
-      managedInstallState: { status: "downloading", percent: 40 },
+      managedInstallState: {
+        status: "downloading",
+        percent: 40,
+        version: "1.18.11",
+      },
+      nextRunBinary: {
+        kind: "path",
+        path: "/usr/local/bin/claude",
+        version: "1.0.0",
+      },
     });
     renderSection(state);
-    expect(screen.getByText(/Ready · installing… 40%/u)).toBeDefined();
+    expect(screen.getByText("Installing v1.18.11 · 40%")).toBeDefined();
+    expect(screen.queryByText(/^Updating in background$/u)).toBeNull();
   });
 
-  it("treats an unsettled availability probe as runnable", () => {
-    // `providerHasRunnableFallback` fails OPEN on `availabilityPending`: the
-    // shell-env PATH probe has not landed, so `candidates` under-reports, while
-    // the execute path awaits that same probe before deciding. Gating here
-    // would dim a working provider for a poll tick. Reached only through the
-    // derivation - the hardcode could never express it.
+  it("still shows Install failed when availability is pending", () => {
+    // availabilityPending fails open for readiness derivation (retry still
+    // offered for network), but the cell copy is raw managed state.
     const state: ProviderCliState = {
       ...providerState({
         selected: { kind: "bundled" },
@@ -679,7 +738,8 @@ describe("ProviderCliCandidatesSection: a pack that failed behind a working bina
       availabilityPending: true,
     };
     renderSection(state);
-    expect(screen.getByText(/Ready · managed install failed/u)).toBeDefined();
+    expect(screen.getByText("Install failed")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 });
 
@@ -687,17 +747,14 @@ describe("ProviderCliCandidatesSection: a pack that failed behind a working bina
  * W10. The closure-carve advisory - the only advisory kind a Phase-1 host
  * populates.
  *
- * For `pi` and `opencode` the resolver skips an auto-discovered PATH binary
- * unconditionally on execute, while observe intents resolve it happily. So the
- * provider looked available and selectable and the turn threw at send. The
- * user's way out (explicitly selecting the PATH row) already worked; nothing
- * told them it existed.
+ * After the table rework the host detail rides a PATH-row info tooltip rather
+ * than a bare line above the table.
  */
 describe("ProviderCliCandidatesSection: row-incompatibility advisory", () => {
   const DETAIL =
     "This provider is paired with the exact build Traycer ships (1.2.3), so a version found on your PATH is not used automatically. Select that path below to use it anyway.";
 
-  it("renders the advisory the host sent, verbatim", () => {
+  it("surfaces the host advisory through a PATH-row tooltip, not a standalone line", () => {
     const state = providerState({
       selected: { kind: "bundled" },
       candidates: [
@@ -707,7 +764,18 @@ describe("ProviderCliCandidatesSection: row-incompatibility advisory", () => {
       advisory: { kind: "row-incompatibility", detail: DETAIL },
     });
     renderSection(state);
-    expect(screen.getByText(DETAIL)).toBeDefined();
+    // Not a free-standing paragraph above the table (former notice line).
+    expect(screen.queryByText(DETAIL)).toBeNull();
+    const info = screen.getByLabelText(
+      "Why this PATH binary is not used automatically",
+    );
+    // Nested under FilePathTooltip: focusing the info icon can open both
+    // tooltips, so assert the advisory is among open tooltips rather than the
+    // unique role=tooltip.
+    fireEvent.focus(info);
+    const openTips = screen.getAllByRole("tooltip").map((el) => el.textContent);
+    expect(openTips.some((text) => text === DETAIL)).toBe(true);
+    fireEvent.blur(info);
   });
 
   it("renders nothing when the host sends no advisory", () => {
@@ -719,6 +787,10 @@ describe("ProviderCliCandidatesSection: row-incompatibility advisory", () => {
     });
     renderSection(state);
     expect(screen.queryByText(/paired with the exact build/u)).toBeNull();
+    expect(
+      screen.queryByLabelText("Why this PATH binary is not used automatically"),
+    ).toBeNull();
+    expect(anyTooltipHasText(/paired with the exact build/u)).toBe(false);
   });
 
   it("renders nothing for an advisory with no detail", () => {
@@ -731,6 +803,9 @@ describe("ProviderCliCandidatesSection: row-incompatibility advisory", () => {
     });
     renderSection(state);
     expect(screen.queryByText(/paired with the exact build/u)).toBeNull();
+    expect(
+      screen.queryByLabelText("Why this PATH binary is not used automatically"),
+    ).toBeNull();
   });
 
   it("ignores the dormant Phase-2 kinds rather than rendering a raw code", () => {
@@ -741,5 +816,348 @@ describe("ProviderCliCandidatesSection: row-incompatibility advisory", () => {
     });
     renderSection(state);
     expect(screen.queryByText("some phase-2 detail")).toBeNull();
+    expect(anyTooltipHasText("some phase-2 detail")).toBe(false);
+  });
+});
+
+/**
+ * B5 table rework: Active chip is host-driven via `nextRunBinary`, never
+ * client inference. Radio stays on the persisted selection; the chip only
+ * appears when the next execute would resolve to a different candidate.
+ */
+describe("ProviderCliCandidatesSection: Active chip from nextRunBinary", () => {
+  it("shows Active on the PATH row when nextRunBinary is path and selection is managed", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: false }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: {
+        status: "downloading",
+        percent: 10,
+        version: "1.18.11",
+      },
+      nextRunBinary: {
+        kind: "path",
+        path: "/usr/local/bin/claude",
+        version: "1.0.0",
+      },
+    });
+    renderSection(state);
+
+    const managedRadio = screen.getByRole("radio", {
+      name: "Select bundled binary",
+    });
+    const pathRadio = screen.getByRole("radio", {
+      name: "Select /usr/local/bin/claude",
+    });
+    // Radio remains the persisted selection while the chip differs.
+    expect(managedRadio).toHaveProperty("checked", true);
+    expect(pathRadio).toHaveProperty("checked", false);
+    expect(screen.getByText(/^Active$/u)).toBeDefined();
+    expect(screen.queryByText("Active (bundled build)")).toBeNull();
+    expect(
+      anyTooltipHasText(
+        "New sessions use this binary. Running sessions keep the binary they started with.",
+      ),
+    ).toBe(true);
+  });
+
+  it("labels the Managed row Active (bundled build) when nextRunBinary.kind is bundled", () => {
+    const state = providerState({
+      selected: { kind: "path" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.2.3" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.2.3" },
+      nextRunBinary: {
+        kind: "bundled",
+        path: null,
+        version: "1.2.3",
+      },
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByRole("radio", { name: "Select /usr/local/bin/claude" }),
+    ).toHaveProperty("checked", true);
+    expect(
+      screen.getByRole("radio", { name: "Select bundled binary" }),
+    ).toHaveProperty("checked", false);
+    expect(screen.getByText("Active (bundled build)")).toBeDefined();
+    expect(screen.queryByText(/^Active$/u)).toBeNull();
+  });
+
+  it("still shows Active (bundled build) when selection is Managed and nextRun is the inline bundled fallback", () => {
+    // Non-null managedInstallState means the row is Managed. Selected managed
+    // install vs next-run inline bundled share the row but are different
+    // binaries — the chip must stay visible.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.2.3" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.2.3" },
+      nextRunBinary: {
+        kind: "bundled",
+        path: null,
+        version: "1.0.0",
+      },
+    });
+    renderSection(state);
+
+    expect(screen.getByText("Managed")).toBeDefined();
+    expect(
+      screen.getByRole("radio", { name: "Select bundled binary" }),
+    ).toHaveProperty("checked", true);
+    expect(screen.getByText("Active (bundled build)")).toBeDefined();
+    expect(screen.queryByText(/^Active$/u)).toBeNull();
+  });
+
+  it.each([
+    ["absent field", undefined],
+    ["explicit null", null],
+  ] as const)(
+    "hides Active (bundled build) on the legacy Bundled row when managedInstallState is %s",
+    (_label, managedInstallState) => {
+      // Legacy / pre-registry row: label is "Bundled", selection.kind is
+      // bundled, and nextRunBinary.kind bundled is the same inline binary the
+      // radio already names — no chip. Only a non-null managedInstallState
+      // makes the bundled next-run a distinct fallback worth labelling.
+      const state = providerState({
+        selected: { kind: "bundled" },
+        candidates: [
+          bundledCandidate({ available: true, version: "1.2.3" }),
+          pathCandidate({ available: true }),
+        ],
+        ...(managedInstallState === undefined ? {} : { managedInstallState }),
+        nextRunBinary: {
+          kind: "bundled",
+          path: null,
+          version: "1.2.3",
+        },
+      });
+      renderSection(state);
+
+      expect(screen.getByText("Bundled")).toBeDefined();
+      expect(screen.queryByText("Managed")).toBeNull();
+      expect(
+        screen.getByRole("radio", { name: "Select bundled binary" }),
+      ).toHaveProperty("checked", true);
+      expect(screen.queryByText("Active (bundled build)")).toBeNull();
+      expect(screen.queryByText(/^Active$/u)).toBeNull();
+    },
+  );
+
+  it("shows no Active chip when nextRunBinary is null", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.0.0" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+      nextRunBinary: null,
+    });
+    renderSection(state);
+    expect(screen.queryByText(/^Active$/u)).toBeNull();
+    expect(screen.queryByText("Active (bundled build)")).toBeNull();
+  });
+
+  it("shows no Active chip when nextRunBinary is absent (old host)", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.0.0" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+    });
+    renderSection(state);
+    expect(screen.queryByText(/^Active$/u)).toBeNull();
+    expect(screen.queryByText("Active (bundled build)")).toBeNull();
+  });
+
+  it("shows no Active chip when nextRunBinary matches the persisted selection", () => {
+    const state = providerState({
+      selected: { kind: "path" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.0.0" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+      nextRunBinary: {
+        kind: "path",
+        path: "/usr/local/bin/claude",
+        version: "1.0.0",
+      },
+    });
+    renderSection(state);
+    expect(screen.queryByText(/^Active$/u)).toBeNull();
+    expect(screen.queryByText("Active (bundled build)")).toBeNull();
+    expect(
+      screen.getByRole("radio", { name: "Select /usr/local/bin/claude" }),
+    ).toHaveProperty("checked", true);
+  });
+
+  it("shows no Active chip when nextRunBinary is managed and selection is managed", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.0.0" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+      nextRunBinary: {
+        kind: "managed",
+        path: "/managed/claude",
+        version: "1.0.0",
+      },
+    });
+    renderSection(state);
+    expect(screen.queryByText(/^Active$/u)).toBeNull();
+    expect(screen.queryByText("Active (bundled build)")).toBeNull();
+    expect(
+      screen.getByRole("radio", { name: "Select bundled binary" }),
+    ).toHaveProperty("checked", true);
+  });
+});
+
+/**
+ * Manage versions is capability-gated against the scoped hostId prop. Pack
+ * fields alone are not enough — an older host must never be offered the panel
+ * entry point (offered-then-failed).
+ */
+describe("ProviderCliCandidatesSection: Manage versions capability gate", () => {
+  function stateWithPackFields(): ProviderCliState {
+    return providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.0.0" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+      packId: "claude-code",
+      managedVersions: emptyManagedVersions(),
+    });
+  }
+
+  it("hides Manage versions when capability is false even with pack fields", () => {
+    mocks.hostSupportsMethod = false;
+    renderSection(stateWithPackFields());
+    expect(mocks.useHostSupportsMethod).toHaveBeenCalledWith(
+      TEST_HOST_ID,
+      PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Manage versions" }),
+    ).toBeNull();
+  });
+
+  it("hides Manage versions when hostId is null even if pack fields are present", () => {
+    // Support flag is irrelevant: null host fails closed (same as the real
+    // useHostSupportsMethod boolean form).
+    mocks.hostSupportsMethod = true;
+    renderSectionWith(stateWithPackFields(), [stateWithPackFields()], null);
+    expect(mocks.useHostSupportsMethod).toHaveBeenCalledWith(
+      null,
+      PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Manage versions" }),
+    ).toBeNull();
+  });
+
+  it("shows Manage versions when capability is true and pack fields are present", () => {
+    mocks.hostSupportsMethod = true;
+    renderSection(stateWithPackFields());
+    expect(mocks.useHostSupportsMethod).toHaveBeenCalledWith(
+      TEST_HOST_ID,
+      PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
+    );
+    expect(
+      screen.getByRole("button", { name: "Manage versions" }),
+    ).toBeDefined();
+  });
+
+  it("hides Manage versions when packId is missing even if capability is true", () => {
+    mocks.hostSupportsMethod = true;
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [bundledCandidate({ available: true, version: "1.0.0" })],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+      managedVersions: emptyManagedVersions(),
+    });
+    renderSection(state);
+    expect(
+      screen.queryByRole("button", { name: "Manage versions" }),
+    ).toBeNull();
+  });
+
+  it("forwards scoped hostId, packId, pack-scoped title, and managedVersions on open", () => {
+    mocks.hostSupportsMethod = true;
+    const managedVersions = emptyManagedVersions();
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: true, version: "1.0.0" }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "installed", version: "1.0.0" },
+      // Shared-store pack id, not the provider display name — the panel title
+      // must stay pack-scoped (e.g. opencode CLI from an openrouter row).
+      packId: "opencode",
+      managedVersions,
+    });
+    renderSection(state);
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage versions" }));
+
+    expect(screen.getByTestId("version-manager-panel")).toBeDefined();
+    expect(mocks.lastVersionManagerProps).toEqual({
+      hostId: TEST_HOST_ID,
+      packId: "opencode",
+      packDisplayName: "opencode CLI",
+      managedVersions,
+    });
+  });
+});
+
+describe("ProviderCliCandidatesSection: tooltip trigger keyboard reachability", () => {
+  it("exposes the PATH advisory and Active chip as focusable buttons", () => {
+    const DETAIL =
+      "This provider is paired with the exact build Traycer ships (1.2.3), so a version found on your PATH is not used automatically. Select that path below to use it anyway.";
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: false }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: {
+        status: "downloading",
+        percent: 10,
+        version: "1.18.11",
+      },
+      advisory: { kind: "row-incompatibility", detail: DETAIL },
+      nextRunBinary: {
+        kind: "path",
+        path: "/usr/local/bin/claude",
+        version: "1.0.0",
+      },
+    });
+    renderSection(state);
+
+    const advisory = screen.getByRole("button", {
+      name: "Why this PATH binary is not used automatically",
+    });
+    advisory.focus();
+    expect(document.activeElement).toBe(advisory);
+
+    const chip = screen.getByRole("button", { name: "Active" });
+    chip.focus();
+    expect(document.activeElement).toBe(chip);
   });
 });

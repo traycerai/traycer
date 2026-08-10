@@ -153,6 +153,36 @@ function isRetryWorthWatching(
   if (state.retryAtMs === null) return false;
   return nowMs < state.retryAtMs + PROVIDERS_RETRY_OBSERVATION_GRACE_MS;
 }
+
+/**
+ * True when any managed-pack transfer is in flight for this provider row —
+ * automatic lane (`managedInstallState`) or user-lane version-manager rows
+ * (`managedVersions.available[].installState`).
+ *
+ * User-lane downloads are independent of the automatic target: after
+ * `providers.installPackVersion` returns non-blocking, only the version row
+ * sits at `downloading` while the automatic slot may remain `installed` /
+ * `absent`. The installing poll lane must still fire, or progress freezes on
+ * the 15-minute steady cadence.
+ *
+ * There is no `queued` status on either wire install-state union today, so
+ * this predicate only inspects `downloading` (including `percent: null`).
+ */
+function providerHasManagedInstallInFlight(provider: {
+  readonly managedInstallState?: ProviderManagedInstallState | null;
+  readonly managedVersions?: {
+    readonly available: readonly {
+      readonly installState: { readonly status: string };
+    }[];
+  } | null;
+}): boolean {
+  if (provider.managedInstallState?.status === "downloading") return true;
+  const managedVersions = provider.managedVersions;
+  if (managedVersions === null || managedVersions === undefined) return false;
+  return managedVersions.available.some(
+    (row) => row.installState.status === "downloading",
+  );
+}
 export const PROVIDERS_LIMITED_POLL_LANE: ConditionPollLane = {
   id: "providers.limited",
   initialDelayMs: 30 * SECOND_MS,
@@ -843,8 +873,16 @@ export const HOST_METHOD_POLL_TABLE = {
         // first boot, and `providers.pending` decays to 30s while an install
         // needs a bounded 5s - taking the faster, tighter-capped lane while
         // bytes are moving is the only ordering that keeps progress readable.
-        const hasInstallInFlight = data.providers.some(
-          (provider) => provider.managedInstallState?.status === "downloading",
+        //
+        // Both lanes: automatic (`managedInstallState`) AND user-lane version
+        // manager rows (`managedVersions.available[].installState`). A
+        // non-blocking installPackVersion leaves only the user-lane row as
+        // `downloading` while the automatic lane stays settled — missing that
+        // would drop progress onto the 15-minute steady lane.
+        // `percent: null` still counts: a sibling-owned transfer needs the
+        // fast lane to notice completion.
+        const hasInstallInFlight = data.providers.some((provider) =>
+          providerHasManagedInstallInFlight(provider),
         );
         if (hasInstallInFlight) return PROVIDERS_INSTALLING_POLL_LANE;
         const hasPendingProbe = data.providers.some(
@@ -1007,6 +1045,37 @@ export const HOST_METHOD_POLL_TABLE = {
   // not a status source - progress is read from `providers.list`, which
   // already carries `managedInstallState`.
   "providers.ensurePack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The four per-pack version-manager methods. All `fifo` for the reason
+  // `providers.ensurePack` above is: each mutates durable host state (bytes on
+  // disk, the shared pin/policy record), so coalescing two rapid taps into one
+  // would drop a user action - and unlike a read, replaying the survivor is not
+  // equivalent. `poll: null` on all four: none is a status source. Progress and
+  // the resulting version list are read from `providers.list`, which carries
+  // `managedVersions`; polling the mutation would re-run it.
+  //
+  // These entries exist because this table is EXHAUSTIVE over the registry's
+  // method names - adding a method to `@traycer/protocol` without adding a row
+  // here is a gui-app compile error, which is the intended tripwire.
+  "providers.installPackVersion": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.removePackVersion": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.usePackVersion": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.setPackPolicy": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

@@ -1,0 +1,857 @@
+import { useCallback, useState, type JSX } from "react";
+import type {
+  ProviderManagedVersions,
+  ProviderPackVersion,
+} from "@traycer/protocol/host/provider-schemas";
+import { toast } from "sonner";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
+import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
+import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
+import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-pack-version-mutation";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { cn } from "@/lib/utils";
+import {
+  certificationBadgeLabel,
+  comparePackVersionsDescending,
+  composeVersionRowMeta,
+  findRecommendedVersion,
+  formatPackSizeBytes,
+  formatSharedWithProvidersLine,
+  installPackVersionRefusalMessage,
+  removeResultUserMessage,
+  updateBannerDownloadEligibility,
+  packVersionUseRefusalMessage,
+  versionDeleteEligibility,
+  versionDownloadEligibility,
+  versionInstallFetchLabel,
+  versionShowsInstallFetchAction,
+  versionUseEligibility,
+  type VersionDeleteEligibility,
+  type VersionDownloadEligibility,
+  type VersionUseEligibility,
+} from "./provider-pack-version-manager-model";
+
+/**
+ * Representative optional method for the four pack-version RPCs. All four
+ * share non-floor `degrade: unsupported` registration; gating on one is the
+ * capability signal for the whole panel (same host either has the surface or
+ * does not).
+ */
+export const PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD =
+  "providers.usePackVersion" as const;
+
+/** Pending key for "Use latest automatically" (clear pin / version: null). */
+const CLEAR_PIN_PENDING_KEY = "__auto__";
+
+/**
+ * Public props for the per-pack version manager. The CLI candidates table
+ * ticket mounts this panel and supplies the wire fields from `providers.list`
+ * v8.0 (`packId` + `managedVersions`) plus the **settings-scoped** `hostId`
+ * already threaded through this tree (`scope.hostId`). Do not ambiently
+ * re-read the globally active host — the settings surface can display one
+ * host while another is active.
+ *
+ * Capability: gated on {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD}
+ * via `useHostMethodSupport` (three-valued) against the **passed** `hostId`.
+ * - `hostId === null` or support `null` → pending (not unsupported).
+ * - support `false` → clear "host too old" (no action buttons).
+ * - support `true` → full panel.
+ */
+export type ProviderPackVersionManagerPanelProps = {
+  /**
+   * Settings-scoped host this panel is about. Same source as every other
+   * child under `providers-settings-panel` (`scope.hostId`). Null when the
+   * scope has no host yet — treated like capability-unknown (pending), never
+   * as "unsupported".
+   */
+  readonly hostId: string | null;
+  /** Machine-shared pack id (e.g. `opencode`). Keys every mutation. */
+  readonly packId: string;
+  /**
+   * Short pack title for the header, e.g. `"opencode CLI"`. Not a provider
+   * id — shared packs have one name that is not any single provider.
+   */
+  readonly packDisplayName: string;
+  /** Per-pack manager state from the provider row. */
+  readonly managedVersions: ProviderManagedVersions;
+};
+
+type RowNotice = {
+  readonly version: string;
+  readonly kind: "info" | "error";
+  readonly message: string;
+};
+
+/** Banner-scoped notice when the durable update version has no row to attach. */
+type BannerNotice = {
+  readonly kind: "error";
+  readonly message: string;
+};
+
+/**
+ * Per-pack version manager panel (B5-T2).
+ *
+ * Renders the wireframe surface: header (name, sharing, footprint, auto-
+ * download toggle), update-available banner, and one action row per version.
+ * Mutations go through the four v8.0 pack RPCs.
+ *
+ * Capability-gated (non-floor optional RPCs): see
+ * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD}.
+ */
+export function ProviderPackVersionManagerPanel(
+  props: ProviderPackVersionManagerPanelProps,
+): JSX.Element {
+  const { hostId, packId, packDisplayName, managedVersions } = props;
+  // Gate against the settings-scoped host only. useHostMethodSupport already
+  // returns null when hostId is null (no handshake possible yet).
+  const methodSupport = useHostMethodSupport(
+    hostId,
+    PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
+  );
+
+  const install = useProvidersInstallPackVersion();
+  const remove = useProvidersRemovePackVersion();
+  const useVersion = useProvidersUsePackVersion();
+  const setPolicy = useProvidersSetPackPolicy();
+
+  const [rowNotice, setRowNotice] = useState<RowNotice | null>(null);
+  const [bannerNotice, setBannerNotice] = useState<BannerNotice | null>(null);
+  const [pendingVersion, setPendingVersion] = useState<string | null>(null);
+
+  const recommendedVersion = findRecommendedVersion(managedVersions);
+  const sharedLine = formatSharedWithProvidersLine(
+    managedVersions.sharedWithProviders,
+  );
+  const totalSizeLabel = formatPackSizeBytes(managedVersions.totalSizeBytes);
+  const updateAvailable = managedVersions.updateAvailable;
+  const bannerDownload =
+    updateAvailable === null
+      ? null
+      : updateBannerDownloadEligibility(
+          managedVersions.available,
+          updateAvailable.version,
+        );
+
+  const clearNotice = useCallback(() => {
+    setRowNotice(null);
+    setBannerNotice(null);
+  }, []);
+
+  const onToggleAutoDownload = useCallback(
+    (next: boolean) => {
+      clearNotice();
+      setPolicy.mutate({ packId, autoDownload: next });
+    },
+    [clearNotice, packId, setPolicy],
+  );
+
+  const onDownload = useCallback(
+    (version: string) => {
+      clearNotice();
+      setPendingVersion(version);
+      const hasRow = managedVersions.available.some(
+        (entry) => entry.version === version,
+      );
+      install.mutate(
+        { packId, version },
+        {
+          onSettled: () => setPendingVersion(null),
+          onSuccess: (response) => {
+            if (!response.result.ok) {
+              const message = installPackVersionRefusalMessage(
+                response.result.code,
+              );
+              if (hasRow) {
+                setRowNotice({ version, kind: "error", message });
+              } else {
+                // Durable banner may name a version with no row — surface on
+                // the banner, not a phantom row notice.
+                setBannerNotice({ kind: "error", message });
+              }
+            }
+          },
+          onError: (error) => {
+            toastFromHostError(error, "Couldn't download this version.");
+          },
+        },
+      );
+    },
+    [clearNotice, install, managedVersions.available, packId],
+  );
+
+  const onUse = useCallback(
+    (version: string) => {
+      clearNotice();
+      setPendingVersion(version);
+      useVersion.mutate(
+        { packId, version },
+        {
+          onSettled: () => setPendingVersion(null),
+          onSuccess: (response) => {
+            if (!response.result.ok) {
+              setRowNotice({
+                version,
+                kind: "error",
+                message: packVersionUseRefusalMessage(response.result.code),
+              });
+              return;
+            }
+            // Honest semantics: running sessions keep their binary.
+            toast.success(`New sessions will use ${version}`);
+          },
+          onError: (error) => {
+            toastFromHostError(error, "Couldn't switch to this version.");
+          },
+        },
+      );
+    },
+    [clearNotice, packId, useVersion],
+  );
+
+  const onClearPin = useCallback(() => {
+    clearNotice();
+    setPendingVersion(CLEAR_PIN_PENDING_KEY);
+    useVersion.mutate(
+      { packId, version: null },
+      {
+        onSettled: () => setPendingVersion(null),
+        onSuccess: (response) => {
+          if (!response.result.ok) {
+            setRowNotice({
+              version: managedVersions.pinnedVersion ?? packId,
+              kind: "error",
+              message:
+                response.result.detail ??
+                "Could not clear the pin and return to automatic selection",
+            });
+            return;
+          }
+          toast.success(
+            "Pin cleared — new sessions follow automatic version selection",
+          );
+        },
+        onError: (error) => {
+          toastFromHostError(error, "Couldn't clear the pin.");
+        },
+      },
+    );
+  }, [clearNotice, managedVersions.pinnedVersion, packId, useVersion]);
+
+  const onDelete = useCallback(
+    (version: string) => {
+      clearNotice();
+      setPendingVersion(version);
+      remove.mutate(
+        { packId, version },
+        {
+          onSettled: () => setPendingVersion(null),
+          onSuccess: (response) => {
+            if (!response.result.ok) {
+              const message = removeResultUserMessage(response.result);
+              setRowNotice({
+                version,
+                kind:
+                  response.result.code === "deferred-locked" ? "info" : "error",
+                message,
+              });
+            }
+          },
+          onError: (error) => {
+            toastFromHostError(error, "Couldn't delete this version.");
+          },
+        },
+      );
+    },
+    [clearNotice, packId, remove],
+  );
+
+  // hostId null OR support null: absence of knowledge, not evidence of absence.
+  if (hostId === null || methodSupport === null) {
+    return (
+      <div
+        data-testid="provider-pack-version-manager-pending"
+        data-pack-id={packId}
+        className="flex w-full max-w-2xl items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-ui-sm text-muted-foreground"
+        aria-busy="true"
+        aria-label={`${packDisplayName} versions loading`}
+      >
+        <MutedAgentSpinner />
+        <span>Checking host support for version management…</span>
+      </div>
+    );
+  }
+
+  if (!methodSupport) {
+    return (
+      <div
+        data-testid="provider-pack-version-manager-unsupported"
+        data-pack-id={packId}
+        className="w-full max-w-2xl rounded-xl border border-border bg-card px-4 py-3 text-ui-sm text-muted-foreground sm:px-5"
+        role="status"
+      >
+        Managing managed CLI versions requires a newer Traycer host. The
+        provider table still works; update this host to download, switch, or
+        delete individual versions.
+      </div>
+    );
+  }
+
+  const rows = [...managedVersions.available].sort((a, b) =>
+    comparePackVersionsDescending(a.version, b.version),
+  );
+
+  const anyPending =
+    install.isPending ||
+    remove.isPending ||
+    useVersion.isPending ||
+    setPolicy.isPending;
+
+  return (
+    <section
+      data-testid="provider-pack-version-manager"
+      data-pack-id={packId}
+      data-host-id={hostId}
+      className="w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-card"
+      aria-label={`${packDisplayName} versions`}
+    >
+      <VersionManagerHeader
+        packDisplayName={packDisplayName}
+        sharedLine={sharedLine}
+        totalSizeLabel={totalSizeLabel}
+        autoDownload={managedVersions.autoDownload}
+        pinnedVersion={managedVersions.pinnedVersion}
+        clearPinPending={
+          pendingVersion === CLEAR_PIN_PENDING_KEY && useVersion.isPending
+        }
+        policyPending={setPolicy.isPending}
+        actionsDisabled={anyPending}
+        onToggleAutoDownload={onToggleAutoDownload}
+        onClearPin={onClearPin}
+      />
+
+      {updateAvailable !== null && bannerDownload !== null ? (
+        <UpdateAvailableBanner
+          version={updateAvailable.version}
+          canDownload={bannerDownload.allowed}
+          disabledReason={bannerDownload.allowed ? null : bannerDownload.reason}
+          notice={bannerNotice}
+          downloadPending={
+            pendingVersion === updateAvailable.version && install.isPending
+          }
+          actionsDisabled={anyPending}
+          onDownload={onDownload}
+        />
+      ) : null}
+
+      <ul className="flex w-full flex-col">
+        {rows.map((row) => (
+          <VersionRow
+            key={row.version}
+            row={row}
+            recommendedVersion={recommendedVersion}
+            notice={
+              rowNotice !== null && rowNotice.version === row.version
+                ? rowNotice
+                : null
+            }
+            downloadPending={
+              pendingVersion === row.version && install.isPending
+            }
+            usePending={pendingVersion === row.version && useVersion.isPending}
+            deletePending={pendingVersion === row.version && remove.isPending}
+            actionsDisabled={anyPending}
+            onDownload={onDownload}
+            onUse={onUse}
+            onDelete={onDelete}
+          />
+        ))}
+        {rows.length === 0 ? (
+          <li className="px-4 py-6 text-center text-ui-sm text-muted-foreground sm:px-5">
+            No versions listed for this pack yet.
+          </li>
+        ) : null}
+      </ul>
+    </section>
+  );
+}
+
+function formatFootprintLine(
+  sharedLine: string | null,
+  totalSizeLabel: string | null,
+): string | null {
+  if (sharedLine !== null && totalSizeLabel !== null) {
+    return `${sharedLine} · ${totalSizeLabel} on disk`;
+  }
+  if (sharedLine !== null) return sharedLine;
+  if (totalSizeLabel !== null) return `${totalSizeLabel} on disk`;
+  return null;
+}
+
+function VersionManagerHeader(props: {
+  readonly packDisplayName: string;
+  readonly sharedLine: string | null;
+  readonly totalSizeLabel: string | null;
+  readonly autoDownload: boolean;
+  readonly pinnedVersion: string | null;
+  readonly clearPinPending: boolean;
+  readonly policyPending: boolean;
+  readonly actionsDisabled: boolean;
+  readonly onToggleAutoDownload: (next: boolean) => void;
+  readonly onClearPin: () => void;
+}): JSX.Element {
+  const footprint = formatFootprintLine(props.sharedLine, props.totalSizeLabel);
+
+  return (
+    <header className="flex w-full flex-col gap-3 border-b border-border bg-muted/40 px-4 py-3 sm:px-5">
+      <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-ui-sm font-semibold text-foreground">
+            {props.packDisplayName}
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              · versions
+            </span>
+          </h3>
+          {footprint !== null ? (
+            <p className="mt-1 text-ui-xs text-muted-foreground">{footprint}</p>
+          ) : null}
+        </div>
+        <label className="flex shrink-0 items-center gap-2 text-ui-xs text-muted-foreground">
+          <span>Auto-download updates</span>
+          <Switch
+            checked={props.autoDownload}
+            onCheckedChange={props.onToggleAutoDownload}
+            disabled={props.policyPending}
+            aria-label="Auto-download updates"
+          />
+          {props.policyPending ? <MutedAgentSpinner /> : null}
+        </label>
+      </div>
+      {props.pinnedVersion !== null ? (
+        <div
+          data-testid="provider-pack-pinned-banner"
+          className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p className="text-ui-xs text-muted-foreground">
+            Pinned to{" "}
+            <span className="font-medium text-foreground">
+              {props.pinnedVersion}
+            </span>
+            {" · "}
+            newer versions notify only until you switch or clear the pin
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            data-testid="provider-pack-clear-pin"
+            disabled={props.actionsDisabled}
+            onClick={props.onClearPin}
+          >
+            Use latest automatically
+            {props.clearPinPending ? <MutedAgentSpinner /> : null}
+          </Button>
+        </div>
+      ) : null}
+    </header>
+  );
+}
+
+function UpdateAvailableBanner(props: {
+  readonly version: string;
+  readonly canDownload: boolean;
+  readonly disabledReason: string | null;
+  readonly notice: BannerNotice | null;
+  readonly downloadPending: boolean;
+  readonly actionsDisabled: boolean;
+  readonly onDownload: (version: string) => void;
+}): JSX.Element {
+  return (
+    <div
+      data-testid="provider-pack-update-available-banner"
+      className="mx-4 mt-3 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5 sm:mx-5"
+    >
+      <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-ui-sm text-foreground">
+          New version <span className="font-semibold">{props.version}</span> is
+          available.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          data-testid="provider-pack-update-download"
+          disabled={!props.canDownload || props.actionsDisabled}
+          onClick={() => props.onDownload(props.version)}
+        >
+          Download
+          {props.downloadPending ? <MutedAgentSpinner /> : null}
+        </Button>
+      </div>
+      {props.disabledReason !== null ? (
+        <p
+          data-testid="provider-pack-update-banner-disabled-reason"
+          className="text-ui-xs text-muted-foreground"
+        >
+          {props.disabledReason}
+        </p>
+      ) : null}
+      {props.notice !== null ? (
+        <p
+          data-testid="provider-pack-update-banner-notice"
+          className="text-ui-xs text-destructive"
+        >
+          {props.notice.message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+type VersionRowProps = {
+  readonly row: ProviderPackVersion;
+  readonly recommendedVersion: string | null;
+  readonly notice: RowNotice | null;
+  readonly downloadPending: boolean;
+  readonly usePending: boolean;
+  readonly deletePending: boolean;
+  readonly actionsDisabled: boolean;
+  readonly onDownload: (version: string) => void;
+  readonly onUse: (version: string) => void;
+  readonly onDelete: (version: string) => void;
+};
+
+function VersionRow(props: VersionRowProps): JSX.Element {
+  const {
+    row,
+    recommendedVersion,
+    notice,
+    downloadPending,
+    usePending,
+    deletePending,
+    actionsDisabled,
+    onDownload,
+    onUse,
+    onDelete,
+  } = props;
+
+  const download = versionDownloadEligibility(row);
+  const useElig = versionUseEligibility(row, recommendedVersion);
+  const del = versionDeleteEligibility(row);
+  const certBadge = certificationBadgeLabel(row.certification);
+  const sizeLabel = formatPackSizeBytes(row.sizeBytes);
+  const meta = composeVersionRowMeta({
+    installState: row.installState,
+    certification: row.certification,
+    sizeLabel,
+    recommended: row.recommended,
+  });
+  const greyed =
+    row.certification === "yanked" ||
+    row.certification === "below-security-floor" ||
+    row.certification === "host-ineligible";
+
+  const showFetch = versionShowsInstallFetchAction(row);
+  const fetchLabel = versionInstallFetchLabel(row);
+  const showCondemnedNoRetry =
+    row.installState.status === "unusable" &&
+    row.installState.reason === "condemned";
+  const useDisabledReason =
+    !useElig.allowed && row.installState.status === "installed" && !row.current
+      ? useElig.reason
+      : null;
+
+  return (
+    <li
+      data-testid={`provider-pack-version-row-${row.version}`}
+      data-version={row.version}
+      className={cn(
+        "flex w-full flex-col gap-2 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5",
+        greyed && "opacity-70",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <VersionRowIdentity
+          version={row.version}
+          recommended={row.recommended}
+          current={row.current}
+          certBadge={certBadge}
+          certification={row.certification}
+        />
+        {meta.length > 0 ? (
+          <p
+            data-testid="version-row-meta"
+            className="mt-1 text-ui-xs text-muted-foreground"
+          >
+            {meta}
+          </p>
+        ) : null}
+
+        {row.installState.status === "downloading" ? (
+          <DownloadProgress percent={row.installState.percent} />
+        ) : null}
+
+        {showCondemnedNoRetry ? (
+          <p
+            data-testid="condemned-no-retry"
+            className="mt-1.5 text-ui-xs text-destructive"
+          >
+            Install failed permanently on this machine — no retry
+          </p>
+        ) : null}
+
+        {notice !== null ? (
+          <p
+            data-testid="version-row-notice"
+            className={cn(
+              "mt-1.5 text-ui-xs",
+              notice.kind === "error"
+                ? "text-destructive"
+                : "text-muted-foreground",
+            )}
+          >
+            {notice.message}
+          </p>
+        ) : null}
+
+        {useDisabledReason !== null ? (
+          <p
+            data-testid="use-disabled-reason"
+            className="mt-1 text-ui-xs text-muted-foreground"
+          >
+            Use disabled: {useDisabledReason}
+          </p>
+        ) : null}
+      </div>
+
+      <VersionRowActions
+        row={row}
+        download={download}
+        useElig={useElig}
+        del={del}
+        showFetch={showFetch}
+        fetchLabel={fetchLabel}
+        downloadPending={downloadPending}
+        usePending={usePending}
+        deletePending={deletePending}
+        actionsDisabled={actionsDisabled}
+        onDownload={onDownload}
+        onUse={onUse}
+        onDelete={onDelete}
+      />
+    </li>
+  );
+}
+
+function VersionRowIdentity(props: {
+  readonly version: string;
+  readonly recommended: boolean;
+  readonly current: boolean;
+  readonly certBadge: string | null;
+  readonly certification: ProviderPackVersion["certification"];
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="font-mono text-ui-sm text-foreground">
+        {props.version}
+      </span>
+      {props.recommended ? (
+        <Badge variant="secondary" data-testid="badge-recommended">
+          Recommended
+        </Badge>
+      ) : null}
+      {props.current ? (
+        <Badge variant="default" data-testid="badge-current">
+          Current
+        </Badge>
+      ) : null}
+      {props.certBadge !== null ? (
+        <Badge
+          variant={props.certification === "yanked" ? "destructive" : "outline"}
+          data-testid={`badge-cert-${props.certification}`}
+        >
+          {props.certBadge}
+        </Badge>
+      ) : null}
+    </div>
+  );
+}
+
+function VersionRowActions(props: {
+  readonly row: ProviderPackVersion;
+  readonly download: VersionDownloadEligibility;
+  readonly useElig: VersionUseEligibility;
+  readonly del: VersionDeleteEligibility;
+  readonly showFetch: boolean;
+  readonly fetchLabel: "Download" | "Retry";
+  readonly downloadPending: boolean;
+  readonly usePending: boolean;
+  readonly deletePending: boolean;
+  readonly actionsDisabled: boolean;
+  readonly onDownload: (version: string) => void;
+  readonly onUse: (version: string) => void;
+  readonly onDelete: (version: string) => void;
+}): JSX.Element {
+  const {
+    row,
+    download,
+    useElig,
+    del,
+    showFetch,
+    fetchLabel,
+    downloadPending,
+    usePending,
+    deletePending,
+    actionsDisabled,
+    onDownload,
+    onUse,
+    onDelete,
+  } = props;
+
+  const downloading = row.installState.status === "downloading";
+  const showUse = row.installState.status === "installed" && !row.current;
+  const fetchDisabled = actionsDisabled || !download.allowed;
+  const useDisabled = actionsDisabled || !useElig.allowed;
+  const fetchTooltip = download.allowed ? null : download.reason;
+  const useTooltip = useElig.allowed ? null : useElig.reason;
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-2">
+      {downloading ? (
+        <Button type="button" size="sm" variant="outline" disabled>
+          Downloading…
+          <MutedAgentSpinner />
+        </Button>
+      ) : null}
+
+      {showFetch ? (
+        <ActionButton
+          label={fetchLabel}
+          disabled={fetchDisabled}
+          tooltip={fetchTooltip}
+          pending={downloadPending}
+          variant={fetchLabel === "Retry" ? "outline" : "default"}
+          onClick={() => onDownload(row.version)}
+        />
+      ) : null}
+
+      {showUse ? (
+        <ActionButton
+          label="Use"
+          disabled={useDisabled}
+          tooltip={useTooltip}
+          pending={usePending}
+          variant="outline"
+          onClick={() => onUse(row.version)}
+        />
+      ) : null}
+
+      {del.allowed ? (
+        <ActionButton
+          label="Delete"
+          disabled={actionsDisabled}
+          tooltip={null}
+          pending={deletePending}
+          variant="outline"
+          destructive
+          onClick={() => onDelete(row.version)}
+        />
+      ) : null}
+
+      {row.current ? (
+        <ActionButton
+          label="Delete"
+          disabled
+          tooltip="Switch to another version first"
+          pending={false}
+          variant="outline"
+          testId="delete-disabled-current"
+          onClick={() => undefined}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ActionButton(props: {
+  readonly label: string;
+  readonly disabled: boolean;
+  readonly tooltip: string | null;
+  readonly pending: boolean;
+  readonly variant: "default" | "outline";
+  readonly destructive?: boolean;
+  readonly testId?: string;
+  readonly onClick: () => void;
+}): JSX.Element {
+  const button = (
+    <Button
+      type="button"
+      size="sm"
+      variant={props.variant}
+      className={
+        props.destructive === true
+          ? "text-destructive hover:text-destructive"
+          : undefined
+      }
+      disabled={props.disabled}
+      data-testid={props.testId}
+      onClick={props.onClick}
+    >
+      {props.label}
+      {props.pending ? <MutedAgentSpinner /> : null}
+    </Button>
+  );
+
+  if (props.tooltip === null) return button;
+
+  return (
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={4}
+      align="center"
+    >
+      <span className="inline-flex">{button}</span>
+    </TooltipWrapper>
+  );
+}
+
+function DownloadProgress(props: {
+  readonly percent: number | null;
+}): JSX.Element {
+  // percent null = sibling host owns the transfer — indeterminate, not error.
+  if (props.percent === null) {
+    return (
+      <div
+        data-testid="download-progress-indeterminate"
+        className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuetext="Download in progress on another host"
+        aria-busy="true"
+      >
+        <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+      </div>
+    );
+  }
+  const clamped = Math.min(100, Math.max(0, Math.round(props.percent)));
+  return (
+    <div
+      data-testid="download-progress-determinate"
+      className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={clamped}
+    >
+      <div
+        className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+        style={{ width: `${String(clamped)}%` }}
+      />
+    </div>
+  );
+}

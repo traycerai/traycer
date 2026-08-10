@@ -1,10 +1,11 @@
 import { use, useCallback, useId, useState, type ReactNode } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Info, Plus, Trash2 } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliCandidate,
   type ProviderCliState,
   type ProviderManagedInstallState,
+  type ProviderNextRunBinary,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -12,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
@@ -19,9 +22,7 @@ import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detec
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
   providerPackBlocksExecution,
-  providerPackErrorDetail,
   providerPackPreparingForProvider,
-  providerPackPreparingShortLabel,
   providerPackRetryable,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
@@ -29,6 +30,10 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
+import {
+  PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
+  ProviderPackVersionManagerPanel,
+} from "./provider-pack-version-manager-panel";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -123,6 +128,12 @@ interface ProviderCandidateConfig {
   readonly candidates: readonly ProviderCliCandidate[];
 }
 
+type VersionManagerPanelData = {
+  readonly packId: string;
+  readonly packDisplayName: string;
+  readonly managedVersions: NonNullable<ProviderCliState["managedVersions"]>;
+};
+
 function candidateConfigForProvider(
   state: ProviderCliState,
   providers: readonly ProviderCliState[],
@@ -139,104 +150,29 @@ function candidateConfigForProvider(
   };
 }
 
-/**
- * D6's PATH-unblock composite: the user's selection is the managed candidate,
- * an install is ACTIVELY in progress (not merely absent - an absent pack with
- * no download running yet is not "installing", so the copy must stay quiet
- * until a download actually starts), and a PATH binary is standing in for it
- * right now. Derived client-side from existing signals (selection +
- * candidates) plus `managedInstallState` rather than carried as its own field
- * - there is nothing here a host-computed boolean would tell us that these
- * don't already. `null` (old host, or this provider hasn't been cut over to
- * the registry yet) never activates it.
- */
-function pathUnblockActive(
-  selected: ProviderSelection,
-  managedInstallState: ProviderManagedInstallState | null,
-  candidates: readonly ProviderCliCandidate[],
-): boolean {
-  if (selected.kind !== "bundled") return false;
-  if (managedInstallState?.status !== "downloading") return false;
-  return candidates.some(
-    (candidate) => candidate.kind === "path" && candidate.available,
-  );
-}
-
-// The two quiet, self-correcting row indicators above the candidates table -
-// never a toast (see the plan's D6/D12 renderer rules). Both are absent by
-// default (old host, or nothing to report).
-function CandidateNotices({
-  showPathUnblockNotice,
-  versionVisibility,
-  advisory,
-  packPreparing,
-}: {
-  readonly showPathUnblockNotice: boolean;
-  readonly versionVisibility: ProviderCliState["versionVisibility"];
-  readonly advisory: ProviderCliState["advisory"];
-  readonly packPreparing: ProviderPackPreparing | null;
-}): ReactNode {
-  // An old host leaves the key genuinely absent, which reads the same here as
-  // "no other session is on a different version".
-  const differingSessionCount = versionVisibility?.differingSessionCount ?? 0;
-  return (
-    <>
-      {/*
-        P2. The reason a failed pack failed, on the screen every other surface
-        sends the user to. The status cell beside the bundled row has one
-        truncating grid column, so it can only ever carry the short label -
-        which for a blocking failure is the two words "Setup failed". A user who
-        followed the picker tooltip or the host's own RPC error here arrived
-        precisely to learn WHY, and found the least informative phrasing in the
-        module. This line is where the sentence fits, and it sits with the other
-        row-level notices rather than inside the table for the same reason those
-        do: the table's job is the binary choice, not the narration.
-
-        Shown for a non-blocking failure too. "Ready · managed install failed"
-        is a state a user is entitled to understand - the provider works, and
-        something they may want to fix quietly did not.
-      */}
-      {packPreparing?.kind === "error" ? (
-        <p
-          className={cn(
-            "mb-2 text-ui-xs",
-            providerPackBlocksExecution(packPreparing)
-              ? "text-destructive"
-              : "text-muted-foreground",
-          )}
-        >
-          {providerPackErrorDetail(packPreparing.reason)}
-        </p>
-      ) : null}
-      {/*
-        W10. The one advisory kind a Phase-1 host populates: this provider is
-        paired with the exact build Traycer ships, so a version found on PATH is
-        skipped automatically on execute. Without this the provider reported
-        available, rendered ungated and selectable, and the turn then threw
-        `preparing` - offered-then-failed, from a direction no gate was watching.
-        Rendered next to the candidates table on purpose: the fix it names ("use
-        that path anyway") is a row the user is already looking at.
-        Unknown future kinds render nothing rather than a bare code.
-      */}
-      {advisory?.kind === "row-incompatibility" && advisory.detail !== null ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
-          {advisory.detail}
-        </p>
-      ) : null}
-      {showPathUnblockNotice ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
-          Running from PATH · installing managed copy
-        </p>
-      ) : null}
-      {differingSessionCount > 0 ? (
-        <p className="mb-2 text-ui-xs text-muted-foreground">
-          {differingSessionCount === 1
-            ? "1 other session is using a different version."
-            : `${differingSessionCount} other sessions are using a different version.`}
-        </p>
-      ) : null}
-    </>
-  );
+function versionManagerPanelDataFor(args: {
+  readonly supportsVersionManager: boolean | null;
+  readonly packId: ProviderCliState["packId"];
+  readonly managedVersions: ProviderCliState["managedVersions"];
+}): VersionManagerPanelData | null {
+  if (
+    !args.supportsVersionManager ||
+    args.packId === null ||
+    args.packId === undefined ||
+    args.managedVersions === null ||
+    args.managedVersions === undefined
+  ) {
+    return null;
+  }
+  return {
+    packId: args.packId,
+    // A pack can back several providers. Its manager must retain the
+    // shared-store name rather than inheriting whichever provider row
+    // happened to open it (for example, `opencode CLI`, not
+    // `OpenRouter CLI`).
+    packDisplayName: `${args.packId} CLI`,
+    managedVersions: args.managedVersions,
+  };
 }
 
 /**
@@ -376,15 +312,25 @@ function CliBinaryMissingNotice({
 export function ProviderCliCandidatesSection({
   state,
   providers,
+  hostId,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly hostId: string | null;
 }): ReactNode {
   const providerId = state.providerId;
   const cliConfig = candidateConfigForProvider(state, providers);
   const radioName = useId();
   const [adding, setAdding] = useState(false);
+  const [versionManagerOpen, setVersionManagerOpen] = useState(false);
   const [draftPath, setDraftPath] = useState("");
+  // The version manager's RPCs are all non-floor. `false` also covers the
+  // handshake's transient unknown state, so we keep its entry point absent
+  // until this host has positively advertised the representative method.
+  const supportsVersionManager = useHostSupportsMethod(
+    hostId,
+    PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
+  );
   const focusDraftInput = useCallback((node: HTMLInputElement | null): void => {
     node?.focus();
   }, []);
@@ -435,11 +381,11 @@ export function ProviderCliCandidatesSection({
   // a red row and a blocking "Setup failed" for every pin-carrying provider on
   // the machine, at the moment the user is least able to tell it is wrong.
   const packPreparing = providerPackPreparingForProvider(state);
-  const showPathUnblockNotice = pathUnblockActive(
-    cliConfig.selected,
-    managedInstallState,
-    cliConfig.candidates,
-  );
+  const versionManagerData = versionManagerPanelDataFor({
+    supportsVersionManager,
+    packId: state.packId,
+    managedVersions: state.managedVersions,
+  });
   // `availabilityPending` means the host's shell/PATH probe is still running,
   // and the protocol is explicit that `candidates` must not be trusted until
   // it settles ("A pending row always carries `available: false` semantically"
@@ -455,103 +401,268 @@ export function ProviderCliCandidatesSection({
 
   return (
     <>
-      <CandidateNotices
-        showPathUnblockNotice={showPathUnblockNotice}
-        versionVisibility={state.versionVisibility}
-        advisory={state.advisory ?? null}
-        packPreparing={packPreparing}
+      <CandidateAreaContent
+        area={candidateArea}
+        providerId={providerId}
+        table={{
+          candidates: cliConfig.candidates,
+          managedInstallState,
+          packPreparing,
+          nextRunBinary: state.nextRunBinary ?? null,
+          advisory: state.advisory ?? null,
+          differingSessionCount:
+            state.versionVisibility?.differingSessionCount ?? 0,
+          radioName,
+          selection: cliConfig.selected,
+          busy: setSelection.isPending || removeCustom.isPending,
+          onSelect,
+          onRetryPack: () => ensurePack.mutate({ providerId }),
+          retryingPack: ensurePack.isPending,
+          onRemove: (path) => removeCustom.mutate({ providerId, path }),
+          canManageVersions: versionManagerData !== null,
+          onToggleVersionManager: () => setVersionManagerOpen((open) => !open),
+          versionManagerOpen,
+          adding,
+          draftPath,
+          onDraftPathChange: setDraftPath,
+          focusDraftInput,
+          onSaveCustom,
+          savingCustom: addCustom.isPending,
+          onCancelCustom: () => {
+            setAdding(false);
+            setDraftPath("");
+          },
+          probing: probe.isFetching,
+          probeExecutable: probe.data?.executable ?? null,
+          probeVersion: probe.data?.version ?? null,
+        }}
       />
-      {candidateArea === "table" ? (
-        <div className="overflow-hidden rounded-lg border border-border/60">
-          <div
-            className={cn(
-              TABLE_GRID,
-              "border-b border-border/40 bg-muted/30 text-ui-xs font-medium text-muted-foreground",
-            )}
-          >
-            <span className="py-2" />
-            <span className="min-w-0 p-2">Path</span>
-            <span className="p-2">Version</span>
-            <span className="py-2" />
-          </div>
-          {cliConfig.candidates.map((candidate) => (
-            <CandidateRow
-              key={candidateKey(candidate)}
-              candidate={candidate}
-              managedInstallState={managedInstallState}
-              packPreparing={packPreparing}
-              radioName={radioName}
-              selected={isSelected(cliConfig.selected, candidate)}
-              busy={setSelection.isPending || removeCustom.isPending}
-              onSelect={onSelect}
-              onRetryPack={() => ensurePack.mutate({ providerId })}
-              retryingPack={ensurePack.isPending}
-              onRemove={(path) => removeCustom.mutate({ providerId, path })}
-            />
-          ))}
-          {adding ? (
-            <div className="flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
-              <div className="flex items-center gap-2">
-                <Input
-                  ref={focusDraftInput}
-                  className="w-full font-mono text-ui-sm"
-                  placeholder="/absolute/path/to/binary"
-                  value={draftPath}
-                  onChange={(e) => setDraftPath(e.target.value)}
-                  disabled={addCustom.isPending}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") onSaveCustom();
-                    if (e.key === "Escape") {
-                      setAdding(false);
-                      setDraftPath("");
-                    }
-                  }}
-                />
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={onSaveCustom}
-                  disabled={
-                    addCustom.isPending || draftPath.trim().length === 0
-                  }
-                >
-                  {addCustom.isPending ? <MutedAgentSpinner /> : null}
-                  Save
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setAdding(false);
-                    setDraftPath("");
-                  }}
-                  disabled={addCustom.isPending}
-                >
-                  Cancel
-                </Button>
-              </div>
-              <ProbeLine
-                probing={probe.isFetching}
-                executable={probe.data?.executable ?? null}
-                version={probe.data?.version ?? null}
-              />
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <CandidateEmptyArea area={candidateArea} providerId={providerId} />
-      )}
-
-      {adding ? null : (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <Plus className="size-4" /> Add custom path
-        </button>
-      )}
+      <VersionManagerMount
+        open={versionManagerOpen}
+        hostId={hostId}
+        data={versionManagerData}
+      />
+      <AddCustomPathButton hidden={adding} onClick={() => setAdding(true)} />
     </>
+  );
+}
+
+type CandidateTableProps = {
+  readonly candidates: readonly ProviderCliCandidate[];
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly packPreparing: ProviderPackPreparing | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly advisory: ProviderCliState["advisory"] | null;
+  readonly differingSessionCount: number;
+  readonly radioName: string;
+  readonly selection: ProviderSelection;
+  readonly busy: boolean;
+  readonly onSelect: (selection: ProviderSelection) => void;
+  readonly onRetryPack: () => void;
+  readonly retryingPack: boolean;
+  readonly onRemove: (path: string) => void;
+  readonly canManageVersions: boolean;
+  readonly onToggleVersionManager: () => void;
+  readonly versionManagerOpen: boolean;
+  readonly adding: boolean;
+  readonly draftPath: string;
+  readonly onDraftPathChange: (path: string) => void;
+  readonly focusDraftInput: (node: HTMLInputElement | null) => void;
+  readonly onSaveCustom: () => void;
+  readonly savingCustom: boolean;
+  readonly onCancelCustom: () => void;
+  readonly probing: boolean;
+  readonly probeExecutable: boolean | null;
+  readonly probeVersion: string | null;
+};
+
+function CandidateAreaContent({
+  area,
+  providerId,
+  table,
+}: {
+  readonly area: CandidateArea;
+  readonly providerId: ProviderId;
+  readonly table: CandidateTableProps;
+}): ReactNode {
+  if (area !== "table") {
+    return <CandidateEmptyArea area={area} providerId={providerId} />;
+  }
+  return <CandidateTable {...table} />;
+}
+
+function CandidateTable({
+  candidates,
+  managedInstallState,
+  packPreparing,
+  nextRunBinary,
+  advisory,
+  differingSessionCount,
+  radioName,
+  selection,
+  busy,
+  onSelect,
+  onRetryPack,
+  retryingPack,
+  onRemove,
+  canManageVersions,
+  onToggleVersionManager,
+  versionManagerOpen,
+  adding,
+  draftPath,
+  onDraftPathChange,
+  focusDraftInput,
+  onSaveCustom,
+  savingCustom,
+  onCancelCustom,
+  probing,
+  probeExecutable,
+  probeVersion,
+}: CandidateTableProps): ReactNode {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/60">
+      <div
+        className={cn(
+          TABLE_GRID,
+          "border-b border-border/40 bg-muted/30 text-ui-xs font-medium text-muted-foreground",
+        )}
+      >
+        <span className="py-2" />
+        <span className="min-w-0 p-2">Path</span>
+        <span className="p-2">Version</span>
+        <span className="py-2" />
+      </div>
+      {candidates.map((candidate) => (
+        <CandidateRow
+          key={candidateKey(candidate)}
+          candidate={candidate}
+          managedInstallState={managedInstallState}
+          packPreparing={packPreparing}
+          nextRunBinary={nextRunBinary}
+          advisory={advisory}
+          differingSessionCount={differingSessionCount}
+          radioName={radioName}
+          selection={selection}
+          selected={isSelected(selection, candidate)}
+          busy={busy}
+          onSelect={onSelect}
+          onRetryPack={onRetryPack}
+          retryingPack={retryingPack}
+          onRemove={onRemove}
+          onManageVersions={
+            candidate.kind === "bundled" && canManageVersions
+              ? onToggleVersionManager
+              : null
+          }
+          versionManagerOpen={versionManagerOpen}
+        />
+      ))}
+      <CustomPathForm
+        open={adding}
+        draftPath={draftPath}
+        onDraftPathChange={onDraftPathChange}
+        focusDraftInput={focusDraftInput}
+        onSave={onSaveCustom}
+        saving={savingCustom}
+        onCancel={onCancelCustom}
+        probing={probing}
+        executable={probeExecutable}
+        version={probeVersion}
+      />
+    </div>
+  );
+}
+
+function CustomPathForm({
+  open,
+  draftPath,
+  onDraftPathChange,
+  focusDraftInput,
+  onSave,
+  saving,
+  onCancel,
+  probing,
+  executable,
+  version,
+}: {
+  readonly open: boolean;
+  readonly draftPath: string;
+  readonly onDraftPathChange: (path: string) => void;
+  readonly focusDraftInput: (node: HTMLInputElement | null) => void;
+  readonly onSave: () => void;
+  readonly saving: boolean;
+  readonly onCancel: () => void;
+  readonly probing: boolean;
+  readonly executable: boolean | null;
+  readonly version: string | null;
+}): ReactNode {
+  if (!open) return null;
+  return (
+    <div className="flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
+      <div className="flex items-center gap-2">
+        <Input
+          ref={focusDraftInput}
+          className="w-full font-mono text-ui-sm"
+          placeholder="/absolute/path/to/binary"
+          value={draftPath}
+          onChange={(event) => onDraftPathChange(event.target.value)}
+          disabled={saving}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") onSave();
+            if (event.key === "Escape") onCancel();
+          }}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={onSave}
+          disabled={saving || draftPath.trim().length === 0}
+        >
+          {saving ? <MutedAgentSpinner /> : null}
+          Save
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+      <ProbeLine probing={probing} executable={executable} version={version} />
+    </div>
+  );
+}
+
+function VersionManagerMount({
+  open,
+  hostId,
+  data,
+}: {
+  readonly open: boolean;
+  readonly hostId: string | null;
+  readonly data: VersionManagerPanelData | null;
+}): ReactNode {
+  if (!open || data === null) return null;
+  return (
+    <div className="mt-3">
+      <ProviderPackVersionManagerPanel {...data} hostId={hostId} />
+    </div>
+  );
+}
+
+function AddCustomPathButton({
+  hidden,
+  onClick,
+}: {
+  readonly hidden: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
+  if (hidden) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-2 inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+    >
+      <Plus className="size-4" /> Add custom path
+    </button>
   );
 }
 
@@ -559,13 +670,19 @@ function CandidateRow({
   candidate,
   managedInstallState,
   packPreparing,
+  nextRunBinary,
+  advisory,
+  differingSessionCount,
   radioName,
+  selection,
   selected,
   busy,
   onSelect,
   onRetryPack,
   retryingPack,
   onRemove,
+  onManageVersions,
+  versionManagerOpen,
 }: {
   readonly candidate: ProviderCliCandidate;
   // Provider-level (not per-candidate - see that schema's comment), so only
@@ -576,99 +693,310 @@ function CandidateRow({
   readonly managedInstallState: ProviderManagedInstallState | null;
   /** The same state, derived against the row's fallbacks. See the call site. */
   readonly packPreparing: ProviderPackPreparing | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly advisory: ProviderCliState["advisory"] | null;
+  readonly differingSessionCount: number;
   readonly radioName: string;
+  readonly selection: ProviderSelection;
   readonly selected: boolean;
   readonly busy: boolean;
   readonly onSelect: (selection: ProviderSelection) => void;
   readonly onRetryPack: () => void;
   readonly retryingPack: boolean;
   readonly onRemove: (path: string) => void;
+  readonly onManageVersions: (() => void) | null;
+  readonly versionManagerOpen: boolean;
 }): ReactNode {
-  const isBundled = candidate.kind === "bundled";
-  const isCustom = candidate.kind === "custom";
-  const pathLabel = isBundled
-    ? bundledPathLabel(managedInstallState)
-    : candidate.path;
-  // A resolved-but-missing binary (custom path the user typed that no longer
-  // exists, or a bundled binary not installed). We keep the row and dim it so
-  // the user sees the entry is retained but unavailable. An in-progress
-  // managed install is not "unavailable" - it's actively working, so it stays
-  // undimmed even though `available` is still false.
-  //
-  // A FAILED pack behind a working fallback gets the same exemption, and
-  // without it P4 survives the fix above: this flag also paints the status cell
-  // `text-destructive`, so the row would render "Ready · managed install
-  // failed" in red - the cell contradicting its own sentence. Dimming is a
-  // claim about the provider ("you cannot use this"), and the derived state is
-  // the only thing that knows whether that claim is true.
-  const packExcusesMissingBinary =
-    isBundled &&
-    packPreparing !== null &&
-    (packPreparing.kind === "downloading" ||
-      !providerPackBlocksExecution(packPreparing));
-  const unavailable =
-    !candidate.available &&
-    !candidate.versionPending &&
-    !packExcusesMissingBinary;
+  const presentation = candidateRowPresentation({
+    candidate,
+    managedInstallState,
+    packPreparing,
+    nextRunBinary,
+    advisory,
+    selection,
+  });
   return (
     <div
       className={cn(
         TABLE_GRID,
         "border-b border-border/40 last:border-b-0 hover:bg-muted/20",
-        unavailable ? "opacity-60" : "",
+        presentation.unavailable ? "opacity-60" : "",
       )}
     >
-      <span className="flex items-center justify-center py-2.5">
-        <input
-          type="radio"
-          aria-label={
-            isBundled ? "Select bundled binary" : `Select ${candidate.path}`
-          }
-          name={radioName}
-          checked={selected}
-          disabled={busy}
-          onChange={() => onSelect(selectionFor(candidate))}
-          className="size-3.5 cursor-pointer accent-primary"
-        />
-      </span>
-      {isBundled ? (
-        <span className="min-w-0 truncate p-2.5 text-ui-sm text-foreground">
-          {pathLabel}
-        </span>
-      ) : (
-        <FilePathTooltip content={candidate.path} side="bottom">
-          <StartTruncatedText className="min-w-0 p-2.5 font-mono text-ui-sm text-foreground">
-            {candidate.path}
-          </StartTruncatedText>
-        </FilePathTooltip>
-      )}
-      <span
-        className={cn(
-          "flex items-center gap-1.5 truncate p-2.5 text-ui-sm",
-          unavailable ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        <CandidateStatus
-          candidate={candidate}
-          preparing={isBundled ? packPreparing : null}
-          onRetry={onRetryPack}
-          retrying={retryingPack}
-        />
-      </span>
-      <span className="flex items-center justify-center py-2.5">
-        {isCustom ? (
+      <CandidateSelectionControl
+        candidate={candidate}
+        radioName={radioName}
+        selected={selected}
+        busy={busy}
+        onSelect={onSelect}
+      />
+      <CandidatePathCell
+        candidate={candidate}
+        pathLabel={presentation.pathLabel}
+        pathAdvisory={presentation.pathAdvisory}
+        differingSessionCount={differingSessionCount}
+        onManageVersions={onManageVersions}
+        versionManagerOpen={versionManagerOpen}
+      />
+      <CandidateVersionCell
+        candidate={candidate}
+        preparing={presentation.preparing}
+        managedInstallState={presentation.managedInstallState}
+        activeLabel={presentation.activeLabel}
+        unavailable={presentation.unavailable}
+        onRetry={onRetryPack}
+        retrying={retryingPack}
+      />
+      <CandidateRowActions
+        candidate={candidate}
+        busy={busy}
+        onRemove={onRemove}
+      />
+    </div>
+  );
+}
+
+type CandidateRowPresentation = {
+  readonly pathLabel: string;
+  readonly pathAdvisory: string | null;
+  readonly unavailable: boolean;
+  readonly activeLabel: string | null;
+  readonly preparing: ProviderPackPreparing | null;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+};
+
+function candidateRowPresentation(args: {
+  readonly candidate: ProviderCliCandidate;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly packPreparing: ProviderPackPreparing | null;
+  readonly nextRunBinary: ProviderNextRunBinary | null;
+  readonly advisory: ProviderCliState["advisory"] | null;
+  readonly selection: ProviderSelection;
+}): CandidateRowPresentation {
+  const isBundled = args.candidate.kind === "bundled";
+  const packExcusesMissingBinary =
+    isBundled &&
+    args.packPreparing !== null &&
+    (args.packPreparing.kind === "downloading" ||
+      !providerPackBlocksExecution(args.packPreparing));
+  return {
+    pathLabel: isBundled
+      ? bundledPathLabel(args.managedInstallState)
+      : args.candidate.path,
+    pathAdvisory:
+      args.candidate.kind === "path" &&
+      args.advisory?.kind === "row-incompatibility"
+        ? args.advisory.detail
+        : null,
+    unavailable:
+      !args.candidate.available &&
+      !args.candidate.versionPending &&
+      !packExcusesMissingBinary,
+    activeLabel: activeLabelForCandidate(
+      args.nextRunBinary,
+      args.candidate,
+      args.selection,
+      args.managedInstallState,
+    ),
+    preparing: isBundled ? args.packPreparing : null,
+    managedInstallState: isBundled ? args.managedInstallState : null,
+  };
+}
+
+function CandidateSelectionControl({
+  candidate,
+  radioName,
+  selected,
+  busy,
+  onSelect,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly radioName: string;
+  readonly selected: boolean;
+  readonly busy: boolean;
+  readonly onSelect: (selection: ProviderSelection) => void;
+}): ReactNode {
+  const label =
+    candidate.kind === "bundled"
+      ? "Select bundled binary"
+      : `Select ${candidate.path}`;
+  return (
+    <span className="flex items-center justify-center py-2.5">
+      <input
+        type="radio"
+        aria-label={label}
+        name={radioName}
+        checked={selected}
+        disabled={busy}
+        onChange={() => onSelect(selectionFor(candidate))}
+        className="size-3.5 cursor-pointer accent-primary"
+      />
+    </span>
+  );
+}
+
+function CandidatePathCell({
+  candidate,
+  pathLabel,
+  pathAdvisory,
+  differingSessionCount,
+  onManageVersions,
+  versionManagerOpen,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly pathLabel: string;
+  readonly pathAdvisory: string | null;
+  readonly differingSessionCount: number;
+  readonly onManageVersions: (() => void) | null;
+  readonly versionManagerOpen: boolean;
+}): ReactNode {
+  if (candidate.kind === "bundled") {
+    return (
+      <BundledCandidatePathCell
+        pathLabel={pathLabel}
+        differingSessionCount={differingSessionCount}
+        onManageVersions={onManageVersions}
+        versionManagerOpen={versionManagerOpen}
+      />
+    );
+  }
+  return (
+    <ExternalCandidatePathCell candidate={candidate} advisory={pathAdvisory} />
+  );
+}
+
+function BundledCandidatePathCell({
+  pathLabel,
+  differingSessionCount,
+  onManageVersions,
+  versionManagerOpen,
+}: {
+  readonly pathLabel: string;
+  readonly differingSessionCount: number;
+  readonly onManageVersions: (() => void) | null;
+  readonly versionManagerOpen: boolean;
+}): ReactNode {
+  return (
+    <div className="min-w-0 p-2.5 text-ui-sm text-foreground">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="truncate">{pathLabel}</span>
+        {onManageVersions === null ? null : (
           <button
             type="button"
-            aria-label="Remove custom path"
-            disabled={busy}
-            onClick={() => onRemove(candidate.path)}
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            aria-expanded={versionManagerOpen}
+            onClick={onManageVersions}
+            className="shrink-0 text-ui-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
           >
-            <Trash2 className="size-3.5" />
+            Manage versions
           </button>
-        ) : null}
-      </span>
+        )}
+      </div>
+      {differingSessionCount > 0 ? (
+        <p className="mt-1 text-ui-xs text-muted-foreground">
+          {differentVersionSessionsLabel(differingSessionCount)}
+        </p>
+      ) : null}
     </div>
+  );
+}
+
+function ExternalCandidatePathCell({
+  candidate,
+  advisory,
+}: {
+  readonly candidate: Exclude<
+    ProviderCliCandidate,
+    { readonly kind: "bundled" }
+  >;
+  readonly advisory: string | null;
+}): ReactNode {
+  return (
+    <div className="flex min-w-0 items-center gap-1 p-2.5">
+      <FilePathTooltip content={candidate.path} side="bottom">
+        <StartTruncatedText className="min-w-0 font-mono text-ui-sm text-foreground">
+          {candidate.path}
+        </StartTruncatedText>
+      </FilePathTooltip>
+      {advisory === null ? null : (
+        <TooltipWrapper
+          label={advisory}
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <button
+            type="button"
+            aria-label="Why this PATH binary is not used automatically"
+            className="shrink-0 rounded-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <Info className="size-3.5" aria-hidden="true" />
+          </button>
+        </TooltipWrapper>
+      )}
+    </div>
+  );
+}
+
+function CandidateVersionCell({
+  candidate,
+  preparing,
+  managedInstallState,
+  activeLabel,
+  unavailable,
+  onRetry,
+  retrying,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly preparing: ProviderPackPreparing | null;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly activeLabel: string | null;
+  readonly unavailable: boolean;
+  readonly onRetry: () => void;
+  readonly retrying: boolean;
+}): ReactNode {
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-1.5 truncate p-2.5 text-ui-sm",
+        unavailable ? "text-destructive" : "text-muted-foreground",
+      )}
+    >
+      <CandidateStatus
+        candidate={candidate}
+        preparing={preparing}
+        managedInstallState={managedInstallState}
+        activeLabel={activeLabel}
+        onRetry={onRetry}
+        retrying={retrying}
+      />
+    </span>
+  );
+}
+
+function CandidateRowActions({
+  candidate,
+  busy,
+  onRemove,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly busy: boolean;
+  readonly onRemove: (path: string) => void;
+}): ReactNode {
+  if (candidate.kind !== "custom") {
+    return <span className="flex items-center justify-center py-2.5" />;
+  }
+  return (
+    <span className="flex items-center justify-center py-2.5">
+      <button
+        type="button"
+        aria-label="Remove custom path"
+        disabled={busy}
+        onClick={() => onRemove(candidate.path)}
+        className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+    </span>
   );
 }
 
@@ -681,6 +1009,66 @@ function versionLabel(candidate: ProviderCliCandidate): string {
   return "-";
 }
 
+function differentVersionSessionsLabel(differingSessionCount: number): string {
+  return differingSessionCount === 1
+    ? "1 running session uses a different version."
+    : `${differingSessionCount} running sessions use a different version.`;
+}
+
+function activeLabelForCandidate(
+  nextRunBinary: ProviderNextRunBinary | null,
+  candidate: ProviderCliCandidate,
+  selection: ProviderSelection,
+  managedInstallState: ProviderManagedInstallState | null,
+): string | null {
+  if (
+    nextRunBinary === null ||
+    nextRunMatchesSelection(nextRunBinary, selection, managedInstallState) ||
+    !nextRunMatchesCandidate(nextRunBinary, candidate)
+  ) {
+    return null;
+  }
+  return nextRunBinary.kind === "bundled" ? "Active (bundled build)" : "Active";
+}
+
+function nextRunMatchesSelection(
+  nextRunBinary: ProviderNextRunBinary,
+  selection: ProviderSelection,
+  managedInstallState: ProviderManagedInstallState | null,
+): boolean {
+  if (nextRunBinary.kind === "managed") {
+    return selection.kind === "bundled";
+  }
+  // The inline `bundled` fallback and a managed install share the Managed UI
+  // row but are different binaries, so show the chip in that state. A legacy
+  // Bundled row (`managedInstallState === null`) is the inline binary itself,
+  // where a bundled next run matches the persisted bundled selection.
+  if (nextRunBinary.kind === "bundled") {
+    return selection.kind === "bundled" && managedInstallState === null;
+  }
+  if (nextRunBinary.kind === "path") return selection.kind === "path";
+  return (
+    selection.kind === "custom" &&
+    nextRunBinary.path !== null &&
+    selection.path === nextRunBinary.path
+  );
+}
+
+function nextRunMatchesCandidate(
+  nextRunBinary: ProviderNextRunBinary,
+  candidate: ProviderCliCandidate,
+): boolean {
+  if (nextRunBinary.kind === "managed" || nextRunBinary.kind === "bundled") {
+    return candidate.kind === "bundled";
+  }
+  if (nextRunBinary.kind === "path") return candidate.kind === "path";
+  return (
+    candidate.kind === "custom" &&
+    nextRunBinary.path !== null &&
+    candidate.path === nextRunBinary.path
+  );
+}
+
 // "Bundled" while this provider still ships the still-inline binary (no
 // install-state signal at all, whether an old host or T7 hasn't cut this
 // provider over yet); "Managed" once the registry pack is what's actually
@@ -691,29 +1079,51 @@ function bundledPathLabel(
   return managedInstallState === null ? "Bundled" : "Managed";
 }
 
-// The bundled row's status cell: the in-progress managed-install state takes
-// priority over the plain version/availability copy (`versionLabel`), which
-// takes priority over the version-probe spinner every candidate can show.
-// Path/custom candidates always pass `preparing: null` here, so they fall
-// straight through to the existing versionPending/versionLabel behavior,
-// unchanged.
-//
-// Takes the DERIVED `ProviderPackPreparing` rather than the raw wire state.
-// Both are one field apart, and that field is `fallbackRunnable` - the one this
-// component used to write itself. Passing the derived object is what makes the
-// fabrication impossible to reintroduce here: there is no longer a literal to
-// edit, only a value that arrived.
 function CandidateStatus({
   candidate,
   preparing,
+  managedInstallState,
+  activeLabel,
   onRetry,
   retrying,
 }: {
   readonly candidate: ProviderCliCandidate;
   readonly preparing: ProviderPackPreparing | null;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly activeLabel: string | null;
   readonly onRetry: () => void;
   readonly retrying: boolean;
 }): ReactNode {
+  if (managedInstallState?.status === "downloading") {
+    return (
+      <ManagedInstallProgress
+        version={managedInstallState.version ?? null}
+        percent={managedInstallState.percent}
+        activeLabel={activeLabel}
+      />
+    );
+  }
+  if (managedInstallState?.status === "error") {
+    return (
+      <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+        <span className="text-ui-xs">Install failed</span>
+        {preparing !== null && providerPackRetryable(preparing) ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              disabled={retrying}
+              onClick={onRetry}
+              className="shrink-0 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-50"
+            >
+              Retry
+            </button>
+          </>
+        ) : null}
+        <ActiveNextRunChip label={activeLabel} />
+      </span>
+    );
+  }
   if (candidate.versionPending) {
     return (
       <>
@@ -722,66 +1132,82 @@ function CandidateStatus({
       </>
     );
   }
-  if (preparing?.kind === "downloading") {
-    return (
-      <>
-        <MutedAgentSpinner />
-        {/*
-          `percent` is NULLABLE and null is a real state, not defensive typing:
-          a queued pack has seen no bytes, and a pack whose download a live
-          SIBLING host owns is genuinely in progress with no observable byte
-          count on this side. Interpolating it raw rendered the literal
-          `Installing… %`. Routed through the shared label helper rather than
-          re-guarded here, so this surface cannot drift from the picker and the
-          composer - all three now answer "unknown progress" the same way.
-        */}
-        <span className="text-ui-xs">
-          {providerPackPreparingShortLabel(preparing)}
-        </span>
-      </>
-    );
-  }
-  if (preparing?.kind === "error") {
-    // The arm that did not exist. A failed managed pack rendered a bare red
-    // "Not installed" with no reason and no way forward - while the recovery
-    // copy everywhere else (the picker tooltip, the host's own RPC error)
-    // points the user AT this screen. Whatever sent them here had to be
-    // readable once they arrived.
-    return (
-      <>
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+      {versionLabel(candidate)}
+      <ActiveNextRunChip label={activeLabel} />
+    </span>
+  );
+}
+
+function ManagedInstallProgress({
+  version,
+  percent,
+  activeLabel,
+}: {
+  readonly version: string | null;
+  readonly percent: number | null;
+  readonly activeLabel: string | null;
+}): ReactNode {
+  const label = installProgressLabel(version, percent);
+  return (
+    <span className="flex w-full min-w-0 flex-col gap-1">
+      <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+        <span className="truncate text-ui-xs">{label}</span>
+        <ActiveNextRunChip label={activeLabel} />
+      </span>
+      <span
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent === null ? undefined : percent}
+        className="h-1 w-full overflow-hidden rounded-full bg-muted"
+      >
         <span
           className={cn(
-            "truncate text-ui-xs",
-            // Red is a claim, and it is only true when the provider genuinely
-            // cannot run. A pack that failed behind a working PATH or bundled
-            // binary reads "Ready · managed install failed", and painting that
-            // destructive would contradict the sentence next to it.
-            providerPackBlocksExecution(preparing) ? "text-destructive" : "",
+            "block h-full rounded-full bg-primary",
+            percent === null ? "w-1/3 animate-pulse" : "",
           )}
-        >
-          {providerPackPreparingShortLabel(preparing)}
-        </span>
-        {/*
-          The retry respects the SAME allow-list the picker rail does. A
-          `unrepairable` cell is terminal host-side and a `trust-unavailable`
-          host has no install machinery at all, so a button here would reach
-          `providers.ensurePack` and be a guaranteed no-op - offered-then-failed
-          on the one screen a stuck user was told to open.
-        */}
-        {providerPackRetryable(preparing) ? (
-          <button
-            type="button"
-            disabled={retrying}
-            onClick={onRetry}
-            className="shrink-0 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-50"
-          >
-            Retry
-          </button>
-        ) : null}
-      </>
-    );
-  }
-  return versionLabel(candidate);
+          style={percent === null ? undefined : { width: `${percent}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
+function installProgressLabel(
+  version: string | null,
+  percent: number | null,
+): string {
+  const versionLabel =
+    version === null ? "Installing" : `Installing v${version}`;
+  return percent === null
+    ? `${versionLabel}…`
+    : `${versionLabel} · ${percent}%`;
+}
+
+function ActiveNextRunChip({
+  label,
+}: {
+  readonly label: string | null;
+}): ReactNode {
+  if (label === null) return null;
+  return (
+    <TooltipWrapper
+      label="New sessions use this binary. Running sessions keep the binary they started with."
+      side="bottom"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <button
+        type="button"
+        className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-ui-xs font-medium text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      >
+        {label}
+      </button>
+    </TooltipWrapper>
+  );
 }
 
 function candidateKey(candidate: ProviderCliCandidate): string {
