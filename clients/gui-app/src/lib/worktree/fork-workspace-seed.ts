@@ -149,5 +149,10 @@ function folderIntentToWorkspaceFolderInfo(
     path: intent.workspacePath,
     name: workspaceFolderName(intent.workspacePath),
     repoIdentifier: intent.repoIdentifier,
+    // Fork seed inherits the chat's bound host via the fork flow; hostId is
+    // stamped when folders are re-prepared on a host. Null here is safe —
+    // git-backed rows resolve via repoIdentifier; local-only rows without
+    // hostId stay unresolved under multi-host (B6).
+    hostId: null,
   };
 }

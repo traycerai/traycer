@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
@@ -29,7 +28,7 @@ function setup(providerId: RateLimitProviderId, usageUpdatedAt: number | null) {
     }: {
       id: RateLimitProviderId;
       updatedAt: number | null;
-    }) => useRefreshProviderRateLimitsOnMount(id, null, updatedAt),
+    }) => useRefreshProviderRateLimitsOnMount(id, null, updatedAt, true),
     { initialProps: { id: providerId, updatedAt: usageUpdatedAt } },
   );
 }
@@ -84,5 +83,12 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
     rerender({ id: "codex", updatedAt: null });
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not enqueue an ephemeralProcess provider when fetching is ineligible", () => {
+    renderHook(() =>
+      useRefreshProviderRateLimitsOnMount("codex", null, null, false),
+    );
+    expect(enqueueSpy).not.toHaveBeenCalled();
   });
 });

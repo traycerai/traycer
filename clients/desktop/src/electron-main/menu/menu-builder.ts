@@ -3,7 +3,10 @@ import {
   type BaseWindow,
   type MenuItemConstructorOptions,
 } from "electron";
-import type { MenuCommandId } from "../../ipc-contracts/window-types";
+import {
+  desktopTopLevelMenuItemId,
+  type MenuCommandId,
+} from "../../ipc-contracts/window-types";
 import {
   TRAYCER_DOCUMENTATION_URL,
   TRAYCER_RELEASE_NOTES_URL,
@@ -24,7 +27,7 @@ export function buildApplicationMenu(
     [
       ...buildAppMenu(state, actions),
       buildFileMenu(state, actions),
-      buildEditMenu(actions),
+      buildEditMenu(state, actions),
       buildViewMenu(state, actions),
       buildWindowMenu(state, actions),
       buildHelpMenu(state, actions),
@@ -52,6 +55,7 @@ function buildAppMenu(
         settingsItem(actions),
         authItem(state, actions),
         { type: "separator" },
+        ...hostUpdateItems(state, actions),
         restartHostItem(actions),
         checkForUpdatesItem(state, actions),
         { type: "separator" },
@@ -80,6 +84,7 @@ function buildFileMenu(
           { type: "separator" } satisfies MenuItemConstructorOptions,
         ];
   return {
+    id: desktopTopLevelMenuItemId("file"),
     label: "File",
     submenu: [
       {
@@ -110,12 +115,16 @@ function buildFileMenu(
   };
 }
 
-function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
+function buildEditMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
   return {
+    id: desktopTopLevelMenuItemId("edit"),
     label: "Edit",
     submenu: [
-      { role: "undo" },
-      { role: "redo" },
+      rendererOwnedHistoryRole("undo", state.platform),
+      rendererOwnedHistoryRole("redo", state.platform),
       { type: "separator" },
       { role: "cut" },
       { role: "copy" },
@@ -142,6 +151,26 @@ function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
       },
     ],
   };
+}
+
+/**
+ * Electron's native undo/redo roles consume their accelerators and call
+ * `webContents.undo()` / `webContents.redo()`. That bypasses editors with a
+ * JavaScript-owned history, including @pierre/diffs. Keep the roles for menu
+ * clicks, but leave the keyboard event with the renderer so the focused editor
+ * can run its own unmodified Cmd/Ctrl-Z and Shift-Cmd/Ctrl-Z commands.
+ *
+ * `registerAccelerator` releases the chord on Windows/Linux. Electron ignores
+ * that flag on macOS, so an explicit empty accelerator is required there to
+ * override the role's built-in keyboard equivalent.
+ */
+function rendererOwnedHistoryRole(
+  role: "undo" | "redo",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return platform === "darwin"
+    ? { role, accelerator: "" }
+    : { role, registerAccelerator: false };
 }
 
 function buildViewMenu(
@@ -179,6 +208,7 @@ function buildViewMenu(
     ...fullscreenSection,
   ];
   return {
+    id: desktopTopLevelMenuItemId("view"),
     label: "View",
     submenu,
   };
@@ -195,6 +225,7 @@ function buildWindowMenu(
     click: () => actions.focusWindow(entry.windowId),
   }));
   return {
+    id: desktopTopLevelMenuItemId("window"),
     label: "Window",
     submenu: [
       {
@@ -234,6 +265,7 @@ function buildHelpMenu(
   actions: MenuBuildActions,
 ): MenuItemConstructorOptions {
   return {
+    id: desktopTopLevelMenuItemId("help"),
     label: "Help",
     role: "help",
     submenu: [
@@ -312,6 +344,20 @@ function restartHostItem(
     click: (_item, browserWindow) =>
       actions.command("host.restart", browserWindow ?? null),
   };
+}
+
+function hostUpdateItems(
+  state: MenuState,
+  actions: MenuBuildActions,
+): readonly MenuItemConstructorOptions[] {
+  if (state.hostUpdateAvailableVersion === null) return [];
+  return [
+    {
+      label: `Update to ${state.hostUpdateAvailableVersion}`,
+      click: (_item, browserWindow) =>
+        actions.command("host.installUpdate", browserWindow ?? null),
+    },
+  ];
 }
 
 function checkForUpdatesItem(

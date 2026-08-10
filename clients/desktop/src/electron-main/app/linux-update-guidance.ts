@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { isWsl } from "./wsl";
 import type { DesktopAppUpdateGuidance } from "../../ipc-contracts/app-update-types";
 
 const execFileAsync = promisify(execFile);
@@ -36,27 +37,6 @@ export function readLinuxPackageType(): LinuxPackageType | null {
 }
 
 /**
- * WSLg sessions typically have no session polkit authentication agent and no
- * TTY for a GUI-launched `sudo`, so `dpkg -i`/`rpm -U` via
- * `LinuxUpdater.runCommandWithSudoIfNeeded` reliably fails there. A plain
- * `/proc/version` read (no subprocess) is the authoritative signal; the env
- * vars are a cheap supplementary fast path, not fully guaranteed to propagate
- * through every WSLg GUI-launch path.
- */
-function isWsl(): boolean {
-  if (
-    process.env["WSL_DISTRO_NAME"] !== undefined ||
-    process.env["WSL_INTEROP"] !== undefined
-  ) {
-    return true;
-  }
-  if (!existsSync("/proc/version")) {
-    return false;
-  }
-  return /microsoft/i.test(readFileSync("/proc/version", "utf-8"));
-}
-
-/**
  * Resolves whether the package manager that owns `packageType` actually
  * tracks the binary we're running from - i.e. whether an in-place
  * `dpkg -i`/`rpm -U` upgrade would replace this exact process. A manually
@@ -86,10 +66,14 @@ async function isRegisteredAtRunningLocation(
  * UX gate, not a safety net: `updater.ts` unconditionally disables
  * `autoInstallOnAppQuit` for any deb/rpm build regardless of this result, so
  * a wrong answer here only costs the user a manual step, never a silent
- * failure. Deliberately does not probe for a live polkit agent (fragile
- * across desktop environments, and would risk spawning a spurious auth
- * prompt on every launch) - WSL exclusion plus the registration check cover
- * the realistic split between "normal desktop Linux" and "can't self-update".
+ * failure. WSLg sessions typically have no session polkit authentication
+ * agent and no TTY for a GUI-launched `sudo`, so `dpkg -i`/`rpm -U` via
+ * `LinuxUpdater.runCommandWithSudoIfNeeded` reliably fails there - hence the
+ * `isWsl` exclusion. Deliberately does not probe for a live polkit agent
+ * (fragile across desktop environments, and would risk spawning a spurious
+ * auth prompt on every launch) - WSL exclusion plus the registration check
+ * cover the realistic split between "normal desktop Linux" and "can't
+ * self-update".
  */
 export async function resolveLinuxSilentInstallSupported(
   packageType: LinuxPackageType,

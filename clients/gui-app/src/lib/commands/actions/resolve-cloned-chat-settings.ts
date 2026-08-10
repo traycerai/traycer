@@ -2,7 +2,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { providerIdForHarness } from "@/components/chat/composer/use-provider-reauth-gate";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 
 export interface ResolvedClonedChatSettings {
   readonly settings: ChatRunSettings;
@@ -68,7 +68,7 @@ export async function resolveClonedChatSettings(input: {
   if (sourceSettings.profileId === null) {
     return { settings: sourceSettings, fallenBackToAmbient: false };
   }
-  const providerId = providerIdForHarness(sourceSettings.harnessId);
+  const providerId = providerCliIdForHarness(sourceSettings.harnessId);
   if (providerId === null) {
     return {
       settings: { ...sourceSettings, profileId: null },
@@ -79,25 +79,29 @@ export async function resolveClonedChatSettings(input: {
   const sourceAccountUuid =
     input.sourceClient === null
       ? null
-      : await input.sourceClient.request("providers.list", {}).then(
-          (response) =>
-            findAccountUuid(
-              response.providers.find((p) => p.providerId === providerId)
-                ?.profiles ?? [],
-              sourceSettings.profileId,
-            ),
-          () => null,
-        );
+      : await input.sourceClient
+          .request("providers.list", { native: null })
+          .then(
+            (response) =>
+              findAccountUuid(
+                response.providers.find((p) => p.providerId === providerId)
+                  ?.profiles ?? [],
+                sourceSettings.profileId,
+              ),
+            () => null,
+          );
 
   const targetProfiles =
     sourceAccountUuid === null
       ? []
-      : await input.targetClient.request("providers.list", {}).then(
-          (response) =>
-            response.providers.find((p) => p.providerId === providerId)
-              ?.profiles ?? [],
-          () => [],
-        );
+      : await input.targetClient
+          .request("providers.list", { native: null })
+          .then(
+            (response) =>
+              response.providers.find((p) => p.providerId === providerId)
+                ?.profiles ?? [],
+            () => [],
+          );
 
   const mappedProfileId = mapProfileIdAcrossHosts(
     sourceAccountUuid,

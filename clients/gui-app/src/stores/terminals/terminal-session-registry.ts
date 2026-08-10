@@ -130,22 +130,7 @@ export class TerminalSessionRegistry {
     const entry: RegistryEntry = {
       instanceId,
       handle,
-      unsubscribeStatus: handle.store.subscribe((state) => {
-        const defunct =
-          state.status === "exited" ||
-          // "Lost" (the store's mapping of a `closed` stream) is a dead end
-          // for a plain terminal: the stream client never redials after
-          // `closed` (transient drops surface as "reconnecting", not
-          // "closed"), so a lingering lost handle would only ever be revived
-          // as a permanently dead store - and it would shadow the fresh
-          // create-then-acquire bootstrap after the host recreates the
-          // session. Lost terminal-AGENTS stay warm: their reopen path runs
-          // `useTerminalSessionRecovery`, which force-releases the dead
-          // handle and re-bootstraps.
-          (state.status === "lost" && state.kind === "terminal");
-        if (!defunct) return;
-        this.evictDefunctLeaseFreeEntry(instanceId);
-      }),
+      unsubscribeStatus: this.watchDefunct(instanceId, handle),
       leases: 1,
       lingerTimer: null,
       releaseSequence: 0,
@@ -153,6 +138,93 @@ export class TerminalSessionRegistry {
     this.entries.set(instanceId, entry);
     this.notify();
     return handle;
+  }
+
+  /**
+   * Subscribe the handle's store for defunct-state eviction of the entry at
+   * `instanceId`. Extracted because a rekey ({@link rekeyLeaseFreeEntry})
+   * must re-subscribe under the new instance id - the closure captures the
+   * id, so the old subscription would target a key that no longer exists and
+   * the defunct handle would never be evicted.
+   */
+  private watchDefunct(
+    instanceId: string,
+    handle: TerminalSessionStoreHandle,
+  ): () => void {
+    return handle.store.subscribe((state) => {
+      const defunct =
+        state.status === "exited" ||
+        // "Lost" (the store's mapping of a `closed` stream) is a dead end
+        // for a plain terminal: the stream client never redials after
+        // `closed` (transient drops surface as "reconnecting", not
+        // "closed"), so a lingering lost handle would only ever be revived
+        // as a permanently dead store - and it would shadow the fresh
+        // create-then-acquire bootstrap after the host recreates the
+        // session. Lost terminal-AGENTS stay warm: their reopen path runs
+        // `useTerminalSessionRecovery`, which force-releases the dead
+        // handle and re-bootstraps.
+        (state.status === "lost" && state.kind === "terminal");
+      if (!defunct) return;
+      this.evictDefunctLeaseFreeEntry(instanceId);
+    });
+  }
+
+  /**
+   * A lease-free warm entry for `sessionId` that a NEW tab instance may adopt
+   * ({@link rekeyLeaseFreeEntry}). Closing a tab keeps a running session's
+   * handle warm, but reopening mints a fresh tab instance id - without
+   * adoption the reopened tile would build a SECOND subscription while the
+   * warm one lingers as an unreachable zombie (still attached host-side,
+   * still counted in the shared `min()` grid, with no UI able to correct
+   * it). Returns null when the session has no warm lease-free entry or the
+   * new id is already registered (remount, StrictMode second pass).
+   */
+  findAdoptableInstanceId(
+    sessionId: string,
+    newInstanceId: string,
+  ): string | null {
+    if (this.entries.has(newInstanceId)) return null;
+    for (const entry of this.entries.values()) {
+      if (entry.handle.sessionId !== sessionId) continue;
+      if (entry.leases > 0) continue;
+      return entry.instanceId;
+    }
+    return null;
+  }
+
+  /**
+   * Rekey a lease-free entry to a new tab instance id so a reopened tab
+   * revives the closed tab's warm handle (live stream, current scrollback)
+   * instead of duplicating the subscription. The caller must rekey the xterm
+   * engine registry FIRST: this notify wakes the engine follower, which
+   * disposes engines whose instance id is no longer a registry member.
+   */
+  rekeyLeaseFreeEntry(oldInstanceId: string, newInstanceId: string): boolean {
+    const entry = this.entries.get(oldInstanceId);
+    if (entry === undefined) return false;
+    if (entry.leases > 0) return false;
+    if (this.entries.has(newInstanceId)) return false;
+    this.cancelLinger(entry);
+    entry.unsubscribeStatus();
+    const rekeyed: RegistryEntry = {
+      instanceId: newInstanceId,
+      handle: entry.handle,
+      unsubscribeStatus: this.watchDefunct(newInstanceId, entry.handle),
+      leases: 0,
+      lingerTimer: null,
+      releaseSequence: entry.releaseSequence,
+    };
+    this.entries.delete(oldInstanceId);
+    this.entries.set(newInstanceId, rekeyed);
+    // A lingering plain terminal keeps its timed eviction under the new id;
+    // without re-parking, an adoption whose acquire never lands (tile errored
+    // before the handle enabled) would leave the entry warm forever. The
+    // adopting acquire cancels this timer as usual.
+    if (shouldLingerLeaseFree(rekeyed.handle)) {
+      this.parkLingering(rekeyed);
+    }
+    this.notify();
+    return true;
   }
 
   release(instanceId: string): void {
@@ -163,27 +235,33 @@ export class TerminalSessionRegistry {
     if (entry.leases > 0) return;
     if (shouldKeepLeaseFree(entry.handle)) return;
     if (shouldLingerLeaseFree(entry.handle)) {
-      // Still-running plain terminal: keep the handle (live stream + warm
-      // engine) for the linger window so navigating back reattaches instantly
-      // instead of paying a full reconnect. The entry stays a registry member
-      // so the xterm follower keeps its engine; eviction happens on the timer,
-      // on session exit or stream loss (the status subscription above), on
-      // warm-cap overflow, or via forceRelease.
-      entry.releaseSequence = this.nextReleaseSequence++;
-      entry.lingerTimer = window.setTimeout(() => {
-        entry.lingerTimer = null;
-        if (entry.leases > 0) return;
-        if (this.entries.get(instanceId) !== entry) return;
-        this.entries.delete(instanceId);
-        this.disposeEntry(entry);
-        this.notify();
-      }, PLAIN_TERMINAL_RELEASE_LINGER_MS);
-      this.evictLingerOverflow();
+      this.parkLingering(entry);
       return;
     }
     this.entries.delete(instanceId);
     this.disposeEntry(entry);
     this.notify();
+  }
+
+  /**
+   * Park a lease-free, still-running plain terminal in the linger pool: keep
+   * the handle (live stream + warm engine) for the linger window so
+   * navigating back reattaches instantly instead of paying a full reconnect.
+   * The entry stays a registry member so the xterm follower keeps its engine;
+   * eviction happens on the timer, on session exit or stream loss (the status
+   * subscription above), on warm-cap overflow, or via forceRelease.
+   */
+  private parkLingering(entry: RegistryEntry): void {
+    entry.releaseSequence = this.nextReleaseSequence++;
+    entry.lingerTimer = window.setTimeout(() => {
+      entry.lingerTimer = null;
+      if (entry.leases > 0) return;
+      if (this.entries.get(entry.instanceId) !== entry) return;
+      this.entries.delete(entry.instanceId);
+      this.disposeEntry(entry);
+      this.notify();
+    }, PLAIN_TERMINAL_RELEASE_LINGER_MS);
+    this.evictLingerOverflow();
   }
 
   forceRelease(instanceId: string): void {

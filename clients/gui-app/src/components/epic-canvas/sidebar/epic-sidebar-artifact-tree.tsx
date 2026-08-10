@@ -32,6 +32,7 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -41,11 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ContextMenuContent } from "@/components/ui/context-menu";
-import {
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-} from "@/components/ui/sidebar";
+import { SidebarGroup, SidebarGroupContent } from "@/components/ui/sidebar";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   Tooltip,
@@ -148,6 +145,7 @@ import { useEpicStore } from "@/hooks/use-epic-store";
 import { useShallow } from "zustand/react/shallow";
 import {
   getSidebarNodeDragId,
+  getPaneScopedDndId,
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -508,6 +506,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
         expandedIds,
         tree,
         treeFilter: ARTIFACTS_TREE_FILTER,
+        emitFilter: ARTIFACTS_TREE_FILTER,
         visibleIds,
         comparator,
       }),
@@ -557,8 +556,8 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={FileText}
-        title="No artifacts match the filter."
-        description={null}
+        title="No matches for the current filters."
+        description="Status, Type, or Read state may be hiding artifacts."
         testId="epic-artifact-sidebar-filter-empty"
       />
     );
@@ -601,13 +600,13 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   return (
     <SidebarSortContext.Provider value={comparator}>
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-        <SidebarContent className="gap-0">
+        <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
           <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
             <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
               {panelContent}
             </SidebarGroupContent>
           </SidebarGroup>
-        </SidebarContent>
+        </ArtifactPanelSearchShell>
       </SidebarFilterVisibilityContext.Provider>
     </SidebarSortContext.Provider>
   );
@@ -1554,14 +1553,19 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isSelected,
     onToggleSelection,
   } = props;
-  const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
-    () => ({
-      kind: SIDEBAR_NODE_DND_TYPE,
-      epicId,
-      viewTabId,
-      nodeId,
-    }),
-    [epicId, nodeId, viewTabId],
+  const activeHostId = useReactiveActiveHostId();
+  const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
+    () =>
+      activeHostId === null
+        ? null
+        : {
+            kind: SIDEBAR_NODE_DND_TYPE,
+            epicId,
+            viewTabId,
+            hostId: activeHostId,
+            nodeId,
+          },
+    [activeHostId, epicId, nodeId, viewTabId],
   );
   const {
     attributes,
@@ -1569,9 +1573,9 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getSidebarNodeDragId(nodeId),
-    disabled: selectionMode || openableType === null,
-    data: dragData,
+    id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
+    disabled: selectionMode || openableType === null || dragData === null,
+    data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
@@ -1803,6 +1807,7 @@ function ArtifactAddChildButton(props: ArtifactAddChildButtonProps) {
     <AddNodeDropdown
       open={undefined}
       onOpenChange={undefined}
+      menuPlacement="row"
       epicId={epicId}
       menuTestId={`epic-sidebar-add-menu-${nodeId}`}
       itemTestId={(t) => `epic-sidebar-add-${t}-${nodeId}`}
@@ -1883,6 +1888,7 @@ function useArtifactRowMenuEntries(
       label: "Export as Markdown",
       icon: exportIcon,
       disabled: exportArtifacts.isPending,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-export-markdown-${props.nodeId}`,
@@ -1896,6 +1902,7 @@ function useArtifactRowMenuEntries(
       label: "Export as PDF",
       icon: exportIcon,
       disabled: exportArtifacts.isPending,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-export-pdf-${props.nodeId}`,
@@ -1910,6 +1917,7 @@ function useArtifactRowMenuEntries(
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "default",
       testIds: {
         dropdown: `epic-sidebar-rename-${props.nodeId}`,
@@ -1924,6 +1932,7 @@ function useArtifactRowMenuEntries(
       label: "Delete",
       icon: <Trash2 className="size-3.5" />,
       disabled: !props.canMutate,
+      disabledTooltip: null,
       variant: "destructive",
       testIds: {
         dropdown: `epic-sidebar-delete-${props.nodeId}`,

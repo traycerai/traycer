@@ -80,12 +80,10 @@ function renderSingleRow(
         onVisiblePathsChange={() => {}}
         taskTitlesByEpicId={new Map()}
         toolbarProps={{
-          hosts: [],
-          value: null,
-          onChange: () => {},
           onRefresh: () => Promise.resolve(),
           refreshing: false,
           canRefresh: true,
+          lastUpdatedAt: null,
         }}
       />
     </Wrapper>,
@@ -157,7 +155,7 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
     screen.getByRole("menuitem", { name: "Copy path" });
     screen.getByRole("menuitem", { name: "Manage script" });
     const deleteItem = screen.getByRole("menuitem", {
-      name: "Delete worktree (in use by an active chat or agent)",
+      name: "Delete worktree (in use by an active agent)",
     });
     expect(deleteItem.getAttribute("aria-disabled")).toBe("true");
   });

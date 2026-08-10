@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -22,6 +21,7 @@ const PROFILE: ProviderProfile = {
   identity: null,
   usageUpdatedAt: null,
   rateLimitStatus: "unknown",
+  rateLimitLimitedScopes: null,
   duplicateOfProfileId: null,
   accentColor: null,
   ambientDriftNotice: null,
@@ -32,7 +32,9 @@ function entry(
 ): ProfileDropdownUsageEntry {
   return {
     profileId: "work",
+    fetchEligible: true,
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
 }

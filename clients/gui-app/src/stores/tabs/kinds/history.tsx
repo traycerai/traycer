@@ -1,11 +1,18 @@
+import { createElement, lazy } from "react";
 import { History } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useTabsStore } from "@/stores/tabs/store";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
 import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 const HISTORY_TAB_LABEL = "History";
 const HISTORY_DEFAULT_PATH = "/epics";
+
+const historySurface = lazy(() =>
+  import("@/components/epics/history-surface").then((module) => ({
+    default: module.HistorySurface,
+  })),
+);
 
 /**
  * Module for `kind: "history"` tabs. Singleton; no duplication.
@@ -25,6 +32,16 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
   }),
   descriptor: {
     kind: "history",
+    surface: {
+      render: () => createElement(historySurface),
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "forbidden",
+      singleton: "per-window",
+      newWindow: "copy",
+      readinessScope: "default-host",
+      durableState: { owner: "tabs-store", eviction: "reconstruct" },
+    },
     duplicate: () => null,
     resolveIntent: () => historyTabIntent(),
     routeOptions: () => ({ to: HISTORY_DEFAULT_PATH }),
@@ -32,7 +49,10 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
       useLandingDraftStore.getState().clearActiveDraft();
     },
     requestClose: () => {
-      useTabsStore.getState().closeSystemTab("history");
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "history",
+        id: "history",
+      });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

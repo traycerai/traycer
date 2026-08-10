@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
@@ -50,13 +49,30 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({ highlighter: null, theme: "dark" }),
-  highlightCode: () => null,
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
+  useWorkspaceWriteFile: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark" }),
 }));
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
 import { TabHostProvider } from "../../tab-host-provider";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const NODE = {
   id: "workspace-file:host-A:/work/repo:src/index.ts",
@@ -127,18 +143,18 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     expect(screen.getByText(/currently unreachable/)).toBeTruthy();
   });
 
-  it("shows the inactive banner when the bound host is not the active host", () => {
+  it("keeps the tile bound to its own host when another host is active", () => {
     state.activeHostId = "host-B";
     renderTile("host-A", NODE);
-    expect(
-      screen.getByText(/Switch your active host to "Host A"/),
-    ).toBeTruthy();
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
   });
 
-  it("shows the inactive banner when there is no active host", () => {
+  it("keeps the tile bound when there is no app-wide active host", () => {
     state.activeHostId = null;
     renderTile("host-A", NODE);
-    expect(screen.getByText(/Switch your active host/)).toBeTruthy();
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
   });
 
   it("renders the live preview when the bound host is the active, reachable host", () => {
@@ -177,6 +193,85 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     });
   });
 
+  it("reports a transport failure against the host, not as a file-read failure", () => {
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "fetch failed",
+        requestId: "req-1",
+        method: "workspace.readFile",
+        fatalDetails: null,
+      }),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    // The host never answered, so this must not be filed as a file-read
+    // failure: that is what sent one field report's triage looking for an fs
+    // error that never happened.
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Workspace file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      code: "UNAUTHORIZED",
+      source: "Host",
+    });
+  });
+
+  it("keeps host-supplied error text out of a transport report", () => {
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new HostRpcError({
+        code: "FORBIDDEN",
+        message: "denied reading /Users/me/private/api-key.txt",
+        requestId: "req-2",
+        method: "workspace.readFile",
+        fatalDetails: null,
+      }),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(JSON.stringify(context)).not.toContain("api-key.txt");
+    expect(JSON.stringify(context)).not.toContain(
+      "denied reading /Users/me/private/api-key.txt",
+    );
+    expect(context?.code).toBe("FORBIDDEN");
+  });
+
+  it("survives a non-HostRpcError in the query error channel", () => {
+    // TanStack's error generic is an unchecked cast, so a bare `Error` can
+    // occupy this channel - reading `.code` off it must not crash the view.
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("boom"),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Workspace file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      code: null,
+      source: "Host",
+    });
+  });
+
   it("shows markdown source and preview modes for markdown files", () => {
     state.readFile = {
       data: {
@@ -195,13 +290,8 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     expect(markdownButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewButton.getAttribute("aria-pressed")).toBe("false");
     expect(
-      screen.getByText((_content, element) => {
-        return (
-          element?.tagName === "CODE" &&
-          element.textContent === "# Contact Information\n\nReach us any time."
-        );
-      }),
-    ).toBeTruthy();
+      document.querySelector("diffs-container")?.shadowRoot,
+    ).not.toBeNull();
     expect(
       screen.queryByRole("heading", { name: "Contact Information" }),
     ).toBeNull();

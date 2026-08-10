@@ -1,14 +1,12 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
+  type TransitionEvent as ReactTransitionEvent,
 } from "react";
-import { useIsMutating } from "@tanstack/react-query";
 import {
-  FolderOpen,
   Maximize2,
   Minimize2,
   PanelRightClose,
@@ -16,12 +14,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
-import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
-import { useHostClient } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import {
   LEADER_SCOPE_LANDING_TERMINAL,
@@ -31,12 +24,16 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
   pointerDragHandleAxisClassName,
   usePointerDragCommit,
+  type PointerDragSliderProps,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
-import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
-import { usePickAndAddWorkspaceFolders } from "@/components/home/host-workspace-selector/use-pick-and-add-folders";
-import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
-import { workspaceMutationKeys } from "@/lib/query-keys";
-import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import {
+  clearPendingTerminalFocus,
+  focusTerminalInstance,
+} from "@/lib/terminals/terminal-focus-registry";
+import { reconcileXtermHostAfterLayoutTransition } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
@@ -49,12 +46,16 @@ import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
 import { LandingTerminalTile } from "./landing-terminal-tile";
 import { useLandingTerminalKill } from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
+import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
-  resolveLandingTerminalAvailability,
-  type LandingTerminalAvailability,
-} from "./landing-terminal-availability";
-
-const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
+  useLandingTerminalGesture,
+  type LandingTerminalTarget,
+} from "./landing-terminal-gesture-context";
+import {
+  LANDING_TERMINAL_HOST_UPDATE_GUIDANCE,
+  resolveLandingTerminalLaunchCwd,
+  type LandingTerminalHostContext,
+} from "./landing-terminal-host-context";
 
 interface LandingTerminalDragState {
   readonly containerWidth: number;
@@ -66,33 +67,38 @@ interface LandingTerminalDragState {
   latestFraction: number;
 }
 
-export interface LandingTerminalPanelProps {
-  readonly draftId: string | null;
+// Matched against the resolved launch cwd (primary folder, else the settled
+// context's home), not merely `target.primaryWorkspacePath` - so a
+// gesture-opened panel with no primary folder still re-targets an existing
+// terminal already running at the reconciled host's home.
+function terminalForTarget(
+  tabs: ReadonlyArray<LandingTerminalTabRef>,
+  activeInstanceId: string | null,
+  hostId: string,
+  launchCwd: string,
+): LandingTerminalTabRef | undefined {
+  const matches = (tab: LandingTerminalTabRef): boolean =>
+    tab.hostId === hostId && tab.cwd === launchCwd;
+  const active = tabs.find((tab) => tab.instanceId === activeInstanceId);
+  return active !== undefined && matches(active) ? active : tabs.find(matches);
 }
 
 /**
- * Landing-only independent-terminal surface. The probe query is deliberately
- * both the capability gate and the ordered reconciliation input. The ordered
- * phase always forces and awaits its own current-host list fetch; cached query
- * data is UI state, never authoritative lifecycle input.
+ * Landing-only independent-terminal surface. It is a CONSUMER of
+ * `LandingTerminalGestureProvider`: every host / client / folder / availability
+ * value comes from `useLandingTerminalGesture().target`, never a live hook - so
+ * no live value is in scope for a create / reconcile / `+` path to
+ * accidentally read past a pinned opening gesture.
  */
-export function LandingTerminalPanel(
-  props: LandingTerminalPanelProps,
-): ReactNode {
-  const activeHostId = useReactiveActiveHostId();
-  const defaultClient = useHostClient();
-  const probe = useTerminalListFor(defaultClient, INDEPENDENT_SCOPE);
-  const availability = resolveLandingTerminalAvailability(
-    activeHostId,
-    probe.data,
-    probe.error,
-  );
-  const stagingKey = useMemo<WorktreeStagingKey>(
-    () => ({ surface: "landing", draftId: props.draftId }),
-    [props.draftId],
-  );
-  const workspace = useHomeWorkspaceSource(stagingKey, null);
-  const primaryWorkspacePath = workspace.primaryWorkspacePath;
+export function LandingTerminalPanel(): ReactNode {
+  const {
+    target,
+    pending,
+    pendingGeneration,
+    openEpisodeDraftId,
+    capture,
+    clearPending,
+  } = useLandingTerminalGesture();
   const tabs = useLandingTerminalStore((state) => state.tabs);
   const activeInstanceId = useLandingTerminalStore(
     (state) => state.activeInstanceId,
@@ -114,78 +120,288 @@ export function LandingTerminalPanel(
   const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
   const [maximized, setMaximized] = useState(false);
-  const [reconciledHostId, setReconciledHostId] = useState<string | null>(null);
+  // Last settled generation's host context. Manual create uses it only when
+  // `hostId` still equals the active host; auto-spawn never reads this alone.
+  const [reconciledContext, setReconciledContext] =
+    useState<LandingTerminalHostContext | null>(null);
 
-  const createTerminalTab = useCallback(() => {
-    if (activeHostId === null || primaryWorkspacePath === null) return;
-    if (availability !== "supported") return;
-    addTab({
-      instanceId: `landing-terminal-${uuidv4()}`,
-      sessionId: `landing-term-${uuidv4()}`,
-      hostId: activeHostId,
-      cwd: primaryWorkspacePath,
-      name: workspaceFolderName(primaryWorkspacePath),
-      titleSource: "default",
-    });
-  }, [activeHostId, addTab, availability, primaryWorkspacePath]);
+  const addTerminalTab = useCallback(
+    (hostId: string, cwd: string): string => {
+      const instanceId = `landing-terminal-${uuidv4()}`;
+      addTab({
+        instanceId,
+        sessionId: `landing-term-${uuidv4()}`,
+        hostId,
+        cwd,
+        name: terminalSessionTitle({
+          title: null,
+          activeProcessName: null,
+          currentCwd: cwd,
+        }),
+        titleSource: "default",
+      });
+      return instanceId;
+    },
+    [addTab],
+  );
+
+  // Manual create paths: the routing target's primary folder, else the last
+  // reconciled home for that target's still-active host. Never invents a path
+  // or uses another host's home. Re-read the routing client's active host at
+  // invocation time: keyboard handlers can fire after a host switch but before
+  // React re-renders, so the captured `routing.hostId` alone is not enough to
+  // satisfy the host-identity guardrail.
+  const createTerminalTab = useCallback(
+    (routing: LandingTerminalTarget): string | null => {
+      if (routing.hostId === null || routing.availability !== "supported") {
+        return null;
+      }
+      // Fail-closed: no host client (a gesture that could not pin one) means we
+      // cannot reconcile the terminal, so we do not create it. In non-gesture
+      // operation the target carries the default client, so this never blocks.
+      const client = routing.client;
+      if (client === null) return null;
+      const currentHostId = client.getActiveHostId();
+      if (currentHostId === null || currentHostId !== routing.hostId) {
+        return null;
+      }
+      const launchCwd = resolveLandingTerminalLaunchCwd(
+        routing.primaryWorkspacePath,
+        reconciledContext,
+        currentHostId,
+      );
+      if (launchCwd === null) return null;
+      return addTerminalTab(currentHostId, launchCwd);
+    },
+    [addTerminalTab, reconciledContext],
+  );
+
+  // The `+` button: create against the EFFECTIVE target (a pinned gesture, else
+  // live focus). It never re-captures, so a `+` pressed while an opening gesture
+  // is still pending honors that gesture's captured host/folder, not focus that
+  // moved to a split partner in the meantime. A user-gesture create keeps the
+  // keyboard with the panel: the focus request parks in the registry until the
+  // new tile's xterm engine mounts.
+  const createTerminalTabFocused = useCallback(() => {
+    const instanceId = createTerminalTab(target);
+    if (instanceId !== null) focusTerminalInstance(instanceId);
+  }, [createTerminalTab, target]);
+
+  // The tab-family chord ("new terminal"): if the panel is closed, capture the
+  // open gesture and create from THAT captured snapshot up-front (the non-empty
+  // set suppresses the open reconciliation's auto-spawn). If already open, it is
+  // just a `+` - create against the effective target, never re-capturing.
+  const revealAndCreateTerminal = useCallback(() => {
+    if (panelOpen) {
+      const instanceId = createTerminalTab(target);
+      if (instanceId !== null) focusTerminalInstance(instanceId);
+      return;
+    }
+    const captured = capture();
+    setPanelOpen(true);
+    const instanceId = createTerminalTab(captured);
+    if (instanceId !== null) focusTerminalInstance(instanceId);
+  }, [capture, createTerminalTab, panelOpen, setPanelOpen, target]);
+
+  const activateTerminalTab = useCallback(
+    (instanceId: string) => {
+      clearPending();
+      activateTab(instanceId);
+      focusTerminalInstance(instanceId);
+    },
+    [activateTab, clearPending],
+  );
+
+  // Focus follows the open/collapse *transition*, never the mount: a landing
+  // page that mounts with the panel already open (new tab, tab switch back)
+  // must leave focus with the composer. Opening also arms the launch-cwd
+  // intent that reconciliation consumes once the host's session list settles.
+  const prevPanelOpenRef = useRef(panelOpen);
+  useEffect(() => {
+    const wasOpen = prevPanelOpenRef.current;
+    prevPanelOpenRef.current = panelOpen;
+    if (wasOpen === panelOpen) return;
+    if (panelOpen) {
+      if (!pending) capture();
+      const openActiveInstanceId =
+        useLandingTerminalStore.getState().activeInstanceId;
+      if (openActiveInstanceId !== null) {
+        focusTerminalInstance(openActiveInstanceId);
+      }
+      return;
+    }
+    // Every collapse path converges on this store transition: the chord, the
+    // header button, closing the last tab, close-all, and a shell exiting.
+    // All of them should hand the keyboard back to the composer.
+    clearPendingTerminalFocus();
+    focusActiveComposer();
+  }, [capture, panelOpen, pending]);
+  useEffect(
+    () => () => {
+      clearPendingTerminalFocus();
+    },
+    [],
+  );
+
+  // Runs after every settled reconciliation pass (the reconciliation key
+  // includes the open/closed bit, so every panel-open transition lands here).
+  // Empty panels auto-spawn at the resolved launch cwd (the routing target's
+  // primary folder, else the settled context's home); a gesture-opened panel
+  // additionally re-targets that cwd: reuse a terminal already running there,
+  // otherwise spawn a fresh one, and focus it either way. The settled
+  // generation's context is authoritative - not React state.
+  const handleReconciliationSettled = useCallback(
+    (generation: number, context: LandingTerminalHostContext) => {
+      const state = useLandingTerminalStore.getState();
+      // A settlement for a superseded generation must neither act nor clear the
+      // newer pending gesture that replaced it.
+      if (pending && pendingGeneration !== generation) return;
+      // Any pending gesture now matches this settled generation and is consumed
+      // exactly once. Clear it on EVERY outcome below (spawn, reuse, no-op) so a
+      // later gesture projects live focus instead of this stale snapshot, and
+      // `+`/workspace projection follow the newly focused draft after settling.
+      const clearIfPending = (): void => {
+        if (pending) clearPending();
+      };
+      if (!state.panelOpen) {
+        clearIfPending();
+        return;
+      }
+      // Host may have switched after this generation began; never spawn with
+      // a home path whose hostId no longer matches the routing target.
+      if (target.hostId === null || context.hostId !== target.hostId) {
+        clearIfPending();
+        return;
+      }
+      const launchCwd = resolveLandingTerminalLaunchCwd(
+        target.primaryWorkspacePath,
+        context,
+        target.hostId,
+      );
+      if (launchCwd === null) {
+        clearIfPending();
+        return;
+      }
+      if (state.tabs.length === 0) {
+        // Empty-panel auto-spawn is pinned to the opening draft. A gesture
+        // spawns its captured draft; a gesture-less live settlement (post-clear,
+        // or a pre-opened panel whose folder just arrived) only spawns while
+        // focus still rests on the opening draft, so switching drafts mid-flight
+        // never spawns a terminal in the draft the user merely moved to.
+        if (!pending && target.draftId !== openEpisodeDraftId) {
+          clearIfPending();
+          return;
+        }
+        const created = addTerminalTab(context.hostId, launchCwd);
+        if (pending) focusTerminalInstance(created);
+        clearIfPending();
+        return;
+      }
+      if (!pending) return;
+      const existing = terminalForTarget(
+        state.tabs,
+        state.activeInstanceId,
+        context.hostId,
+        launchCwd,
+      );
+      if (existing === undefined) {
+        const created = addTerminalTab(context.hostId, launchCwd);
+        focusTerminalInstance(created);
+        clearIfPending();
+        return;
+      }
+      if (existing.instanceId !== state.activeInstanceId) {
+        state.activateTab(existing.instanceId);
+      }
+      focusTerminalInstance(existing.instanceId);
+      clearIfPending();
+    },
+    [
+      addTerminalTab,
+      clearPending,
+      openEpisodeDraftId,
+      pending,
+      pendingGeneration,
+      target,
+    ],
+  );
 
   useLandingTerminalReconciliation({
-    activeHostId,
-    availability,
+    activeHostId: target.hostId,
+    availability: target.availability,
     panelOpen,
-    primaryWorkspacePath,
-    client: defaultClient,
-    createTerminalTab,
+    primaryWorkspacePath: target.primaryWorkspacePath,
+    generation: target.generation,
+    client: target.client,
     killTerminal: killTerminalAsync,
-    onReconciled: setReconciledHostId,
+    onReconciled: setReconciledContext,
+    onSettled: handleReconciliationSettled,
   });
 
   const closeTerminalTab = useCallback(
     (tab: LandingTerminalTabRef) => {
+      clearPending();
       // `closeTab` is the atomic tombstone-first durable write. Dispatch the
       // host mutation only after that state transition has completed.
       const closed = closeTab(tab.instanceId);
       if (closed === null) return;
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
+      // Closing a non-last tab promotes a surviving neighbor - keep the
+      // keyboard with the panel. The last-tab case collapses the panel, and
+      // the open-transition effect hands focus back to the composer instead.
+      const state = useLandingTerminalStore.getState();
+      if (state.panelOpen && state.activeInstanceId !== null) {
+        focusTerminalInstance(state.activeInstanceId);
+      }
     },
-    [closeTab, killTerminal],
+    [clearPending, closeTab, killTerminal],
   );
 
   const closeAllTerminalTabs = useCallback(() => {
     // Same tombstone-first ordering as a single close, batched: every ref is
     // durably tombstoned in one write before the first kill is dispatched.
+    clearPending();
     closeAllTabs().forEach((closed) => {
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
     });
-  }, [closeAllTabs, killTerminal]);
+  }, [clearPending, closeAllTabs, killTerminal]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
       setMaximized(false);
+      clearPending();
       setPanelOpen(false);
       return;
     }
+    capture();
     setPanelOpen(true);
-  }, [panelOpen, setPanelOpen]);
+  }, [capture, clearPending, panelOpen, setPanelOpen]);
 
   const openPanel = useCallback(() => {
+    capture();
     setPanelOpen(true);
-  }, [setPanelOpen]);
+  }, [capture, setPanelOpen]);
 
-  const pickAndAddFolders = usePickAndAddWorkspaceFolders(
-    defaultClient,
-    workspace,
-  );
-  const pickFolder = useCallback(() => {
-    void pickAndAddFolders();
-  }, [pickAndAddFolders]);
-  const folderPickPending =
-    useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
+  // The `+` gate reads the effective target only: capability from the captured
+  // host, fail-closed on an unpinned client, and the reconciled launch context.
+  const { createEnabled, createDisabledReason } = landingTerminalCreateGate({
+    panelOpen,
+    availability: target.availability,
+    hostId: target.hostId,
+    primaryWorkspacePath: target.primaryWorkspacePath,
+    clientReady: target.client !== null,
+    reconciledContext,
+  });
 
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
-  // untouched and render no terminal affordance until one is selected.
-  if (availability === "no-active-host" || availability === "unsupported") {
+  // untouched and render no terminal affordance until one is selected. Read the
+  // captured verdict so a mid-gesture switch to an unsupported host cannot
+  // unmount the panel (and destroy the captured host's reconciliation).
+  if (
+    target.availability === "no-active-host" ||
+    target.availability === "unsupported"
+  ) {
     return null;
   }
 
@@ -193,24 +409,25 @@ export function LandingTerminalPanel(
     <LandingTerminalPanelContents
       tabs={tabs}
       activeInstanceId={activeInstanceId}
-      availability={availability}
+      availability={target.availability}
       panelOpen={panelOpen}
       panelWidthFraction={panelWidthFraction}
-      primaryWorkspacePath={primaryWorkspacePath}
-      activeHostId={activeHostId}
-      reconciledHostId={reconciledHostId}
+      primaryWorkspacePath={target.primaryWorkspacePath}
+      activeHostId={target.hostId}
+      createEnabled={createEnabled}
+      createDisabledReason={createDisabledReason}
+      reconciledContext={reconciledContext}
       maximized={maximized}
-      folderPickPending={folderPickPending}
       onTogglePanel={togglePanel}
       onOpenPanel={openPanel}
       onToggleMaximized={() => setMaximized((value) => !value)}
       onSetPanelWidthFraction={setPanelWidthFraction}
-      onCreateTerminal={createTerminalTab}
-      onActivateTab={activateTab}
+      onCreateTerminal={createTerminalTabFocused}
+      onRevealAndCreate={revealAndCreateTerminal}
+      onActivateTab={activateTerminalTab}
       onCloseTab={closeTerminalTab}
       onCloseAllTabs={closeAllTerminalTabs}
       onRenameTab={renameTab}
-      onPickFolder={pickFolder}
     />
   );
 }
@@ -223,43 +440,42 @@ interface LandingTerminalPanelContentsProps {
   readonly panelWidthFraction: number;
   readonly primaryWorkspacePath: string | null;
   readonly activeHostId: string | null;
-  readonly reconciledHostId: string | null;
+  readonly createEnabled: boolean;
+  readonly createDisabledReason: string | null;
+  readonly reconciledContext: LandingTerminalHostContext | null;
   readonly maximized: boolean;
-  readonly folderPickPending: boolean;
   readonly onTogglePanel: () => void;
   readonly onOpenPanel: () => void;
   readonly onToggleMaximized: () => void;
   readonly onSetPanelWidthFraction: (fraction: number) => void;
   readonly onCreateTerminal: () => void;
+  readonly onRevealAndCreate: () => void;
   readonly onActivateTab: (instanceId: string) => void;
   readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
   readonly onCloseAllTabs: () => void;
   readonly onRenameTab: (instanceId: string, name: string) => void;
-  readonly onPickFolder: () => void;
 }
 
 function LandingTerminalPanelContents(
   props: LandingTerminalPanelContentsProps,
 ): ReactNode {
-  const sliderProps = useLandingTerminalPanelResize({
+  const panelRef = useRef<HTMLElement | null>(null);
+  const scheduleTerminalLayoutReconcile = useLandingTerminalLayoutReconcile({
+    panelOpen: props.panelOpen,
+    activeInstanceId: props.activeInstanceId,
+  });
+  const { sliderProps, isDragging } = useLandingTerminalPanelResize({
     panelWidthFraction: props.panelWidthFraction,
     setPanelWidthFraction: props.onSetPanelWidthFraction,
+    onLayoutSettled: scheduleTerminalLayoutReconcile,
   });
-  const createDisabledReason = landingTerminalCreateDisabledReason(
-    props.availability,
-    props.primaryWorkspacePath,
-  );
-  const createEnabled =
-    props.panelOpen &&
-    props.availability === "supported" &&
-    props.activeHostId !== null &&
-    props.reconciledHostId === props.activeHostId;
+
   useLandingTerminalShortcuts({
     panelOpen: props.panelOpen,
     maximized: props.maximized,
     onTogglePanel: props.onTogglePanel,
     onOpenPanel: props.onOpenPanel,
-    onCreateTerminal: props.onCreateTerminal,
+    onRevealAndCreate: props.onRevealAndCreate,
     onToggleMaximized: props.onToggleMaximized,
     onActivateTab: props.onActivateTab,
     onCloseTab: props.onCloseTab,
@@ -268,6 +484,35 @@ function LandingTerminalPanelContents(
   const panelStyle = props.maximized
     ? undefined
     : { width: props.panelOpen ? `${props.panelWidthFraction * 100}%` : "0%" };
+  const handlePanelTransitionEnd = useCallback(
+    (event: ReactTransitionEvent<HTMLElement>): void => {
+      if (event.target !== event.currentTarget) return;
+      if (event.propertyName !== "width") return;
+      if (!props.panelOpen) return;
+      scheduleTerminalLayoutReconcile();
+    },
+    [props.panelOpen, scheduleTerminalLayoutReconcile],
+  );
+  const handlePanelTransitionCancel = useCallback(
+    (event: TransitionEvent): void => {
+      if (event.target !== panelRef.current) return;
+      if (event.propertyName !== "width") return;
+      if (!props.panelOpen || isDragging()) return;
+      scheduleTerminalLayoutReconcile();
+    },
+    [isDragging, props.panelOpen, scheduleTerminalLayoutReconcile],
+  );
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    panel.addEventListener("transitioncancel", handlePanelTransitionCancel);
+    return () => {
+      panel.removeEventListener(
+        "transitioncancel",
+        handlePanelTransitionCancel,
+      );
+    };
+  }, [handlePanelTransitionCancel]);
 
   return (
     <>
@@ -295,6 +540,7 @@ function LandingTerminalPanelContents(
         )}
       />
       <aside
+        ref={panelRef}
         data-landing-terminal-panel
         data-testid="landing-terminal-panel"
         data-open={props.panelOpen ? "true" : "false"}
@@ -309,6 +555,7 @@ function LandingTerminalPanelContents(
           props.maximized && "absolute inset-0 z-20 w-full",
         )}
         style={panelStyle}
+        onTransitionEnd={handlePanelTransitionEnd}
       >
         <LandingTerminalPanelHeader
           maximized={props.maximized}
@@ -318,7 +565,7 @@ function LandingTerminalPanelContents(
         <LandingTerminalTabStrip
           tabs={props.tabs}
           activeInstanceId={props.activeInstanceId}
-          createDisabledReason={createDisabledReason}
+          createDisabledReason={props.createDisabledReason}
           onAdd={props.onCreateTerminal}
           onActivate={props.onActivateTab}
           onClose={props.onCloseTab}
@@ -331,10 +578,9 @@ function LandingTerminalPanelContents(
           availability={props.availability}
           panelOpen={props.panelOpen}
           activeHostId={props.activeHostId}
-          createEnabled={createEnabled}
+          createEnabled={props.createEnabled}
           primaryWorkspacePath={props.primaryWorkspacePath}
-          folderPickPending={props.folderPickPending}
-          onPickFolder={props.onPickFolder}
+          reconciledContext={props.reconciledContext}
         />
       </aside>
     </>
@@ -344,18 +590,71 @@ function LandingTerminalPanelContents(
 /**
  * Why the strip's "+" is unavailable (surfaced as its tooltip), `null` when
  * creating is live. Mirrors the empty-state copy so the strip explains itself
- * even when tabs are already open (e.g. the pinned folder was removed after
- * the terminals were spawned).
+ * even when tabs are already open (e.g. the last folder was removed after the
+ * terminals were spawned and the host cannot report a home directory).
+ * `clientReady` is false when the host client cannot be pinned (fail-closed):
+ * the action stays disabled rather than falling back to the live default
+ * client.
  */
-function landingTerminalCreateDisabledReason(
-  availability: LandingTerminalAvailability,
-  primaryWorkspacePath: string | null,
-): string | null {
-  if (availability !== "supported") return "Connecting to the selected host…";
-  if (primaryWorkspacePath === null) {
-    return "Pick a folder to open a terminal in.";
+function landingTerminalCreateDisabledReason(args: {
+  readonly availability: LandingTerminalAvailability;
+  readonly primaryWorkspacePath: string | null;
+  readonly clientReady: boolean;
+  readonly activeHostId: string | null;
+  readonly reconciledContext: LandingTerminalHostContext | null;
+}): string | null {
+  if (!args.clientReady) return "Connecting to the selected host…";
+  if (args.availability !== "supported") {
+    return "Connecting to the selected host…";
+  }
+  if (args.primaryWorkspacePath !== null) return null;
+  if (
+    args.reconciledContext === null ||
+    args.activeHostId === null ||
+    args.reconciledContext.hostId !== args.activeHostId
+  ) {
+    return "Connecting to the selected host…";
+  }
+  if (args.reconciledContext.homeCwd === null) {
+    return LANDING_TERMINAL_HOST_UPDATE_GUIDANCE;
   }
   return null;
+}
+
+/**
+ * The create gate, resolved once from either the captured opening-gesture
+ * snapshot or live focus (the caller decides which by passing the effective
+ * values). `createEnabled` drives the terminal tiles; `createDisabledReason`
+ * drives the `+` button's disabled state and tooltip. Both stay in lockstep so
+ * a fail-closed client or an unsupported host disables the action either way.
+ */
+function landingTerminalCreateGate(args: {
+  readonly panelOpen: boolean;
+  readonly availability: LandingTerminalAvailability;
+  readonly hostId: string | null;
+  readonly primaryWorkspacePath: string | null;
+  readonly clientReady: boolean;
+  readonly reconciledContext: LandingTerminalHostContext | null;
+}): {
+  readonly createEnabled: boolean;
+  readonly createDisabledReason: string | null;
+} {
+  const createDisabledReason = landingTerminalCreateDisabledReason({
+    availability: args.availability,
+    primaryWorkspacePath: args.primaryWorkspacePath,
+    clientReady: args.clientReady,
+    activeHostId: args.hostId,
+    reconciledContext: args.reconciledContext,
+  });
+  // Derived from the reason rather than restated, so the two cannot drift.
+  // They previously did: a captured workspace path makes the reason `null`
+  // (the launch cwd is that folder, so no reconciled `homeCwd` is needed),
+  // while this condition still demanded a reconciled context matching the
+  // captured host - leaving the "+" enabled with its tooltip clear but the
+  // tiles' create affordance shut.
+  const createEnabled =
+    args.panelOpen && args.hostId !== null && createDisabledReason === null;
+  return { createEnabled, createDisabledReason };
 }
 
 /**
@@ -389,7 +688,7 @@ function useLandingTerminalShortcuts(args: {
   readonly maximized: boolean;
   readonly onTogglePanel: () => void;
   readonly onOpenPanel: () => void;
-  readonly onCreateTerminal: () => void;
+  readonly onRevealAndCreate: () => void;
   readonly onToggleMaximized: () => void;
   readonly onActivateTab: (instanceId: string) => void;
   readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
@@ -400,7 +699,7 @@ function useLandingTerminalShortcuts(args: {
     maximized,
     onTogglePanel,
     onOpenPanel,
-    onCreateTerminal,
+    onRevealAndCreate,
     onToggleMaximized,
     onActivateTab,
     onCloseTab,
@@ -410,26 +709,21 @@ function useLandingTerminalShortcuts(args: {
     () => registerDynamicActionHandler("app.terminal.toggle", onTogglePanel),
     [onTogglePanel],
   );
-  const revealAndCreate = useCallback(() => {
-    // Reveal first: a collapsed panel with no tabs would otherwise let
-    // reconciliation's auto-spawn race this create and open two shells.
-    // Creating the tab up-front leaves a non-empty set, which suppresses
-    // the auto-spawn. Both calls self-gate, so this is safe while the
-    // host is still connecting.
-    onOpenPanel();
-    onCreateTerminal();
-  }, [onCreateTerminal, onOpenPanel]);
+  // Reveal-and-create is one gesture in the panel: a collapsed panel captures
+  // the open gesture and creates from that captured snapshot up-front (the
+  // non-empty set suppresses reconciliation's auto-spawn), while an open panel
+  // is just a `+`. It self-gates, so this is safe while the host is connecting.
   useEffect(
-    () => registerDynamicActionHandler("app.terminal.new", revealAndCreate),
-    [revealAndCreate],
+    () => registerDynamicActionHandler("app.terminal.new", onRevealAndCreate),
+    [onRevealAndCreate],
   );
   useEffect(
     () =>
       registerDynamicActionHandler("tab.new", () => {
         if (systemTabOverlayActive()) return;
-        revealAndCreate();
+        onRevealAndCreate();
       }),
-    [revealAndCreate],
+    [onRevealAndCreate],
   );
   useEffect(
     () =>
@@ -600,8 +894,7 @@ function LandingTerminalPanelBody(props: {
   readonly activeHostId: string | null;
   readonly createEnabled: boolean;
   readonly primaryWorkspacePath: string | null;
-  readonly folderPickPending: boolean;
-  readonly onPickFolder: () => void;
+  readonly reconciledContext: LandingTerminalHostContext | null;
 }): ReactNode {
   if (props.availability === "unknown") {
     return (
@@ -619,8 +912,8 @@ function LandingTerminalPanelBody(props: {
       {props.tabs.length === 0 ? (
         <LandingTerminalEmptyState
           primaryWorkspacePath={props.primaryWorkspacePath}
-          folderPickPending={props.folderPickPending}
-          onPickFolder={props.onPickFolder}
+          activeHostId={props.activeHostId}
+          reconciledContext={props.reconciledContext}
         />
       ) : (
         props.tabs.map((tab) => (
@@ -650,37 +943,25 @@ function LandingTerminalPanelBody(props: {
 
 function LandingTerminalEmptyState(props: {
   readonly primaryWorkspacePath: string | null;
-  readonly folderPickPending: boolean;
-  readonly onPickFolder: () => void;
+  readonly activeHostId: string | null;
+  readonly reconciledContext: LandingTerminalHostContext | null;
 }): ReactNode {
-  // No folder means no cwd to spawn in. Offer the picker here rather than
-  // telling the user to go find it: it writes through the same workspace
-  // source as the composer's picker, so the folder they choose becomes the
-  // primary and reconciliation's auto-spawn opens the terminal.
-  if (props.primaryWorkspacePath === null) {
+  // Bridged v2.0 host with no primary folder: capability/update guidance, not
+  // the removed folder-picker blocker and not a guessed cwd.
+  if (
+    props.primaryWorkspacePath === null &&
+    props.reconciledContext !== null &&
+    props.activeHostId !== null &&
+    props.reconciledContext.hostId === props.activeHostId &&
+    props.reconciledContext.homeCwd === null
+  ) {
     return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
-        <p className="text-ui-sm text-muted-foreground">
-          Pick a folder to open a terminal in.
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-testid="landing-terminal-select-folder"
-          disabled={props.folderPickPending}
-          onClick={props.onPickFolder}
-        >
-          <FolderOpen className="size-4" />
-          Select folder
-          {props.folderPickPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+      <div
+        role="status"
+        data-testid="landing-terminal-host-update"
+        className="flex h-full min-h-0 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground"
+      >
+        {LANDING_TERMINAL_HOST_UPDATE_GUIDANCE}
       </div>
     );
   }
@@ -700,18 +981,42 @@ function isLandingTerminalPanelElement(
   );
 }
 
+function resolveLandingTerminalResizeContainer(
+  handle: HTMLElement,
+): HTMLElement | null {
+  const parent = handle.parentElement;
+  if (parent === null) return null;
+
+  // Split landing panes portal the handle and panel into a `display: contents`
+  // anchor. That anchor preserves flex layout but has no box of its own, so its
+  // bounding rect is always zero-sized. Measure the pane's flex row instead.
+  return window.getComputedStyle(parent).display === "contents"
+    ? parent.parentElement
+    : parent;
+}
+
 interface LandingTerminalPanelResizeArgs {
   readonly panelWidthFraction: number;
   readonly setPanelWidthFraction: (fraction: number) => void;
+  readonly onLayoutSettled: () => void;
 }
 
-function useLandingTerminalPanelResize(args: LandingTerminalPanelResizeArgs) {
+interface LandingTerminalPanelResizeResult {
+  readonly sliderProps: PointerDragSliderProps;
+  readonly isDragging: () => boolean;
+}
+
+function useLandingTerminalPanelResize(
+  args: LandingTerminalPanelResizeArgs,
+): LandingTerminalPanelResizeResult {
   const dragRef = useRef<LandingTerminalDragState | null>(null);
-  return usePointerDragCommit({
+  const sliderProps = usePointerDragCommit({
     axis: "horizontal",
     onDragStart: (event) => {
       const panel = event.currentTarget.nextElementSibling;
-      const container = event.currentTarget.parentElement;
+      const container = resolveLandingTerminalResizeContainer(
+        event.currentTarget,
+      );
       if (!isLandingTerminalPanelElement(panel) || container === null) {
         return false;
       }
@@ -744,18 +1049,67 @@ function useLandingTerminalPanelResize(args: LandingTerminalPanelResizeArgs) {
       dragRef.current = null;
       if (drag === null) return;
       args.setPanelWidthFraction(drag.latestFraction);
+      args.onLayoutSettled();
     },
     onDragCancel: () => {
       const drag = dragRef.current;
       dragRef.current = null;
       if (drag === null) return;
       drag.panel.style.width = drag.initialWidth;
+      args.onLayoutSettled();
     },
     onReset: () => {
       args.setPanelWidthFraction(DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION);
+      args.onLayoutSettled();
     },
     onKeyNudge: (direction) => {
       args.setPanelWidthFraction(args.panelWidthFraction - direction * 0.03);
+      args.onLayoutSettled();
     },
   });
+  const isDragging = useCallback((): boolean => dragRef.current !== null, []);
+  return { sliderProps, isDragging };
+}
+
+function useLandingTerminalLayoutReconcile(args: {
+  readonly panelOpen: boolean;
+  readonly activeInstanceId: string | null;
+}): () => void {
+  const frameRef = useRef<number | null>(null);
+  const previousPanelOpenRef = useRef(args.panelOpen);
+  const cancelScheduledReconcile = useCallback((): void => {
+    if (frameRef.current === null) return;
+    window.cancelAnimationFrame(frameRef.current);
+    frameRef.current = null;
+  }, []);
+  const scheduleReconcile = useCallback((): void => {
+    cancelScheduledReconcile();
+    if (!args.panelOpen || args.activeInstanceId === null) return;
+    const instanceId = args.activeInstanceId;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      reconcileXtermHostAfterLayoutTransition(instanceId);
+    });
+  }, [args.activeInstanceId, args.panelOpen, cancelScheduledReconcile]);
+
+  useEffect(() => {
+    const reopened = args.panelOpen && !previousPanelOpenRef.current;
+    previousPanelOpenRef.current = args.panelOpen;
+    // A normal reveal reconciles on its final width transition. If another
+    // resize has globally suppressed transitions, the panel jumps straight to
+    // its target width and needs the next-frame fallback instead. An active-tab
+    // change while already open also lands here, including a delayed
+    // reconciliation that selects a different terminal after reveal.
+    if (args.panelOpen && (!reopened || isPanelResizeInteractionActive())) {
+      scheduleReconcile();
+    }
+    return cancelScheduledReconcile;
+  }, [
+    args.activeInstanceId,
+    args.panelOpen,
+    cancelScheduledReconcile,
+    scheduleReconcile,
+  ]);
+
+  return scheduleReconcile;
 }

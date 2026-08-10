@@ -28,7 +28,12 @@ import {
   worktreeIntentSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  SEARCH_TEXT_PREVIEW_MAX_BYTES,
+  searchTextPreviewRangeSchema,
+} from "@traycer/protocol/host/search-text-preview-schema";
+import {
   chatRunSettingsSchema,
+  chatRunSettingsStrictSchema,
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
@@ -70,12 +75,16 @@ export type TaskRepoMatchMode = z.infer<typeof taskRepoMatchModeSchema>;
 export const taskOwnershipScopeSchema = z.enum(["mine", "shared"]);
 export type TaskOwnershipScope = z.infer<typeof taskOwnershipScopeSchema>;
 
-export const listTasksSortSchema = z.enum([
+export const listTasksSortSchemaV11 = z.enum([
   "recent",
   "oldest",
   "title-asc",
   "title-desc",
   "relevance",
+]);
+export const listTasksSortSchema = z.enum([
+  ...listTasksSortSchemaV11.options,
+  "last-viewed",
 ]);
 export type ListTasksSort = z.infer<typeof listTasksSortSchema>;
 
@@ -491,13 +500,16 @@ export const listTaskLightSchema = taskLightSchema.extend({
 });
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
-export const listTasksRequestSchema = z.object({
+export const listTasksRequestSchemaV11 = z.object({
   limit: z.number(),
   cursor: z.string().optional(),
   filters: taskFiltersSchema.nullable(),
-  sort: listTasksSortSchema.optional(),
+  sort: listTasksSortSchemaV11.optional(),
   extensionPhaseVersion: z.string(),
   extensionEpicVersion: z.string(),
+});
+export const listTasksRequestSchema = listTasksRequestSchemaV11.extend({
+  sort: listTasksSortSchema.optional(),
 });
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
 
@@ -551,6 +563,22 @@ export const setEpicPinnedResponseSchema = z.object({
   pinned: z.boolean(),
 });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
+
+// ─── Personal task view recency (epic.recordViewed@1.0) ─────────────────────
+
+export const recordEpicViewedRequestSchema = z.object({
+  epicId: z.string(),
+});
+export type RecordEpicViewedRequest = z.infer<
+  typeof recordEpicViewedRequestSchema
+>;
+
+export const recordEpicViewedResponseSchema = z.object({
+  viewedAt: z.number(),
+});
+export type RecordEpicViewedResponse = z.infer<
+  typeof recordEpicViewedResponseSchema
+>;
 
 // ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
 // Optional (non-floor) capability: resolve a small set of task ids to list-row
@@ -981,6 +1009,49 @@ export type UpdateChatRunSettingsResponse = z.infer<
   typeof updateChatRunSettingsResponseSchema
 >;
 
+// v1.1 tightens `settings` to the wire-strict tuple (every field required, no
+// zod defaults): this method is a whole-tuple WYSIWYG replace, and the strict
+// schema makes a subset-field "patch" a validation error instead of a silent
+// null-clobber of omitted fields. See `chatRunSettingsStrictSchema`.
+// Profile-only changes belong on `epic.updateChatProfile` below.
+export const updateChatRunSettingsRequestSchemaV11 = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  settings: chatRunSettingsStrictSchema,
+});
+export type UpdateChatRunSettingsRequestV11 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV11
+>;
+
+// Narrow, safe-by-construction field update: move a chat onto another
+// logged-in profile (subscription) of its CURRENT harness without touching
+// the rest of the tuple. The host patches its own authoritative persisted
+// record, so callers never rebuild (and possibly stale-patch) the full
+// tuple client-side. `null` = the ambient/host login. There is deliberately
+// no sibling `epic.updateChatModel`: a model change invalidates the
+// reasoning/thinking/tier selection and is only expressible as a full
+// reconfigure (`agent.configure` / `epic.updateChatRunSettings`).
+// Optional (non-floor) capability: old hosts fail only this call with
+// E_HOST_UNSUPPORTED and the renderer degrades to persist-on-next-send.
+export const updateChatProfileRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  profileId: z.string().nullable(),
+});
+export type UpdateChatProfileRequest = z.infer<
+  typeof updateChatProfileRequestSchema
+>;
+
+// `updated` is false when the chat has no persisted run settings yet (a
+// never-configured chat has no tuple to patch; its first send will stamp
+// the composer's full tuple, profile included).
+export const updateChatProfileResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type UpdateChatProfileResponse = z.infer<
+  typeof updateChatProfileResponseSchema
+>;
+
 export const deleteChatRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),
@@ -989,6 +1060,33 @@ export type DeleteChatRequest = z.infer<typeof deleteChatRequestSchema>;
 
 export const deleteChatResponseSchema = z.object({ deleted: z.boolean() });
 export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
+
+// Optional (non-floor) capability: durable host-backed archive toggle. Sets or
+// clears `archivedAt` on a single chat OR terminal-agent record, resolved by
+// `chatId` (one method keyed by id covers both the `chats` and `tuiAgents`
+// maps). Idempotent - archiving an already-archived record, or unarchiving an
+// active one, is a no-op. Old hosts lack it; callers get E_HOST_UNSUPPORTED for
+// this call only and hide the archive affordance.
+export const setChatArchivedRequestSchema = z.object({
+  epicId: z.string(),
+  // Names either a chat (in `chats`) or a terminal-agent (in `tuiAgents`)
+  // record; the host resolves the id across both maps.
+  chatId: z.string(),
+  archived: z.boolean(),
+});
+export type SetChatArchivedRequest = z.infer<
+  typeof setChatArchivedRequestSchema
+>;
+
+// `updated` is true when the record's `archivedAt` actually changed; false when
+// the record was already in the requested state (idempotent no-op) or no record
+// matched the id.
+export const setChatArchivedResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type SetChatArchivedResponse = z.infer<
+  typeof setChatArchivedResponseSchema
+>;
 
 export const reparentChatRequestSchema = z.object({
   epicId: z.string(),
@@ -1041,8 +1139,54 @@ export const createTuiAgentRequestSchema = z.object({
   // predate profiles keep today's exact behavior. See the multi-profile
   // decision log.
   profileId: z.string().nullable().default(null),
+  // The upstream harness session id this record was forked FROM, when the
+  // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
+  // above was itself a fork. `null` for a normal (non-fork) create, and for
+  // older clients that predate this field. The resolver persists this
+  // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
+  // provider failure between PTY spawn and destination-transcript
+  // establishment still has durable provenance to retry the fork from -
+  // the renderer's own prepared-launch stash is cleared on PTY creation,
+  // well before that establishment point.
+  // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
+  forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
+
+/**
+ * Frozen `epic.createTuiAgent@1.0` request, exactly as shipped through
+ * `host-v1.1.10`: everything above except `forkSourceHarnessSessionId`.
+ *
+ * That field was authored straight onto the live object while @1.0 was the
+ * only registered version, so it silently grew an already-released contract;
+ * `host-v1.1.10` then froze @1.0 without it, because the commit that added it
+ * was not in the release cherry-pick. It rides @1.1 now.
+ *
+ * Hand-pinned field-for-field rather than derived from the live schema via
+ * `.omit()` - a field added to the live shape must not silently leak back into
+ * this contract, which is the exact failure this freeze exists to prevent.
+ */
+export const createTuiAgentRequestSchemaV10 = z.object({
+  epicId: z.string(),
+  parentId: z.string().nullable(),
+  title: z.string(),
+  harnessId: tuiHarnessIdSchema,
+  harnessSessionId: z.string().nullable().catch(null),
+  terminalAgentArgs: z.string().nullable().default(null).catch(null),
+  terminalShellCommand: z.string().nullable().catch(null),
+  terminalShellArgs: z.array(z.string()).nullable().catch(null),
+  hostId: z.string(),
+  workspaceFolders: z.array(z.string()),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  tuiAgentId: z.string().nullable().optional(),
+  profileId: z.string().nullable().default(null),
+});
+export type CreateTuiAgentRequestV10 = z.infer<
+  typeof createTuiAgentRequestSchemaV10
+>;
 
 export const createTuiAgentResponseSchema = z.object({
   tuiAgentId: z.string(),
@@ -1330,4 +1474,140 @@ export const resolveArtifactByPathResponseSchema = z.object({
 });
 export type ResolveArtifactByPathResponse = z.infer<
   typeof resolveArtifactByPathResponseSchema
+>;
+
+// ─── Search artifacts (epic.searchArtifacts@1.0 wire shape) ──────────────────
+// Epic-scoped artifact search. `epicId` is ALWAYS required: the protocol cannot
+// represent an omitted epic, an "all epics" sentinel, or a cross-epic scope, so
+// artifact search can never grow into a cloud-wide index (search decision log,
+// "Context-derived search scope"). `fields` selects which of title / relative
+// path / Markdown body are searched; title/path are Fuse-ranked over authoritative
+// artifact metadata, body is ripgrep-matched over the epic's on-disk Markdown
+// mirror. All paths returned are RELATIVE to the epic's artifact root - a
+// host-absolute path is never exposed.
+
+/** Which of the artifact's searchable surfaces a query is run against. */
+export const searchArtifactsFieldsSchema = z.object({
+  title: z.boolean(),
+  path: z.boolean(),
+  body: z.boolean(),
+});
+export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
+
+/**
+ * Server-side filters composed with the query. `kinds`/`statuses` restrict by
+ * artifact metadata; `subtreePath` restricts to a subtree of the artifact tree,
+ * expressed as a POSIX path RELATIVE to the epic artifact root (never an
+ * absolute filesystem root - the host derives and authorizes the real root
+ * internally). A `null` field means "no restriction on this axis".
+ */
+export const searchArtifactsFiltersSchema = z.object({
+  kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
+  statuses: z.array(z.number().int()).nullable(),
+  subtreePath: z
+    .string()
+    .min(1)
+    .refine(
+      (path) =>
+        !path.startsWith("/") &&
+        path
+          .split("/")
+          .every(
+            (segment) => segment !== "" && segment !== "." && segment !== "..",
+          ),
+      "subtreePath must be a non-empty relative POSIX path without traversal",
+    )
+    .nullable(),
+});
+export type SearchArtifactsFilters = z.infer<
+  typeof searchArtifactsFiltersSchema
+>;
+
+export const searchArtifactsRequestSchema = z.object({
+  epicId: z.string(),
+  query: z.string(),
+  fields: searchArtifactsFieldsSchema,
+  filters: searchArtifactsFiltersSchema,
+  limit: z.number().int().min(1).max(1_000),
+});
+export type SearchArtifactsRequest = z.infer<
+  typeof searchArtifactsRequestSchema
+>;
+
+/** Which surface produced a hit. A hit may carry more than one source. */
+export const searchArtifactMatchSourceSchema = z.enum([
+  "title",
+  "path",
+  "body",
+]);
+export type SearchArtifactMatchSource = z.infer<
+  typeof searchArtifactMatchSourceSchema
+>;
+
+/**
+ * Maximum size, in UTF-8 bytes, of a single {@link searchArtifactSnippetSchema}
+ * `text`. The host enforces this bound (ripgrep's `--max-columns` does NOT bound
+ * the JSON `lines.text` payload), truncating on a UTF-8 character boundary and
+ * clamping/dropping highlight ranges so every returned range still addresses the
+ * returned text. Bounds response weight against a pathological single-line body.
+ */
+export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = SEARCH_TEXT_PREVIEW_MAX_BYTES;
+
+/**
+ * One body-match line. `ranges` are BYTE offsets into the UTF-8 encoding of
+ * `text` (ripgrep submatch offsets), not UTF-16/JS string indices, so a
+ * consumer that wants character indices converts deliberately. `text` is bounded
+ * to {@link SEARCH_ARTIFACT_SNIPPET_MAX_BYTES} bytes host-side; a highlight for a
+ * match past that bound is dropped rather than pointing outside `text`.
+ */
+export const searchArtifactSnippetSchema = z.object({
+  lineNumber: z.number().int().positive(),
+  text: z.string(),
+  ranges: z.array(searchTextPreviewRangeSchema),
+});
+export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
+
+/**
+ * One ranked artifact hit. `artifactId`/`kind`/`title` are authoritative
+ * (resolved against the epic's Y.Doc index, so a stale disk entry for a deleted
+ * artifact never appears); `status` is read from the trusted disk mirror.
+ * `relativePath` and `breadcrumb` are relative to the epic artifact root. The
+ * hit is NOT authoritative for opening: the caller re-resolves the path through
+ * the existing `epic.resolveArtifactByPath` route so a stale disk result cannot
+ * mutate or resurrect deleted state.
+ */
+export const searchArtifactHitSchema = z.object({
+  artifactId: z.string(),
+  kind: LatestEpicArtifactKindSchema,
+  title: z.string(),
+  status: z.number().int().nullable(),
+  relativePath: z.string(),
+  breadcrumb: z.array(z.string()),
+  sources: z.array(searchArtifactMatchSourceSchema),
+  score: z.number(),
+  snippets: z.array(searchArtifactSnippetSchema),
+});
+export type SearchArtifactHit = z.infer<typeof searchArtifactHitSchema>;
+
+/**
+ * `ready` = the mirror was searched (an empty `results` is a legitimate
+ * zero-match). `mirror-unavailable` = the epic's on-disk mirror does not exist
+ * yet / is not a directory - a DISTINCT typed condition from zero matches, so a
+ * caller can tell "nothing matched" apart from "nothing to search yet".
+ */
+export const searchArtifactsOutcomeSchema = z.enum([
+  "ready",
+  "mirror-unavailable",
+]);
+export type SearchArtifactsOutcome = z.infer<
+  typeof searchArtifactsOutcomeSchema
+>;
+
+export const searchArtifactsResponseSchema = z.object({
+  outcome: searchArtifactsOutcomeSchema,
+  results: z.array(searchArtifactHitSchema),
+  truncated: z.boolean(),
+});
+export type SearchArtifactsResponse = z.infer<
+  typeof searchArtifactsResponseSchema
 >;

@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import { describe, expect, it } from "vitest";
 import { queryMountedChatFindUnit } from "@/components/chat/chat-find";
 

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useHostDirectory } from "@/lib/host";
 
 /**
@@ -50,7 +51,7 @@ export function useHostDirectoryEntry(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-function hostDirectoryEntryEquals(
+export function hostDirectoryEntryEquals(
   a: HostDirectoryEntry | null,
   b: HostDirectoryEntry | null,
 ): boolean {
@@ -62,6 +63,16 @@ function hostDirectoryEntryEquals(
     a.kind === b.kind &&
     a.websocketUrl === b.websocketUrl &&
     a.version === b.version &&
-    a.status === b.status
+    a.status === b.status &&
+    // Not part of the base shape (R-1): a same-host public-key rotation
+    // (re-enrollment / corruption recovery) would otherwise be swallowed by
+    // this cache - every base field can stay byte-identical - permanently
+    // hiding the new key from every consumer of this hook (chat/terminal
+    // session registries key their durable owners on it).
+    remotePublicKeyOf(a) === remotePublicKeyOf(b)
   );
+}
+
+function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
 }

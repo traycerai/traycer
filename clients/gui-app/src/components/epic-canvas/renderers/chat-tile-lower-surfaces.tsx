@@ -5,6 +5,7 @@ import type {
   ChatApprovalState,
   ChatFileEditApprovalState,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
@@ -26,14 +27,22 @@ import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
-import { lowerScrollRegionMaxHeightClass } from "@/lib/chat/chat-lower-scroll-budget";
+import {
+  chatBackgroundSectionVisible,
+  lowerScrollRegionMaxHeightClass,
+} from "@/lib/chat/chat-lower-scroll-budget";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-commands-for-chat";
 import { cn } from "@/lib/utils";
-import type { PendingInterviewView } from "./chat-tile-types";
+import type {
+  PendingInterviewView,
+  UnanswerableInterviewView,
+} from "./chat-tile-types";
 import {
   composerHasBlockingApprovals,
   visibleComposerApprovals,
@@ -43,6 +52,7 @@ type ComposerSlotBottomSpacing = "normal" | "none";
 
 export interface ChatLowerInteractionSurfacesProps {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly chatId: string;
   readonly runtime: ChatLowerRuntimeState;
   readonly access: ChatLowerAccessState;
@@ -68,14 +78,46 @@ export interface ChatLowerAccessState {
   readonly canAct: boolean;
 }
 
+/**
+ * Why the composer's send is blocked, for the send button's tooltip. `canAct`
+ * folds role and connection: a viewer can never act; a non-viewer with
+ * `canAct === false` means the chat stream is not open (host reconnecting
+ * after a drop / renderer resume).
+ */
+function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
+  if (access.canAct) return null;
+  if (access.isViewer) return "You have view-only access to this chat";
+  return "Reconnecting to the host — sending is paused";
+}
+
 export interface ChatLowerTurnState {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  /** Host-projected same-turn steering capability of the running turn's harness. */
+  readonly steerCapable: boolean;
+  /**
+   * Whether the tab's negotiated `chat.subscribe` version understands
+   * `after_safe_point` (host handshake minor >= 5). Gates whether `Mod-Enter`
+   * can steer at all, keeping a new renderer from steering a <=1.4 host.
+   */
+  readonly steerProtocolSupported: boolean;
+  /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
+  readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
   readonly onStopTurn: () => string | null;
 }
 
 export interface ChatLowerInterviewState {
   readonly pending: PendingInterviewView | null;
+  // True while an answer/skip for the pending block is in flight or accepted
+  // but unresolved (derived from the chat session's pending/accepted actions).
+  // Gates the card so the same action cannot be double-sent.
+  readonly isBusy: boolean;
+  // Host-pending interviews with no answerable card in this transcript. Non-
+  // empty means the chat is send-locked with nothing to answer, so the escape-
+  // hatch notice renders above whatever else occupies the composer slot.
+  readonly unanswerable: ReadonlyArray<UnanswerableInterviewView>;
+  // True while a dismissal for any `unanswerable` block is in flight.
+  readonly unanswerableBusy: boolean;
   readonly onAnswer: (
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
@@ -94,14 +136,14 @@ export interface ChatLowerApprovalsState {
 }
 
 export interface ChatLowerQueueState {
-  readonly editingItem: ChatQueuedItem | null;
+  readonly editingItem: ChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
   readonly value: ChatSessionState["queue"];
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
-  readonly onEdit: (item: ChatQueuedItem) => void;
+  readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
-  readonly onAbortSteer: (item: ChatQueuedItem) => void;
+  readonly onAbortSteer: (item: ChatQueuedPromptItem) => void;
   readonly onCancelEdit: () => void;
   readonly onStopBackgroundItem: (taskId: string) => string | null;
   readonly onStopAllBackgroundItems: () => string | null;
@@ -109,7 +151,7 @@ export interface ChatLowerQueueState {
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onSteerNow: (item: ChatQueuedItem) => void;
+  readonly onSteerNow: (item: ChatQueuedPromptItem) => void;
 }
 
 export interface ChatLowerComposerState {
@@ -128,6 +170,14 @@ export interface ChatLowerComposerState {
 }
 
 interface ComposerSurfaceModel {
+  /**
+   * The view tab this composer is rendered in. Reaches the composer only for
+   * the provider re-auth banner's terminal sign-in: the host creates the PTY
+   * and the banner has to open THAT session as a tile in ITS OWN view. In a
+   * split view each pane renders its own banner, so a banner that used the
+   * app-wide active view would open the terminal in the other pane.
+   */
+  readonly viewTabId: string;
   readonly runtime: ChatLowerRuntimeState;
   readonly access: ChatLowerAccessState;
   readonly turn: ChatLowerTurnState;
@@ -159,6 +209,9 @@ export function ChatLowerInteractionSurfaces(
   const turnOnStopTurn = props.turn.onStopTurn;
   const turnActiveTurnStatus = props.turn.activeTurnStatus;
   const turnStopDisabled = props.turn.stopDisabled;
+  const turnSteerCapable = props.turn.steerCapable;
+  const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
+  const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
   // Intercept the composer Stop button: when this chat has active
   // sub-agents, raise the cascade prompt instead of stopping only its turn.
@@ -174,10 +227,20 @@ export function ChatLowerInteractionSurfaces(
   const turnWithCascade = useMemo(
     () => ({
       activeTurnStatus: turnActiveTurnStatus,
+      steerCapable: turnSteerCapable,
+      steerProtocolSupported: turnSteerProtocolSupported,
+      getActiveTurnForSteer: turnGetActiveTurnForSteer,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
     }),
-    [turnActiveTurnStatus, turnStopDisabled, requestStopTurn],
+    [
+      turnActiveTurnStatus,
+      turnSteerCapable,
+      turnSteerProtocolSupported,
+      turnGetActiveTurnForSteer,
+      turnStopDisabled,
+      requestStopTurn,
+    ],
   );
 
   // Memoize on the underlying approvals array: `visibleComposerApprovals`
@@ -202,8 +265,16 @@ export function ChatLowerInteractionSurfaces(
   // Show the queue surface whenever it holds anything - user-typed sends and
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
-  const backgroundVisible =
-    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+  // Read here rather than inside the dock: the same count decides the dock's
+  // Background section and the spacing of everything below it.
+  const runningManagedCommandCount = useRunningManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+  ).length;
+  const backgroundVisible = chatBackgroundSectionVisible({
+    backgroundItemCount: props.backgroundItems?.length ?? 0,
+    runningManagedCommandCount,
+  });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
   const approvalVisible = approvalSurfaceVisible(
@@ -252,6 +323,7 @@ export function ChatLowerInteractionSurfaces(
 
   const composerModel = useMemo(
     () => ({
+      viewTabId: props.viewTabId,
       runtime: props.runtime,
       access: props.access,
       turn: turnWithCascade,
@@ -266,6 +338,7 @@ export function ChatLowerInteractionSurfaces(
       hasPendingApprovals,
     }),
     [
+      props.viewTabId,
       props.runtime,
       props.access,
       turnWithCascade,
@@ -288,12 +361,15 @@ export function ChatLowerInteractionSurfaces(
       <ChatLowerDock
         snapshotLoaded={props.runtime.snapshotLoaded}
         epicId={props.epicId}
+        chatId={props.chatId}
+        viewTabId={props.viewTabId}
         selfAgent={stopControls.self}
         activeAgents={activeAgents}
         todo={props.todo}
         restore={props.restoreContext}
         queue={props.queue.value}
         backgroundItems={props.backgroundItems}
+        runningManagedCommandCount={runningManagedCommandCount}
         backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
         backgroundStopAllPending={props.backgroundStopAllPending}
         activeTurnStatus={props.turn.activeTurnStatus}
@@ -394,36 +470,61 @@ function ComposerSurface(props: {
           <ReadOnlyComposerNotice />
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
-            agentMode={model.composer.sessionSettingsSeed?.agentMode ?? null}
           />
         </div>
       </ComposerSlotShell>
     );
   }
-  if (model.interview.pending !== null) {
-    return (
+  // The escape hatch stacks ABOVE the card/composer rather than replacing
+  // either: a stuck block can coexist with an answerable one, and the composer
+  // must stay reachable in case the host would in fact accept a send (only
+  // `detached` waits gate it host-side, which the renderer cannot observe).
+  const escapeHatch =
+    model.interview.unanswerable.length > 0 ? (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
-        <PendingInterviewCard
-          key={model.interview.pending.blockId}
-          blockId={model.interview.pending.blockId}
-          toolName={model.interview.pending.toolName}
-          title={model.interview.pending.title}
-          description={model.interview.pending.description}
-          questions={model.interview.pending.questions}
-          isActive={model.composer.isActive}
-          onSubmit={model.access.canAct ? model.interview.onAnswer : null}
-          onSkip={model.access.canAct ? model.interview.onError : null}
-          onFork={model.access.canAct ? model.interview.onFork : null}
+        <UnanswerableInterviewNotice
+          interviews={model.interview.unanswerable}
+          isBusy={model.interview.unanswerableBusy}
+          onDismiss={model.access.canAct ? model.interview.onError : null}
         />
       </ComposerSlotShell>
+    ) : null;
+  // The notice already paid the surface's top spacing, so whatever follows it
+  // connects flush underneath.
+  const belowSpacing: ChatLowerSurfaceTopSpacing =
+    escapeHatch === null ? layout.topSpacing : "connected";
+  if (model.interview.pending !== null) {
+    return (
+      <>
+        {escapeHatch}
+        <ComposerSlotShell topSpacing={belowSpacing} bottomSpacing="normal">
+          <PendingInterviewCard
+            key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
+            chatId={model.composer.nodeId}
+            blockId={model.interview.pending.blockId}
+            toolName={model.interview.pending.toolName}
+            title={model.interview.pending.title}
+            description={model.interview.pending.description}
+            questions={model.interview.pending.questions}
+            isActive={model.composer.isActive}
+            isBusy={model.interview.isBusy}
+            onSubmit={model.access.canAct ? model.interview.onAnswer : null}
+            onSkip={model.access.canAct ? model.interview.onError : null}
+            onFork={model.access.canAct ? model.interview.onFork : null}
+          />
+        </ComposerSlotShell>
+      </>
     );
   }
   return (
-    <LiveChatComposer
-      model={model}
-      topSpacing={layout.topSpacing}
-      hasPendingApprovals={model.hasPendingApprovals}
-    />
+    <>
+      {escapeHatch}
+      <LiveChatComposer
+        model={model}
+        topSpacing={belowSpacing}
+        hasPendingApprovals={model.hasPendingApprovals}
+      />
+    </>
   );
 }
 
@@ -439,9 +540,11 @@ function LiveChatComposer(props: {
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
       sendDisabled={!model.access.canAct}
+      sendDisabledHint={chatSendDisabledHint(model.access)}
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
+      viewTabId={model.viewTabId}
       settingsSeed={
         model.queue.editingItem?.settings ?? model.composer.sessionSettingsSeed
       }
@@ -449,6 +552,9 @@ function LiveChatComposer(props: {
       onSubmitMessage={model.composer.onSubmitMessage}
       onSettingsChange={model.composer.onSettingsChange}
       activeTurnStatus={model.turn.activeTurnStatus}
+      steerCapable={model.turn.steerCapable}
+      steerProtocolSupported={model.turn.steerProtocolSupported}
+      getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
       hasPendingApprovals={props.hasPendingApprovals}
@@ -491,14 +597,18 @@ function ComposerSlotShell(props: {
   readonly bottomSpacing: ComposerSlotBottomSpacing;
 }) {
   return (
-    <div
-      className={cn(
-        "bg-canvas px-4",
-        props.topSpacing === "normal" ? "pt-4" : "pt-0",
-        props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
-      )}
-    >
-      <div className="mx-auto w-full max-w-3xl">{props.children}</div>
+    <div className="pointer-events-none px-4">
+      <div
+        className={cn(
+          "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas",
+          props.topSpacing === "normal" ? "pt-4" : "pt-0",
+          props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
+          props.bottomSpacing === "normal" &&
+            "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+        )}
+      >
+        {props.children}
+      </div>
     </div>
   );
 }
@@ -506,7 +616,7 @@ function ComposerSlotShell(props: {
 function ReadOnlyComposerNotice() {
   return (
     <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      Read-only viewer. The chat owner can send prompts and manage this queue.
+      Read-only viewer. The agent owner can send prompts and manage this queue.
     </div>
   );
 }

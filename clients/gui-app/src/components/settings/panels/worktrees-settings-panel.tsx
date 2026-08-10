@@ -61,7 +61,6 @@ import {
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   buildTaskMergeRollups,
   taskMergeRollupEqual,
@@ -77,13 +76,7 @@ import {
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -105,10 +98,13 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -138,6 +134,15 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  useWorktreesSettingsViewStore,
+  type WorktreeSortMode,
+} from "@/stores/settings/worktrees-settings-view-store";
+import {
+  EMPTY_SELECTED_WORKTREE_PATHS,
+  useWorktreesSettingsSelectionStore,
+  type SelectedWorktreePathsUpdate,
+} from "@/stores/settings/worktrees-settings-selection-store";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -145,11 +150,9 @@ type WorktreeRowDeleteStatus = "deleting";
 // `unknown` = the per-path query settled to an error (non-animated fallback, no
 // infinite spinner). `pending` and `unknown` are both un-enriched for filtering.
 type WorktreeEnrichmentState = "ready" | "pending" | "unknown";
-type WorktreeSortMode = "newest" | "oldest";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
-const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 
@@ -210,76 +213,72 @@ function useObservedHeight(): {
 }
 
 /**
- * Host-wide worktree management. Lists every git worktree under the selected
+ * Inventory-only: this panel lists every git worktree under the selected
  * host's `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
  * owning chat/agent was deleted still appear) and lets the user delete ones
- * they no longer need.
+ * they no longer need. The branch-prefix default lives in General settings;
+ * a per-repository override lives in that repo's Environment dialog - this
+ * page carries neither, so the inventory's own host/search/filter toolbar is
+ * the only chrome above the list.
  *
- * The selected host is reached through transient per-host clients
- * (`useHostClientFor` for listing, `useHostStreamClientFor` for the
- * streamed delete), so picking a host here never swaps the app-wide active
- * host or reloads the Epic list. The host picker + a refresh control sit
- * in a toolbar directly above the worktree cards.
+ * The scoped host comes from the ONE picker in the sidebar (`useHostScope`),
+ * which reaches a non-active host through a transient client, so viewing
+ * another host's worktrees never swaps the app-wide active host or reloads the
+ * Epic list. This panel used to carry its own host `<Select>` in the
+ * toolbar; that slot is gone entirely — the sidebar names the scoped host,
+ * and the toolbar keeps only the refresh control and its own filters.
  */
 export function WorktreesSettingsPanel(): ReactNode {
-  const activeHostId = useReactiveActiveHostId();
-  const hostsQuery = useHostDirectoryList();
-  const hosts = useMemo(() => hostsQuery.data ?? [], [hostsQuery.data]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Default to the active host until the user picks another.
-  const effectiveId = selectedId ?? activeHostId;
-  // Resolve the entry from the (referentially stable) directory data so the
-  // transient clients memoize per host rather than rebuilding each render.
-  const selectedEntry = useMemo(
-    () => hosts.find((entry) => entry.hostId === effectiveId) ?? null,
-    [hosts, effectiveId],
-  );
-  const client = useHostClientFor(selectedEntry);
+  const scope = useHostScope();
   // One-shot `worktree.deleteByPath` stream transport: it survives the panel
   // unmounting (a backgrounded delete keeps its socket) but wires no proactive
   // reconnect and no auth revalidation, so an OS wake / host respawn does not
   // silently re-subscribe and re-run the delete pipeline. A dropped socket
   // surfaces the failure instead.
   const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
+  const compact = useSettingsDensity() === "compact";
 
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose chat or agent was deleted."
+      description="Traycer-created worktrees on this host."
       fillHeight
-      bodyClassName="relative max-h-[min(85vh,52rem)]"
+      bodyClassName="relative rounded-none border-none bg-transparent"
     >
-      <WorktreesBody
-        client={client}
-        openStreamTransport={openStreamTransport}
-        hostId={effectiveId}
-        hosts={hosts}
-        value={effectiveId}
-        onChange={setSelectedId}
-      />
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          compact ? "gap-2.5" : "gap-3",
+        )}
+      >
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
+          <WorktreesBody
+            client={scope.client}
+            openStreamTransport={openStreamTransport}
+            hostId={scope.hostId}
+            scope={scope}
+          />
+        </div>
+      </div>
     </SettingsPanelShell>
   );
 }
 
 function WorktreesToolbar(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
   readonly onRefresh: () => Promise<unknown>;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
+  readonly lastUpdatedAt: number | null;
   readonly selectionControls: ReactNode | null;
   readonly filterControls: ReactNode | null;
 }): ReactNode {
   const {
     canRefresh,
     filterControls,
-    hosts,
-    onChange,
+    lastUpdatedAt,
     onRefresh,
     refreshing,
     selectionControls,
-    value,
   } = props;
   const refreshWorktrees = useCallback(async () => {
     await onRefresh();
@@ -292,13 +291,18 @@ function WorktreesToolbar(props: {
 
   return (
     <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <HostSelect hosts={hosts} value={value} onChange={onChange} />
+      {/* The slot on the left held first a host `<Select>`, then a readout of
+          the scoped host. Both are gone: the sidebar names that host one row
+          away and never scrolls, so this toolbar carries only what it owns. */}
+      <div className="flex items-center justify-end gap-2">
         <div
-          className="flex shrink-0 items-center gap-1"
+          className="flex shrink-0 items-center gap-2"
           data-testid="worktrees-toolbar-actions"
         >
           {selectionControls}
+          {refresh.refreshing ? null : (
+            <WorktreesUpdatedAgoLabel updatedAt={lastUpdatedAt} />
+          )}
           <Button
             type="button"
             variant="outline"
@@ -316,6 +320,35 @@ function WorktreesToolbar(props: {
       </div>
       {filterControls}
     </div>
+  );
+}
+
+/**
+ * "Updated Xm ago" beside the Refresh button. Under the manual-refresh model
+ * (listing `staleTime: Infinity`, no host freshness sweep) this is the only
+ * signal of how old the list is - a warm-open seed shows its snapshot-era
+ * save time, so a relaunch honestly reads as hours old until refreshed.
+ * Split into an outer null-gate and an inner hook caller so the shared 60s
+ * relative-time clock only re-renders this leaf, never the toolbar.
+ */
+function WorktreesUpdatedAgoLabel(props: {
+  readonly updatedAt: number | null;
+}): ReactNode {
+  if (props.updatedAt === null) return null;
+  return <WorktreesUpdatedAgoText updatedAt={props.updatedAt} />;
+}
+
+function WorktreesUpdatedAgoText(props: {
+  readonly updatedAt: number;
+}): ReactNode {
+  const ago = useRelativeTimestamp(props.updatedAt);
+  return (
+    <span
+      className="text-ui-xs whitespace-nowrap text-muted-foreground"
+      data-testid="worktrees-updated-ago"
+    >
+      Updated {ago}
+    </span>
   );
 }
 
@@ -486,50 +519,23 @@ function WorktreeSortMenu(props: {
   );
 }
 
-/**
- * Host picker - visible so the user always knows which host they're managing,
- * but deliberately lower-emphasis than the search/filter/sort/refresh cluster:
- * no border or filled background at rest, muted text, only gaining contrast on
- * hover/open. It stays a real `Select` (keyboard-reachable, same interaction
- * model), just styled to read as ambient context rather than a primary action.
- */
-function HostSelect(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
-}): ReactNode {
-  return (
-    <Select value={props.value ?? undefined} onValueChange={props.onChange}>
-      <SelectTrigger
-        size="sm"
-        aria-label="Select a host"
-        data-testid="worktrees-host-select"
-        className="w-[min(60vw,15rem)] border-transparent bg-transparent px-2 text-muted-foreground shadow-none hover:bg-accent/40 hover:text-foreground data-[state=open]:bg-accent/40 data-[state=open]:text-foreground dark:bg-transparent dark:hover:bg-accent/40"
-      >
-        <SelectValue placeholder="Select a host" />
-      </SelectTrigger>
-      <SelectContent>
-        {props.hosts.map((host) => (
-          <SelectItem key={host.hostId} value={host.hostId}>
-            {hostOptionLabel(host)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string | null;
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
+  readonly scope: HostScope;
 }): ReactNode {
-  const { client, openStreamTransport, hostId, hosts, value, onChange } = props;
+  const { client, openStreamTransport, hostId, scope } = props;
   const reachability = useHostReachability(hostId ?? "");
-  const reachable = hostId !== null && reachability.status === "reachable";
+  // Two reachability opinions used to disagree here. `useHostReachability` is
+  // the TAB-binding check and can call a host reachable that this settings
+  // scope cannot dial (a registry row with no websocket URL), which surfaced
+  // as a bogus "Sign in to manage worktrees" on a host that was simply not
+  // routable from here. The scope's verdict wins: it is the one that knows
+  // whether a client exists.
+  const scopeUsable = isHostScopeUsable(scope.status);
+  const reachable =
+    scopeUsable && hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
   // The full listing's paths seed the background enrichment sweep: rows the
   // user never scrolls to still get probed (in bounded chunks), so tier pills
@@ -550,23 +556,19 @@ function WorktreesBody(props: {
   const canRefresh = reachable && client !== null;
   const onRefresh = useCallback(() => listing.refresh(), [listing]);
   const toolbarProps = {
-    hosts,
-    value,
-    onChange,
     onRefresh,
-    refreshing: listing.refreshing || enrichment.enriching,
+    // Only the explicit Refresh mutation locks the button - NOT enrichment.
+    // A cold fleet enriches for tens of seconds; gating on that stranded the
+    // manual escape hatch (and the "Updated Xm ago" label) for the whole
+    // convergence, which is exactly when the user most wants to re-pull.
+    refreshing: listing.isRefreshPending,
     canRefresh,
+    lastUpdatedAt: listing.lastUpdatedAt,
   };
 
   let content: ReactNode;
   let listOwnsToolbar = false;
-  if (hostId === null) {
-    content = (
-      <WorktreesStateMessage tone="muted" spinner={false}>
-        Select a host to manage its worktrees.
-      </WorktreesStateMessage>
-    );
-  } else if (reachability.status === "checking") {
+  if (reachability.status === "checking") {
     content = (
       <WorktreesStateMessage tone="muted" spinner>
         Checking {reachability.hostLabel}…
@@ -633,7 +635,7 @@ function WorktreesBody(props: {
     );
   }
 
-  const showStandaloneToolbar = hosts.length > 0 && !listOwnsToolbar;
+  const showStandaloneToolbar = scope.hosts.length > 0 && !listOwnsToolbar;
 
   return (
     <div className="flex h-full flex-col">
@@ -644,13 +646,38 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
-      {listing.isPartial ? (
-        <WorktreesPartialListingBanner
-          message={listing.errorMessage}
-          onRetry={listing.retryPartial}
-        />
-      ) : null}
-      {content}
+      {/* The gate owns every state where the scope has no client: it names
+          the host, distinguishes deregistered from unroutable, and offers the
+          way back to the active host — the old `hostId === null` branch
+          flattened all of that into "Select a host". The reachability/listing
+          content renders as the gate's CHILDREN (not beside it) so the list —
+          a script review mid-read, an armed delete, selection and collapse
+          state — is preserved through a transient same-host disconnect
+          instead of being unmounted, exactly as the other host-scoped panels
+          do. The partial-listing banner is a child too: today it could not
+          outlive a disconnect either way (a scope with no client drops the
+          listing data, and `isPartial` with it — measured), but it is
+          host-scoped content, and behind the boundary its concealment stays
+          correct even if the listing cache ever learns to survive a client
+          loss. A usable scope is `following` or `ready`, both of which
+          require a resolved host, so no "Select a host" branch is needed
+          inside. */}
+      <HostScopeGate
+        scope={scope}
+        skeleton={
+          <WorktreesStateMessage tone="muted" spinner>
+            Connecting to {scope.hostLabel}…
+          </WorktreesStateMessage>
+        }
+      >
+        {listing.isPartial ? (
+          <WorktreesPartialListingBanner
+            message={listing.errorMessage}
+            onRetry={listing.retryPartial}
+          />
+        ) : null}
+        {content}
+      </HostScopeGate>
     </div>
   );
 }
@@ -801,12 +828,10 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
-    readonly hosts: readonly HostDirectoryEntry[];
-    readonly value: string | null;
-    readonly onChange: (hostId: string) => void;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;
+    readonly lastUpdatedAt: number | null;
   };
 }): ReactNode {
   const {
@@ -889,11 +914,28 @@ export function WorktreesList(props: {
     () => buildTaskMergeRollups(mergedWorktrees),
     [mergedWorktrees],
   );
-  const [searchText, setSearchText] = useState("");
+  const searchText = useWorktreesSettingsViewStore((state) => state.searchText);
+  const setSearchText = useWorktreesSettingsViewStore(
+    (state) => state.setSearchText,
+  );
+  const sortMode = useWorktreesSettingsViewStore((state) => state.sortMode);
+  const setSortMode = useWorktreesSettingsViewStore(
+    (state) => state.setSortMode,
+  );
+  const tierFilterValues = useWorktreesSettingsViewStore(
+    (state) => state.tierFilters,
+  );
+  const toggleTierFilter = useWorktreesSettingsViewStore(
+    (state) => state.toggleTierFilter,
+  );
+  const clearTierFilters = useWorktreesSettingsViewStore(
+    (state) => state.clearTierFilters,
+  );
   const deferredSearchText = useDeferredValue(searchText);
-  const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
-  const [tierFilters, setTierFilters] =
-    useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
+  const tierFilters = useMemo(
+    () => new Set(tierFilterValues),
+    [tierFilterValues],
+  );
   const searchHaystackByPath = useMemo(
     () => buildWorktreeSearchHaystackByPath(worktrees, taskTitlesByEpicId),
     [worktrees, taskTitlesByEpicId],
@@ -980,13 +1022,6 @@ export function WorktreesList(props: {
     effectiveTierFilters,
     isPending,
   ]);
-  const toggleTierFilter = useCallback((tier: WorktreeTier) => {
-    setTierFilters((prev) => withMemberToggled(prev, tier));
-  }, []);
-  const clearTierFilters = useCallback(() => {
-    setTierFilters(EMPTY_TIER_FILTER);
-  }, []);
-
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
   // host the delete ran on.
@@ -1006,8 +1041,18 @@ export function WorktreesList(props: {
     close,
     dismissTerminalBackgrounded,
   } = useWorktreeDeleteRun(hostId, openStreamTransport, invalidate);
-  const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const selectedPaths = useWorktreesSettingsSelectionStore(
+    (state) =>
+      state.selectedPathsByHost.get(hostId) ?? EMPTY_SELECTED_WORKTREE_PATHS,
+  );
+  const setSelectedPathsForHost = useWorktreesSettingsSelectionStore(
+    (state) => state.setSelectedPaths,
+  );
+  const setSelectedPaths = useCallback(
+    (update: SelectedWorktreePathsUpdate): void => {
+      setSelectedPathsForHost(hostId, update);
+    },
+    [hostId, setSelectedPathsForHost],
   );
   const [pendingDeleteTargets, setPendingDeleteTargets] =
     useState<ReadonlyArray<WorktreeHostEntryV14> | null>(null);
@@ -1220,10 +1265,10 @@ export function WorktreesList(props: {
       }
       return next;
     });
-  }, [allVisibleSelected, selectableWorktreePaths]);
+  }, [allVisibleSelected, selectableWorktreePaths, setSelectedPaths]);
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set());
-  }, []);
+  }, [setSelectedPaths]);
   const toggleRepoCollapsed = useCallback(
     (group: WorktreeRepoGroup, collapsed: boolean) => {
       if (collapsed) {
@@ -1233,7 +1278,7 @@ export function WorktreesList(props: {
         setSelectedPaths((prev) => removeSelectedWorktrees(prev, group.items));
       }
     },
-    [],
+    [setSelectedPaths],
   );
   const toggleAllReposCollapsed = useCallback(() => {
     if (allReposCollapsed) {
@@ -1242,7 +1287,7 @@ export function WorktreesList(props: {
     }
     dispatchCollapsedRepoKeys({ type: "collapse-all", keys: repoKeys });
     setSelectedPaths(new Set());
-  }, [allReposCollapsed, repoKeys]);
+  }, [allReposCollapsed, repoKeys, setSelectedPaths]);
   const requestDeleteTargets = useCallback(
     (targets: ReadonlyArray<WorktreeHostEntryV14>) => {
       // A `Checking` row's tier isn't known yet, so it never opens a delete
@@ -1701,35 +1746,43 @@ function WorktreeSelectAllToggle(props: {
   else if (indeterminate) indicator = <Minus className="size-3" />;
   const label = "Select all visible worktrees";
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={ariaChecked}
-      aria-label={label}
-      title={label}
-      data-testid="worktrees-select-all"
-      disabled={props.selectableCount === 0}
-      onClick={props.onToggle}
-      className={cn(
-        "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
-        allSelected || indeterminate
-          ? "border-border bg-muted text-foreground"
-          : "border-border bg-background text-muted-foreground hover:border-foreground hover:bg-muted hover:text-foreground",
-      )}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "flex size-3.5 items-center justify-center rounded-[0.1875rem] border",
-          allSelected || indeterminate
-            ? "border-foreground/70 bg-foreground text-background"
-            : "border-muted-foreground/50",
-        )}
-      >
-        {indicator}
+      <span className="inline-flex">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={ariaChecked}
+          aria-label={label}
+          data-testid="worktrees-select-all"
+          disabled={props.selectableCount === 0}
+          onClick={props.onToggle}
+          className={cn(
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
+            allSelected || indeterminate
+              ? "border-border bg-muted text-foreground"
+              : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
+          )}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "flex size-3.5 items-center justify-center rounded-[0.1875rem] border",
+              allSelected || indeterminate
+                ? "border-foreground/70 bg-foreground text-background"
+                : "border-muted-foreground/50",
+            )}
+          >
+            {indicator}
+          </span>
+          <span>Select all</span>
+        </button>
       </span>
-      <span>Select all</span>
-    </button>
+    </TooltipWrapper>
   );
 }
 
@@ -1896,13 +1949,17 @@ function WorktreeBulkDeleteDialog(props: {
             </div>
             <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
               {summary.paths.map((path) => (
-                <li
+                <TooltipWrapper
                   key={path}
-                  className="truncate py-0.5 text-ui-xs text-muted-foreground"
-                  title={path}
+                  label={path}
+                  side="top"
+                  sideOffset={undefined}
+                  align={undefined}
                 >
-                  {path}
-                </li>
+                  <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
+                    {path}
+                  </li>
+                </TooltipWrapper>
               ))}
             </ul>
             <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
@@ -2097,6 +2154,7 @@ const WorktreeRow = memo(function WorktreeRow(
       navigateToTabIntent(
         navigate,
         openOrFocusEpicIntent({ epicId, focus: undefined }),
+        undefined,
       );
     },
     [navigate],
@@ -2662,17 +2720,23 @@ function WorktreeTaskAssociation(props: {
             variant="outline"
             className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-muted hover:text-muted-foreground"
           >
-            <button
-              type="button"
-              title={item.title}
-              aria-label={`Open Task ${item.title}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                props.onOpenTask(item.epicId);
-              }}
+            <TooltipWrapper
+              label={item.title}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <span className="truncate">{item.title}</span>
-            </button>
+              <button
+                type="button"
+                aria-label={`Open Task ${item.title}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onOpenTask(item.epicId);
+                }}
+              >
+                <span className="truncate">{item.title}</span>
+              </button>
+            </TooltipWrapper>
           </Badge>
           <TaskMergeRollupBadge
             rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}
@@ -2710,18 +2774,24 @@ function TaskMergeRollupBadge(props: {
   if (rollup === null || rollup.status === "none") return null;
   const fullyMerged = rollup.status === "merged";
   return (
-    <span
-      className="text-ui-xs text-muted-foreground"
-      data-testid="task-merge-rollup"
-      data-rollup-status={rollup.status}
-      title={
+    <TooltipWrapper
+      label={
         fullyMerged
           ? "Every branch this Task owns has a merged PR"
           : `${rollup.merged} of ${rollup.total} owned branches merged`
       }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      Task {taskMergeRollupLabel(rollup)}
-    </span>
+      <span
+        className="text-ui-xs text-muted-foreground"
+        data-testid="task-merge-rollup"
+        data-rollup-status={rollup.status}
+      >
+        Task {taskMergeRollupLabel(rollup)}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -2746,22 +2816,28 @@ function WorktreesRepoExpansionControl(props: {
 }): ReactNode {
   const label = props.allCollapsed ? "Expand all" : "Collapse all";
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={label}
-      title={label}
-      data-testid="worktrees-toggle-all-repos"
-      className="text-muted-foreground hover:text-foreground"
-      onClick={props.onToggle}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.allCollapsed ? (
-        <CopyPlus className="size-4" />
-      ) : (
-        <CopyMinus className="size-4" />
-      )}
-    </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        data-testid="worktrees-toggle-all-repos"
+        className="text-muted-foreground hover:text-foreground"
+        onClick={props.onToggle}
+      >
+        {props.allCollapsed ? (
+          <CopyPlus className="size-4" />
+        ) : (
+          <CopyMinus className="size-4" />
+        )}
+      </Button>
+    </TooltipWrapper>
   );
 }
 
@@ -2802,7 +2878,7 @@ function WorktreeSelectionControl(props: {
   if (props.canSelect || props.deleting) return checkbox;
   return (
     <TooltipWrapper
-      label="In use by an active chat or agent"
+      label="In use by an active agent"
       side="top"
       sideOffset={undefined}
       align="start"
@@ -2817,7 +2893,7 @@ const WORKTREE_DELETE_DISABLED_COPY: Record<
   { readonly ariaLabel: string }
 > = {
   "in-use": {
-    ariaLabel: "Delete worktree (in use by an active chat or agent)",
+    ariaLabel: "Delete worktree (in use by an active agent)",
   },
   checking: {
     ariaLabel: "Delete worktree (status is still being checked)",
@@ -2880,18 +2956,29 @@ function WorktreeRowActions(props: {
             <FileSliders className="size-3.5" aria-hidden />
             {props.scriptsLabel}
           </DropdownMenuItem>
-          <DropdownMenuItem
-            data-testid="worktree-row-delete"
-            variant="destructive"
-            aria-label={deleteLabel}
-            title={deleteLabel}
-            disabled={deleteDisabled}
-            onSelect={props.onDelete}
-            className="gap-2 px-2 py-2"
+          <TooltipWrapper
+            label={deleteLabel}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <Trash2 className="size-3.5" aria-hidden />
-            Delete worktree
-          </DropdownMenuItem>
+            {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
+                content's layout child, and a shrink-to-fit one would narrow the
+                row to its text. */}
+            <span className="flex w-full">
+              <DropdownMenuItem
+                data-testid="worktree-row-delete"
+                variant="destructive"
+                aria-label={deleteLabel}
+                disabled={deleteDisabled}
+                onSelect={props.onDelete}
+                className="gap-2 px-2 py-2"
+              >
+                <Trash2 className="size-3.5" aria-hidden />
+                Delete worktree
+              </DropdownMenuItem>
+            </span>
+          </TooltipWrapper>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -2923,14 +3010,18 @@ function WorktreeScriptReviewDialog(props: {
       scriptSeed={props.scriptSeed}
       seedPending={false}
       errorNote={null}
+      scriptsNote={null}
+      repositoryDefaultsSlot={null}
       inUseNote={
-        target.inUse
-          ? "This worktree is in use by an active chat or agent."
-          : null
+        target.inUse ? "This worktree is in use by an active agent." : null
       }
+      saveLabel="Save"
       // Settings stashes the reviewed scripts synchronously for its delete flow;
       // wrap in a resolved promise so the shared dialog's success path runs.
       onSave={(scripts) => Promise.resolve(onSave(target, scripts))}
+      // No nested editor to protect here (no Branch naming section) - plain
+      // Escape-closes-the-dialog behavior.
+      onEscapeKeyDown={() => {}}
       onOpenChange={props.onOpenChange}
     />
   );
@@ -3559,11 +3650,6 @@ function worktreeSelectionCheckboxVisibility(args: {
 
 function branchLabel(entry: WorktreeHostEntry): string {
   return entry.branch ?? "detached HEAD";
-}
-
-function hostOptionLabel(host: HostDirectoryEntry): string {
-  const label = host.label.length > 0 ? host.label : host.hostId;
-  return host.status === "unavailable" ? `${label} (offline)` : label;
 }
 
 function invalidateWorktreeDeleteCaches(

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
@@ -59,6 +58,8 @@ const SETUP_MODEL: SetupCardViewModel = {
       terminalSessionId: "term-1",
       worktreePath: "/worktrees/repo/feature",
       branch: "feature",
+      errorMessage: null,
+      retryFolderIntent: null,
     },
   ],
   createdAt: 1500,
@@ -76,6 +77,8 @@ function setupCardRow(): ChatMessageModel {
         kind: "setup-card",
         model: SETUP_MODEL,
         viewTabId: "tab-1",
+        anchorMessageId: null,
+        isGenesisPin: false,
       },
     ],
     structuredContent: null,

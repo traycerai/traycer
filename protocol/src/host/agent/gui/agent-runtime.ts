@@ -187,6 +187,15 @@ export type RuntimeSlashInvocation = z.infer<
   typeof runtimeSlashInvocationSchema
 >;
 
+export const runtimeSkillInvocationSchema = z.object({
+  name: z.string(),
+  path: z.string().nullable(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+export type RuntimeSkillInvocation = z.infer<
+  typeof runtimeSkillInvocationSchema
+>;
+
 export const runtimeAgentRunInputSchema = z.object({
   harnessId: guiHarnessIdSchema,
   prompt: z.string(),
@@ -205,6 +214,9 @@ export const runtimeAgentRunInputSchema = z.object({
   providerWorkspace: providerWorkspaceSchema,
   systemPrompt: z.string().nullable().default(null),
   slashInvocation: runtimeSlashInvocationSchema.nullable().default(null),
+  // Skills selected as inline composer modifiers. Optional preserves runtime
+  // compatibility with callers created before multi-skill composer support.
+  skillInvocations: z.array(runtimeSkillInvocationSchema).optional(),
   // Billing/account context for the turn, sourced from the turn-bearing frame's
   // `accountContext` (a global app-wide selection), not from per-chat
   // `chatRunSettings`. The Traycer harness threads this to its per-user
@@ -767,6 +779,12 @@ export const commandStartedEventSchema = z.object({
   type: z.literal("command.started"),
   command: z.string(),
   cwd: z.string().optional(),
+  // True when the harness has promoted this command to a backgrounded one. A
+  // harness that only learns this later (Codex decides at the parent turn's
+  // end, by which time the card is already open) re-emits `command.started`
+  // with the same `blockId` to stamp the marker - the accumulator updates the
+  // open block in place rather than appending a second card.
+  backgroundTask: z.boolean().optional(),
 });
 export type CommandStartedEvent = z.infer<typeof commandStartedEventSchema>;
 
@@ -775,8 +793,36 @@ export const commandCompletedEventSchema = z.object({
   type: z.literal("command.completed"),
   command: z.string(),
   exitCode: z.number().optional(),
+  // Present ONLY when the ending was abnormal: `"stopped"` when the host
+  // terminated the command (an explicit stop, or a teardown kill), `"error"`
+  // for a genuine failure. Absent on a clean exit - and absent from every
+  // event an emitter that predates this field sends, which is exactly the
+  // "nothing abnormal to report" reading.
+  terminationReason: z.enum(["error", "stopped"]).optional(),
+  // Reinforces the persistent background marker at terminal, so a card whose
+  // promotion re-emit was lost still settles as a background card.
+  backgroundTask: z.boolean().optional(),
 });
 export type CommandCompletedEvent = z.infer<typeof commandCompletedEventSchema>;
+
+// Wire-freeze copies of the `command.*` events, hand-frozen at the shape the
+// released `chat.subscribe@1.0–1.3` lines shipped - before `backgroundTask` and
+// `terminationReason` existed. Bound (via the frozen runtime unions below) to
+// those lines' `blockDelta` frame, so a background marker or a termination
+// reason cannot reach a peer that negotiated a released minor.
+export const commandStartedEventSchemaPreBackgroundTask = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("command.started"),
+  command: z.string(),
+  cwd: z.string().optional(),
+});
+
+export const commandCompletedEventSchemaPreBackgroundTask = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("command.completed"),
+  command: z.string(),
+  exitCode: z.number().optional(),
+});
 
 export const sessionCreatedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -918,6 +964,28 @@ export const piUserMessageAnchorResolvedSchema = z.object({
   piSessionId: z.string().nullable(),
 });
 
+export const hermesUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("hermes"),
+  sessionId: z.string(),
+  // The ACP session id the `hermes acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  hermesSessionId: z.string().nullable(),
+});
+
+export const ompUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("omp"),
+  sessionId: z.string(),
+  // The omp RPC session id assigned for this turn. Null until the session is
+  // resolved; used to resume the same omp session on a later turn.
+  ompSessionId: z.string().nullable(),
+});
+
+export const huggingFaceUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("huggingface"),
+  sessionId: z.string(),
+  opencodeUserMessageId: z.string(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -939,6 +1007,9 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     ampUserMessageAnchorResolvedSchema,
     devinUserMessageAnchorResolvedSchema,
     piUserMessageAnchorResolvedSchema,
+    hermesUserMessageAnchorResolvedSchema,
+    ompUserMessageAnchorResolvedSchema,
+    huggingFaceUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -1015,9 +1086,12 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  * Stable `ErrorEvent.code` flagging a *recoverable* provider auth failure (an
  * invalid/expired/missing credential the user can fix by reconnecting). Part of
  * the wire contract: host harnesses emit it and the renderer keys on it,
- * provider-agnostic, to suppress the transcript row, mount the composer re-auth
- * banner, and restore the doomed prompt for re-send. Lives here (next to
- * `errorEventSchema`) so both sides import the one definition.
+ * provider-agnostic, to mount the composer re-auth banner and restore the
+ * doomed prompt for re-send. The error row itself renders in the transcript
+ * like any other error - it is the failure's durable record (a headless
+ * A2A-triggered turn may fail with no live subscriber, so the persisted row is
+ * the only trace). Lives here (next to `errorEventSchema`) so both sides
+ * import the one definition.
  */
 export const AUTH_ERROR_CODE = "auth";
 
@@ -1026,6 +1100,11 @@ export const AUTH_ERROR_CODE = "auth";
 // Kept so `chat.subscribe@1.2`'s frozen `blockDelta` frame schema (see
 // `subscribe.ts`) parses only events a real 1.2 peer could produce. Do not
 // add the `workflow.*` variants here - a 1.2 peer must never observe them.
+//
+// It is `runtimeEventSchemaV12PreInReplyTo` below - not this union - that
+// `subscribe.ts` actually binds to the 1.2 frame; this one only supplies the
+// live `runtimeEventSchema` its non-`workflow.*` members. So per-event wire
+// freezes belong in that copy, and this list stays on the live schemas.
 export const runtimeEventSchemaV12 = z.discriminatedUnion("type", [
   textDeltaEventSchema,
   textCompletedEventSchema,
@@ -1109,8 +1188,8 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   fileChangeStartedEventSchema,
   fileChangeCompletedEventSchema,
   artifactOperationEventSchema,
-  commandStartedEventSchema,
-  commandCompletedEventSchema,
+  commandStartedEventSchemaPreBackgroundTask,
+  commandCompletedEventSchemaPreBackgroundTask,
   sessionCreatedEventSchema,
   sessionResumedEventSchema,
   turnStartedEventSchema,

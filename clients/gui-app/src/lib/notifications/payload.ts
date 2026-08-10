@@ -15,6 +15,8 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
@@ -27,7 +29,8 @@ export type NotificationPayloadKind =
   | "approval"
   | "interview"
   | "chat"
-  | "terminal";
+  | "terminal"
+  | "hostSurface";
 
 export interface SessionNotificationPayload {
   readonly kind: "session";
@@ -77,6 +80,27 @@ export interface TerminalNotificationPayload {
   readonly tileInstanceId: string;
 }
 
+/**
+ * A host-managed surface rather than a document inside an epic.
+ *
+ * One destination FAMILY, not one payload kind per operation: the notification
+ * model is expected to grow to test boxes, development environments, and other
+ * host-owned resources, and each of those would otherwise add a transport type
+ * for what is really the same navigation shape. `surface` grows here in client
+ * code - it is never persisted in a notification row, because a durable route
+ * would freeze today's UI into data that outlives it.
+ *
+ * `focus` is a HINT. A surface must always be reachable without it: the
+ * resource a row describes may be gone by the time the row is read (a deleted
+ * worktree, by construction), and failing to resolve a focus target must never
+ * turn into a dead-end activation.
+ */
+export interface HostSurfaceNotificationPayload {
+  readonly kind: "hostSurface";
+  readonly surface: "worktreeSettings";
+  readonly focus: { readonly resourceId: string } | undefined;
+}
+
 export type NotificationPayload =
   | SessionNotificationPayload
   | ArtifactNotificationPayload
@@ -84,7 +108,8 @@ export type NotificationPayload =
   | ApprovalNotificationPayload
   | InterviewNotificationPayload
   | ChatNotificationPayload
-  | TerminalNotificationPayload;
+  | TerminalNotificationPayload
+  | HostSurfaceNotificationPayload;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -211,6 +236,28 @@ function parseInterviewPayload(
   };
 }
 
+/**
+ * Total parse of a host-surface destination. An unknown `surface` yields
+ * `null` (degrade to opening the centre) rather than a payload the router
+ * would have to guess at - a native envelope can arrive from a NEWER build
+ * that knows surfaces this one does not.
+ */
+function parseHostSurfacePayload(
+  value: Record<string, unknown>,
+): HostSurfaceNotificationPayload | null {
+  if (value.surface !== "worktreeSettings") {
+    return null;
+  }
+  const focus = isRecord(value.focus)
+    ? readString(value.focus.resourceId)
+    : null;
+  return {
+    kind: "hostSurface",
+    surface: "worktreeSettings",
+    focus: focus === null ? undefined : { resourceId: focus },
+  };
+}
+
 export function parseNotificationPayload(
   value: unknown,
 ): NotificationPayload | null {
@@ -219,6 +266,8 @@ export function parseNotificationPayload(
   }
 
   switch (value.kind) {
+    case "hostSurface":
+      return parseHostSurfacePayload(value);
     case "session":
       return parseSessionPayload(value);
     case "artifact":
@@ -264,7 +313,35 @@ export function buildPayloadFromEvent(
   }
 }
 
-type NavigateFn = UseNavigateResult<string>;
+export type NotificationNavigate = UseNavigateResult<string>;
+
+/**
+ * Pure predicate mirroring `routeNotification`'s no-op branches, without
+ * navigating. Lets a caller (native click routing) decide upfront whether an
+ * activation will actually go anywhere, so a non-navigable payload (a
+ * `session` kind, or an `artifact`/`approval` missing the ids it needs) can
+ * fall back to opening the center instead of activating silently.
+ */
+export function isNotificationPayloadRoutable(
+  payload: NotificationPayload,
+): boolean {
+  switch (payload.kind) {
+    // `hostSurface` is always routable: the surface needs no ids to resolve,
+    // and its focus hint is allowed to miss.
+    case "epic":
+    case "chat":
+    case "interview":
+    case "terminal":
+    case "hostSurface":
+      return true;
+    case "approval":
+      return payload.epicId !== undefined && payload.chatId !== undefined;
+    case "artifact":
+      return payload.epicId !== undefined;
+    case "session":
+      return false;
+  }
+}
 
 /**
  * Single routing entry point used by both `NotificationFocusBridge` (OS toast
@@ -272,9 +349,21 @@ type NavigateFn = UseNavigateResult<string>;
  * contract in one place so the two surfaces cannot drift.
  */
 export function routeNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: NotificationPayload,
   receivedAt: number,
+): void {
+  routeNotificationForHost(navigate, payload, receivedAt, null);
+}
+
+/** Cloud approvals/interviews must only reuse a tile bound to their origin.
+ * The regular entry point deliberately keeps its legacy host-agnostic route
+ * behavior for v1 notifications. */
+export function routeNotificationForHost(
+  navigate: NotificationNavigate,
+  payload: NotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
 ): void {
   switch (payload.kind) {
     case "epic":
@@ -289,10 +378,11 @@ export function routeNotification(
             migrationSource: undefined,
           },
         }),
+        undefined,
       );
       return;
     case "chat":
-      routeEpicChatNotification(navigate, payload, receivedAt);
+      routeEpicChatNotification(navigate, payload, receivedAt, originHostId);
       return;
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
@@ -309,6 +399,7 @@ export function routeNotification(
           chatId: payload.chatId,
         },
         receivedAt,
+        originHostId,
       );
       return;
     case "interview":
@@ -320,6 +411,7 @@ export function routeNotification(
           chatId: payload.chatId,
         },
         receivedAt,
+        originHostId,
       );
       return;
     case "artifact": {
@@ -337,16 +429,62 @@ export function routeNotification(
             migrationSource: undefined,
           },
         }),
+        undefined,
       );
       return;
     }
+    case "hostSurface":
+      routeHostSurfaceNotification(navigate, payload);
+      return;
     case "session":
       return;
   }
 }
 
+/**
+ * Opens the host-managed surface a row points at.
+ *
+ * Goes through `ensureSettingsTab` rather than navigating to the route
+ * directly so the Settings tab exists, is focused, and REMEMBERS worktrees as
+ * its last section - the same path the command palette and header take. Panel
+ * state that lives outside the route (search text, tier filters, sort) is
+ * therefore untouched: the user lands back on the list they had set up.
+ *
+ * Worktree deletion passes no focus hint on purpose. The row it would point at
+ * has just been deleted, so the only honest destination is the list.
+ */
+function routeHostSurfaceNotification(
+  navigate: NotificationNavigate,
+  payload: HostSurfaceNotificationPayload,
+): void {
+  navigateToTabIntent(
+    navigate,
+    ensureSettingsTab({
+      subSection: HOST_SURFACE_SETTINGS_SECTION[payload.surface],
+      resetToGeneral: false,
+    }),
+    undefined,
+  );
+}
+
+/**
+ * Every host surface, mapped to the Settings section that hosts it.
+ *
+ * A `Record` keyed by the surface union rather than a switch: it is exhaustive
+ * by construction, so adding a surface fails to compile here until it declares
+ * a destination. A future surface that is NOT a Settings section (a dedicated
+ * route, say) is the point at which this becomes a real dispatch rather than a
+ * table - which is a change to make then, not a switch to guess at now.
+ */
+const HOST_SURFACE_SETTINGS_SECTION: Record<
+  HostSurfaceNotificationPayload["surface"],
+  SettingsSectionId
+> = {
+  worktreeSettings: "worktrees",
+};
+
 function routeTerminalNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: TerminalNotificationPayload,
   receivedAt: number,
 ): void {
@@ -364,15 +502,23 @@ function routeTerminalNotification(
           migrationSource: undefined,
         },
       }),
+      undefined,
     );
     return;
   }
 
-  const nestedFocus = store.prepareSetActiveTileTabFocusTarget(
-    payload.tabId,
-    payload.paneId,
-    payload.tileInstanceId,
-  );
+  // The payload names the EXACT tab that owns the terminal. Prepare THAT tab's
+  // nested focus and activate it - never resolve by epic, which would pick an
+  // active/MRU same-epic sibling and land on the wrong tab. A retained,
+  // currently-closed tab is reopened by the controller's legacy projection
+  // (`setActiveTab` reinserts it into `openTabOrder`).
+  const nestedFocus = useEpicCanvasStore
+    .getState()
+    .prepareSetActiveTileTabFocusTarget(
+      payload.tabId,
+      payload.paneId,
+      payload.tileInstanceId,
+    );
   navigateToTabIntent(
     navigate,
     existingEpicTabIntentWithNestedFocus({
@@ -386,15 +532,22 @@ function routeTerminalNotification(
       },
       nestedFocus,
     }),
+    undefined,
   );
 }
 
 function routeEpicChatNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
+  originHostId: string | null,
 ): void {
-  if (routeLegacyTerminalNotification(navigate, payload, receivedAt)) return;
+  if (
+    routeLegacyTerminalNotification(navigate, payload, receivedAt, originHostId)
+  )
+    return;
+  if (routeOpenChatNotification(navigate, payload, receivedAt, originHostId))
+    return;
   navigateToTabIntent(
     navigate,
     openOrFocusEpicIntent({
@@ -406,13 +559,108 @@ function routeEpicChatNotification(
         migrationSource: undefined,
       },
     }),
+    undefined,
   );
 }
 
-function routeLegacyTerminalNotification(
-  navigate: NavigateFn,
+function isChatArtifactTileType(type: string | undefined): boolean {
+  return type === "chat" || type === "terminal-agent";
+}
+
+function routeOpenChatNotification(
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
+  originHostId: string | null,
+): boolean {
+  const chatId = payload.chatId;
+  if (chatId === undefined) return false;
+  const state = useEpicCanvasStore.getState();
+  const preferredTabId = state.resolveTabIdForEpic(payload.epicId);
+  const candidateTabIds = [
+    ...(preferredTabId === null ? [] : [preferredTabId]),
+    ...state.openTabOrder,
+    ...Object.keys(state.tabsById),
+  ].filter((tabId, index, tabIds) => tabIds.indexOf(tabId) === index);
+  const match = candidateTabIds
+    .flatMap((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tabId, chatId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
+      if (
+        !isChatArtifactTileType(tile?.type) ||
+        (originHostId !== null && tile?.hostId !== originHostId)
+      )
+        return [];
+      return [{ tabId, ...found }];
+    })
+    .at(0);
+  if (match === undefined) {
+    const closedMatchTabId = candidateTabIds.find((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return false;
+      return Object.values(state.closedTilePayloadsByTabId[tabId] ?? {}).some(
+        (closed) => {
+          const node = closed?.node;
+          if (node === undefined) return false;
+          return (
+            node.id === chatId &&
+            isChatArtifactTileType(node.type) &&
+            (originHostId === null || node.hostId === originHostId)
+          );
+        },
+      );
+    });
+    if (closedMatchTabId === undefined) return false;
+    navigateToTabIntent(
+      navigate,
+      existingEpicTabIntentWithNestedFocus({
+        epicId: payload.epicId,
+        tabId: closedMatchTabId,
+        focus: {
+          focusedAt: receivedAt,
+          focusArtifactId: chatId,
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+        nestedFocus: null,
+      }),
+      undefined,
+    );
+    return true;
+  }
+
+  const nestedFocus = state.prepareSetActiveTileTabFocusTarget(
+    match.tabId,
+    match.paneId,
+    match.instanceId,
+  );
+  navigateToTabIntent(
+    navigate,
+    existingEpicTabIntentWithNestedFocus({
+      epicId: payload.epicId,
+      tabId: match.tabId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: chatId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+      nestedFocus,
+    }),
+    undefined,
+  );
+  return true;
+}
+
+function routeLegacyTerminalNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
 ): boolean {
   if (payload.chatId === undefined) return false;
   const terminalId = payload.chatId;
@@ -424,7 +672,10 @@ function routeLegacyTerminalNotification(
       if (found === null) return [];
       const tile =
         state.canvasByTabId[tab.tabId]?.tilesByInstanceId[found.instanceId];
-      return tile?.type === "terminal" ? [{ tab, found }] : [];
+      return tile?.type === "terminal" &&
+        (originHostId === null || tile.hostId === originHostId)
+        ? [{ tab, found }]
+        : [];
     })
     .at(0);
   if (match === undefined) return false;

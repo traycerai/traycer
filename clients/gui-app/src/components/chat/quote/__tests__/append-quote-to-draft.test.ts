@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -68,6 +67,50 @@ describe("buildQuoteBlockquote", () => {
     expect(node).toEqual({
       type: "blockquote",
       content: [emptyParagraph()],
+    });
+  });
+
+  it("drops a single trailing empty line (the browser's block-boundary blank after a triple-click)", () => {
+    const node = buildQuoteBlockquote({
+      text: "Third paragraph, the last one.\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("Third paragraph, the last one.")],
+    });
+  });
+
+  it("drops two trailing empty lines", () => {
+    const node = buildQuoteBlockquote({
+      text: "Third paragraph, the last one.\n\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("Third paragraph, the last one.")],
+    });
+  });
+
+  it("drops three trailing empty lines", () => {
+    const node = buildQuoteBlockquote({
+      text: "Third paragraph, the last one.\n\n\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("Third paragraph, the last one.")],
+    });
+  });
+
+  it("drops trailing empty lines after a multi-paragraph selection while keeping the internal blank line", () => {
+    const node = buildQuoteBlockquote({
+      text: "First.\n\nSecond.\n\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("First."), emptyParagraph(), paragraph("Second.")],
     });
   });
 

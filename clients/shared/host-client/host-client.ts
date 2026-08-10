@@ -2,12 +2,23 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type {
   HostRpcError,
+  HostRequestAuthority,
   IHostMessenger,
   RequestOfMethod,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
 import type { HostDirectoryEntry } from "./host-directory";
+import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
+import {
+  HostBindingAuthorityRegistry,
+  StaleHostBindingAuthorityError,
+} from "./host-binding-authority-registry";
+import {
+  HostRequestCoordinator,
+  type HostRequestAuthorityDomain,
+} from "./host-request-coordinator";
+import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
 
 /**
  * Narrow port the client calls to invalidate host-scoped query state.
@@ -21,6 +32,8 @@ export interface IHostQueryInvalidator {
     hostId: string | null,
     options: HostQueryInvalidationOptions,
   ): void;
+  /** Cancels observers before a binding/context change aborts their jobs. */
+  readonly cancelHostScope?: (hostId: string | null) => Promise<void>;
 }
 
 export interface HostQueryInvalidationOptions {
@@ -47,6 +60,40 @@ export interface HostClientOptions<Registry extends VersionedRpcRegistry> {
   readonly registry: Registry;
   readonly messenger: IHostMessenger<Registry>;
   readonly invalidator: IHostQueryInvalidator;
+  /** Registry-exhaustive unary scheduling policy supplied by the shell. */
+  readonly schedulingPolicy?: RpcSchedulingPolicy<Registry>;
+  /** Provider-owned in GUI; standalone callers may let this client own one. */
+  readonly requestCoordinator?: HostRequestCoordinator<Registry> | null;
+  /** Shared by default and routed clients created within one host runtime. */
+  readonly authorityRegistry?: HostBindingAuthorityRegistry;
+  /** Reads the live directory entry to reject stale routed captures. */
+  readonly findHostById?: (hostId: string) => HostDirectoryEntry | null;
+}
+
+/** Narrow request surface shared by the default client and routed facades. */
+export interface HostRequester<Registry extends VersionedRpcRegistry> {
+  getRegistry(): Registry;
+  getActiveHost(): HostDirectoryEntry | null;
+  getActiveHostId(): string | null;
+  getRequestContext(): RequestContext | null;
+  getRequestContextUserId(): string | null;
+  onChange(
+    handler: (event: HostClientChangeEvent) => void,
+  ): HostClientUnsubscribe;
+  request<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
+  requestWithSignal<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
+  requestWithResponseTimeout<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
 /**
@@ -77,6 +124,11 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   private readonly registry: Registry;
   private readonly messenger: IHostMessenger<Registry>;
   private readonly invalidator: IHostQueryInvalidator;
+  private readonly authorityRegistry: HostBindingAuthorityRegistry;
+  private readonly findHostById: (hostId: string) => HostDirectoryEntry | null;
+  private readonly schedulingPolicy: RpcSchedulingPolicy<Registry>;
+  private readonly requestCoordinator: HostRequestCoordinator<Registry>;
+  private readonly ownsRequestCoordinator: boolean;
 
   private activeHost: HostDirectoryEntry | null = null;
   private requestContext: RequestContext | null = null;
@@ -89,6 +141,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     this.registry = options.registry;
     this.messenger = options.messenger;
     this.invalidator = options.invalidator;
+    this.schedulingPolicy =
+      options.schedulingPolicy ?? createLatestSchedulingPolicy<Registry>();
+    this.ownsRequestCoordinator =
+      options.requestCoordinator === null ||
+      options.requestCoordinator === undefined;
+    this.requestCoordinator =
+      options.requestCoordinator ??
+      new HostRequestCoordinator({
+        registry: options.registry,
+        schedulingPolicy: this.schedulingPolicy,
+      });
+    this.authorityRegistry =
+      options.authorityRegistry ?? new HostBindingAuthorityRegistry();
+    this.findHostById =
+      options.findHostById ??
+      ((hostId) =>
+        this.activeHost !== null && this.activeHost.hostId === hostId
+          ? this.activeHost
+          : null);
   }
 
   /** Returns the registry this client was constructed with (for type callers). */
@@ -130,6 +201,51 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     return this.requestContext.identity.userId;
   }
 
+  getAuthorityRegistry(): HostBindingAuthorityRegistry {
+    return this.authorityRegistry;
+  }
+
+  resolveHostById(hostId: string): HostDirectoryEntry | null {
+    return this.findHostById(hostId);
+  }
+
+  createRequester(entry: HostDirectoryEntry): HostClient<Registry> {
+    // Pins the host IDENTITY, not the transport snapshot. A host's directory
+    // entry refreshes in place (status, version, endpoint) and
+    // `captureAuthority` refuses a routed entry that no longer matches the
+    // live directory - so a requester frozen on its creation-time entry would
+    // fail every request after such a refresh until rebuilt, while a dialog
+    // holding it stays open. Each property access resolves the current entry;
+    // the creation-time one only serves once the host leaves the directory,
+    // where capture rejects it as stale either way.
+    const resolveEntry = (): HostDirectoryEntry =>
+      this.findHostById(entry.hostId) ?? entry;
+    return new Proxy(this, {
+      get: (target, property, receiver) => {
+        if (property === "getActiveHost") {
+          return () => resolveEntry();
+        }
+        if (property === "getActiveHostId") {
+          return () => entry.hostId;
+        }
+        if (property === "request") {
+          return target.requestFor.bind(target, resolveEntry());
+        }
+        if (property === "requestWithSignal") {
+          return target.requestForWithSignal.bind(target, resolveEntry());
+        }
+        if (property === "requestWithResponseTimeout") {
+          return target.requestForWithResponseTimeout.bind(
+            target,
+            resolveEntry(),
+          );
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
   /**
    * Selects a host (or clears selection with `null`). When the active host
    * id changes, invalidates the host-scoped cache for the previous host
@@ -141,6 +257,18 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       this.activeHost = entry;
       if (!sameHostTransport(previous, entry)) {
         if (entry !== null) {
+          this.cancelThenAbortHost(entry.hostId, () => {
+            // Mint only after Query observers consumed cancellation. The
+            // registry's previous token is aborted as this new binding is made.
+            this.authorityRegistry.capture(entry, entry);
+          });
+          // The GUI's invalidator adapter skips the harness-catalog methods on
+          // this sweep entirely - it does not even mark them stale, since an
+          // invalidated entry re-probes at the next picker mount and that just
+          // moves the burst. They recover at the picker's own intent edges
+          // instead: a transport flap is exactly what a busy-host storm
+          // produces, and refetching catalogs here would fan provider probes
+          // back out mid-storm (traycer#912).
           this.invalidator.invalidateHostScope(entry.hostId, {
             refetchActive: true,
           });
@@ -155,6 +283,9 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     }
 
     this.activeHost = entry;
+    if (previous !== null) {
+      this.cancelThenAbortHost(previous.hostId, () => undefined);
+    }
     this.invalidator.invalidateHostScope(
       previous === null ? null : previous.hostId,
       { refetchActive: false },
@@ -175,18 +306,101 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * Reports that an endpoint the client already selected has just recovered
    * availability. Invalidates host-scoped cache so active observers refetch
    * against the recovered endpoint. No-op when no host is bound.
+   *
+   * Delivery is coalesced per host per microtask tick (see
+   * {@link deliverAvailabilityRecovered}): one shared remote session's ready
+   * boundary fans out to every consumer wiring (app-wide stream, one per
+   * durable tab transport, the runtime messenger), each of which reports it
+   * here in the same tick with its own cooldown state - without coalescing,
+   * an active host with a few open tabs turns every reconnect boundary into
+   * that many duplicate host-scope invalidations plus change-event fanouts
+   * (each of which resets the runtime messenger's binding).
    */
   notifyAvailabilityRecovered(): void {
     if (this.activeHost === null) {
       return;
     }
-    this.invalidator.invalidateHostScope(this.activeHost.hostId, {
-      refetchActive: true,
-    });
-    this.emitChange({
-      previousHostId: this.activeHost.hostId,
-      currentHostId: this.activeHost.hostId,
-      reason: "availability-recovered",
+    this.deliverAvailabilityRecovered(this.activeHost.hostId, true);
+  }
+
+  /**
+   * {@link notifyAvailabilityRecovered} for an explicitly-named host. Tabs
+   * bind a `hostId` for life, so a durable per-tab stream can heartbeat (and
+   * observe recovering) a host that is NOT the active one - that host's
+   * stranded unary queries are keyed by ITS id and would never be reached by
+   * the active-host variant. For the active host this delegates (including
+   * the change event); for any other host it invalidates that host's scope so
+   * active observers refetch, without announcing an active-host change.
+   */
+  notifyHostAvailabilityRecovered(hostId: string): void {
+    if (this.activeHost !== null && this.activeHost.hostId === hostId) {
+      this.notifyAvailabilityRecovered();
+      return;
+    }
+    this.deliverAvailabilityRecovered(hostId, false);
+  }
+
+  /**
+   * The un-stranding half of {@link notifyHostAvailabilityRecovered} WITHOUT
+   * the active-host change announcement - the same host-scope invalidation the
+   * non-active branch above performs, for a host that happens to be active.
+   *
+   * Exists for one caller: a remote binding that owes a ready boundary for a
+   * host which became active while its first dial was still in flight. Routing
+   * that through the active-host path would emit a `"availability-recovered"`
+   * change event, and the runtime answers a change by resetting the very
+   * binding delivering the news. Dropping it instead is not an option either -
+   * `subscribeAvailabilityRecovered` reports a RECOVERY, not current state, so
+   * the active stream runtime attaching afterwards to an already-ready session
+   * gets no replay and the queries stranded by that dial never refetch.
+   */
+  invalidateHostScopeForAvailability(hostId: string): void {
+    this.deliverAvailabilityRecovered(hostId, false);
+  }
+
+  /**
+   * The choke point every availability-recovered report funnels through, so
+   * one physical ready boundary reaching N wirings costs ONE host-scope
+   * invalidation and at most one change event. Reports for the same host in
+   * the same microtask tick merge; a merged report emits the change event if
+   * ANY of its callers asked for one (the active-host variants do, the
+   * messenger's deliberately does not), and reads the active host at
+   * delivery time so a same-tick unbind cannot announce a stale identity.
+   */
+  private readonly pendingAvailabilityByHost = new Map<
+    string,
+    { emitChangeEvent: boolean }
+  >();
+
+  private deliverAvailabilityRecovered(
+    hostId: string,
+    emitChangeEvent: boolean,
+  ): void {
+    const pending = this.pendingAvailabilityByHost.get(hostId);
+    if (pending !== undefined) {
+      if (emitChangeEvent) {
+        pending.emitChangeEvent = true;
+      }
+      return;
+    }
+    const entry = { emitChangeEvent };
+    this.pendingAvailabilityByHost.set(hostId, entry);
+    queueMicrotask(() => {
+      this.pendingAvailabilityByHost.delete(hostId);
+      this.invalidator.invalidateHostScope(hostId, {
+        refetchActive: true,
+      });
+      if (
+        entry.emitChangeEvent &&
+        this.activeHost !== null &&
+        this.activeHost.hostId === hostId
+      ) {
+        this.emitChange({
+          previousHostId: hostId,
+          currentHostId: hostId,
+          reason: "availability-recovered",
+        });
+      }
     });
   }
 
@@ -212,6 +426,9 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     this.invalidator.invalidateHostScope(currentHostId, {
       refetchActive: false,
     });
+    if (currentHostId !== null) {
+      this.cancelThenAbortHost(currentHostId, () => undefined);
+    }
     this.emitChange({
       previousHostId: currentHostId,
       currentHostId,
@@ -256,15 +473,39 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * context state at call time, so any `bind` / `setRequestContext` update
    * that happened before `request` is resolved takes effect for this call.
    */
-  request<Method extends keyof Registry & string>(
+  async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const preflightError = this.readRequestPreflightError(method);
-    if (preflightError !== null) {
-      return Promise.reject(preflightError);
+    return this.requestWithSignal(method, params, undefined);
+  }
+
+  async requestWithSignal<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestForWithSignal(this.activeHost, method, params, signal);
+  }
+
+  /**
+   * Releases a cancelled TanStack Query's active latest/join raw call. This
+   * is for bespoke query functions that predate `requestWithSignal`; normal
+   * query builders propagate their cancellation signal directly.
+   */
+  cancelActiveRead<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+  ): void {
+    if (this.activeHost === null || this.requestContext === null) {
+      return;
     }
-    return this.messenger.request(method, params);
+    this.requestCoordinator.cancelActiveRead(
+      this.activeHost.hostId,
+      this.requestContext.identity.userId,
+      method,
+      params,
+    );
   }
 
   /**
@@ -273,24 +514,163 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * `IHostMessenger.requestWithResponseTimeout`). Dial and handshake keep
    * the transport defaults so an unreachable host still fails fast.
    */
-  requestWithResponseTimeout<Method extends keyof Registry & string>(
+  async requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const preflightError = this.readRequestPreflightError(method);
-    if (preflightError !== null) {
-      return Promise.reject(preflightError);
+    const expectedTimeout = this.schedulingPolicyTimeout(method);
+    if (expectedTimeout === null || expectedTimeout !== responseTimeoutMs) {
+      return Promise.reject(
+        new Error(
+          `Host method '${method}' does not permit response timeout ${responseTimeoutMs}`,
+        ),
+      );
     }
-    return this.messenger.requestWithResponseTimeout(
+    return this.requestForWithResponseTimeout(
+      this.activeHost,
       method,
       params,
       responseTimeoutMs,
     );
   }
 
-  private readRequestPreflightError(method: string): HostRpcError | null {
-    if (this.activeHost === null) {
+  requestFor<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestForWithSignal(entry, method, params, undefined);
+  }
+
+  requestForWithSignal<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.scheduleRequest(entry, method, params, signal, (authority) =>
+      this.messenger.request(method, params, authority),
+    );
+  }
+
+  requestForWithResponseTimeout<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    const expectedTimeout = this.schedulingPolicyTimeout(method);
+    if (expectedTimeout === null || expectedTimeout !== responseTimeoutMs) {
+      return Promise.reject(
+        new Error(
+          `Host method '${method}' does not permit response timeout ${responseTimeoutMs}`,
+        ),
+      );
+    }
+    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
+      this.messenger.requestWithResponseTimeout(
+        method,
+        params,
+        responseTimeoutMs,
+        authority,
+      ),
+    );
+  }
+
+  private scheduleRequest<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    execute: (
+      authority: HostRequestAuthority,
+    ) => Promise<ResponseOfMethod<Registry, Method>>,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    try {
+      const preflightError = this.readRequestPreflightError(method, entry);
+      if (preflightError !== null) {
+        return Promise.reject(preflightError);
+      }
+      if (entry === null || this.requestContext === null) {
+        return Promise.reject(new StaleHostBindingAuthorityError("unbound"));
+      }
+      const captured = this.captureAuthority(entry, this.requestContext);
+      return this.requestCoordinator.request({
+        hostId: entry.hostId,
+        userId: this.requestContext.identity.userId,
+        method,
+        params,
+        authority: captured.authority,
+        authorityDomain: captured.authorityDomain,
+        signal,
+        execute,
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  dispose(): void {
+    if (this.ownsRequestCoordinator) {
+      this.requestCoordinator.dispose();
+    }
+  }
+
+  private captureAuthority(
+    entry: HostDirectoryEntry,
+    context: RequestContext,
+  ): {
+    readonly authority: HostRequestAuthority;
+    readonly authorityDomain: HostRequestAuthorityDomain;
+  } {
+    const binding = this.authorityRegistry.capture(
+      entry,
+      this.findHostById(entry.hostId),
+    );
+    return {
+      authority: {
+        endpoint: binding.endpoint,
+        bearer: context.credentials,
+        abortSignal: AbortSignal.any([
+          binding.abortSignal,
+          context.abortSignal,
+        ]),
+      },
+      authorityDomain: {
+        bindingToken: binding.token,
+        requestContext: context,
+      },
+    };
+  }
+
+  private schedulingPolicyTimeout<Method extends keyof Registry & string>(
+    method: Method,
+  ): number | null {
+    return this.schedulingPolicy.joinResponseTimeoutMs(method);
+  }
+
+  private cancelThenAbortHost(hostId: string, afterCancel: () => void): void {
+    const transition = this.requestCoordinator.snapshotHostTransition(hostId);
+    const finishTransition = (): void => {
+      afterCancel();
+      this.requestCoordinator.abortHostTransition(transition);
+    };
+    const cancel = this.invalidator.cancelHostScope;
+    if (cancel === undefined) {
+      finishTransition();
+      return;
+    }
+    void cancel(hostId).finally(() => {
+      finishTransition();
+    });
+  }
+
+  private readRequestPreflightError(
+    method: string,
+    entry: HostDirectoryEntry | null,
+  ): HostRpcError | null {
+    if (entry === null) {
       return new HostRpcErrorCtor({
         code: "RPC_ERROR",
         message: "Cannot call host RPC without an active host",
@@ -329,6 +709,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 }
 
+function createLatestSchedulingPolicy<
+  Registry extends VersionedRpcRegistry,
+>(): RpcSchedulingPolicy<Registry> {
+  return {
+    modeFor: () => "latest",
+    joinResponseTimeoutMs: () => null,
+  };
+}
+
 function sameHostId(
   previous: HostDirectoryEntry | null,
   next: HostDirectoryEntry | null,
@@ -342,6 +731,17 @@ function sameHostId(
   return previous.hostId === next.hostId;
 }
 
+/**
+ * `publicKey` is compared separately from the base fields (R-1): a remote
+ * host's static Noise key can rotate (re-enrollment / corruption recovery -
+ * `registerOrAdoptHost` overwrites the key on the same `hostId`) while every
+ * base field - including `websocketUrl`, since every remote host shares one
+ * fixed relay attach URL - stays identical. Treating that as "same transport"
+ * would swallow the `host-updated` `emitChange` this rotation must fire,
+ * leaving every `onChange` subscriber (the app-wide stream provider, the
+ * reactive active-host-id projection, the epic session mount) permanently
+ * pinned to the stale key with no signal that anything changed.
+ */
 function sameHostTransport(
   previous: HostDirectoryEntry | null,
   next: HostDirectoryEntry | null,
@@ -354,6 +754,11 @@ function sameHostTransport(
     previous.kind === next.kind &&
     previous.websocketUrl === next.websocketUrl &&
     previous.version === next.version &&
-    previous.status === next.status
+    previous.status === next.status &&
+    remotePublicKeyOf(previous) === remotePublicKeyOf(next)
   );
+}
+
+function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
 }

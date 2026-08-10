@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -21,13 +20,15 @@ function makeFixture(content: JsonContent): {
     element,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: {
         current: () => {
           submitCalls.count += 1;
         },
       },
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content,
   });

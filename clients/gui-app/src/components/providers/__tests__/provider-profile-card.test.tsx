@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderProfile,
@@ -31,6 +30,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor,
     ambientDriftNotice: null,

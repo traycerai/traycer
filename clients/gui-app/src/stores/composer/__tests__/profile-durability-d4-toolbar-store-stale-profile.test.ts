@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import type { HarnessOption } from "@/components/home/data/landing-options";
 import {
@@ -80,7 +79,6 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
         },
         reasoning: "",
         serviceTier: "",
-        agentMode: "regular",
       },
       onSettingsChange: null,
       tuiOnly: false,
@@ -120,7 +118,6 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
         },
         reasoning: "",
         serviceTier: "",
-        agentMode: "regular",
       },
       onSettingsChange: null,
       tuiOnly: false,

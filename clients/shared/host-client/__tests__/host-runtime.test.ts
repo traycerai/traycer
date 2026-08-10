@@ -21,6 +21,7 @@ import {
 import { MockHostMessenger } from "../mock/mock-host-messenger";
 import { MockRunnerHost } from "../mock/mock-runner-host";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
+import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
 
 const pingV10 = defineRpcContract({
   method: "host.ping",
@@ -38,6 +39,11 @@ const registry = defineVersionedRpcRegistry({
     },
   },
 });
+
+const schedulingPolicy: RpcSchedulingPolicy<typeof registry> = {
+  modeFor: () => "latest",
+  joinResponseTimeoutMs: () => null,
+};
 
 class RecordingInvalidator implements IHostQueryInvalidator {
   readonly calls: Array<string | null> = [];
@@ -144,6 +150,8 @@ function buildRuntime(options: {
     requestContextProvider: provider,
     directory,
     invalidator,
+    schedulingPolicy,
+    requestCoordinator: null,
   });
   return { runtime, provider, directory, invalidator, runnerHost };
 }
@@ -214,19 +222,43 @@ describe("HostRuntime lifecycle", () => {
     expect(invalidator.calls).toEqual(["mock-local"]);
   });
 
+  it("refreshes the directory immediately when the provider emits a new identity", () => {
+    vi.useFakeTimers();
+    try {
+      const { runtime, provider, directory } = buildRuntime({
+        initialSignedIn: null,
+        initialSelected: mockLocalHostEntry,
+      });
+
+      runtime.start();
+      const baseline = directory.refreshCalls.count;
+
+      signInProvider(provider, "user-1", "tok-1");
+
+      expect(directory.refreshCalls.count).toBe(baseline + 1);
+      vi.advanceTimersByTime(14_999);
+      expect(directory.refreshCalls.count).toBe(baseline + 1);
+      runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits null context and invalidates the host scope on sign-out", () => {
-    const { runtime, provider, invalidator } = buildRuntime({
+    const { runtime, provider, invalidator, directory } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
       initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
     invalidator.calls.length = 0;
+    const refreshBaseline = directory.refreshCalls.count;
 
     provider.signOut();
 
     expect(runtime.hostClient.getRequestContext()).toBeNull();
     expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
   });
 
   it("preserves the host-scoped cache across same-user credential rotation (silent on the provider)", () => {
@@ -252,13 +284,14 @@ describe("HostRuntime lifecycle", () => {
   });
 
   it("aborts the previous context and invalidates on cross-user transition", () => {
-    const { runtime, provider, invalidator } = buildRuntime({
+    const { runtime, provider, invalidator, directory } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },
       initialSelected: mockLocalHostEntry,
     });
 
     runtime.start();
     invalidator.calls.length = 0;
+    const refreshBaseline = directory.refreshCalls.count;
 
     const ctxA = runtime.hostClient.getRequestContext();
     if (ctxA === null) {
@@ -276,6 +309,7 @@ describe("HostRuntime lifecycle", () => {
       "user-2",
     );
     expect(invalidator.calls).toEqual(["mock-local"]);
+    expect(directory.refreshCalls.count).toBe(refreshBaseline + 1);
   });
 
   it("rebinds the host client when directory selection changes", () => {

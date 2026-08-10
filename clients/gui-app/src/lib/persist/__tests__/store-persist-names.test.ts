@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -9,6 +8,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -17,6 +17,7 @@ import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-s
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useWorktreesSettingsViewStore } from "@/stores/settings/worktrees-settings-view-store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -49,7 +50,7 @@ interface StorePersistHandle {
 const STORE_PERSIST_NAME_CASES: ReadonlyArray<
   [label: string, store: StorePersistHandle, expectedName: string]
 > = [
-  // ── 17 static singletons ─────────────────────────────────────────────────
+  // ── Static singletons ────────────────────────────────────────────────────
   [
     "useCommandPaletteStore",
     useCommandPaletteStore,
@@ -60,12 +61,18 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     useComposerDraftStore,
     "traycer-gui-app:composer-drafts",
   ],
+  // NOTE: useInterviewDraftStore is intentionally absent. It no longer uses the
+  // zustand `persist` middleware (so it has no `.persist.getOptions().name`): it
+  // persists one localStorage key per (chatId, blockId) via `interviewDraftKey`
+  // for cross-window isolation — the same reason the app-local display-receipt
+  // store is not listed here.
   [
     "useArtifactReadStateStore",
     useArtifactReadStateStore,
     "traycer-gui-app:artifact-read-state",
   ],
   ["useGitPanelStore", useGitPanelStore, "traycer-gui-app:git-panel"],
+  ["usePrPresenceStore", usePrPresenceStore, "traycer-gui-app:pr-presence"],
   [
     "useInitialChatHandoffStore",
     useInitialChatHandoffStore,
@@ -97,6 +104,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:settings-section",
   ],
   [
+    "useWorktreesSettingsViewStore",
+    useWorktreesSettingsViewStore,
+    "traycer-gui-app:worktrees-settings-view",
+  ],
+  [
     "useRateLimitPopoverStore",
     useRateLimitPopoverStore,
     "traycer-gui-app:rate-limit-popover",
@@ -108,7 +120,7 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:workspace-folders",
   ],
 
-  // ── 6 scoped singletons (initial `anon` bucket at construction) ───────────
+  // ── Scoped singletons (initial `anon` bucket at construction) ─────────────
   [
     "useComposerRunSettingsStore",
     useComposerRunSettingsStore,

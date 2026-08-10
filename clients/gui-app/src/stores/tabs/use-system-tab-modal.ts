@@ -9,11 +9,13 @@ import { hrefPathname } from "@/lib/routes";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import {
-  ensureHistoryTab,
-  ensureSettingsTab,
+  resolveHistoryTabIntent,
+  resolveSettingsTabIntent,
 } from "@/lib/commands/actions/open-system-tab";
-import { type TabNavigationIntent } from "@/lib/tab-navigation";
-import { tabActivate, tabRouteOptions } from "@/stores/tabs/registry";
+import {
+  activateTabIntent,
+  type TabNavigationIntent,
+} from "@/lib/tab-navigation";
 import {
   parseSystemTabOverlayView,
   withOverlayCleared,
@@ -21,6 +23,8 @@ import {
   type SystemTabOverlayView,
 } from "@/lib/system-tab-overlay-search";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { historySearchToParams } from "@/lib/history-search";
+import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import {
   type OpenSettingsModalOpts,
   type SystemModalActive,
@@ -56,6 +60,8 @@ export interface SystemTabModalState {
   readonly active: SystemModalActive | null;
 }
 
+type TabActivationSource = "focus-existing" | "promote-modal";
+
 /**
  * Command-only API for surfaces that open or close system overlays.
  *
@@ -72,10 +78,11 @@ export function useSystemTabModalActions(): SystemTabModalActions {
       const settingsTab = useTabsStore.getState().systemTabs.settings;
       if (settingsTab !== null) {
         navigateToTabClearingOverlay(
-          ensureSettingsTab({
+          resolveSettingsTabIntent({
             subSection: opts.section,
             resetToGeneral: opts.resetToGeneral,
           }),
+          "focus-existing",
         );
         return;
       }
@@ -100,7 +107,7 @@ export function useSystemTabModalActions(): SystemTabModalActions {
   const openHistory = useCallback(() => {
     const historyTab = useTabsStore.getState().systemTabs.history;
     if (historyTab !== null) {
-      navigateToTabClearingOverlay(ensureHistoryTab());
+      navigateToTabClearingOverlay(resolveHistoryTabIntent(), "focus-existing");
       return;
     }
     void router.navigate({
@@ -184,7 +191,10 @@ export function useSystemTabModalController(): SystemTabModalApi {
 
   const promoteToTab = useCallback(() => {
     if (active === null) return;
-    navigateToTabClearingOverlay(overlayPromotionIntent(active));
+    navigateToTabClearingOverlay(
+      overlayPromotionIntent(active),
+      "promote-modal",
+    );
   }, [active, navigateToTabClearingOverlay]);
 
   const isOverlayActive = useCallback(
@@ -216,14 +226,24 @@ export function useSystemTabModalController(): SystemTabModalApi {
 
 function useNavigateToTabClearingOverlay(): (
   target: TabNavigationIntent,
+  source: TabActivationSource,
 ) => void {
   const router = useRouter();
   return useCallback(
-    (target: TabNavigationIntent): void => {
-      tabActivate(target);
-      void router.navigate({
-        ...tabRouteOptions(target),
-        search: (prev) => withOverlayCleared(prev),
+    (target: TabNavigationIntent, source: TabActivationSource): void => {
+      // Promotion carries the modal's visible state regardless of whether a
+      // History tab already exists. Ordinary header activation intentionally
+      // omits it so the navigation controller can restore the tab-owned route
+      // snapshot instead.
+      const historySearch =
+        target.kind === "history" && source === "promote-modal"
+          ? historySearchToParams(useHistorySearchStore.getState().search)
+          : null;
+      activateTabIntent(router.navigate, target, {
+        search: (prev) => ({
+          ...withOverlayCleared(prev),
+          ...(historySearch ?? {}),
+        }),
       });
     },
     [router],
@@ -234,12 +254,12 @@ function overlayPromotionIntent(
   active: SystemModalActive,
 ): TabNavigationIntent {
   if (active.kind === "settings") {
-    return ensureSettingsTab({
+    return resolveSettingsTabIntent({
       subSection: active.section,
       resetToGeneral: false,
     });
   }
-  return ensureHistoryTab();
+  return resolveHistoryTabIntent();
 }
 
 /**
@@ -379,23 +399,19 @@ export function useSystemTabModalRefreshGuard(): void {
     }
     const systemTabs = useTabsStore.getState().systemTabs;
     if (isColdLoad && overlay.settingsOverlay && systemTabs.settings !== null) {
-      const target = ensureSettingsTab({
+      const target = resolveSettingsTabIntent({
         subSection: useSettingsSectionStore.getState().section,
         resetToGeneral: false,
       });
-      tabActivate(target);
-      void router.navigate({
-        ...tabRouteOptions(target),
+      activateTabIntent(router.navigate, target, {
         replace: true,
         search: (prev) => withOverlayCleared(prev),
       });
       return;
     }
     if (isColdLoad && overlay.historyOverlay && systemTabs.history !== null) {
-      const target = ensureHistoryTab();
-      tabActivate(target);
-      void router.navigate({
-        ...tabRouteOptions(target),
+      const target = resolveHistoryTabIntent();
+      activateTabIntent(router.navigate, target, {
         replace: true,
         search: (prev) => withOverlayCleared(prev),
       });

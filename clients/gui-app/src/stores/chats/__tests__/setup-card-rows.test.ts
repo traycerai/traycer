@@ -218,6 +218,9 @@ describe("buildSetupCardRows", () => {
       // These events carry no worktreePath/branch metadata, so both are null.
       worktreePath: null,
       branch: null,
+      // Non-failed states never surface a failure reason or retry intent.
+      errorMessage: null,
+      retryFolderIntent: null,
     });
   });
 
@@ -250,6 +253,66 @@ describe("buildSetupCardRows", () => {
       state: "failed",
       setupExitCode: 17,
       terminalSessionId: "term-1",
+    });
+  });
+
+  it("surfaces a provision failure's reason and schema-valid retry intent", () => {
+    const folderIntent = {
+      kind: "worktree",
+      workspacePath: "/repo",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      isPrimary: true,
+      branch: {
+        type: "new",
+        name: "traycer/fresh-fox",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+      scripts: null,
+    };
+    const row = onlyRow([
+      setupEvent(
+        "setup.creating",
+        { workspacePath: "/repo", branch: "traycer/fresh-fox" },
+        null,
+      ),
+      setupEvent(
+        "setup.failed",
+        {
+          workspacePath: "/repo",
+          branch: "traycer/fresh-fox",
+          operation: "provision",
+          setupExitCode: null,
+          errorMessage: "fatal: could not create work tree dir",
+          folderIntent,
+        },
+        null,
+      ),
+    ]);
+    expect(row.model.workspaces[0]).toMatchObject({
+      state: "failed",
+      errorMessage: "fatal: could not create work tree dir",
+      retryFolderIntent: folderIntent,
+    });
+  });
+
+  it("drops a malformed folderIntent instead of offering a broken retry", () => {
+    const row = onlyRow([
+      setupEvent(
+        "setup.failed",
+        {
+          workspacePath: "/repo",
+          operation: "provision",
+          errorMessage: "fatal: boom",
+          folderIntent: { kind: "worktree", workspacePath: "/repo" },
+        },
+        null,
+      ),
+    ]);
+    expect(row.model.workspaces[0]).toMatchObject({
+      state: "failed",
+      errorMessage: "fatal: boom",
+      retryFolderIntent: null,
     });
   });
 

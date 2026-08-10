@@ -1,5 +1,7 @@
 import path from "path";
 import os from "node:os";
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 const availableParallelism =
@@ -7,11 +9,28 @@ const availableParallelism =
     ? os.availableParallelism()
     : os.cpus().length;
 const MAX_TEST_WORKERS = Math.min(
-  4,
-  Math.max(2, Math.floor(availableParallelism / 2)),
+  2,
+  Math.max(1, Math.floor(availableParallelism / 2)),
 );
+const REACT_COMPILER_REGRESSION_FILES =
+  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters)\.(?:ts|tsx)$/;
 
 export default defineConfig({
+  // Run the affected composer boundary through the packaged desktop
+  // renderer's compiler preset. The stash regression was invisible when
+  // tests skipped this pass because the compiler may replace a React
+  // imperative-handle facade during an ordinary editor render. The filter
+  // keeps unrelated GUI tests on their existing fast transform path.
+  plugins: [
+    react(),
+    babel({
+      include: REACT_COMPILER_REGRESSION_FILES,
+      presets: [reactCompilerPreset()],
+    }).then((plugin) => ({
+      ...plugin,
+      enforce: "post" as const,
+    })),
+  ],
   resolve: {
     alias: [
       { find: "@", replacement: path.resolve(__dirname, "src") },
@@ -54,6 +73,8 @@ export default defineConfig({
     ],
     globals: false,
     pool: "forks",
+    // A few suites advance large fake-timer windows. Limiting concurrently
+    // running files keeps those timers responsive on CI's shared runners.
     maxWorkers: MAX_TEST_WORKERS,
     testTimeout: 20_000,
     hookTimeout: 20_000,

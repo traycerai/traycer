@@ -2,6 +2,8 @@ import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
 import {
   answeredQuestionsSummary,
   buildChatActivityTimeline,
+  hidesSoleReasoningHeader,
+  reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
@@ -17,7 +19,7 @@ import {
 } from "@/components/chat/segments/subagent-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
-import { composerClipboardPlainText } from "@/lib/composer/composer-clipboard";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { segmentStepLabel } from "@/lib/chat/todo-status-tones";
 import {
@@ -27,7 +29,6 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
-import { formatClockDuration } from "@/lib/format-duration";
 import { formatSingleLine } from "@/lib/utils";
 import type {
   ActivityGroupModel,
@@ -84,9 +85,21 @@ const CHAT_FIND_PREVIEW_MAX_LENGTH = 180;
 export function buildChatFindRows(
   messages: ReadonlyArray<ChatMessageModel>,
   tileInstanceId: string,
+  /**
+   * The renderer's live promotion set, threaded in verbatim. Find must group
+   * runs exactly as the renderer does: a unit id and owning chain are both
+   * derived from the group a segment lands in, so a projection that grouped
+   * differently would emit ids no element carries and chains that open the
+   * wrong disclosure - matches counted but impossible to paint or navigate to.
+   */
+  promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindRow> {
   return messages.map((message) => {
-    const units = chatFindUnitsForMessage(message, tileInstanceId);
+    const units = chatFindUnitsForMessage(
+      message,
+      tileInstanceId,
+      promotedToolBlockIds,
+    );
     return {
       messageId: message.id,
       units,
@@ -136,14 +149,13 @@ export function chatFindA2AReceivedBodyUnitId(messageId: string): string {
 function chatFindUnitsForMessage(
   message: ChatMessageModel,
   tileInstanceId: string,
+  promotedToolBlockIds: ReadonlySet<string>,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
     const turnState = message.runState === null ? "complete" : "active";
-    // Find indexes the full transcript inline regardless of background
-    // promotion, so no tool blocks are treated as promoted here.
     return buildChatActivityTimeline(message.segments, {
       turnState,
-      promotedToolBlockIds: new Set<string>(),
+      promotedToolBlockIds,
     }).flatMap((item) => timelineItemSearchUnits(item, tileInstanceId));
   }
 
@@ -173,10 +185,13 @@ function chatFindUnitsForMessage(
   // `text` segments mirror that content, so also projecting them would
   // double-count every match with a phantom unit that has no anchor to paint.
   // Project the content unit alone so the count matches what actually renders.
+  // The DISPLAY projection, not the clipboard one: find has to index the text
+  // the DOM actually paints, or a `$`-written chip is unfindable by what it
+  // reads as and findable by a `/name` the highlighter cannot locate.
   const contentText =
     message.structuredContent === null
       ? message.content
-      : composerClipboardPlainText(message.structuredContent);
+      : composerDisplayPlainText(message.structuredContent);
   return compactUnits([
     chatFindUnit({
       unitId: chatFindMessageContentUnitId(message.id),
@@ -220,29 +235,47 @@ function activityGroupSearchUnits(
   tileInstanceId: string,
 ): ReadonlyArray<ChatFindUnit> {
   const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
+  // Hoisted: a group property, not a per-child one, and computing it inside the
+  // flatMap would walk the segment list once per segment.
+  const headerlessReasoning = hidesSoleReasoningHeader(group.segments);
   return compactUnits([
     chatFindUnit({
       unitId: chatFindActivityGroupSummaryUnitId(group.id),
       text: group.label,
       owningChain: [],
     }),
+    // A reveal force-opens the group, and every child that renders a header
+    // renders it in both the live window and the expanded body, so each of
+    // these units has somewhere to paint. The ONE child that renders no header
+    // is a group's sole reasoning block, and it is skipped below - its label is
+    // already the group summary's own leading clause, so nothing leaves the
+    // index with it.
     ...group.segments.flatMap((segment) =>
-      activityGroupChildSearchUnits(
+      activityGroupChildSearchUnits({
         segment,
-        group.id,
-        [groupKey],
+        groupId: group.id,
+        groupChain: [groupKey],
         tileInstanceId,
-      ),
+        headerlessReasoning,
+      }),
     ),
   ]);
 }
 
+interface ActivityGroupChildSearchUnitsArgs {
+  readonly segment: ActivityGroupModel["segments"][number];
+  readonly groupId: string;
+  readonly groupChain: ReadonlyArray<ChatCollapsibleKey>;
+  readonly tileInstanceId: string;
+  /** The group's sole reasoning block renders unheaded, so it has no anchor. */
+  readonly headerlessReasoning: boolean;
+}
+
 function activityGroupChildSearchUnits(
-  segment: ActivityGroupModel["segments"][number],
-  groupId: string,
-  groupChain: ReadonlyArray<ChatCollapsibleKey>,
-  tileInstanceId: string,
+  args: ActivityGroupChildSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
+  const { segment, groupId, groupChain, tileInstanceId } = args;
+  if (segment.kind === "reasoning" && args.headerlessReasoning) return [];
   if (segment.kind === "subagent") {
     const renderId = segment.id;
     return subagentSegmentSearchUnits({
@@ -432,6 +465,8 @@ function activityGroupChildHeaderSearchText(
       return approvalHeaderSearchText(segment);
     case "subagent":
       return [];
+    case "reasoning":
+      return reasoningSegmentSearchText(segment);
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;
@@ -643,8 +678,7 @@ function subagentBodySearchText(
 function reasoningSegmentSearchText(
   segment: Extract<MessageSegment, { kind: "reasoning" }>,
 ): ReadonlyArray<string> {
-  if (segment.isStreaming) return ["Thinking"];
-  return [reasoningSummaryLabel(segment.durationMs)];
+  return [reasoningBlockLabel(segment.isStreaming, segment.durationMs)];
 }
 
 // Index ONLY what the inline plan card renders: the headline, the status badge
@@ -785,10 +819,4 @@ function changeCountLabel(fileCount: number, artifactCount: number): string {
     parts.push(`${artifactCount} artifact${artifactCount > 1 ? "s" : ""}`);
   }
   return parts.join(" ");
-}
-
-function reasoningSummaryLabel(durationMs: number | null): string {
-  if (durationMs === null) return "Thought";
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  return `Thought for ${formatClockDuration(seconds)}`;
 }

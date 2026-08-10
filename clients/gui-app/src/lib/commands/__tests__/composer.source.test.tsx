@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import {
@@ -196,6 +195,17 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
+  it("emits a context-gated Stash prompt row bound to composer.stash", () => {
+    registerFocusedComposerControls("landing", stubControls({}));
+    const item = captureItems(null, "landing").find(
+      (row) => row.id === "composer:stash-prompt",
+    );
+    expect(item).toBeDefined();
+    expect(item?.actionId).toBe("composer.stash");
+    expect(item?.label).toBe("Stash prompt");
+    expect(item?.shortcut).toBe("mod+s");
+  });
+
   it("hides Change model… when no picker is registered", () => {
     // A focused composer with no active picker (e.g. locked/pending) registers
     // its controls but not a picker, so the toggle would no-op.
@@ -276,6 +286,7 @@ describe("composerSource", () => {
       tabId: "epic-1",
       placement: { kind: "active-tile" },
       parentId: null,
+      hostId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
@@ -316,6 +327,7 @@ describe("composerSource", () => {
       tabId: "epic-1",
       placement: { kind: "split", groupId: activeGroupId, position: "right" },
       parentId: null,
+      hostId: null,
     });
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]

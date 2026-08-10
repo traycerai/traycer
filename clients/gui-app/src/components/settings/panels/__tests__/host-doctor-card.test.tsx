@@ -13,6 +13,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
+  HostRestartRequestResult,
   FreePortAndRestartInput,
   IHostManagement,
   IRunnerHost,
@@ -29,7 +30,7 @@ vi.mock("sonner", () => ({
 
 interface ManagementOverrides {
   readonly runDoctor?: () => Promise<HostDoctorReport>;
-  readonly restartHost?: () => Promise<void>;
+  readonly restartHost?: () => Promise<HostRestartRequestResult>;
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
@@ -39,10 +40,15 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
   const notImplemented = (method: string) => (): Promise<never> =>
     Promise.reject(new Error(`${method} not implemented in mock`));
   return {
-    installHost: vi.fn(notImplemented("installHost")),
-    updateHost: vi.fn(notImplemented("updateHost")),
+    getHostControllerStatus: vi.fn(notImplemented("getHostControllerStatus")),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(notImplemented("applyStaged")),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
-    restartHost: overrides.restartHost ?? vi.fn(() => Promise.resolve()),
+    restartHost:
+      overrides.restartHost ??
+      vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),
@@ -53,10 +59,8 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     availableVersions: vi.fn(notImplemented("availableVersions")),
     installedRecord: vi.fn(() => Promise.resolve(null)),
     registerService: vi.fn(notImplemented("registerService")),
-    ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
@@ -266,7 +270,9 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
       Promise.resolve(input),
     );
-    const restartHost = vi.fn(() => Promise.resolve());
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     // A defective Doctor record that *claims* it can free a port but
     // has no port/PID. The card must NOT pop the kill dialog.
     const issue: HostDoctorIssue = {
@@ -339,7 +345,9 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   });
 
   it("calls management.restartHost() when the fix button is clicked", async () => {
-    const restartHost = vi.fn(() => Promise.resolve());
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     const management = makeManagement({
       runDoctor: () =>
         Promise.resolve<HostDoctorReport>({

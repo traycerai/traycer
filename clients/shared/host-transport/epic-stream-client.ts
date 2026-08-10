@@ -17,6 +17,15 @@ export interface EpicDeletedAttribution {
   readonly deletedByDisplayName: string | null;
   readonly deletedByTraycerUserId: string | null;
 }
+
+/**
+ * One room's host-to-cloud durability state in an atomic subscription
+ * snapshot. A room absent from a received snapshot is clean at that instant.
+ */
+export interface EpicArtifactRoomDirtySnapshot {
+  readonly artifactRoomId: string;
+  readonly dirty: boolean;
+}
 import type {
   EarlyMetaEpic,
   SnapshotMetaEpic,
@@ -28,10 +37,10 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
- * Typed handlers for an `epic.subscribe@1.0` session.
+ * Typed handlers for an `epic.subscribe` session.
  *
  * Every callback maps a server frame kind defined by the contract to a
  * stable shape callers can bind into Zustand / React state. Connection
@@ -124,6 +133,32 @@ export interface EpicStreamCallbacks {
     state: EpicArtifactRoomAvailability,
   ) => void;
   /**
+   * Per-artifact-room sync state: the host holds work for this room that its
+   * cloud connection has not acknowledged. Orthogonal to
+   * `onArtifactRoomState` - a room stays `ready` and editable across a
+   * websocket drop (artifact rooms are local-first), so availability and
+   * dirtiness move independently.
+   *
+   * Emitted by the host only on `epic.subscribe@1.1` and only on a CHANGE.
+   * A room is known clean only after this cycle's `onDirtySnapshot`; an old
+   * host never sends that snapshot, so its dirtiness remains unknown.
+   */
+  readonly onArtifactRoomDirty: (
+    artifactRoomId: string,
+    dirty: boolean,
+  ) => void;
+  /** Root-doc host-to-cloud durability transition after `onDirtySnapshot`. */
+  readonly onRootDirty: (dirty: boolean) => void;
+  /**
+   * Atomic @1.1 baseline for this subscription cycle. Its arrival, rather
+   * than the order of individual deltas, establishes that host dirtiness is
+   * known for the current open stream.
+   */
+  readonly onDirtySnapshot: (
+    rootDirty: boolean,
+    rooms: readonly EpicArtifactRoomDirtySnapshot[],
+  ) => void;
+  /**
    * Host-observed Tiptap/cloud room connection state. Distinct from the
    * renderer→host `/stream` lifecycle: the local stream can be open while
    * the host is offline from Tiptap Cloud.
@@ -178,7 +213,7 @@ export interface EpicStreamCallbacks {
 }
 
 export interface EpicStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly callbacks: EpicStreamCallbacks;
 }
@@ -402,6 +437,18 @@ export class EpicStreamClient {
       }
       case "artifactRoomState": {
         this.callbacks.onArtifactRoomState(frame.artifactRoomId, frame.state);
+        return;
+      }
+      case "artifactRoomDirty": {
+        this.callbacks.onArtifactRoomDirty(frame.artifactRoomId, frame.dirty);
+        return;
+      }
+      case "rootDirty": {
+        this.callbacks.onRootDirty(frame.dirty);
+        return;
+      }
+      case "dirtySnapshot": {
+        this.callbacks.onDirtySnapshot(frame.rootDirty, frame.rooms);
         return;
       }
       case "migrationStarted": {

@@ -29,13 +29,21 @@ type PackageManagerSource =
  *     path and rewrite the manifest. If the live binary is locked (typical
  *     on Windows), surface a `pendingUpgrade` instead of erroring.
  *
+ *   - If the Desktop-owned slot binary is present but cannot report its
+ *     version (failed probe: corrupt file, ENOEXEC, hang), never let the
+ *     manifest's recorded version stand in for it - route through the same
+ *     upgrade path and re-stage the bundled CLI over it.
+ *
  *   - If a **package-manager**-owned CLI (homebrew/npm/winget/scoop/apt/rpm) is
  *     older than the bundled CLI, **do not** overwrite it. Return a
  *     reconciliation outcome with platform/source-specific upgrade
  *     instructions so the UI can surface the right hint.
  *
  *   - If the installed manifest/PATH CLI is **newer** than (or equal to)
- *     the bundled CLI, trust it silently for the session.
+ *     the bundled CLI, trust it silently for the session. A PATH CLI is
+ *     only ever trusted after a successful `--version` probe: a PATH name
+ *     that cannot answer is not a Traycer CLI (oss #872: the name squatted
+ *     by a desktop-app launcher) and routes to bundled staging instead.
  *
  *   - If no installed CLI exists, leave staging to the first-launch
  *     setup flow (it already calls `installBundledCli`).
@@ -242,24 +250,47 @@ export async function reconcileCli(
           binaryPath: discovery.binaryPath,
         };
       }
-      await clearPackageManagerHint(deps);
-      // PATH binary present but no manifest. Trust it silently -
-      // package managers that don't run our `cli mark-source` post-
-      // install hook still surface here. We can't compare versions
-      // without probing, so the conservative call is "trust newer-
-      // or-equal" by default.
-      return {
-        kind: "trusted-newer",
-        source: "path",
-        installedVersion: null,
-        bundledVersion,
-        binaryPath: discovery.binaryPath,
-      };
+      // PATH binary present but no manifest. Package managers that don't
+      // run our `cli mark-source` post-install hook surface here, so a
+      // binary that can answer `--version` is trusted whatever its version
+      // - we can't name the owning package manager to print an upgrade
+      // hint, and overwriting a working install is not this branch's call.
+      // Production discovery has usually probed already
+      // (`vetPathCliCandidate`); probe here otherwise so trust is never
+      // extended on the strength of the file name alone.
+      const probedVersion =
+        discovery.version ?? (await deps.probeCliVersion(discovery.binaryPath));
+      if (probedVersion !== null) {
+        await clearPackageManagerHint(deps);
+        return {
+          kind:
+            compareSemver(probedVersion, bundledVersion) === 0
+              ? "trusted-equal"
+              : "trusted-newer",
+          source: "path",
+          installedVersion: probedVersion,
+          bundledVersion,
+          binaryPath: discovery.binaryPath,
+        };
+      }
+      // A `traycer` on PATH that cannot print its version is not a usable
+      // CLI. Trusting it anyway is what suppressed bundled staging and
+      // bricked first-launch service install when the name was squatted by
+      // a desktop-app launcher (oss #872) - fall through to the
+      // fresh-install staging below instead.
+      deps.logger.warn(
+        "[cli-reconcile] PATH `traycer` failed the version probe - treating it as not-a-CLI and staging the bundled CLI",
+        { binaryPath: discovery.binaryPath, bundledVersion },
+      );
     }
     await clearPackageManagerHint(deps);
-    if (discovery.kind === "bundled" && bundledPath !== null) {
-      // Fresh install: no manifest and no `traycer` on PATH, but the app ships
-      // a bundled CLI. Stage it into the Desktop-owned slot (a symlink on
+    if (
+      (discovery.kind === "bundled" || discovery.kind === "path") &&
+      bundledPath !== null
+    ) {
+      // Fresh install: no manifest, and either no `traycer` on PATH or only
+      // a probe-failed imposter under that name, but the app ships a bundled
+      // CLI. Stage it into the Desktop-owned slot (a symlink on
       // POSIX) so the bundle-blind host has a deterministic, space-free
       // `~/.traycer/cli[/<slot>]/bin/traycer` to put on PATH for the monitor /
       // title hooks / terminal agents. Nothing else self-heals this slot.
@@ -331,9 +362,36 @@ export async function reconcileCli(
     });
   }
 
+  // Case 2b: the desktop-owned slot binary is present (case 2a saw it) but
+  // cannot report its version - a corrupt file's ENOEXEC, garbage
+  // `--version` output, and a hung binary all collapse to a null probe.
+  // The manifest's recorded version is exactly what must NOT stand in for
+  // it then: a broken slot plus a record claiming >= bundled reads
+  // "trusted-equal" on every launch, and the CLI stays dead until a manual
+  // reinstall (v1.1.9-rc.3 field incident: the slot held a non-executable
+  // file while the manifest claimed 2.0.0, so reconcile trusted it
+  // indefinitely). A binary that cannot even print its version has nothing
+  // worth preserving, so route it through the upgrade path below - which
+  // re-stages the app's own bundled CLI and already owns the
+  // binary-locked/pendingUpgrade fallbacks - instead of the trust branch.
+  // A transiently failing probe (the 2s timeout under cold-launch I/O)
+  // merely re-stages bytes the desktop owns anyway; the next launch probes
+  // the healthy copy and trusts it again.
+  const slotBinaryUnresponsive =
+    manifest.source === "desktop" && probedManifestVersion === null;
+
   // Case 2: manifest present. Compare versions.
   const cmp = compareSemver(installedVersion, bundledVersion);
-  if (cmp >= 0) {
+  if (slotBinaryUnresponsive) {
+    deps.logger.warn(
+      "[cli-reconcile] desktop-owned slot binary failed the version probe - re-staging the bundled CLI over it instead of trusting the manifest record",
+      {
+        binaryPath: manifest.binaryPath,
+        manifestVersion: manifest.version,
+        bundledVersion,
+      },
+    );
+  } else if (cmp >= 0) {
     // Version comparison is blind between two dogfood builds: every local
     // build stamps the same `0.0.0-local` sentinel, so a stale slot CLI
     // reads "equal" forever and keeps running host installs/stops with old

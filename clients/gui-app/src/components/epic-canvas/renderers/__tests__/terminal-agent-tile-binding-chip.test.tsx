@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -151,9 +150,17 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   }),
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>

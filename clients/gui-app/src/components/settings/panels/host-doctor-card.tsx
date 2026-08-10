@@ -11,6 +11,7 @@ import {
 import {
   parseFreePortInput,
   runFixAction,
+  type FixActionResult,
 } from "@/components/settings/panels/host-doctor-actions";
 import {
   queryOptions,
@@ -25,6 +26,7 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   HostDoctorIssue,
@@ -87,7 +89,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   );
 
   const fixMutation = useMutation<
-    void,
+    FixActionResult,
     Error,
     HostDoctorIssue,
     { readonly management: IHostManagement }
@@ -95,10 +97,17 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     mutationKey: runnerMutationKeys.hostRunDoctor(),
     onMutate: () => ({ management }),
     mutationFn: async (issue) => {
-      if (issue.fixAction === null) return;
-      await runFixAction(management, issue);
+      if (issue.fixAction === null) return { kind: "applied" };
+      return runFixAction(management, issue);
     },
-    onSuccess: (_data, _issue, context) => {
+    onSuccess: (result, _issue, context) => {
+      // A declined restart fix is neither applied nor failed: the host
+      // refused for a self-clearing reason (busy work, lock contention).
+      // Announce it as information and leave the recurrence model alone.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
       toast.success("Fix applied");
       recurrenceModel.setRecurrence({ failures: [], locked: false });
       void queryClient.invalidateQueries({

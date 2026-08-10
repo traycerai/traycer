@@ -1,29 +1,39 @@
-import "../../../__tests__/test-browser-apis";
+import { createElement } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory } from "@tanstack/react-router";
 import {
   dispatchAction,
   findActionForChord,
   matchDigitAction,
   registerBaseLeaderScope,
   registerDynamicActionHandler,
+  resolveLeaderOwner,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
+import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { existingEpicTabIntent } from "@/lib/tab-navigation";
-import { tabActivate } from "@/stores/tabs/registry";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type {
   OpenSettingsModalOpts,
   SystemOverlayKind,
 } from "@/stores/tabs/system-overlay-types";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type {
+  NavigateNestedFocus,
+  PrepareNestedFocusTarget,
+} from "@/lib/epic-nested-focus-navigation";
 
 interface NavigateCall {
   readonly kind: "home" | "settings" | "epic" | "section" | "back" | "forward";
@@ -68,6 +78,7 @@ function canvasTabIds(tabId: string): ReadonlyArray<string> {
 }
 
 function buildRouter(initialPath: string): MockRouter {
+  synchronizeLayoutForRoute(initialPath);
   const calls: Array<NavigateCall> = [];
   let pathname = initialPath;
   const router: KeybindingRouter = {
@@ -100,6 +111,18 @@ function buildRouter(initialPath: string): MockRouter {
       if (intent.kind === "epic") {
         calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
         pathname = `/epics/${intent.epicId}/${intent.tabId}`;
+      } else if (intent.kind === "open-epic") {
+        calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
+        pathname = `/epics/${intent.epicId}`;
+      } else if (intent.kind === "open-phase-migration") {
+        calls.push({ kind: "epic", epicId: intent.phaseId, sectionId: null });
+        pathname = `/epics/${intent.phaseId}`;
+      } else if (intent.kind === "complete-epic-migration") {
+        calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
+        pathname = `/epics/${intent.epicId}/${intent.tabId}`;
+      } else if (intent.kind === "new-draft") {
+        calls.push({ kind: "home", epicId: null, sectionId: null });
+        pathname = "/";
       } else if (intent.kind === "draft") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
         pathname = "/";
@@ -129,6 +152,25 @@ function buildRouter(initialPath: string): MockRouter {
     pathname = next;
   };
   return { router, calls, setPath };
+}
+
+function synchronizeLayoutForRoute(pathname: string): void {
+  const match = /^\/epics\/[^/]+\/([^/]+)$/.exec(pathname);
+  const tabId = match?.[1];
+  if (tabId === undefined) return;
+  const openTabIds = useEpicCanvasStore.getState().openTabOrder;
+  if (!openTabIds.includes(tabId)) return;
+  useTabsStore.setState((state) => ({
+    ...state,
+    version: 2,
+    items: openTabIds.map((id) => ({
+      kind: "tab" as const,
+      id: tabItemId({ kind: "epic", id }),
+      ref: { kind: "epic" as const, id },
+    })),
+    activeItemId: tabItemId({ kind: "epic", id: tabId }),
+    stripOrder: openTabIds.map((id) => ({ kind: "epic" as const, id })),
+  }));
 }
 
 describe("dispatchAction", () => {
@@ -257,6 +299,99 @@ describe("dispatchAction", () => {
     expect(document.activeElement).toBe(targetEditor);
   });
 
+  it("focuses the selected chat editor instead of a retained background editor", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-pane-focus", "Pane Focus");
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
+    const sourcePaneId =
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ?? null;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    useEpicCanvasStore
+      .getState()
+      .splitPaneWithNode(tabId, sourcePaneId, "right", specRef("spec-b"));
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    const targetPaneId =
+      collectPanes(canvas?.root ?? null).find(
+        (pane) => pane.id !== sourcePaneId,
+      )?.id ?? null;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    useEpicCanvasStore.getState().setActiveTilePane(tabId, sourcePaneId);
+
+    appendFocusPane(sourcePaneId, [0, 0, 500, 600]);
+    const targetPane = appendPane(targetPaneId, [500, 0, 500, 600]);
+    const backgroundLayer = appendTabLayer(targetPane, "background-tab", false);
+    appendComposerEditor(backgroundLayer);
+    const selectedLayer = appendTabLayer(targetPane, "selected-tab", true);
+    appendComposerEditor(selectedLayer);
+    const primaryComposer = document.createElement("div");
+    primaryComposer.setAttribute("data-chat-composer", "");
+    selectedLayer.append(primaryComposer);
+    const selectedEditor = appendComposerEditor(primaryComposer);
+
+    const { router } = buildRouter(`/epics/epic-pane-focus/${tabId}`);
+
+    expect(dispatchAction("group.focus.right", router)).toBe(true);
+    expect(document.activeElement).toBe(selectedEditor);
+  });
+
+  it("requests primary-editor restoration for directional group focus", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-pane-focus", "Pane Focus");
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
+    const sourcePaneId =
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ?? null;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    useEpicCanvasStore
+      .getState()
+      .splitPaneWithNode(tabId, sourcePaneId, "right", specRef("spec-b"));
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    const targetPaneId =
+      collectPanes(canvas?.root ?? null).find(
+        (pane) => pane.id !== sourcePaneId,
+      )?.id ?? null;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    useEpicCanvasStore.getState().setActiveTilePane(tabId, sourcePaneId);
+
+    appendFocusPane(sourcePaneId, [0, 0, 500, 600]);
+    const targetPane = appendPane(targetPaneId, [500, 0, 500, 600]);
+    const targetLayer = appendTabLayer(targetPane, "selected-tab", true);
+    const composer = document.createElement("div");
+    composer.setAttribute("data-chat-composer", "");
+    targetLayer.append(composer);
+    const targetEditor = appendComposerEditor(composer);
+    targetEditor.setAttribute("role", "textbox");
+    targetEditor.setAttribute("aria-label", "Destination chat composer");
+
+    const { router: baseRouter } = buildRouter(
+      `/epics/epic-pane-focus/${tabId}`,
+    );
+    const navigateNestedFocusToPrimaryEditor: NavigateNestedFocus = vi.fn(
+      (
+        _epicId: string,
+        _nestedTabId: string,
+        prepare: PrepareNestedFocusTarget,
+      ) => prepare(),
+    );
+    const router: KeybindingRouter = {
+      ...baseRouter,
+      navigateNestedFocusToPrimaryEditor,
+    };
+
+    expect(dispatchAction("group.focus.right", router)).toBe(true);
+    expect(navigateNestedFocusToPrimaryEditor).toHaveBeenCalledWith(
+      "epic-pane-focus",
+      tabId,
+      expect.any(Function),
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Destination chat composer" }),
+    );
+  });
+
   it("does not close hidden epic canvas tabs while a non-detail route is active", () => {
     const tabId = useEpicCanvasStore
       .getState()
@@ -313,13 +448,12 @@ describe("dispatchAction", () => {
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-b"));
     useLandingDraftStore.getState().createDraft(null);
-    tabActivate(
-      existingEpicTabIntent({
-        epicId: "epic-route-active",
-        tabId,
-        focus: undefined,
-      }),
-    );
+    // Re-activate the epic tab over the just-created draft, mirroring exactly
+    // what activateTabIntent does (legacy source projection + layout focus),
+    // without importing raw tabActivate: draft cleared, epic focused.
+    useEpicCanvasStore.getState().setActiveTab(tabId);
+    useLandingDraftStore.getState().clearActiveDraft();
+    useTabsStore.getState().focusRef({ kind: "epic", id: tabId });
 
     const { router } = buildRouter(`/epics/epic-route-active/${tabId}`);
     const fired = dispatchAction("tab.close", router);
@@ -341,9 +475,51 @@ describe("dispatchAction", () => {
     expect(fired).toBe(true);
     expect(canvasTabIds(tabId)).toEqual(["spec-a"]);
   });
+
+  it("excludes a focused Phase-migration surface from Epic canvas commands and leader scope", () => {
+    const tabId = useEpicCanvasStore.getState().openTabOrder[0];
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-b"));
+    useEpicCanvasStore.setState((state) => {
+      const tab = state.tabsById[tabId];
+      if (tab === undefined) return state;
+      return {
+        tabsById: {
+          ...state.tabsById,
+          [tabId]: {
+            ...tab,
+            surfaceMode: { kind: "phase-migration", phaseId: tab.epicId },
+          },
+        },
+      };
+    });
+    const { router } = buildRouter(`/epics/e1/${tabId}`);
+    const unregister = registerBaseLeaderScope(router);
+
+    try {
+      expect(resolveLeaderOwner("mod")).toBeNull();
+      expect(dispatchAction("tab.close", router)).toBe(false);
+      expect(canvasTabIds(tabId)).toEqual(["spec-a", "spec-b"]);
+    } finally {
+      unregister();
+    }
+  });
 });
 
 function appendFocusPane(
+  paneId: string,
+  box: [number, number, number, number],
+): HTMLElement {
+  const pane = appendPane(paneId, box);
+  const layer = appendTabLayer(pane, "selected-tab", true);
+  const editor = document.createElement("button");
+  editor.type = "button";
+  editor.setAttribute("data-artifact-editor", "");
+  layer.append(editor);
+  return editor;
+}
+
+function appendPane(
   paneId: string,
   box: [number, number, number, number],
 ): HTMLElement {
@@ -355,10 +531,28 @@ function appendFocusPane(
     new DOMRect(x, y, width, height),
   );
 
+  return pane;
+}
+
+function appendTabLayer(
+  pane: HTMLElement,
+  tabInstanceId: string,
+  selected: boolean,
+): HTMLElement {
+  const layer = document.createElement("div");
+  layer.setAttribute("data-tab-instance-id", tabInstanceId);
+  layer.setAttribute("data-selected", selected ? "true" : "false");
+  if (!selected) layer.hidden = true;
+  pane.append(layer);
+
+  return layer;
+}
+
+function appendComposerEditor(parent: HTMLElement): HTMLElement {
   const editor = document.createElement("button");
   editor.type = "button";
-  editor.setAttribute("data-artifact-editor", "");
-  pane.append(editor);
+  editor.setAttribute("data-composer-editor", "");
+  parent.append(editor);
   return editor;
 }
 
@@ -436,10 +630,56 @@ describe("leader digit dispatch (global scope)", () => {
   });
 
   it("settings section digit navigates to the Nth section", () => {
+    // The section leader now gates on the actual focused ref, not just the
+    // /settings pathname, so seed the Settings tab as the focused layout item -
+    // the real state when the flat Settings tab owns the screen.
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/general",
+    });
     const { router, calls } = buildRouter("/settings/general");
     expect(fireDigit(router, 2, "alt")).toBe(true);
     expect(calls[0].kind).toBe("section");
     expect(calls[0].sectionId).toBe("appearance");
+  });
+
+  it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {
+    // F4 (closure): the section leader was pathname-owned. With the empty side
+    // of a [Settings | empty] split focused, routeBackingSide keeps the URL on
+    // /settings, but Settings does NOT own focus - an Alt-digit section command
+    // must no-op instead of stealing focus back to Settings.
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-settings",
+          left: { kind: "tab", ref: { kind: "settings", id: "settings" } },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-settings",
+      stripOrder: [{ kind: "settings", id: "settings" }],
+      systemTabs: {
+        history: null,
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: "/settings/general",
+        },
+      },
+    });
+
+    const { router, calls } = buildRouter("/settings/general");
+    fireDigit(router, 2, "alt");
+    // No settings-section navigation is dispatched - the section leader is
+    // inactive because the focused ref is the empty side, not Settings.
+    expect(calls.some((call) => call.kind === "section")).toBe(false);
   });
 });
 
@@ -461,3 +701,175 @@ function seedEpicTabs(): void {
       .openTabOrder.map((id) => ({ kind: "epic", id })),
   }));
 }
+
+// Builds the lightweight `KeybindingRouterSource` `<KeybindingProvider>`
+// itself takes (distinct from the `KeybindingRouter` seam `dispatchAction`
+// takes above) - just enough for `routerAdapterFor` to read a pathname and
+// hand off a no-op `navigate`. Digit-chord tab switches update
+// `useEpicCanvasStore` directly (see the `dispatchAction`/`fireDigit` tests
+// above), so a real TanStack router isn't needed to observe them.
+function buildProviderRouterSource(
+  initialPathname: string,
+): KeybindingRouterSource {
+  const history = createMemoryHistory({ initialEntries: [initialPathname] });
+  const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
+  return {
+    get state() {
+      return { location: { pathname: history.location.pathname } };
+    },
+    history,
+    navigate,
+  };
+}
+
+// Renders the real `<KeybindingProvider>` (so its actual window `keydown`
+// capture-phase listener is live) and appends a Diffs-shaped boundary -
+// `data-diffs-editor-boundary` wrapping a contenteditable node - directly
+// under `document.body`. Returns the contenteditable so tests can dispatch
+// real, DOM-composed keydown events at it.
+function renderDiffsBoundaryProvider(initialPathname: string): HTMLElement {
+  const router = buildProviderRouterSource(initialPathname);
+  render(createElement(KeybindingProvider, { router, children: null }));
+  const boundary = document.createElement("div");
+  boundary.setAttribute("data-diffs-editor-boundary", "");
+  const editor = document.createElement("div");
+  editor.setAttribute("contenteditable", "true");
+  // jsdom does not compute `isContentEditable` from the attribute - stub the
+  // browser-computed property `isDiffsEditorEvent` actually reads.
+  Object.defineProperty(editor, "isContentEditable", {
+    value: true,
+    configurable: true,
+  });
+  boundary.append(editor);
+  document.body.append(boundary);
+  return editor;
+}
+
+function fireKeyDownOn(
+  target: HTMLElement,
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function seedManyEpicTabs(count: number): ReadonlyArray<string> {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useTabsStore.setState({
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
+  const tabIds = Array.from({ length: count }, (_, index) =>
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(`m${index + 1}`, `Epic ${index + 1}`),
+  );
+  useEpicCanvasStore.getState().setActiveTab(tabIds[0]);
+  useTabsStore.setState((state) => ({
+    ...state,
+    stripOrder: useEpicCanvasStore
+      .getState()
+      .openTabOrder.map((id) => ({ kind: "epic", id })),
+  }));
+  return tabIds;
+}
+
+// Finding: `isDiffsEditorEvent(event)` used to short-circuit `handleKeyDown`
+// unconditionally, so a modified chord (⌘1, a reserved shortcut, ...) typed
+// while focus sat inside a Diffs editor boundary never reached
+// `resolveReservedAction`/`matchDigitAction` at all - even though it was
+// never meant to type a character into the editor. The fix only bypasses to
+// the editor for BARE (unmodified) typing.
+describe("<KeybindingProvider /> inside a Diffs editor boundary", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    __resetTabNavigationControllerForTesting();
+    seedEpicTabs();
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+  });
+
+  it("still resolves a modified chord (alt+digit) as a reserved action while focus is inside the editor", () => {
+    const secondTabId = useEpicCanvasStore.getState().openTabOrder[1];
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+
+    act(() => {
+      fireKeyDownOn(editor, { code: "Digit2", key: "2", altKey: true });
+    });
+
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(secondTabId);
+  });
+
+  it("lets bare typing inside the editor bypass the app's keybinding handling", () => {
+    const firstTabId = useEpicCanvasStore.getState().activeTabId;
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = fireKeyDownOn(editor, { code: "KeyJ", key: "j" });
+    });
+
+    expect(event?.defaultPrevented).toBe(false);
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(firstTabId);
+  });
+
+  it("never reserves Diffs' native undo and redo chords as app actions", () => {
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.settings.open": "mod+z",
+        "app.history.open": "mod+shift+z",
+      },
+    });
+    const editor = renderDiffsBoundaryProvider("/epics/e1");
+    const primaryModifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+
+    const undo = fireKeyDownOn(editor, {
+      code: "KeyZ",
+      key: "z",
+      ...primaryModifier,
+    });
+    const redo = fireKeyDownOn(editor, {
+      code: "KeyZ",
+      key: "z",
+      ...primaryModifier,
+      shiftKey: true,
+    });
+
+    expect(undo.defaultPrevented).toBe(false);
+    expect(redo.defaultPrevented).toBe(false);
+  });
+
+  it("does not let entering the editor mid-chord break a multi-digit sequence typed entirely inside it", () => {
+    // Guards the narrower fix over the naive "always reset the pending digit
+    // sequence when isDiffsEditorEvent is true" reading: that would wipe the
+    // sequence armed by the FIRST digit before the second digit (also fired
+    // with focus inside the boundary) ever got to extend it.
+    __resetTabNavigationControllerForTesting();
+    const tabIds = seedManyEpicTabs(12);
+    const editor = renderDiffsBoundaryProvider("/epics/m1");
+
+    act(() => {
+      fireKeyDownOn(editor, { code: "Digit1", key: "1", altKey: true });
+      fireKeyDownOn(editor, { code: "Digit2", key: "2", altKey: true });
+    });
+
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(tabIds[11]);
+  });
+});

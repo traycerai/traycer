@@ -1,6 +1,8 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
+  chatActiveTurnSchema,
   chatQueuedItemSchema,
+  chatQueuedManagedCommandItemSchema,
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
@@ -8,6 +10,8 @@ import {
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
+  chatSubscribeV16,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -50,6 +54,9 @@ const chat: Chat = {
   claudePendingWakes: [],
   messages: [userMessage],
   events: [],
+  archivedAt: null,
+  pinnedUserProviderHandle: null,
+  lastDeliveredRolesDigest: null,
 };
 
 const event: ChatEvent = {
@@ -165,6 +172,7 @@ describe("chat.subscribe@1.2 server frames", () => {
     });
 
     expect(parsed.status).toBe("steer_requested");
+    if (parsed.kind !== "prompt") throw new Error("expected prompt item");
     expect(parsed.steerRequest?.mode).toBe("safe_point");
   });
 
@@ -362,6 +370,9 @@ describe("chat.subscribe@1.2 server frames", () => {
       blockId: "wake-tool-1",
       outputFile: null,
       mcp: null,
+      // A fired schedule is not a managed command; there is nothing to open.
+      managedCommand: null,
+      live: false,
     });
   });
 
@@ -386,7 +397,10 @@ describe("chat.subscribe@1.2 server frames", () => {
       mcp: { serverName: "probe", toolName: "slow_op" },
     });
     expect(mcpTrigger.kind).toBe("command");
-    expect(mcpTrigger.mcp).toEqual({ serverName: "probe", toolName: "slow_op" });
+    expect(mcpTrigger.mcp).toEqual({
+      serverName: "probe",
+      toolName: "slow_op",
+    });
   });
 
   it("parses mcp background items on 1.4, defaulting startedAt for old-host frames", () => {
@@ -409,7 +423,9 @@ describe("chat.subscribe@1.2 server frames", () => {
       backgroundItems: [backgroundItem],
     });
 
-    expect(chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem))).toMatchObject({
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem)),
+    ).toMatchObject({
       backgroundItems: [{ ...mcpItem, startedAt: null }],
     });
     expect(
@@ -1409,5 +1425,388 @@ describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
     if (parsed.kind !== "messageAccepted")
       throw new Error("expected messageAccepted");
     expect(parsed.message.sender).not.toHaveProperty("inReplyTo");
+  });
+});
+
+describe("chat.subscribe@1.6 (managed-command queue items)", () => {
+  const managedCommandItem = {
+    kind: "managed-command" as const,
+    queueItemId: "queue-managed-1",
+    commandId: "command-1",
+    description: "bun test --watch",
+    status: "pending" as const,
+    createdAt: 3000,
+    updatedAt: 3000,
+  };
+
+  // The exact shape a released 1.4 host persisted into `queue.added` metadata
+  // and put on the wire: no `kind` key at all.
+  const legacyKindlessItem = {
+    queueItemId: "queue-legacy-1",
+    messageId: "message-2",
+    message: { kind: "user", content: { type: "doc", content: [] } },
+    sender: { type: "user", userId: "user-1" },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "epic",
+    },
+    createdAt: 2001,
+    updatedAt: 2002,
+  };
+
+  function snapshotFrameWithQueueItems(
+    items: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    };
+  }
+
+  it("declares schemaVersion 1.6", () => {
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
+  });
+
+  // The load-bearing compat guarantee: every payload a ≤1.4 host ever wrote
+  // carries no `kind`, and the defaulted prompt discriminant must adopt them
+  // with no migration. This is why the union is a plain `z.union` (a
+  // `z.discriminatedUnion` rejects a missing discriminant even when the
+  // literal is defaulted) with the managed-command arm listed first.
+  it("parses a legacy kind-less queued item as a prompt item", () => {
+    const parsed = chatQueuedItemSchema.parse(legacyKindlessItem);
+
+    expect(parsed.kind).toBe("prompt");
+    if (parsed.kind !== "prompt") throw new Error("expected prompt item");
+    expect(parsed.messageId).toBe("message-2");
+    expect(parsed.sender).toMatchObject({ type: "user", userId: "user-1" });
+  });
+
+  it("parses a managed-command queued item as its own variant", () => {
+    const parsed = chatQueuedItemSchema.parse(managedCommandItem);
+
+    expect(parsed.kind).toBe("managed-command");
+    if (parsed.kind !== "managed-command") {
+      throw new Error("expected managed-command item");
+    }
+    expect(parsed.commandId).toBe("command-1");
+    expect(parsed.description).toBe("bun test --watch");
+    expect(parsed.status).toBe("pending");
+    // The variant is content-free: no fabricated message/sender/settings ride
+    // along on the durable record.
+    expect(parsed).not.toHaveProperty("message");
+    expect(parsed).not.toHaveProperty("sender");
+    expect(parsed).not.toHaveProperty("messageId");
+    expect(parsed).not.toHaveProperty("settings");
+  });
+
+  it("defaults a managed-command item's status to pending", () => {
+    const parsed = chatQueuedManagedCommandItemSchema.parse({
+      kind: "managed-command",
+      queueItemId: "queue-managed-2",
+      commandId: "command-2",
+      description: "tail -f server.log",
+      createdAt: 3000,
+      updatedAt: 3000,
+    });
+
+    expect(parsed.status).toBe("pending");
+  });
+
+  it("rejects a managed-command item that omits its durable dispatch key", () => {
+    expect(
+      chatQueuedItemSchema.safeParse({
+        kind: "managed-command",
+        queueItemId: "queue-managed-3",
+        description: "no commandId",
+        createdAt: 3000,
+        updatedAt: 3000,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries a managed-command queue item through a 1.6 snapshot frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithQueueItems([managedCommandItem]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      kind: "managed-command",
+      commandId: "command-1",
+    });
+  });
+
+  it("carries a managed-command queue item through a 1.6 queueChanged frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      queue: { status: "idle", items: [managedCommandItem] },
+    });
+    if (parsed.kind !== "queueChanged")
+      throw new Error("expected queueChanged");
+    expect(parsed.queue.items[0]).toMatchObject({
+      kind: "managed-command",
+      commandId: "command-1",
+    });
+  });
+
+  // The frozen 1.4 line must not be able to absorb the new variant - this is
+  // what forces the host's per-minor frame projection to exist rather than
+  // relying on zod stripping unknown keys.
+  it("cannot parse a managed-command item on the frozen 1.4 line", () => {
+    expect(
+      chatSubscribeV14.serverFrameSchema.safeParse(
+        snapshotFrameWithQueueItems([managedCommandItem]),
+      ).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV14.serverFrameSchema.safeParse({
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        queue: { status: "idle", items: [managedCommandItem] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still parses ordinary prompt items on the frozen 1.4 line", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse(
+      snapshotFrameWithQueueItems([legacyKindlessItem]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      queueItemId: "queue-legacy-1",
+    });
+    // The 1.4 line predates the discriminant and must never grow one.
+    expect(parsed.snapshot.queue.items[0]).not.toHaveProperty("kind");
+  });
+
+  // Same guarantee one line up: 1.5 shipped before the union existed, so it
+  // must reject the variant too, not just 1.4.
+  it("cannot parse a managed-command item on the frozen 1.5 line", () => {
+    expect(
+      chatSubscribeV15.serverFrameSchema.safeParse(
+        snapshotFrameWithQueueItems([managedCommandItem]),
+      ).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
+  const shell = {
+    id: "command-1",
+    monitoring: true,
+    description: "deploy watcher",
+    status: {
+      state: "running" as const,
+      pid: 4410,
+      startedAtMs: 1_700_000_000_000,
+    },
+    chatId: "chat-1",
+    createdAtMs: 1_699_999_000_000,
+    updatedAtMs: 1_700_000_000_000,
+  };
+
+  function snapshotFrameWithManagedCommands(
+    managedCommands: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        managedCommands,
+      },
+    };
+  }
+
+  const managedCommandsChangedFrame = {
+    kind: "managedCommandsChanged",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    managedCommands: [shell],
+  };
+
+  it("carries the chat's commands on a live snapshot", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithManagedCommands([shell]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.managedCommands).toEqual([shell]);
+  });
+
+  // Optional on the wire, always present after parsing: no consumer ever
+  // null-checks the set, on either channel.
+  it("defaults an omitted set to empty rather than undefined", () => {
+    const frame = snapshotFrameWithManagedCommands([]);
+    const snapshot = frame["snapshot"] as Record<string, unknown>;
+    delete snapshot["managedCommands"];
+
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(frame);
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.managedCommands).toEqual([]);
+
+    const changed = chatSubscribeV16.serverFrameSchema.parse({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    if (changed.kind !== "managedCommandsChanged") {
+      throw new Error("expected managedCommandsChanged");
+    }
+    expect(changed.managedCommands).toEqual([]);
+  });
+
+  it("drops the field on the frozen 1.5 line", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse(
+      snapshotFrameWithManagedCommands([shell]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot).not.toHaveProperty("managedCommands");
+  });
+
+  it("carries the whole set on every managedCommandsChanged frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      managedCommandsChangedFrame,
+    );
+    if (parsed.kind !== "managedCommandsChanged") {
+      throw new Error("expected managedCommandsChanged");
+    }
+    expect(parsed.managedCommands).toEqual([shell]);
+  });
+
+  // The frame and the field arrive together or not at all - a 1.5 peer has no
+  // variant for it, so the host must never send one (see the host's
+  // `projectManagedCommandsForPreV16`).
+  it("is not a frame a 1.5 peer can parse", () => {
+    expect(
+      chatSubscribeV15.serverFrameSchema.safeParse(managedCommandsChangedFrame)
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
+  // Pre-1.5 active turn shape: no sameTurnSteeringSupported field at all.
+  // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state)
+  // must still accept the carrier and default the capability to false.
+  const preV15ActiveTurn = {
+    turnId: "turn-1",
+    status: "running" as const,
+    harnessId: "claude" as const,
+    model: "claude-sonnet-4-5",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "epic" as const,
+    profileId: null,
+    userMessageId: "message-1",
+    startedAt: 1000,
+    updatedAt: 1000,
+  };
+
+  const activeTurnWithCapability = {
+    ...preV15ActiveTurn,
+    sameTurnSteeringSupported: true,
+  };
+
+  it("defaults missing sameTurnSteeringSupported to false on the live schema", () => {
+    const parsed = chatActiveTurnSchema.parse(preV15ActiveTurn);
+    expect(parsed.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("defaults missing sameTurnSteeringSupported through a live snapshot frame", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: preV15ActiveTurn,
+        runStatus: "running",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    });
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.activeTurn?.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("defaults missing sameTurnSteeringSupported through a live turnStateChanged frame", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: preV15ActiveTurn,
+    });
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.activeTurn?.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("strips sameTurnSteeringSupported for a 1.4 peer and retains it on 1.5", () => {
+    const frame = {
+      kind: "turnStateChanged" as const,
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running" as const,
+      activeTurn: activeTurnWithCapability,
+    };
+
+    const v14 = chatSubscribeV14.serverFrameSchema.parse(frame);
+    if (v14.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(v14.activeTurn).not.toHaveProperty("sameTurnSteeringSupported");
+
+    const v15 = chatSubscribeV15.serverFrameSchema.parse(frame);
+    if (v15.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(v15.activeTurn?.sameTurnSteeringSupported).toBe(true);
   });
 });

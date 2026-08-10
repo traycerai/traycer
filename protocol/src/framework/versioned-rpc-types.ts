@@ -27,7 +27,27 @@ export const RPC_ERROR_CODES = [
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
   "SENDER_TUI_UNSUPPORTED",
+  // Caller-supplied input is structurally valid but semantically rejected
+  // (e.g. minting the reserved `traycer:system` agent id). Additive and
+  // degrade-safe: the wire `code` is an open string and old clients narrow
+  // unknown codes to RPC_ERROR while keeping the 4xx status.
+  "E_INVALID_ARGUMENT",
+  // Role-surface outcomes (same additive degrade story as E_INVALID_ARGUMENT).
+  // An absent agent and a foreign-account agent share E_AGENT_NOT_FOUND with
+  // one message template - anything more specific would be an existence
+  // oracle across the account boundary.
+  "E_AGENT_NOT_FOUND",
+  // The caller's OWN agent lives on another host; the message names it, so
+  // telling the caller where to go discloses nothing across accounts.
+  "E_AGENT_NOT_LOCAL",
+  // A claim held by ANOTHER of the caller's own agents - a real authorization
+  // error with role-specific copy, distinct from the generic epic-access
+  // FORBIDDEN whose "check Task access" guidance would mislead here.
+  "E_ROLE_FORBIDDEN",
   "TERMINAL_ID_TAKEN",
+  // `agent.sendMessage`'s prompt exceeded the shared A2A_MESSAGE_MAX_UTF8_BYTES
+  // ceiling. Same additive degrade story as E_INVALID_ARGUMENT.
+  "MESSAGE_TOO_LARGE",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
@@ -91,8 +111,7 @@ export type RpcErrorFor<Contract> = Contract extends AnyRpcContract
   : never;
 
 export type RpcResultFor<Contract> =
-  | RpcSuccessFor<Contract>
-  | RpcErrorFor<Contract>;
+  RpcSuccessFor<Contract> | RpcErrorFor<Contract>;
 
 type SameMethodPair<
   From extends AnyRpcContract,
@@ -117,8 +136,7 @@ export type UpgradePath<
     : never;
 
 export type DowngradeResult<Value> =
-  | { ok: true; value: Value }
-  | { ok: false; error: RpcErrorDetails };
+  { ok: true; value: Value } | { ok: false; error: RpcErrorDetails };
 
 export type DowngradePath<
   From extends AnyRpcContract,
@@ -221,6 +239,19 @@ export type VersionEntry<
 > = {
   readonly contract: Contract;
   readonly upgradeFromPreviousVersion: Upgrade;
+  /**
+   * Declares that this minor's RESPONSE value growth (new enum values,
+   * new union variants, widened forms relative to the previous minor)
+   * is emission-gated: the host consults the negotiated version and
+   * never emits the new values to older peers (the chat-frame-projection
+   * pattern). Without this, the registry validator rejects response-side
+   * value growth on a minor - an old peer's schema REFUSES such values,
+   * and for state-controlled response data that refusal poisons every
+   * old peer with no opt-out. Declaring it is a reviewed claim about the
+   * EMITTER, which the validator cannot check; structural additivity is
+   * still enforced regardless.
+   */
+  readonly responseGrowthProjectionGated?: true;
 };
 
 export type AnyVersionEntry = VersionEntry<
@@ -496,6 +527,8 @@ type ValidateVersionEntry<
                 >
               : never
           : never;
+        /** See `VersionEntry.responseGrowthProjectionGated`. */
+        readonly responseGrowthProjectionGated?: true;
       }
     : never
   : never;
@@ -505,9 +538,9 @@ type ValidateLineVersions<
   Registry extends UncheckedMethodVersionRegistry,
   Major extends NumberKeys<Registry>,
 > = {
-  readonly [Minor in NumberKeys<
-    Registry[Major]["versions"]
-  >]: ValidateVersionEntry<Method, Registry, Major, Minor>;
+  readonly [
+    Minor in NumberKeys<Registry[Major]["versions"]>
+  ]: ValidateVersionEntry<Method, Registry, Major, Minor>;
 };
 
 type ValidateLineDowngrades<
@@ -515,8 +548,9 @@ type ValidateLineDowngrades<
   Major extends NumberKeys<Registry>,
   Downgrades extends Readonly<Record<number, AnyDowngradePath>>,
 > = {
-  readonly [TargetMajor in keyof Downgrades &
-    number]: TargetMajor extends NumberKeys<Registry>
+  readonly [
+    TargetMajor in keyof Downgrades & number
+  ]: TargetMajor extends NumberKeys<Registry>
     ? IsLessThan<TargetMajor, Major> extends true
       ? DowngradePath<
           LatestContractForLine<Registry[Major]>,

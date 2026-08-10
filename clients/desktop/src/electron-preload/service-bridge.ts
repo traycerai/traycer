@@ -1,15 +1,7 @@
 import { ipcRenderer } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
 
-export interface ServiceStatusSnapshot {
-  readonly state: "running" | "stopped" | "not-installed";
-  readonly version: string | null;
-  readonly listenUrl: string | null;
-  readonly pid: number | null;
-}
-
 export interface ServiceBridgeSurface {
-  status(): Promise<ServiceStatusSnapshot>;
   install(): Promise<void>;
   uninstall(purge: boolean): Promise<void>;
   start(): Promise<void>;
@@ -24,10 +16,6 @@ export interface ServiceBridgeSurface {
 
 export function buildServiceBridge(): ServiceBridgeSurface {
   return {
-    status: () =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.serviceStatus,
-      ) as Promise<ServiceStatusSnapshot>,
     install: () =>
       ipcRenderer.invoke(RunnerHostInvoke.serviceInstall) as Promise<void>,
     uninstall: (purge) =>

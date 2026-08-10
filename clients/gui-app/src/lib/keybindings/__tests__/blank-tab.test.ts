@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   dispatchAction,
@@ -9,6 +8,10 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
+import {
+  resetTabsStoreForTest,
+  seedActiveEpicTabInTabsStore,
+} from "@/stores/tabs/test-support/tabs-store-fixtures";
 import {
   isBlankTileRef,
   type EpicCanvasTileRef,
@@ -56,6 +59,7 @@ function seedActiveGroupTab(): string {
   const store = useEpicCanvasStore.getState();
   const tabId = store.openEpicTab(SEED_EPIC_ID, "Epic");
   store.openTileInTab(tabId, SPEC_A);
+  seedActiveEpicTabInTabsStore(tabId);
   return tabId;
 }
 
@@ -79,6 +83,7 @@ function activeGroup(tabId: string): {
 
 beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  resetTabsStoreForTest();
   useCommandPaletteStore.setState({
     open: false,
     query: "",
@@ -89,6 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  resetTabsStoreForTest();
 });
 
 describe("tab.new default chord (mod+t) and epic.new (mod+n)", () => {

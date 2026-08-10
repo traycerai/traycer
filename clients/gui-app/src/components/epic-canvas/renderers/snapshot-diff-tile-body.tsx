@@ -377,6 +377,7 @@ function SnapshotFileDiffContent(props: {
       scrollContainerRef={findScrollContainerRef}
       onScroll={onScroll}
       banner={null}
+      fileIdentity={null}
     >
       <DiffContentPrimitive
         patch={props.patch}
@@ -387,6 +388,7 @@ function SnapshotFileDiffContent(props: {
         lineNumbers={props.diffViewerPreferences.lineNumbers}
         indicatorStyle={props.diffViewerPreferences.indicatorStyle}
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );
@@ -445,7 +447,7 @@ function snapshotDiffFindKindLabel(diff: SnapshotDiffTilePayload): string {
   if (diff.kind === "snapshot-hash") return "Artifact diff";
   if (diff.kind === "snapshot-segment") return "Edit";
   if (diff.kind === "snapshot-cumulative") return "Changes";
-  return "Cumulative chat changes";
+  return "Cumulative agent changes";
 }
 
 function SnapshotDiffLoading(props: {
@@ -514,7 +516,7 @@ function snapshotDiffPrimaryTitle(diff: SnapshotDiffTilePayload): string {
 
 function snapshotDiffSecondaryLine(diff: SnapshotDiffTilePayload): ReactNode {
   if (diff.kind === "snapshot-cumulative-bundle") {
-    return "Cumulative chat changes";
+    return "Cumulative agent changes";
   }
   if (diff.kind === "snapshot-hash") {
     return "Artifact diff";

@@ -1,6 +1,5 @@
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import {
-  isChatSessionSettled,
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
@@ -24,7 +23,7 @@ type ChatRunInputs = Pick<
 export interface ChatTurnPhase {
   readonly runningTurn: boolean;
   readonly stopping: boolean;
-  readonly settled: boolean;
+  readonly turnEnded: boolean;
   readonly connectionClosed: boolean;
 }
 
@@ -32,7 +31,11 @@ export function toChatTurnPhase(state: ChatRunInputs): ChatTurnPhase {
   return {
     runningTurn: state.runStatus === "running" && state.activeTurn !== null,
     stopping: state.runStatus === "stopping",
-    settled: isChatSessionSettled(state),
+    // A turn is complete once the host has stopped running it. Do not require
+    // the queue to be empty: an errored turn deliberately parks queued
+    // messages in `paused`, and completion-driven usage/profile refreshes must
+    // still observe the provider failure that caused the pause.
+    turnEnded: state.runStatus === "idle" && state.activeTurn === null,
     connectionClosed: state.connectionStatus === "closed",
   };
 }
@@ -60,7 +63,7 @@ export function advanceTurnNotify(
   }
   const armed = prev.armed || phase.runningTurn;
   const stopRequested = prev.stopRequested || phase.stopping;
-  if (armed && phase.settled) {
+  if (armed && phase.turnEnded) {
     return { state: INITIAL_TURN_NOTIFY_STATE, completed: !stopRequested };
   }
   return { state: { armed, stopRequested }, completed: false };

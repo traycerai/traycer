@@ -1,6 +1,6 @@
-import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,7 +9,10 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeFolderIntent,
+  WorktreeWorkspaceSummary,
+} from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   contrastRatio,
@@ -65,6 +68,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
   };
 });
 
+import { FolderBranchControl } from "../folder-branch-control";
 import { FolderLocationControl } from "../folder-location-control";
 import { FolderRow } from "../folder-row";
 import { WorkspaceFolderRows } from "../workspace-folder-rows";
@@ -72,6 +76,7 @@ import { WorkspaceFolderSummaryControl } from "../workspace-folder-summary-contr
 import { WorkspaceSummaryTrigger } from "../workspace-summary-trigger";
 import type { WorkspaceRunItem } from "../workspace-run-item";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 const EMPTY_COUNTS: ReadonlyMap<string, number> = new Map();
@@ -133,6 +138,7 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     summary: GIT_SUMMARY,
     currentIntent: null,
     defaultNewBranchName: "traycer/swift-otter",
+    branchPrefixWarning: null,
     repoIdentifier: { owner: "acme", repo: "app" },
     isPrimary: true,
     canChangePrimary: true,
@@ -373,6 +379,45 @@ describe("FolderRow", () => {
     expect(screen.queryByLabelText("Copy folder path")).toBeNull();
   });
 
+  it("shows the branch-prefix fallback warning on a new-worktree row", () => {
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: null,
+        branchPrefixWarning:
+          'Repository branch prefix "has spaces" in /repo/.traycer/environment.json is invalid: Prefix can\'t contain spaces. Using the global default.',
+      },
+      NOOP,
+    );
+    expect(screen.getByTestId("folder-row-branch-prefix-warning")).toBeTruthy();
+  });
+
+  it("hides the branch-prefix warning when there is nothing to warn about", () => {
+    renderRow(
+      { mode: "worktree", currentIntent: null, branchPrefixWarning: null },
+      NOOP,
+    );
+    expect(screen.queryByTestId("folder-row-branch-prefix-warning")).toBeNull();
+  });
+
+  it("hides the branch-prefix warning for an imported (existing) worktree - nothing was generated to fall back on", () => {
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: {
+          kind: "import",
+          workspacePath: "/repo",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          isPrimary: true,
+          worktreePath: "/wt/feat-login",
+        },
+        branchPrefixWarning: "some warning that should not render here",
+      },
+      NOOP,
+    );
+    expect(screen.queryByTestId("folder-row-branch-prefix-warning")).toBeNull();
+  });
+
   it("keeps the copy-path icon's default state free of stacked opacity attenuation and >=3:1 against the popover in every theme preset", () => {
     renderRow(
       { mode: "local", displayPath: "/repo", currentIntent: null },
@@ -424,7 +469,10 @@ describe("FolderRow", () => {
     expect(identity.children[1].className).toContain("text-foreground/90");
     expect(location.className).toContain("var(--color-muted-foreground)");
     expect(branch.className).toContain("text-foreground/75");
-    expect(identity.getAttribute("title")).toBe("/repo");
+    // The path tooltip is scoped to the NAME now, not the whole chip - the
+    // chip also carries the copy-path button and missing-folder warning, each
+    // with a tooltip of its own.
+    expect(tooltipTextNear(identity.children[1])).toBe("/repo");
   });
 
   it("reserves two stable trailing action slots", () => {
@@ -564,20 +612,19 @@ describe("FolderRow", () => {
       NOOP,
     );
     fireEvent.click(screen.getByTestId("folder-branch-import-trigger"));
-    expect(screen.getByTestId("import-worktree-branch-form")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("import-worktree-source-branch")
-        .getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("import-worktree-source-branch").textContent,
-    ).toContain("development");
-    const branchNameInput = screen.getByTestId("import-worktree-branch-name");
-    if (!(branchNameInput instanceof HTMLInputElement)) {
-      throw new Error("Expected imported worktree branch name input");
-    }
-    expect(branchNameInput.value).toBe("feat/login");
+    const details = screen.getByTestId("import-worktree-branch-form");
+    expect(details).toBeInstanceOf(HTMLDListElement);
+    expect(within(details).queryByRole("listbox")).toBeNull();
+    expect(within(details).queryByRole("option")).toBeNull();
+    expect(within(details).queryByRole("button")).toBeNull();
+    const sourceBranch = screen.getByTestId("import-worktree-source-branch");
+    expect(sourceBranch).not.toBeInstanceOf(HTMLInputElement);
+    expect(sourceBranch.textContent).toBe("development");
+    const branchName = screen.getByTestId("import-worktree-branch-name");
+    expect(branchName).not.toBeInstanceOf(HTMLInputElement);
+    expect(branchName.textContent).toBe("feat/login");
+    expect(screen.getByText("Source branch")).toBeTruthy();
+    expect(screen.getByText("Current branch")).toBeTruthy();
     expect(screen.queryByTestId("folder-branch-trigger")).toBeNull();
   });
 
@@ -642,7 +689,7 @@ describe("FolderRow", () => {
     expect(pin.className).toContain("cursor-not-allowed");
     fireEvent.focus(pin);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the chat starts",
+      "cannot be changed after the agent starts",
     );
   });
 
@@ -654,7 +701,7 @@ describe("FolderRow", () => {
     tabForward();
     expect(document.activeElement).toBe(pin);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the chat starts",
+      "cannot be changed after the agent starts",
     );
   });
 
@@ -1144,6 +1191,123 @@ describe("WorkspaceSummaryTrigger", () => {
   });
 });
 
+describe("FolderBranchControl — Escape close", () => {
+  const AUTOSAVE_DELAY_MS = 500;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("commits the pending autosave draft when Escape closes the popover", async () => {
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <FolderBranchControl
+          item={item({
+            mode: "worktree",
+            currentIntent: null,
+            branchLabel: "traycer/swift-otter",
+            summary: GIT_SUMMARY,
+            onEmit,
+          })}
+          boundaryEl={null}
+          readOnly={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId("folder-branch-popover");
+    const name = screen.getByTestId("new-worktree-branch-name");
+    fireEvent.change(name, { target: { value: "feat/escape-commits" } });
+    expect(onEmit).not.toHaveBeenCalled();
+
+    // Escape before debounce: unmount flush still commits (no cancel path).
+    act(() => {
+      vi.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
+    });
+    expect(onEmit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
+
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 200);
+      await Promise.resolve();
+    });
+
+    expect(onEmit).toHaveBeenCalledTimes(1);
+    expect(onEmit.mock.calls[0][0]).toMatchObject({
+      branch: { name: "feat/escape-commits" },
+    });
+    expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
+  });
+
+  it("returns focus to the chip on Escape without opening the chip tooltip from focus restore", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <FolderBranchControl
+          item={item({
+            mode: "worktree",
+            currentIntent: null,
+            branchLabel: "traycer/swift-otter",
+            summary: GIT_SUMMARY,
+          })}
+          boundaryEl={null}
+          readOnly={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId("folder-branch-popover");
+    expect(popover).toBeTruthy();
+
+    // Escape closes the popover and restores focus to the trigger. Production
+    // arms suppress via onCloseAutoFocus (no preventDefault) so the chip
+    // tooltip does not open solely from that focus return.
+    fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
+    });
+
+    // Do not preventDefault onCloseAutoFocus for Escape — chip must regain focus.
+    expect(document.activeElement).toBe(chip);
+
+    // Drain focusin microtask + 150ms suppress fallback so any delayed open
+    // would surface. With delayDuration={0}, a suppress miss would show a
+    // tooltip role for the chip label.
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(document.activeElement).toBe(chip);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(
+      document.querySelector(
+        '[data-slot="tooltip-content"][data-state="open"]',
+      ),
+    ).toBeNull();
+    expect(
+      document.querySelector(
+        '[data-slot="tooltip-content"][data-state="delayed-open"]',
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("WorkspaceFolderSummaryControl", () => {
   it("uses the rich hover preview instead of a competing native title", () => {
     render(
@@ -1161,6 +1325,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1190,6 +1355,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1269,6 +1435,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1306,6 +1473,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1337,6 +1505,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1384,6 +1553,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1411,6 +1581,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1440,6 +1611,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1464,6 +1636,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1496,6 +1669,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1520,6 +1694,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />

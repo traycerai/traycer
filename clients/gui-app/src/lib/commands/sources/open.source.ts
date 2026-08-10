@@ -5,16 +5,17 @@
  * sub-page stack); its leaves open into the bound target group via
  * `openTileIntoTargetGroup` (Decision 2/3 of the pane-opener tech plan).
  *
- * T5 fills Chats / TUI / Terminals / Artifacts (live projection + pinned
- * "New X", default-host bound). T6 fills Files / Diff (two-step workspace →
- * file).
+ * T5 fills Agents / Terminals / Artifacts (live projection + pinned
+ * creation leaves, default-host bound). T6 fills Files / Diff (two-step
+ * workspace → file).
  */
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
-import { useChatsOpenerItems } from "@/lib/commands/sources/open/chats-subpage";
+import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
+import { useSearchOpenerItems } from "@/lib/commands/sources/open/search-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
-import { useTuiOpenerItems } from "@/lib/commands/sources/open/tui-subpage";
+import { commGraphOpenerItem } from "@/lib/commands/sources/open/comm-graph-leaf";
 import type {
   CommandContext,
   CommandItem,
@@ -31,16 +32,14 @@ interface OpenerCategory {
 
 const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
   {
-    id: "chats",
-    title: "Chats",
-    keywords: ["chat", "chats"],
-    useItems: useChatsOpenerItems,
-  },
-  {
-    id: "tui",
-    title: "TUI agents",
-    keywords: ["tui", "agent", "agents"],
-    useItems: useTuiOpenerItems,
+    // ONE Agent category. Chat and Terminal are interfaces within it, not peer
+    // collections - splitting them here restated an interface as an entity.
+    // `chat`/`chats`/`tui` stay as keywords so users who learned the old
+    // vocabulary still land here: the label moves, discoverability does not.
+    id: "agents",
+    title: "Agents",
+    keywords: ["agent", "agents", "chat", "chats", "tui", "terminal"],
+    useItems: useAgentsOpenerItems,
   },
   {
     id: "terminals",
@@ -65,6 +64,12 @@ const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
     title: "Diff",
     keywords: ["diff", "changes"],
     useItems: useDiffOpenerItems,
+  },
+  {
+    id: "search",
+    title: "Text search",
+    keywords: ["search", "text", "grep", "find", "content", "code"],
+    useItems: useSearchOpenerItems,
   },
 ];
 
@@ -96,5 +101,11 @@ const CATEGORY_ENTRIES: ReadonlyArray<CommandItem> =
 
 export const openSource: CommandSource = {
   id: "open",
-  getItems: (ctx) => (ctx.targetGroupId === null ? [] : CATEGORY_ENTRIES),
+  getItems: (ctx) =>
+    ctx.targetGroupId === null
+      ? []
+      : // The communication graph is a LEAF, not a category: there is exactly
+        // one graph per epic, so a sub-page listing one row would be a wasted
+        // step. It also needs no host pick - the tile fans in across hosts.
+        [...CATEGORY_ENTRIES, commGraphOpenerItem(ctx)],
 };

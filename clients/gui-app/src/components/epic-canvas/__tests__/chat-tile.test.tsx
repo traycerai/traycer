@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,7 +9,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+  installLegendListViewportMetrics,
+  restoreLegendListTestClock,
+  settleLegendList,
+} from "@/components/chat/__tests__/legend-list-test-environment";
+import { modLabel } from "@/lib/keybindings/platform";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -81,6 +87,38 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
 
+// The tile subscribes to the command catalog itself, because its next-step /
+// compact / implement-plan sends bypass the composer and its picker store. The
+// mocked host client above never resolves a request, so without this the
+// catalog would stay loading forever and every `$` prompt would (correctly) be
+// left as prose. Serve one skill so the gated conversion has something to
+// resolve; unknown names still fall through to the ungated `/` fallback.
+vi.mock("@/hooks/composer/use-slash-commands", () => ({
+  useSlashCommands: () => ({
+    data: [
+      {
+        harnessId: "claude",
+        name: "traycer-implement",
+        description: "Implement a ticket",
+        argumentHint: null,
+        kind: "skill",
+        metadata: { path: "/repo/.agents/skills/traycer-implement/SKILL.md" },
+        source: "provider",
+        preview: {
+          kind: "text",
+          primary: "Implement a ticket",
+          secondary: null,
+          mono: false,
+        },
+      },
+    ],
+    isLoading: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(undefined),
+  }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
   ...(await importActual<
     typeof import("@/hooks/epic/use-epic-chat-mutations")
@@ -118,6 +156,10 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  // No stream client means nothing has been negotiated yet, which is what
+  // `null` says - the tile's Shells menu reads this and stays quiet.
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -132,6 +174,9 @@ import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -204,7 +249,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   permissionMode: "supervised",
   reasoningEffort: "medium",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
@@ -213,7 +258,7 @@ const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
   permissionMode: "full_access",
   reasoningEffort: "low",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const INITIAL_HANDOFF_CONTENT: JsonContent = {
@@ -231,7 +276,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   permissionMode: "supervised",
   reasoningEffort: "high",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
@@ -240,7 +285,7 @@ const SESSION_SETTINGS: ChatRunSettings = {
   permissionMode: "full_access",
   reasoningEffort: "low",
   serviceTier: null,
-  agentMode: "epic",
+  agentMode: "regular",
   profileId: null,
 };
 
@@ -313,10 +358,14 @@ function createChatHarness(): ChatHarness {
           );
         }, 0);
       }
-      const client: Pick<ChatStreamClient, "sendAction" | "close"> = {
+      const client: Pick<
+        ChatStreamClient,
+        "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+      > = {
         sendAction: (frame) => {
           sent.push(frame);
         },
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
       return client;
@@ -408,6 +457,9 @@ function emitChatSnapshotWithMessages(input: {
         claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: {
         role: input.access,
@@ -423,6 +475,7 @@ function emitChatSnapshotWithMessages(input: {
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }
@@ -471,6 +524,20 @@ function hostUserMessage(): Message {
   };
 }
 
+const DELIVERED_A2A_MESSAGE_ID = "message-delivered-a2a";
+
+/**
+ * The shape a communication-graph `gui_message` origin ref points at: an A2A
+ * message delivered into the RECEIVING chat, which lands as a user row.
+ */
+function deliveredA2aUserMessage(): Message {
+  return {
+    ...hostUserMessage(),
+    messageId: DELIVERED_A2A_MESSAGE_ID,
+    timestamp: 5,
+  };
+}
+
 function nextStepsAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -493,6 +560,45 @@ function nextStepsAssistantMessage(): Message {
           "Implementation is complete.",
           "",
           "- [] /implementation-validation all",
+          "</TRAYCER_NEXT_STEPS>",
+        ].join("\n"),
+        status: "completed",
+        timestamp: 2,
+        providerNotice: null,
+      },
+    ],
+    timestamp: 2,
+    turnId: "turn-next-steps",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
+// The `$` sibling of the fixture above. Kept separate rather than parameterized
+// because every other next-step case asserts against the `/` prompt text.
+function skillNextStepsAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "next-steps-msg",
+    startedAt: 1,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: "next-steps-block",
+        text: [
+          "<TRAYCER_NEXT_STEPS>",
+          "Implementation is complete.",
+          "",
+          "- [] $traycer-implement Implement the runtime ticket.",
           "</TRAYCER_NEXT_STEPS>",
         ].join("\n"),
         status: "completed",
@@ -622,11 +728,12 @@ function skippedInterviewAssistantMessage(): Message {
 
 function runningActiveTurn(): ChatActiveTurn {
   return {
+    agentMode: "regular",
+    sameTurnSteeringSupported: false,
     turnId: "turn-active",
     status: "running",
     harnessId: "codex",
     model: "gpt-live",
-    agentMode: "regular",
     profileId: null,
     userMessageId: "message-1",
     startedAt: 3,
@@ -682,39 +789,35 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
   return (
     <TestRouterProvider>
-      <VirtuosoMessageListTestingContext.Provider
-        value={{ itemHeight: 120, viewportHeight: 900 }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <RunnerHostProvider
-            runnerHost={
-              new MockRunnerHost({
-                signInUrl: "https://example.com",
-                authnBaseUrl: "https://auth.example.com",
-                localHost: null,
-                hosts: [],
-                workspaceFolderPickerPaths: undefined,
-                hasLocalHost: undefined,
-                traycerCli: undefined,
-              })
-            }
-          >
-            <TooltipProvider>
-              <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {chatVisible ? (
-                    <ChatTile
-                      node={CHAT_ARTIFACT}
-                      viewTabId="tab-test"
-                      isActive
-                    />
-                  ) : null}
-                </TabHostProvider>
-              </TestEpicSessionWrapper>
-            </TooltipProvider>
-          </RunnerHostProvider>
-        </QueryClientProvider>
-      </VirtuosoMessageListTestingContext.Provider>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={
+            new MockRunnerHost({
+              signInUrl: "https://example.com",
+              authnBaseUrl: "https://auth.example.com",
+              localHost: null,
+              hosts: [],
+              workspaceFolderPickerPaths: undefined,
+              hasLocalHost: undefined,
+              traycerCli: undefined,
+            })
+          }
+        >
+          <TooltipProvider>
+            <TestEpicSessionWrapper epicId={EPIC_ID}>
+              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                {chatVisible ? (
+                  <ChatTile
+                    node={CHAT_ARTIFACT}
+                    viewTabId="tab-test"
+                    isActive
+                  />
+                ) : null}
+              </TabHostProvider>
+            </TestEpicSessionWrapper>
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
     </TestRouterProvider>
   );
 }
@@ -723,6 +826,10 @@ async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
     expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
   });
+  // LegendList needs a few frames (plus its scroll-finish fallback) to
+  // bootstrap its initial scroll position and measure rows in jsdom before
+  // any message content actually mounts - see legend-list-test-environment.ts.
+  await settleLegendList();
   await waitFor(() => {
     expect(screen.getByText("Host chat content")).not.toBeNull();
   });
@@ -743,6 +850,17 @@ function queryButtonByAriaLabel(label: string): HTMLButtonElement | null {
     throw new Error(`Expected ${label} to resolve to a button`);
   }
   return button;
+}
+
+function pasteInlineEditText(text: string): void {
+  fireEvent.paste(screen.getByRole("textbox", { name: "Edit message" }), {
+    clipboardData: {
+      files: [],
+      items: [],
+      types: ["text/plain"],
+      getData: (type: string) => (type === "text/plain" ? text : ""),
+    },
+  });
 }
 
 function getButtonContainingText(text: string): HTMLButtonElement {
@@ -777,6 +895,8 @@ function registerWaitingChatHandoff(): void {
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    installLegendListViewportMetrics();
+    installLegendListTestClock();
     window.localStorage.clear();
     useAuthStore.setState({
       status: "signed-in",
@@ -793,6 +913,7 @@ describe("<ChatTile />", () => {
           content: PENDING_DRAFT_CONTENT,
           selection: null,
           resetEpoch: 0,
+          revision: 0,
         },
       },
     });
@@ -818,7 +939,10 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    restoreLegendListTestClock();
+    vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
     chatHarness.teardown();
     useInitialChatHandoffStore.getState().resetForTests();
@@ -849,9 +973,7 @@ describe("<ChatTile />", () => {
 
     renderChatTile();
     // Flush the epic snapshot (fired via setTimeout(0)) + effects.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
@@ -866,7 +988,9 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(chatHarness.streamCreations()).toBe(1);
     });
-    expect(screen.getByRole("status", { name: "Loading chat" })).not.toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Loading agent" }),
+    ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
@@ -896,7 +1020,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
     expect(chatHarness.streamCreations()).toBe(1);
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
-    expect(screen.queryByRole("status", { name: "Loading chat" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading agent" })).toBeNull();
     expect(
       screen
         .getByTestId("host-workspace-selector")
@@ -956,11 +1080,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
           model: "haiku",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1004,7 +1129,7 @@ describe("<ChatTile />", () => {
     expect(frame.fromMessageId).toBe("message-1");
   });
 
-  it("sends edit-user-message from the inline editor with current composer settings", async () => {
+  it("resubmits an unchanged inline message with current composer settings", async () => {
     useComposerRunSettingsStore.setState({
       globalLastRunSettings: QUEUED_SETTINGS,
     });
@@ -1031,7 +1156,12 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
-    fireEvent.click(getButtonByAriaLabel("Send edit"));
+    const sendEditButton = getButtonByAriaLabel("Send edit");
+    if (!(sendEditButton instanceof HTMLButtonElement)) {
+      throw new Error("expected send edit button");
+    }
+    expect(sendEditButton.disabled).toBe(false);
+    fireEvent.click(sendEditButton);
 
     expect(chatHarness.sent).toHaveLength(1);
     const frame = chatHarness.sent[0];
@@ -1048,6 +1178,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     fireEvent.click(getButtonByAriaLabel("Edit message"));
+    pasteInlineEditText(" updated");
     expect(getButtonByAriaLabel("Send edit")).not.toBeNull();
 
     fireEvent.click(getButtonByAriaLabel("Send edit"));
@@ -1115,11 +1246,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
           model: "gpt-live",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1208,7 +1340,7 @@ describe("<ChatTile />", () => {
     await screen.findByText("Implementation is complete.");
     fireEvent.click(screen.getByTestId("assistant-fork-chat"));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
@@ -1228,11 +1360,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
           model: "gpt-live",
-          agentMode: "regular",
           profileId: null,
           userMessageId: "message-1",
           startedAt: 2,
@@ -1438,13 +1571,17 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
     expect(titleInput.value).toBe("Cross Question - Chat 1");
 
-    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    const forkButton = screen.getByRole("button", { name: "Fork" });
+    expect(within(forkButton).getByText(modLabel())).not.toBeNull();
+    expect(within(forkButton).getByText("↵")).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
     const [forkCall] = forkCreateTestState.mutate.mock.calls;
     expect(forkCall[0].forkSource.interviewBlockId).toBe("question-1");
@@ -1722,9 +1859,7 @@ describe("<ChatTile />", () => {
       );
     });
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     act(() => {
       emitChatSnapshotWithMessages({
@@ -1757,9 +1892,68 @@ describe("<ChatTile />", () => {
           content: [
             {
               type: "slashCommand",
-              attrs: { commandName: "implementation-validation" },
+              attrs: {
+                commandName: "implementation-validation",
+                trigger: "/",
+              },
             },
             { type: "text", text: " all" },
+          ],
+        },
+      ],
+    });
+  });
+
+  // A next-step click never touches the composer, so the chip has to come out of
+  // `buildSubmittedChatJSONContent`. When that converter was `/`-only the `$`
+  // prompt stayed prose, which cost more than the pill: with neither a
+  // `slashCommand` node nor a leading `/name` in the text, the host resolved no
+  // invocation at all and the skill silently never ran.
+  it("sends a $-prefixed next step as a skill chip", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skillNextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    const nextStepButton = getButtonContainingText(
+      "$traycer-implement Implement the runtime ticket.",
+    );
+    expect(nextStepButton.disabled).toBe(false);
+
+    fireEvent.click(nextStepButton);
+
+    expect(chatHarness.sent).toHaveLength(1);
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.content).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: {
+                commandName: "traycer-implement",
+                harnessId: "claude",
+                kind: "skill",
+                description: "Implement a ticket",
+                argumentHint: null,
+                path: "/repo/.agents/skills/traycer-implement/SKILL.md",
+                trigger: "$",
+              },
+            },
+            { type: "text", text: " Implement the runtime ticket." },
           ],
         },
       ],
@@ -1937,9 +2131,7 @@ describe("<ChatTile />", () => {
     renderChatTile();
     expect(chatHarness.sent).toHaveLength(0);
 
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
 
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
@@ -1988,9 +2180,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2031,9 +2221,7 @@ describe("<ChatTile />", () => {
     registerWaitingChatHandoff();
 
     renderChatTile();
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await advanceLegendListTime(0);
     await waitFor(() => {
       expect(chatHarness.sent).toHaveLength(1);
     });
@@ -2050,7 +2238,7 @@ describe("<ChatTile />", () => {
         clientActionId: frame.clientActionId,
         action: "send",
         status: "rejected",
-        reason: "Only the chat owner can perform this action.",
+        reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
       });
@@ -2071,7 +2259,7 @@ describe("<ChatTile />", () => {
       Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
     ).toMatchObject({
       status: "failed",
-      failureReason: "Only the chat owner can perform this action.",
+      failureReason: "Only the agent owner can perform this action.",
     });
   });
 
@@ -2095,7 +2283,7 @@ describe("<ChatTile />", () => {
     });
     expect(
       await screen.findByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2113,7 +2301,7 @@ describe("<ChatTile />", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(
       screen.getByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2122,6 +2310,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     const queueItems: ChatQueuedItem[] = [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-same-turn",
         messageId: "message-same-turn",
         message: {
@@ -2140,6 +2329,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-next-turn",
         messageId: "message-next-turn",
         message: {
@@ -2189,11 +2379,12 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: QUEUED_SETTINGS.harnessId,
           model: QUEUED_SETTINGS.model,
-          agentMode: QUEUED_SETTINGS.agentMode,
           profileId: null,
           userMessageId: "message-active",
           startedAt: 4,
@@ -2228,6 +2419,7 @@ describe("<ChatTile />", () => {
     chatHarness.install(
       "owner",
       Array.from({ length: 8 }, (_, index) => ({
+        kind: "prompt" as const,
         queueItemId: `queue-${index}`,
         messageId: `message-${index}`,
         message: {
@@ -2261,6 +2453,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("viewer", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2294,6 +2487,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2356,11 +2550,18 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
+  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
+  // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
+  // which drives the real useChatComposerSubmit + the tile's edit-arm logic
+  // without depending on TipTap DOM key events under jsdom. Plain Enter edit
+  // → queueSettingsUpdate remains covered by the settings-update test above.
+
   it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
     useComposerDraftStore.setState({ drafts: {} });
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2415,6 +2616,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2471,6 +2673,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt" as const,
         queueItemId: "queue-1",
         messageId: "message-queue-1",
         message: {
@@ -2489,6 +2692,7 @@ describe("<ChatTile />", () => {
         updatedAt: 2,
       },
       {
+        kind: "prompt" as const,
         queueItemId: "queue-2",
         messageId: "message-queue-2",
         message: {
@@ -2546,6 +2750,145 @@ describe("<ChatTile />", () => {
     expect(screen.getByTestId("composer-editor").textContent).toBe(
       "pending message",
     );
+  });
+
+  /**
+   * Cross-tile transcript jumps (the communication-graph timeline parks one,
+   * this tile performs it).
+   *
+   * The load-bearing case is a WARM tile: the graph stream and the chat stream
+   * are independent, so the timeline routinely exposes a row before this tile's
+   * own transcript has it. Consuming the request then would burn it - the
+   * transcript marks the request handled and only afterwards finds it has no
+   * index entry - and the row would arrive with nothing left parked.
+   */
+  it("holds a parked transcript jump until its target message streams in", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
+        kind: "message",
+        // A2A rows anchor on the DELIVERED message, which reaches the receiving
+        // chat as a user row - and user rows are the ones keyed by `messageId`.
+        messageId: DELIVERED_A2A_MESSAGE_ID,
+      });
+    });
+
+    // Warm tile, target absent: the request must SURVIVE, not be swallowed.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+    ).not.toBeUndefined();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), deliveredA2aUserMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          CHAT_ARTIFACT.id
+        ],
+      ).toBeUndefined();
+    });
+  });
+
+  it("expands the target card once a parked block jump resolves", async () => {
+    useToolOpenStore.getState().reset(CHAT_ARTIFACT.instanceId);
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
+        kind: "block",
+        blockId: "next-steps-block",
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Nothing opened yet - the block's message has not arrived.
+    expect(
+      useToolOpenStore
+        .getState()
+        .openIds.has(
+          scopedChatOpenId(CHAT_ARTIFACT.instanceId, "next-steps-block"),
+        ),
+    ).toBe(false);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    // The scroll path ran: landing on a card expands it.
+    await waitFor(() => {
+      expect(
+        useToolOpenStore
+          .getState()
+          .openIds.has(
+            scopedChatOpenId(CHAT_ARTIFACT.instanceId, "next-steps-block"),
+          ),
+      ).toBe(true);
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+    ).toBeUndefined();
+  });
+
+  it("drops a parked jump quietly when its target never arrives", async () => {
+    // `shouldAdvanceTime` keeps every other timer in the tile running on the
+    // real clock; only the jump's TTL is fast-forwarded.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      act(() => {
+        useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
+          kind: "message",
+          messageId: "message-that-never-arrives",
+        });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          CHAT_ARTIFACT.id
+        ],
+      ).not.toBeUndefined();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+
+      // Cleared, with no error surfaced: the tile is open on the right agent,
+      // which is the degrade this feature already accepts for anchor-less rows.
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          CHAT_ARTIFACT.id
+        ],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

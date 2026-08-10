@@ -101,6 +101,9 @@ function buildMessengerFactory(
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
           }),
       },
     });
@@ -118,10 +121,13 @@ function mountEpicsList(opts: MountOptions): MountResult {
     traycerCli: undefined,
   });
   if (opts.storedToken !== null) {
-    void host.tokenStore.set({
-      token: opts.storedToken,
-      refreshToken: `${opts.storedToken}-refresh`,
-    });
+    void host.tokenStore.signIn(
+      {
+        token: opts.storedToken,
+        refreshToken: `${opts.storedToken}-refresh`,
+      },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
   }
   setInitialAuthState(opts.authStatus);
 
@@ -156,7 +162,7 @@ function mountEpicsList(opts: MountOptions): MountResult {
           messengerFactory={buildMessengerFactory(opts)}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve([])}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback">loading runtime…</div>}
         >
           {children}

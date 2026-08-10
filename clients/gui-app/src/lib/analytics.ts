@@ -55,6 +55,7 @@ export type AnalyticsCommand =
 export type AnalyticsSettingsSection =
   | "agents"
   | "appearance"
+  | "devices"
   | "diagnostics"
   | "general"
   | "host"
@@ -77,16 +78,73 @@ export type AnalyticsHarness =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
+  | "huggingface"
   | "kilocode"
   | "kimi"
   | "kiro"
+  | "omp"
   | "opencode"
   | "openrouter"
   | "pi"
   | "qwen"
   | "traycer";
 
-export type AnalyticsNotificationCategory = "app-local" | "global" | "host";
+/** Product vocabulary only - never the internal host/app-local/global source
+ * seam. Callers pass `MergedNotificationRow.category`, already mapped at the
+ * projection boundary by `categoryForNotificationSource`. */
+export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
+
+/** Bounded count buckets for every notification-analytics count. `unknown`
+ * is legal only when an exact composite count cannot be formed (host
+ * summary unavailable) - never as a generic "didn't bother computing it"
+ * escape hatch. */
+export type AnalyticsCountBucket =
+  "unknown" | "0" | "1" | "2-5" | "6-20" | "21+";
+
+export type AnalyticsNotificationEntryPoint = Extract<
+  AnalyticsSource,
+  "direct_ui" | "notification"
+>;
+
+export type AnalyticsNotificationHostState = "exact" | "unknown";
+
+export type AnalyticsNotificationFilter =
+  "unread_only" | AnalyticsNotificationCategory;
+
+export type AnalyticsNotificationSection = "attention" | "recent";
+
+export type AnalyticsNotificationSurface = "center" | "toast" | "native";
+
+export type AnalyticsNotificationAcknowledgmentSource =
+  "explicit_action" | "activation";
+
+export type AnalyticsNotificationOutcome = "success" | "failure";
+
+/** Maps a count to one of the fixed buckets `0`, `1`, `2-5`, `6-20`, `21+`.
+ * Pass `null` when the exact composite count cannot be formed (e.g. the host
+ * summary is unavailable) to get `"unknown"` - never derive `"unknown"` from
+ * the numeric value itself. */
+export function analyticsCountBucket(
+  count: number | null,
+): AnalyticsCountBucket {
+  if (count === null) return "unknown";
+  if (count <= 0) return "0";
+  if (count === 1) return "1";
+  if (count <= 5) return "2-5";
+  if (count <= 20) return "6-20";
+  return "21+";
+}
+
+/** Session age of the renderer process at sample time. Resource retention
+ * bugs show up as heap correlating with this bucket, so it is the axis every
+ * resource sample must carry. */
+export type AnalyticsSessionAgeBucket =
+  "under_1h" | "1_to_4h" | "4_to_12h" | "over_12h";
+
+/** Escalating JS-heap pressure bands. `critical` sits below the renderer's
+ * 4 GB old-space ceiling with room to still report before an OOM. */
+export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 
 export type AnalyticsOnboardingStep =
   | "agent-guide"
@@ -115,9 +173,12 @@ export type AnalyticsProvider =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
+  | "huggingface"
   | "kilocode"
   | "kimi"
   | "kiro"
+  | "omp"
   | "opencode"
   | "openrouter"
   | "pi"
@@ -127,12 +188,13 @@ export type AnalyticsProvider =
 export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
+  | "allowPrereleaseUpdates"
   | "artifactIconColorMode"
   | "artifactIconColors"
+  | "chatTurnMinimapSide"
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
-  | "defaultAgentMode"
   | "defaultEditor"
   | "defaultPermission"
   | "defaultReasoning"
@@ -145,6 +207,9 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
+  | "steerOnModEnterEnabled"
+  | "summonHotkeyChord"
+  | "summonHotkeyEnabled"
   | "terminalCursorBlink"
   | "terminalCursorStyle"
   | "terminalFontFamily"
@@ -274,10 +339,12 @@ export enum AnalyticsEvent {
   ShareRoleChanged = "share_role_changed",
   ShareAccessRevoked = "share_access_revoked",
   NotificationCenterOpened = "notification_center_opened",
-  NotificationActivated = "notification_activated",
+  NotificationFilterChanged = "notification_filter_changed",
+  NotificationActivationCompleted = "notification_activation_completed",
   NotificationMarkedRead = "notification_marked_read",
   NotificationsMarkedAllRead = "notifications_marked_all_read",
-  NotificationsCleared = "notifications_cleared",
+  NotificationPageLoaded = "notification_page_loaded",
+  NotificationNewRevealed = "notification_new_revealed",
   TerminalOpened = "terminal_opened",
   TerminalRenamed = "terminal_renamed",
   TerminalKilled = "terminal_killed",
@@ -302,14 +369,31 @@ export enum AnalyticsEvent {
   UpdateInstallGuidanceOpened = "update_install_guidance_opened",
   UpdateFailed = "update_failed",
   ReportIssueOpened = "report_issue_opened",
-  ReportIssueHandedOff = "report_issue_handed_off",
+  ReportIssueBlocked = "report_issue_blocked",
+  ReportIssuePrivateSubmit = "report_issue_private_submit",
+  ReportIssuePublicOpenAttempted = "report_issue_public_open_attempted",
   AppQuitRequested = "app_quit_requested",
   TabCloseBlocked = "tab_close_blocked",
+  AppResourceSample = "app_resource_sample",
+  AppResourcePressure = "app_resource_pressure",
 }
 
 type SourceProperties = { readonly source: AnalyticsSource };
 type BlockedProperties = SourceProperties & {
   readonly blocker: AnalyticsBlocker;
+};
+/**
+ * Shared body of both resource events, so a periodic sample and a pressure
+ * crossing are directly comparable in one query. A `null` measurement means
+ * the runtime cannot report it (no desktop bridge, or a build without
+ * `performance.memory`) - never "we skipped computing it".
+ */
+type ResourceMeasurementProperties = {
+  readonly js_heap_mb: number;
+  readonly js_heap_limit_mb: number | null;
+  readonly heap_slope_mb_per_h: number | null;
+  readonly session_age_bucket: AnalyticsSessionAgeBucket;
+  readonly open_tabs: number;
 };
 type WorkspaceKind = "local" | "unknown" | "worktree";
 export type AnalyticsTargetKind =
@@ -492,7 +576,6 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ChatOpened]: SourceProperties;
   readonly [AnalyticsEvent.ChatMessageSent]: {
     readonly harness: AnalyticsHarness;
-    readonly mode: "epic" | "regular";
   };
   readonly [AnalyticsEvent.ChatMessageEdited]: null;
   readonly [AnalyticsEvent.ChatMessageSuffixDeleted]: null;
@@ -585,16 +668,44 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ShareAccessRevoked]: {
     readonly target: "person" | "team";
   };
-  readonly [AnalyticsEvent.NotificationCenterOpened]: null;
-  readonly [AnalyticsEvent.NotificationActivated]: {
+  readonly [AnalyticsEvent.NotificationCenterOpened]: {
+    readonly entry_point: AnalyticsNotificationEntryPoint;
+    readonly host_state: AnalyticsNotificationHostState;
+    readonly attention_bucket: AnalyticsCountBucket;
+    readonly unread_bucket: AnalyticsCountBucket;
+  };
+  readonly [AnalyticsEvent.NotificationFilterChanged]: {
+    readonly filter: AnalyticsNotificationFilter;
+    readonly enabled: boolean;
+  };
+  readonly [AnalyticsEvent.NotificationActivationCompleted]: {
     readonly category: AnalyticsNotificationCategory;
+    readonly section: AnalyticsNotificationSection;
+    readonly surface: AnalyticsNotificationSurface;
+    readonly outcome: AnalyticsNotificationOutcome;
   };
   readonly [AnalyticsEvent.NotificationMarkedRead]: {
     readonly category: AnalyticsNotificationCategory;
+    readonly acknowledgment_source: AnalyticsNotificationAcknowledgmentSource;
   };
-  readonly [AnalyticsEvent.NotificationsMarkedAllRead]: null;
-  readonly [AnalyticsEvent.NotificationsCleared]: {
-    readonly scope: "all" | "read";
+  readonly [AnalyticsEvent.NotificationsMarkedAllRead]: {
+    readonly affected_count_bucket: AnalyticsCountBucket;
+  };
+  readonly [AnalyticsEvent.NotificationPageLoaded]:
+    | {
+        readonly section: AnalyticsNotificationSection;
+        readonly outcome: "success";
+        readonly result_count_bucket: AnalyticsCountBucket;
+        readonly has_more: boolean;
+      }
+    | {
+        readonly section: AnalyticsNotificationSection;
+        readonly outcome: "failure";
+        readonly result_count_bucket: null;
+        readonly has_more: null;
+      };
+  readonly [AnalyticsEvent.NotificationNewRevealed]: {
+    readonly count_bucket: AnalyticsCountBucket;
   };
   readonly [AnalyticsEvent.TerminalOpened]: SourceProperties & {
     readonly kind: "agent" | "shell";
@@ -647,12 +758,45 @@ export interface AnalyticsEventProperties {
     readonly blocker: AnalyticsBlocker;
   };
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties;
-  readonly [AnalyticsEvent.ReportIssueHandedOff]:
-    | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker }
-    | { readonly outcome: "succeeded"; readonly blocker: null };
+  // Which report type's gate blocked the attempt (ticket 07's evidence gate,
+  // Flow 2 manual opens only) - downstream funnels join this against a later
+  // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
+  // `blocked_action` (review round N1) - the gate guards every report-
+  // producing action, not just Send, so this says which one the user hit.
+  readonly [AnalyticsEvent.ReportIssueBlocked]: {
+    readonly report_type: "bug" | "idea" | "other";
+    readonly blocked_action:
+      "send" | "open_github_issue" | "report_on_github" | "save_bundle";
+  };
+  readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
+    | {
+        readonly outcome: "confirmed";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "unconfirmed";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "failed";
+        readonly blocker: AnalyticsBlocker;
+        readonly attachment_count: number;
+      }
+    | {
+        readonly outcome: "unavailable";
+        readonly blocker: null;
+        readonly attachment_count: number;
+      };
+  readonly [AnalyticsEvent.ReportIssuePublicOpenAttempted]: null;
   readonly [AnalyticsEvent.AppQuitRequested]: SourceProperties;
   readonly [AnalyticsEvent.TabCloseBlocked]: {
     readonly decision: "cancel" | "discard";
+  };
+  readonly [AnalyticsEvent.AppResourceSample]: ResourceMeasurementProperties;
+  readonly [AnalyticsEvent.AppResourcePressure]: ResourceMeasurementProperties & {
+    readonly pressure_tier: AnalyticsResourcePressureTier;
   };
 }
 
@@ -756,9 +900,12 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
+  "huggingface",
   "kilocode",
   "kimi",
   "kiro",
+  "omp",
   "opencode",
   "openrouter",
   "pi",
@@ -775,9 +922,12 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
+  "huggingface",
   "kilocode",
   "kimi",
   "kiro",
+  "omp",
   "opencode",
   "openrouter",
   "pi",
@@ -799,12 +949,12 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>([
 ]);
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "allowPrereleaseUpdates",
   "artifactIconColorMode",
   "artifactIconColors",
   "codeFontFamily",
   "codeFontSize",
   "composerMode",
-  "defaultAgentMode",
   "defaultEditor",
   "defaultPermission",
   "defaultReasoning",
@@ -869,6 +1019,64 @@ const ANALYTICS_TARGETS = new Set<string>([
   "task",
   "terminal",
   "terminal_agent",
+]);
+
+const ANALYTICS_COUNT_BUCKETS = new Set<string>([
+  "unknown",
+  "0",
+  "1",
+  "2-5",
+  "6-20",
+  "21+",
+]);
+
+/** `unknown` is reserved for a composite count that genuinely cannot be
+ * formed (e.g. the host summary is unavailable). A completed page load and a
+ * revealed arrival count are always derived from local, exact data, so
+ * neither may report `unknown`. */
+const ANALYTICS_EXACT_COUNT_BUCKETS = new Set<string>(
+  [...ANALYTICS_COUNT_BUCKETS].filter((bucket) => bucket !== "unknown"),
+);
+
+const ANALYTICS_NOTIFICATION_CATEGORIES = new Set<string>([
+  "task",
+  "collaboration",
+  "system",
+]);
+
+const ANALYTICS_NOTIFICATION_ENTRY_POINTS = new Set<string>([
+  "direct_ui",
+  "notification",
+]);
+
+const ANALYTICS_NOTIFICATION_HOST_STATES = new Set<string>([
+  "exact",
+  "unknown",
+]);
+
+const ANALYTICS_NOTIFICATION_FILTERS = new Set<string>([
+  "unread_only",
+  "task",
+  "collaboration",
+  "system",
+]);
+
+const ANALYTICS_NOTIFICATION_ACKNOWLEDGMENT_SOURCES = new Set<string>([
+  "explicit_action",
+  "activation",
+]);
+
+const ANALYTICS_SESSION_AGE_BUCKETS = new Set<string>([
+  "under_1h",
+  "1_to_4h",
+  "4_to_12h",
+  "over_12h",
+]);
+
+const ANALYTICS_RESOURCE_PRESSURE_TIERS = new Set<string>([
+  "elevated",
+  "high",
+  "critical",
 ]);
 
 const ANALYTICS_EVENTS = new Set<string>(Object.values(AnalyticsEvent));
@@ -1009,7 +1217,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["requested_count", "succeeded_count", "failed_count"],
   ),
   ...eventKeyEntries([AnalyticsEvent.SetupScriptsSaved], ["script_count"]),
-  ...eventKeyEntries([AnalyticsEvent.ChatMessageSent], ["harness", "mode"]),
+  ...eventKeyEntries([AnalyticsEvent.ChatMessageSent], ["harness"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ChatForked],
     ["source", "include_history"],
@@ -1066,13 +1274,33 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["target", "role"],
   ),
   ...eventKeyEntries(
-    [
-      AnalyticsEvent.NotificationActivated,
-      AnalyticsEvent.NotificationMarkedRead,
-    ],
-    ["category"],
+    [AnalyticsEvent.NotificationCenterOpened],
+    ["entry_point", "host_state", "attention_bucket", "unread_bucket"],
   ),
-  ...eventKeyEntries([AnalyticsEvent.NotificationsCleared], ["scope"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationFilterChanged],
+    ["filter", "enabled"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationActivationCompleted],
+    ["category", "section", "surface", "outcome"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationMarkedRead],
+    ["category", "acknowledgment_source"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationsMarkedAllRead],
+    ["affected_count_bucket"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationPageLoaded],
+    ["section", "outcome", "result_count_bucket", "has_more"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationNewRevealed],
+    ["count_bucket"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.TerminalOpened], ["source", "kind"]),
   ...eventKeyEntries(
     [AnalyticsEvent.TerminalRenamed, AnalyticsEvent.TerminalKilled],
@@ -1097,10 +1325,35 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["source", "section", "setting"],
   ),
   ...eventKeyEntries(
-    [AnalyticsEvent.ReportIssueHandedOff],
-    ["outcome", "blocker"],
+    [AnalyticsEvent.ReportIssueBlocked],
+    ["report_type", "blocked_action"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ReportIssuePrivateSubmit],
+    ["outcome", "blocker", "attachment_count"],
   ),
   ...eventKeyEntries([AnalyticsEvent.TabCloseBlocked], ["decision"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.AppResourceSample],
+    [
+      "js_heap_mb",
+      "js_heap_limit_mb",
+      "heap_slope_mb_per_h",
+      "session_age_bucket",
+      "open_tabs",
+    ],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.AppResourcePressure],
+    [
+      "pressure_tier",
+      "js_heap_mb",
+      "js_heap_limit_mb",
+      "heap_slope_mb_per_h",
+      "session_age_bucket",
+      "open_tabs",
+    ],
+  ),
 ]);
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
@@ -1121,10 +1374,9 @@ const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.CommentResolved,
   AnalyticsEvent.CommentReopened,
   AnalyticsEvent.CommentDeleted,
-  AnalyticsEvent.NotificationCenterOpened,
-  AnalyticsEvent.NotificationsMarkedAllRead,
   AnalyticsEvent.VoiceDictationCancelled,
   AnalyticsEvent.UpdateDownloadSucceeded,
+  AnalyticsEvent.ReportIssuePublicOpenAttempted,
 ]);
 
 function eventPropertyKeys(
@@ -1151,9 +1403,16 @@ export function analyticsEventContractIsComplete(): boolean {
 const EXACT_PROPERTY_VALUES: {
   readonly [key: string]: ReadonlySet<string> | undefined;
 } = {
-  category: new Set(["app-local", "global", "host"]),
+  acknowledgment_source: ANALYTICS_NOTIFICATION_ACKNOWLEDGMENT_SOURCES,
+  affected_count_bucket: ANALYTICS_COUNT_BUCKETS,
+  attention_bucket: ANALYTICS_COUNT_BUCKETS,
+  category: ANALYTICS_NOTIFICATION_CATEGORIES,
   command: ANALYTICS_COMMANDS,
   context: new Set(["personal", "team"]),
+  count_bucket: ANALYTICS_COUNT_BUCKETS,
+  entry_point: ANALYTICS_NOTIFICATION_ENTRY_POINTS,
+  filter: ANALYTICS_NOTIFICATION_FILTERS,
+  host_state: ANALYTICS_NOTIFICATION_HOST_STATES,
   operation: new Set([
     "ambient_drift",
     "api_key",
@@ -1173,15 +1432,18 @@ const EXACT_PROPERTY_VALUES: {
   launch_reason: new Set(["normal", "update_restart"]),
   last_step: ANALYTICS_ONBOARDING_STEPS,
   permission: new Set(["denied", "granted", "unavailable"]),
+  pressure_tier: ANALYTICS_RESOURCE_PRESSURE_TIERS,
   provider: ANALYTICS_PROVIDERS,
   role: new Set(["editor", "owner", "viewer"]),
   section: ANALYTICS_SETTINGS_SECTIONS,
+  session_age_bucket: ANALYTICS_SESSION_AGE_BUCKETS,
   setting: ANALYTICS_SETTINGS,
   source: ANALYTICS_SOURCES,
   step: ANALYTICS_ONBOARDING_STEPS,
   surface: new Set(["chat", "draft"]),
   theme: ANALYTICS_THEMES,
   to: ANALYTICS_HARNESSES,
+  unread_bucket: ANALYTICS_COUNT_BUCKETS,
   workspace_kind: new Set(["local", "unknown", "worktree"]),
 };
 
@@ -1194,6 +1456,11 @@ function eventValueEntries(
 }
 
 const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
+  ...eventValueEntries(
+    [AnalyticsEvent.NotificationNewRevealed],
+    "count_bucket",
+    ANALYTICS_EXACT_COUNT_BUCKETS,
+  ),
   ...eventValueEntries(
     [AnalyticsEvent.OnboardingStarted],
     "mode",
@@ -1217,11 +1484,6 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     ],
     "mode",
     new Set(["chat", "terminal_agent"]),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.ChatMessageSent],
-    "mode",
-    new Set(["epic", "regular"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
@@ -1264,9 +1526,25 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["all", "file"]),
   ),
   ...eventValueEntries(
-    [AnalyticsEvent.NotificationsCleared],
-    "scope",
-    new Set(["all", "read"]),
+    [
+      AnalyticsEvent.NotificationActivationCompleted,
+      AnalyticsEvent.NotificationPageLoaded,
+    ],
+    "section",
+    new Set(["attention", "recent"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.NotificationActivationCompleted],
+    "surface",
+    new Set(["center", "toast", "native"]),
+  ),
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.NotificationActivationCompleted,
+      AnalyticsEvent.NotificationPageLoaded,
+    ],
+    "outcome",
+    new Set(["success", "failure"]),
   ),
   ...eventValueEntries(
     [
@@ -1316,9 +1594,24 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["person", "team"]),
   ),
   ...eventValueEntries(
-    [AnalyticsEvent.WorktreeDeleted, AnalyticsEvent.ReportIssueHandedOff],
+    [AnalyticsEvent.WorktreeDeleted],
     "outcome",
     new Set(["failed", "succeeded"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssuePrivateSubmit],
+    "outcome",
+    new Set(["confirmed", "unconfirmed", "failed", "unavailable"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    "report_type",
+    new Set(["bug", "idea", "other"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssueBlocked],
+    "blocked_action",
+    new Set(["send", "open_github_issue", "report_on_github", "save_bundle"]),
   ),
 ]);
 
@@ -1326,6 +1619,7 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
   "cascade",
   "cleanup_worktrees",
   "customized",
+  "enabled",
   "has_mention",
   "include_history",
   "restored_tabs",
@@ -1336,12 +1630,27 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
 const COUNT_PROPERTY_KEYS = new Set<string>([
   "answer_count",
   "artifact_count",
+  "attachment_count",
   "failed_count",
   "file_count",
+  "open_tabs",
   "requested_count",
   "script_count",
   "succeeded_count",
   "workspace_count",
+]);
+
+/**
+ * Resource gauges, as distinct from `COUNT_PROPERTY_KEYS`. A count is a
+ * non-negative integer tally; a measure is a sampled magnitude that is
+ * legitimately fractional (CPU percent), legitimately negative (a heap slope
+ * while memory is being released), and legitimately absent (`null` when the
+ * runtime cannot report it).
+ */
+const MEASURE_PROPERTY_KEYS = new Set<string>([
+  "heap_slope_mb_per_h",
+  "js_heap_limit_mb",
+  "js_heap_mb",
 ]);
 
 function analyticsPropertyHasValidator(
@@ -1349,10 +1658,10 @@ function analyticsPropertyHasValidator(
   key: string,
 ): boolean {
   return (
-    key === "blocker" ||
-    key === "status" ||
+    EVENT_SCOPED_PROPERTY_KEYS.has(key) ||
     BOOLEAN_PROPERTY_KEYS.has(key) ||
     COUNT_PROPERTY_KEYS.has(key) ||
+    MEASURE_PROPERTY_KEYS.has(key) ||
     EVENT_EXACT_PROPERTY_VALUES.has(`${event}:${key}`) ||
     EXACT_PROPERTY_VALUES[key] !== undefined
   );
@@ -1368,23 +1677,65 @@ function isAnalyticsCount(value: unknown): boolean {
   return count >= 0 && count <= 10_000;
 }
 
+/** `null` is a first-class value here: it records "this runtime cannot
+ * measure it", which is different from a zero reading. Non-finite values are
+ * a sampling bug and are rejected rather than shipped as `NaN`. */
+function isAnalyticsMeasure(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  return Math.abs(value) <= 1_000_000;
+}
+
+/**
+ * Keys whose validity depends on which event carries them - each admits
+ * `null` only for the specific events where the absence is meaningful. Held
+ * as one set so the validator and `analyticsPropertyHasValidator` cannot
+ * drift apart on which keys are event-scoped.
+ */
+const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
+  "blocker",
+  "has_more",
+  "result_count_bucket",
+  "status",
+]);
+
+function isEventScopedPropertyValue(
+  event: AnalyticsEvent,
+  key: string,
+  value: unknown,
+): boolean {
+  if (key === "blocker") {
+    if (value === null) {
+      return (
+        event === AnalyticsEvent.WorktreeDeleted ||
+        event === AnalyticsEvent.ReportIssuePrivateSubmit
+      );
+    }
+    return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
+  }
+  if (key === "result_count_bucket") {
+    if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
+    return typeof value === "string" && ANALYTICS_COUNT_BUCKETS.has(value);
+  }
+  if (key === "has_more") {
+    if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
+    return typeof value === "boolean";
+  }
+  if (key === "status") return isAnalyticsStatus(value);
+  return false;
+}
+
 function isAnalyticsPropertyValue(
   event: AnalyticsEvent,
   key: string,
   value: unknown,
 ): value is AnalyticsPropertyValue {
-  if (key === "blocker") {
-    if (value === null) {
-      return (
-        event === AnalyticsEvent.WorktreeDeleted ||
-        event === AnalyticsEvent.ReportIssueHandedOff
-      );
-    }
-    return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
+  if (EVENT_SCOPED_PROPERTY_KEYS.has(key)) {
+    return isEventScopedPropertyValue(event, key, value);
   }
-  if (key === "status") return isAnalyticsStatus(value);
   if (BOOLEAN_PROPERTY_KEYS.has(key)) return typeof value === "boolean";
   if (COUNT_PROPERTY_KEYS.has(key)) return isAnalyticsCount(value);
+  if (MEASURE_PROPERTY_KEYS.has(key)) return isAnalyticsMeasure(value);
   const allowed =
     EVENT_EXACT_PROPERTY_VALUES.get(`${event}:${key}`) ??
     EXACT_PROPERTY_VALUES[key];
@@ -1393,19 +1744,37 @@ function isAnalyticsPropertyValue(
   );
 }
 
+function analyticsOutcomeBlockerPairIsValid(
+  properties: Record<string, unknown>,
+  successOutcomes: ReadonlySet<string>,
+): boolean {
+  if (
+    typeof properties.outcome === "string" &&
+    successOutcomes.has(properties.outcome)
+  ) {
+    return properties.blocker === null;
+  }
+  return (
+    properties.outcome === "failed" &&
+    typeof properties.blocker === "string" &&
+    ANALYTICS_BLOCKERS.has(properties.blocker)
+  );
+}
+
 function analyticsPropertiesAreRelationallyValid(
   event: AnalyticsEvent,
   properties: Record<string, unknown>,
 ): boolean {
-  if (
-    event === AnalyticsEvent.WorktreeDeleted ||
-    event === AnalyticsEvent.ReportIssueHandedOff
-  ) {
-    return (
-      (properties.outcome === "succeeded" && properties.blocker === null) ||
-      (properties.outcome === "failed" &&
-        typeof properties.blocker === "string" &&
-        ANALYTICS_BLOCKERS.has(properties.blocker))
+  if (event === AnalyticsEvent.WorktreeDeleted) {
+    return analyticsOutcomeBlockerPairIsValid(
+      properties,
+      new Set(["succeeded"]),
+    );
+  }
+  if (event === AnalyticsEvent.ReportIssuePrivateSubmit) {
+    return analyticsOutcomeBlockerPairIsValid(
+      properties,
+      new Set(["confirmed", "unconfirmed", "unavailable"]),
     );
   }
   if (event === AnalyticsEvent.WorktreesBulkDeleted) {
@@ -1414,8 +1783,29 @@ function analyticsPropertiesAreRelationallyValid(
       Number(properties.succeeded_count) + Number(properties.failed_count)
     );
   }
+  if (event === AnalyticsEvent.NotificationPageLoaded) {
+    return (
+      (properties.outcome === "success" &&
+        typeof properties.result_count_bucket === "string" &&
+        ANALYTICS_EXACT_COUNT_BUCKETS.has(properties.result_count_bucket) &&
+        typeof properties.has_more === "boolean") ||
+      (properties.outcome === "failure" &&
+        properties.result_count_bucket === null &&
+        properties.has_more === null)
+    );
+  }
   return true;
 }
+
+const NOTIFICATION_STRICT_EVENTS = new Set<AnalyticsEvent>([
+  AnalyticsEvent.NotificationCenterOpened,
+  AnalyticsEvent.NotificationFilterChanged,
+  AnalyticsEvent.NotificationActivationCompleted,
+  AnalyticsEvent.NotificationMarkedRead,
+  AnalyticsEvent.NotificationsMarkedAllRead,
+  AnalyticsEvent.NotificationPageLoaded,
+  AnalyticsEvent.NotificationNewRevealed,
+]);
 
 export function sanitizeAnalyticsProperties(
   event: AnalyticsEvent,
@@ -1424,6 +1814,18 @@ export function sanitizeAnalyticsProperties(
   const record: Record<string, unknown> = { ...properties };
   const expectedKeys = eventPropertyKeys(event);
   if (expectedKeys === null) return null;
+  // The notification event family rejects rather than silently strips: a
+  // property outside its exact allowlist is a caller bug (e.g. an
+  // accidentally attached feed/host identifier), not extra data to discard
+  // quietly. Other events keep the historical strip-only behavior other call
+  // sites already rely on (see "strips identifiers, paths, content, queries,
+  // and raw errors at runtime").
+  if (
+    NOTIFICATION_STRICT_EVENTS.has(event) &&
+    Object.keys(record).length !== expectedKeys.length
+  ) {
+    return null;
+  }
   if (
     expectedKeys.some(
       (key) =>
@@ -1691,6 +2093,76 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
     ANALYTICS_BLOCKER_PATTERNS.find(({ pattern }) => pattern.test(text))
       ?.blocker ?? "unknown"
   );
+}
+
+/**
+ * Maps the four-state delivery result onto private-submit analytics
+ * outcomes. `unconfirmed` never claims failure and never claims delivery -
+ * it gets its own outcome rather than collapsing onto `confirmed` or
+ * `failed`. A structured `failed` result (capture threw, DSN rejected) has no
+ * `Error` to classify, so it gets a fixed `unknown` blocker; a thrown
+ * exception from the mutation itself still goes through
+ * `analyticsBlockerFromError` on the `onError` path.
+ *
+ * `attachmentCount` (ticket 08 / T5) is the number of images on the request
+ * that produced `result` - a low-cardinality integer the count-property
+ * validator already accepts, so it rides along on every outcome rather than
+ * needing its own event.
+ */
+export function reportIssuePrivateSubmitPropertiesFromResult(
+  result:
+    | { readonly status: "delivered" }
+    | { readonly status: "unconfirmed" }
+    | { readonly status: "unavailable" }
+    | { readonly status: "failed" },
+  attachmentCount: number,
+):
+  | {
+      readonly outcome: "confirmed";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "unconfirmed";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "unavailable";
+      readonly blocker: null;
+      readonly attachment_count: number;
+    }
+  | {
+      readonly outcome: "failed";
+      readonly blocker: AnalyticsBlocker;
+      readonly attachment_count: number;
+    } {
+  switch (result.status) {
+    case "delivered":
+      return {
+        outcome: "confirmed",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
+    case "unconfirmed":
+      return {
+        outcome: "unconfirmed",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
+    case "unavailable":
+      return {
+        outcome: "unavailable",
+        blocker: null,
+        attachment_count: attachmentCount,
+      };
+    case "failed":
+      return {
+        outcome: "failed",
+        blocker: "unknown",
+        attachment_count: attachmentCount,
+      };
+  }
 }
 
 /**

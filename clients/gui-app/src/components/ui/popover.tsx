@@ -3,6 +3,8 @@
 import * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
 
 function Popover({
@@ -30,8 +32,20 @@ function PopoverContent({
   align = "center",
   sideOffset = 4,
   container,
+  onCloseAutoFocus,
   ...props
 }: PopoverContentProps) {
+  // Keep a pane's controlled root open state intact while its document portal is
+  // not allowed to present over the focused split partner: un-present by
+  // unmounting the portal (leaving the root open, so it re-presents on refocus).
+  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
+  // Concealed region (see `portal-concealment-context`): the portal's DOM
+  // escapes the region's own concealment, so it un-presents here and
+  // re-presents intact when the region returns.
+  const concealed = usePortalConcealed();
+  if (!paneFocused || concealed) return null;
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
@@ -42,6 +56,7 @@ function PopoverContent({
           "z-50 flex w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
+        onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       />
     </PopoverPrimitive.Portal>

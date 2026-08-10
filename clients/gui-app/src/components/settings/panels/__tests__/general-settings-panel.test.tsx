@@ -18,6 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
 import {
   useMigrationRunStore,
@@ -26,13 +27,11 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import {
-  localSnapshotClearScopeKey,
-  useLocalSnapshotClearStore,
-} from "@/stores/settings/local-snapshot-clear-store";
+import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 
 interface CapturedHostQueryArgs {
   readonly method: string;
+  readonly client: TestHostClient | null;
 }
 
 interface ClearLocalSnapshotsContext {
@@ -51,6 +50,7 @@ interface CapturedClearLocalSnapshotsOptions {
 
 interface CapturedHostMutationArgs {
   readonly method: string;
+  readonly client: TestHostClient | null;
   readonly options: CapturedClearLocalSnapshotsOptions;
 }
 
@@ -67,6 +67,18 @@ interface HostQueryMocks {
   capturedQueryArgs: CapturedHostQueryArgs | null;
   capturedMutationArgs: CapturedHostMutationArgs | null;
   getActiveHostId: Mock<() => string | null>;
+  activeHostId: string;
+  lastTransientTarget: { readonly hostId: string } | null;
+  directoryEntries: ReadonlyArray<{
+    readonly hostId: string;
+    readonly label: string;
+    readonly status: string;
+    readonly websocketUrl: string;
+  }>;
+}
+
+interface TestHostClient {
+  readonly getActiveHostId: () => string | null;
 }
 
 const INITIAL_COUNTS = {
@@ -121,6 +133,13 @@ interface TestRunnerHost {
   hostManagement: { uninstallTraycer: Mock } | null;
 }
 
+interface TestFeatureSettingsBridge {
+  readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
+  readonly setAgentRolesEnabled: Mock<
+    (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
+  >;
+}
+
 const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
   current: { hostManagement: null },
 }));
@@ -138,6 +157,22 @@ const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   capturedQueryArgs: null,
   capturedMutationArgs: null,
   getActiveHostId: vi.fn(() => "host-test"),
+  activeHostId: "host-test",
+  lastTransientTarget: null,
+  directoryEntries: [
+    {
+      hostId: "host-test",
+      label: "Local host",
+      status: "available",
+      websocketUrl: "ws://local.invalid",
+    },
+    {
+      hostId: "remote-host",
+      label: "Remote host",
+      status: "available",
+      websocketUrl: "ws://remote.invalid",
+    },
+  ],
 }));
 
 vi.mock("@/components/migration/migration-run-handle", () => ({
@@ -153,6 +188,25 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
     getActiveHostId: hostQueryMocks.getActiveHostId,
   }),
+  useHostBinding: () => null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => hostQueryMocks.activeHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: hostQueryMocks.directoryEntries }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: (target: { readonly hostId: string } | null) => {
+    hostQueryMocks.lastTransientTarget = target;
+    if (target === null) return null;
+    return {
+      getActiveHostId: () => target.hostId,
+    };
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -228,7 +282,23 @@ describe("GeneralSettingsPanel", () => {
     hostQueryMocks.mutationResult.isPending = false;
     hostQueryMocks.capturedQueryArgs = null;
     hostQueryMocks.capturedMutationArgs = null;
+    hostQueryMocks.activeHostId = "host-test";
+    hostQueryMocks.lastTransientTarget = null;
     hostQueryMocks.getActiveHostId.mockReturnValue("host-test");
+    hostQueryMocks.directoryEntries = [
+      {
+        hostId: "host-test",
+        label: "Local host",
+        status: "available",
+        websocketUrl: "ws://local.invalid",
+      },
+      {
+        hostId: "remote-host",
+        label: "Remote host",
+        status: "available",
+        websocketUrl: "ws://remote.invalid",
+      },
+    ];
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
     runnerHostMock.current = { hostManagement: null };
@@ -262,6 +332,83 @@ describe("GeneralSettingsPanel", () => {
     useAuthStore.getState().setSignedOut();
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    delete (globalThis as { runnerHost?: unknown }).runnerHost;
+  });
+
+  it("hydrates and updates Agent roles under Experimental", async () => {
+    let agentRoles = false;
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles })),
+      setAgentRolesEnabled: vi.fn((enabled) => {
+        agentRoles = enabled;
+        return Promise.resolve({ agentRoles });
+      }),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    expect(screen.getByText("Experimental")).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Agent roles" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),
+    );
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
+    await waitFor(() => expect(bridge.get).toHaveBeenCalledTimes(2));
+  });
+
+  it("surfaces feature-settings read failures and keeps Agent roles disabled", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.reject(new Error("invalid config"))),
+      setAgentRolesEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: enabled }),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    expect(
+      await screen.findByText(/Couldn't read feature settings/),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("switch", { name: "Agent roles" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(bridge.setAgentRolesEnabled).not.toHaveBeenCalled();
+  });
+
+  it("preserves the Agent roles value when the settings write fails", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      setAgentRolesEnabled: vi.fn(() =>
+        Promise.reject(new Error("write failed")),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", { name: "Agent roles" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),
+    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
   it("renders the Data migration row and starts the stream on click", () => {
@@ -323,6 +470,20 @@ describe("GeneralSettingsPanel", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
   });
 
+  it("labels the steering chord with the platform modifier", () => {
+    renderPanel();
+
+    const chord = `${modLabel()}+Enter`;
+    expect(
+      screen.getByRole("switch", { name: `Steer with ${chord}` }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        `While a turn is running on a supported harness, ${chord} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`,
+      ),
+    ).toBeTruthy();
+  });
+
   it("navigates to replay onboarding without clearing first-run completion", () => {
     useOnboardingStore.setState({ completedAt: 123, step: 4 });
 
@@ -356,75 +517,20 @@ describe("GeneralSettingsPanel", () => {
     ).toBeTruthy();
   });
 
-  it("renders file edit snapshot storage size from the host query", () => {
+  // The Danger Zone used to mix three scopes in one red box: one machine's
+  // snapshots, this device's installation, and this app's state. Only the last
+  // is app-global, so it is the only one that stays; the other two live on the
+  // machine's own page, where the title already names the target.
+  it("keeps only the app-global destructive action", () => {
     renderPanel();
 
-    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
     expect(
-      screen.getByTestId("settings-local-snapshots-size").textContent,
-    ).toBe("432 MB");
-    expect(hostQueryMocks.capturedQueryArgs?.method).toBe(
-      "snapshots.getLocalStorageSize",
-    );
-  });
-
-  it("opens confirmation and clears file edit snapshots through the mutation", () => {
-    renderPanel();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Clear file edit snapshots" }),
-    );
-
-    expect(screen.getByText("Clear file edit snapshots?")).toBeTruthy();
-    fireEvent.click(getDialogButton("Clear file edit snapshots"));
-
-    expect(hostQueryMocks.mutationResult.mutate).toHaveBeenCalledWith({});
-    expect(hostQueryMocks.capturedMutationArgs?.method).toBe(
-      "snapshots.clearLocalSnapshots",
-    );
-  });
-
-  it("invalidates size and shows a toast after clearing file edit snapshots", () => {
-    const queryClient = renderPanel();
-    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
-    const now = vi.spyOn(Date, "now").mockReturnValue(9000);
-    const captured = hostQueryMocks.capturedMutationArgs;
-    if (captured === null) {
-      throw new Error("expected snapshots mutation");
-    }
-
-    const context = captured.options.onMutate();
-    captured.options.onSuccess({ clearedBytes: 1024 }, {}, context);
-
-    expect(context).toEqual({
-      hostId: "host-test",
-      userId: "owner-test",
-    });
-    expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ["host", "host-test", "snapshots.getLocalStorageSize", {}],
-    });
-    expect(toast.success).toHaveBeenCalledWith("Cleared file edit snapshots", {
-      description: "1 KB removed.",
-    });
+      screen.getByRole("button", { name: "Clear local app state" }),
+    ).toBeTruthy();
     expect(
-      useLocalSnapshotClearStore.getState().clearedAtByScope[
-        localSnapshotClearScopeKey("owner-test", "host-test")
-      ],
-    ).toBe(9000);
-    now.mockRestore();
-  });
-
-  it("renders the local app state action distinct from snapshots", () => {
-    renderPanel();
-
-    const button = screen.getByRole("button", {
-      name: "Clear local app state",
-    });
-    expect(button).toBeTruthy();
-    // Distinct control from the host-side snapshot clear.
-    expect(
-      screen.getByRole("button", { name: "Clear file edit snapshots" }),
-    ).not.toBe(button);
+      screen.queryByRole("button", { name: "Clear file edit snapshots" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
   });
 
   it("opens the confirm dialog when clicking Clear local app state", () => {
@@ -532,37 +638,155 @@ describe("GeneralSettingsPanel", () => {
     });
   });
 
-  it("keeps local destructive actions visible when host management is unavailable", () => {
-    runnerHostMock.current = { hostManagement: null };
+  it("renders the four named section headers in order", () => {
     renderPanel();
-    expect(screen.getByTestId("settings-danger-zone")).toBeTruthy();
-    expect(screen.getByText("File Edit Snapshots")).toBeTruthy();
-    expect(screen.getByText("Local app state")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Remove Traycer" })).toBeNull();
+
+    const chat = screen.getByText("Chat & composer");
+    const running = screen.getByText("Running agents");
+    const setup = screen.getByText("Setup & migration");
+    const danger = screen.getByText("Danger Zone");
+
+    expect(documentPosition(chat, running)).toBe("before");
+    expect(documentPosition(running, setup)).toBe("before");
+    expect(documentPosition(setup, danger)).toBe("before");
   });
 
-  it("removes Traycer from the Danger Zone after confirmation", async () => {
-    const uninstallTraycer = vi.fn(() =>
-      Promise.resolve({
-        removedHost: true,
-        deregisteredService: true,
-        removedLoginItem: true,
-      }),
-    );
-    runnerHostMock.current = { hostManagement: { uninstallTraycer } };
+  it("renders named sections as h2 headings outside separate bordered cards", () => {
     renderPanel();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove Traycer" }));
-    fireEvent.click(getDialogButton("Remove Traycer"));
+    // SettingsGroup renders real <h2> labels, not row-shaped bands inside a
+    // single shared card. Each group is its own <section>; the h2 and the
+    // bordered rows-container are siblings.
+    const sectionTitles = [
+      "Chat & composer",
+      "Running agents",
+      "Setup & migration",
+      "Danger Zone",
+    ] as const;
 
-    await waitFor(() => {
-      expect(uninstallTraycer).toHaveBeenCalledTimes(1);
-    });
-    // The remove row switches to the success/quit state.
-    await screen.findByText("Traycer removed");
-    expect(screen.getByRole("button", { name: "Quit Traycer" })).toBeTruthy();
+    const headings = sectionTitles.map((title) =>
+      screen.getByRole("heading", { level: 2, name: title }),
+    );
+
+    for (const heading of headings) {
+      const section = heading.closest("section");
+      expect(section).not.toBeNull();
+      // Heading sits outside the bordered card (sibling of the card div).
+      expect(heading.closest("div.rounded-lg")).toBeNull();
+      expect(section?.contains(heading)).toBe(true);
+    }
+
+    // Representative rows live inside each section's card, not the heading.
+    const voice = screen.getByText("Voice input");
+    const preventSleep = screen.getByText("Prevent sleep while running");
+    const productTour = screen.getByText("Product tour");
+    const snapshots = screen.getByText("Local app state");
+
+    const chatHeading = headings[0];
+    const runningHeading = headings[1];
+    const setupHeading = headings[2];
+    const dangerHeading = headings[3];
+
+    // Heading and its rows do NOT share the closest bordered card.
+    expect(chatHeading.closest("div.rounded-lg")).toBeNull();
+    expect(voice.closest("div.rounded-lg")).not.toBeNull();
+    expect(voice.closest("div.rounded-lg")).not.toBe(
+      chatHeading.closest("div.rounded-lg"),
+    );
+
+    // Two rows in the same group DO share the bordered card.
+    const quote = screen.getByText("Quote reply on text selection");
+    expect(voice.closest("div.rounded-lg")).toBe(
+      quote.closest("div.rounded-lg"),
+    );
+
+    // Rows from different groups do NOT share a card.
+    expect(voice.closest("div.rounded-lg")).not.toBe(
+      preventSleep.closest("div.rounded-lg"),
+    );
+    expect(preventSleep.closest("div.rounded-lg")).not.toBe(
+      productTour.closest("div.rounded-lg"),
+    );
+    expect(productTour.closest("div.rounded-lg")).not.toBe(
+      snapshots.closest("div.rounded-lg"),
+    );
+
+    // Each heading's section owns its representative row.
+    expect(chatHeading.closest("section")).toBe(voice.closest("section"));
+    expect(runningHeading.closest("section")).toBe(
+      preventSleep.closest("section"),
+    );
+    expect(setupHeading.closest("section")).toBe(
+      productTour.closest("section"),
+    );
+    expect(dangerHeading.closest("section")).toBe(snapshots.closest("section"));
+    // Distinct sections per group.
+    expect(chatHeading.closest("section")).not.toBe(
+      runningHeading.closest("section"),
+    );
+  });
+
+  it("places representative rows under the correct section headers", () => {
+    renderPanel();
+
+    const chat = screen.getByText("Chat & composer");
+    const running = screen.getByText("Running agents");
+    const setup = screen.getByText("Setup & migration");
+    const danger = screen.getByText("Danger Zone");
+
+    const voice = screen.getByText("Voice input");
+    const quote = screen.getByText("Quote reply on text selection");
+    const pin = screen.getByText("Pin context usage breakdown");
+    const preventSleep = screen.getByText("Prevent sleep while running");
+    const globalResources = screen.getByText("Show global resources button");
+    const productTour = screen.getByText("Product tour");
+    const dataMigration = screen.getByText("Data migration");
+    const snapshots = screen.getByText("Local app state");
+
+    // Chat & composer rows sit between that header and Running agents.
+    expect(documentPosition(chat, voice)).toBe("before");
+    expect(documentPosition(voice, quote)).toBe("before");
+    expect(documentPosition(quote, pin)).toBe("before");
+    expect(documentPosition(pin, running)).toBe("before");
+
+    // Running agents rows sit between that header and Setup & migration.
+    expect(documentPosition(running, preventSleep)).toBe("before");
+    expect(documentPosition(preventSleep, globalResources)).toBe("before");
+    expect(documentPosition(globalResources, setup)).toBe("before");
+    // Prevent sleep is not still in Chat & composer.
+    expect(documentPosition(chat, preventSleep)).toBe("before");
+    expect(documentPosition(preventSleep, running)).not.toBe("before");
+
+    // Setup & migration: Product tour before Data migration.
+    expect(documentPosition(setup, productTour)).toBe("before");
+    expect(documentPosition(productTour, dataMigration)).toBe("before");
+    expect(documentPosition(dataMigration, danger)).toBe("before");
+
+    // Danger Zone content after its header.
+    expect(documentPosition(danger, snapshots)).toBe("before");
+  });
+
+  it("renders the Worktree branch prefix editor (moved from Worktrees)", () => {
+    renderPanel();
+
+    // The global default now lives on General (the Worktrees page is
+    // inventory-only). Assert the actual editor mounted, not just its label
+    // text, so a regression that drops `WorktreeBranchPrefixSection` fails
+    // loudly here.
+    screen.getByRole("textbox", { name: "Branch prefix" });
+    screen.getByText("Default branch prefix");
   });
 });
+
+function documentPosition(
+  earlier: HTMLElement,
+  later: HTMLElement,
+): "before" | "after" | "unrelated" {
+  const relation = earlier.compareDocumentPosition(later);
+  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
+  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
+  return "unrelated";
+}
 
 function getDialogButton(name: string): HTMLElement {
   return within(screen.getByRole("dialog")).getByRole("button", { name });
@@ -574,6 +798,11 @@ function renderPanel(): QueryClient {
   });
   render(
     <QueryClientProvider client={queryClient}>
+      <span
+        aria-hidden
+        data-testid="active-host-probe"
+        data-bound-host-id={hostQueryMocks.activeHostId}
+      />
       <GeneralSettingsPanel />
     </QueryClientProvider>,
   );

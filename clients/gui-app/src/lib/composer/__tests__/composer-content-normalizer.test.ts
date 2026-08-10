@@ -139,18 +139,21 @@ describe("normalizeComposerContent", () => {
 
   it("normalizes slash commands with images before the command text", () => {
     expect(
-      buildSubmittedChatJSONContent({
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [
-              imageNode("img-1"),
-              { type: "text", text: "/plan review this" },
-            ],
-          },
-        ],
-      }),
+      buildSubmittedChatJSONContent(
+        {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                imageNode("img-1"),
+                { type: "text", text: "/plan review this" },
+              ],
+            },
+          ],
+        },
+        null,
+      ),
     ).toEqual({
       type: "doc",
       content: [
@@ -158,7 +161,10 @@ describe("normalizeComposerContent", () => {
           type: "paragraph",
           content: [
             imageNode("img-1"),
-            { type: "slashCommand", attrs: { commandName: "plan" } },
+            {
+              type: "slashCommand",
+              attrs: { commandName: "plan", trigger: "/" },
+            },
             { type: "text", text: " review this" },
           ],
         },
@@ -181,7 +187,7 @@ describe("normalizeComposerContent", () => {
       ],
     };
 
-    expect(buildSubmittedChatJSONContent(content)).toBe(content);
+    expect(buildSubmittedChatJSONContent(content, null)).toBe(content);
   });
 
   it("does not convert a leading slash command inside a non-paragraph block", () => {
@@ -195,28 +201,31 @@ describe("normalizeComposerContent", () => {
       ],
     };
 
-    expect(buildSubmittedChatJSONContent(content)).toBe(content);
+    expect(buildSubmittedChatJSONContent(content, null)).toBe(content);
   });
 
   it("extracts image attachments in document traversal order", () => {
-    const submitted = buildSubmittedChatJSONContent({
-      type: "doc",
-      content: [
-        {
-          type: "attachmentGroup",
-          content: [imageNode("legacy-1"), imageNode("legacy-2")],
-        },
-        {
-          type: "paragraph",
-          content: [
-            { type: "text", text: "/plan " },
-            imageNode("inline-1"),
-            { type: "text", text: "then " },
-            imageNode("inline-2"),
-          ],
-        },
-      ],
-    });
+    const submitted = buildSubmittedChatJSONContent(
+      {
+        type: "doc",
+        content: [
+          {
+            type: "attachmentGroup",
+            content: [imageNode("legacy-1"), imageNode("legacy-2")],
+          },
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "/plan " },
+              imageNode("inline-1"),
+              { type: "text", text: "then " },
+              imageNode("inline-2"),
+            ],
+          },
+        ],
+      },
+      null,
+    );
 
     expect(
       buildAttachmentsFromJSONContent(submitted).map((attachment) =>

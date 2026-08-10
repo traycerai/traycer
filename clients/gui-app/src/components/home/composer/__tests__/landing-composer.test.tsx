@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { landingComposerSettingsSeedForDraft } from "@/components/home/composer/landing-composer-settings-seed";

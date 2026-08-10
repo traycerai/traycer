@@ -1,6 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { TraycerApp, hostRpcRegistry } from "@traycer-clients/gui-app";
+import {
+  TraycerApp,
+  hostRpcRegistry,
+  installTitleBarOverlayThemeSync,
+} from "@traycer-clients/gui-app";
 import * as Sentry from "@sentry/electron/renderer";
 import { makeFetchTransport } from "@sentry/browser";
 import "./index.css";
@@ -51,6 +55,16 @@ function bootstrap(): void {
     bridge,
     signInUrl: composeDesktopSignInUrl(redirectUri),
   });
+
+  if (bridge.menu.platform === "win32") {
+    const disposeTitleBarThemeSync = installTitleBarOverlayThemeSync(
+      bridge.platform.windowEx,
+      document,
+    );
+    window.addEventListener("beforeunload", disposeTitleBarThemeSync, {
+      once: true,
+    });
+  }
 
   const container = document.getElementById("root");
   if (container === null) {

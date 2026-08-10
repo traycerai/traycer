@@ -2,7 +2,9 @@ import { useMemo } from "react";
 import type {
   ChatRunSettings,
   ChatActiveTurn,
+  ChatQueueDeliveryPolicy,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   InterviewAnswer,
@@ -35,6 +37,7 @@ export interface ChatActions {
     content: JsonContent,
     sender: UserMessageSender,
     settings: ChatRunSettings,
+    deliveryPolicy: ChatQueueDeliveryPolicy,
   ) => SentChatMessageAction | null;
   readonly deleteMessageSuffix: (fromMessageId: string) => string | null;
   readonly editUserMessage: (
@@ -64,6 +67,10 @@ export interface ChatActions {
   ) => void;
   readonly updateActivePermissionMode: (
     permissionMode: PermissionMode,
+  ) => string | null;
+  readonly updateActiveProfile: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
   ) => string | null;
   readonly queueCancel: (queueItemId: string) => string | null;
   readonly queueReorder: (
@@ -116,13 +123,14 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
-      sendMessage: (content, sender, settings) =>
+      sendMessage: (content, sender, settings, deliveryPolicy) =>
         tracked(
-          handle.store.getState().sendMessage(content, sender, settings),
+          handle.store
+            .getState()
+            .sendMessage(content, sender, settings, deliveryPolicy),
           () => {
             Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
               harness: settings.harnessId,
-              mode: settings.agentMode,
             });
           },
         ),
@@ -195,6 +203,8 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
           .restampQueuedItemSettings(settings, excludeQueueItemId),
       updateActivePermissionMode: (permissionMode) =>
         handle.store.getState().updateActivePermissionMode(permissionMode),
+      updateActiveProfile: (harnessId, profileId) =>
+        handle.store.getState().updateActiveProfile(harnessId, profileId),
       queueCancel: (queueItemId) =>
         tracked(handle.store.getState().queueCancel(queueItemId), () => {
           Analytics.getInstance().track(

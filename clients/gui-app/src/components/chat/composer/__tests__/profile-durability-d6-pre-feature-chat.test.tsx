@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +17,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
   useTabProvidersList: (activity: { enabled: boolean }) =>
+    activity.enabled
+      ? { data: { providers: mocks.providers } }
+      : { data: undefined },
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: (
+    _client: unknown,
+    activity: { enabled: boolean },
+  ) =>
     activity.enabled
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
@@ -65,6 +73,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -92,6 +101,15 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -112,7 +130,13 @@ function PreFeatureComposerHarness() {
     true,
     "authoritative",
   );
-  const prompt = useProfileRateLimitSwitchPrompt("claude", profileId, true);
+  const prompt = useProfileRateLimitSwitchPrompt({
+    harnessId: "claude",
+    profileId,
+    selectedModel: null,
+    active: true,
+    client: null,
+  });
   const visible = !reauthGate.signedOut && prompt.kind === "visible";
   return (
     <TooltipProvider delayDuration={0}>
@@ -125,10 +149,12 @@ function PreFeatureComposerHarness() {
             harnessId="claude"
             providerId={prompt.providerId}
             severity={prompt.severity}
+            limitedFamilies={prompt.limitedFamilies}
             current={prompt.current}
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
             affectedChatCount={1}
@@ -162,11 +188,14 @@ describe("D6: pre-feature chat + multi-profile state", () => {
       ]),
     ];
     const { result } = renderHook(() =>
-      useProfileRateLimitSwitchPrompt(
-        "claude",
-        selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
-        true,
-      ),
+      useProfileRateLimitSwitchPrompt({
+        harnessId: "claude",
+        profileId: selectionFromChatRunSettings(legacyChatRunSettingsBlob())
+          .profileId,
+        selectedModel: null,
+        active: true,
+        client: null,
+      }),
     );
     expect(result.current.kind).toBe("hidden");
   });
@@ -179,11 +208,14 @@ describe("D6: pre-feature chat + multi-profile state", () => {
       ]),
     ];
     const { result } = renderHook(() =>
-      useProfileRateLimitSwitchPrompt(
-        "claude",
-        selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
-        true,
-      ),
+      useProfileRateLimitSwitchPrompt({
+        harnessId: "claude",
+        profileId: selectionFromChatRunSettings(legacyChatRunSettingsBlob())
+          .profileId,
+        selectedModel: null,
+        active: true,
+        client: null,
+      }),
     );
     expect(result.current.kind).toBe("visible");
   });

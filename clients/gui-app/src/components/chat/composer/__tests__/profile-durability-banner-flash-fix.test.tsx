@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useStore } from "zustand";
@@ -19,7 +18,7 @@ import type {
 /**
  * Banner-flash bug: switching chat tabs (a real ChatTile remount past the
  * keep-alive LRU) or creating a new chat via its first message briefly
- * flashes "This chat's Codex profile is no longer available", then self-
+ * flashes "This agent's Codex profile is no longer available", then self-
  * corrects. Root cause (confirmed): `chat-composer.tsx` seeds its toolbar
  * store with `settingsSeed ?? fallbackSettingsSeed`. Before the chat's own
  * authoritative settings hydrate (fresh mount, or a brand-new chat with
@@ -167,6 +166,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -196,6 +196,15 @@ function providerState(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }

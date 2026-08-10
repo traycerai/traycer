@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -55,9 +54,10 @@ function setup(
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-  renderHook(() => useRefreshProviderRateLimitsOnTurn(providerId, profileId), {
-    wrapper,
-  });
+  renderHook(
+    () => useRefreshProviderRateLimitsOnTurn(providerId, profileId, true),
+    { wrapper },
+  );
   return { invalidateSpy };
 }
 
@@ -166,6 +166,24 @@ describe("useRefreshProviderRateLimitsOnTurn", () => {
     // No subscription is created, so there is nothing to fire; assert the
     // effect took the null branch and wired nothing up.
     expect(sub.handler).toBeNull();
+    expect(enqueueSpy).not.toHaveBeenCalled();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not subscribe or refresh when fetching is ineligible", () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockResolvedValue(undefined);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    renderHook(() => useRefreshProviderRateLimitsOnTurn("codex", null, false), {
+      wrapper,
+    });
+
+    expect(sub.handler).toBeNull();
+    fireTurn("codex");
     expect(enqueueSpy).not.toHaveBeenCalled();
     expect(invalidateSpy).not.toHaveBeenCalled();
   });

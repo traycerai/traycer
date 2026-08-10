@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId } from "react";
 import { ExternalLink } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -14,13 +14,48 @@ import { envNamePlaceholder } from "./provider-env-name-placeholder";
 
 type ProviderId = ProviderCliState["providerId"];
 
-const API_KEY_DASHBOARD_URL: Partial<Record<ProviderId, string>> = {
+/**
+ * Where the user gets a key, per provider. `null` means "no page to send them
+ * to" and simply omits the link.
+ *
+ * EXHAUSTIVE on purpose. This was a `Partial<Record<…>>`, and the failure mode
+ * of a partial record here is entirely silent: kiro takes a `KIRO_API_KEY`,
+ * renders the whole key field, and had no entry - so its users saw an input box
+ * and no way to find out where a key comes from, with nothing in the code
+ * marking the omission as an omission. Every future key provider would have
+ * inherited that. A total record makes the compiler ask.
+ *
+ * Only the five providers in the host's `API_KEY_ENV_VAR` map ever reach this
+ * component (`state.apiKey.supported` is false for the rest), so the other
+ * thirteen entries are `null` by construction rather than by research.
+ */
+const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
+  "claude-code": null,
+  codex: null,
+  opencode: null,
   cursor: "https://cursor.com/dashboard/api?section=user-keys#user-api-keys",
-  droid: "https://app.factory.ai/settings/api-keys",
+  traycer: null,
   openrouter: "https://openrouter.ai/settings/keys",
+  huggingface: "https://huggingface.co/settings/tokens",
+  grok: null,
+  qwen: null,
+  // Kiro keys are issued from the Kiro app / AWS console rather than a stable
+  // public key page; left null rather than shipping a guessed URL that dead-ends
+  // the user this entry exists to help. Fill it in once one is confirmed.
+  kiro: null,
+  droid: "https://app.factory.ai/settings/api-keys",
+  kimi: null,
+  copilot: null,
+  kilocode: null,
   amp: "https://ampcode.com/settings",
-  // Devin uses Windsurf API keys (WINDSURF_API_KEY / credentials.toml).
-  devin: "https://app.devin.ai/",
+  // Devin is NOT an API-key provider (it is absent from the host's
+  // `API_KEY_ENV_VAR`, so `apiKey.supported` is false and this section never
+  // renders for it). The old entry - a Windsurf-key URL - was unreachable, and
+  // making this record total is what surfaced that.
+  devin: null,
+  pi: null,
+  hermes: null,
+  omp: null,
 };
 
 function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {
@@ -31,13 +66,23 @@ function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {
 // API-key-authenticated providers (Cursor) render a key field in addition to
 // the binary picker. The raw key never leaves the host; `state.apiKey` only
 // reports whether one is configured and where it came from.
+//
+// The draft is OWNED BY THE CALLER rather than held here. This section renders
+// inside the `account` tab, and Radix unmounts an inactive `TabsContent` - so
+// a locally-held draft would be destroyed by an ordinary tab switch, silently
+// blanking a key the user had already pasted. `ProviderDetail` holds it
+// instead: that survives tab switches and is still discarded on a provider
+// switch, which remounts it by `key`.
 export function ProviderApiKeySection({
   state,
+  draft,
+  onDraftChange,
 }: {
   readonly state: ProviderCliState;
+  readonly draft: string;
+  readonly onDraftChange: (draft: string) => void;
 }) {
   const inputId = useId();
-  const [draft, setDraft] = useState("");
   const setApiKey = useProvidersSetApiKey();
   const clearApiKey = useProvidersClearApiKey();
   const runnerHost = useRunnerHost();
@@ -51,12 +96,12 @@ export function ProviderApiKeySection({
     if (trimmed.length === 0 || setApiKey.isPending) return;
     setApiKey.mutate(
       { providerId, apiKey: trimmed },
-      { onSuccess: () => setDraft("") },
+      { onSuccess: () => onDraftChange("") },
     );
   };
 
   return (
-    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3">
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
         <label
           htmlFor={inputId}
@@ -68,7 +113,7 @@ export function ProviderApiKeySection({
           {apiKeyStatusLabel(state.apiKey)}
         </span>
       </div>
-      {dashboardUrl === undefined ? null : (
+      {dashboardUrl === null ? null : (
         <button
           type="button"
           onClick={() => {
@@ -92,7 +137,7 @@ export function ProviderApiKeySection({
               : `Paste your ${PROVIDER_DISPLAY_NAMES[providerId]} API key`
           }
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => onDraftChange(e.target.value)}
           disabled={setApiKey.isPending}
           onKeyDown={(e) => {
             if (e.key === "Enter") onSave();

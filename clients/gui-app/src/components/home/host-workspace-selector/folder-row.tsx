@@ -6,7 +6,11 @@ import { cn } from "@/lib/utils";
 import { CopyPathButton } from "./copy-path-button";
 import { FolderLocationControl } from "./folder-location-control";
 import { FolderBranchControl } from "./folder-branch-control";
-import { workspaceRunPath, type WorkspaceRunItem } from "./workspace-run-item";
+import {
+  folderLocationValue,
+  workspaceRunPath,
+  type WorkspaceRunItem,
+} from "./workspace-run-item";
 
 /**
  * One compact single-line folder row using the parent grid's shared columns:
@@ -36,15 +40,25 @@ export function FolderRow(props: {
       <span
         className="inline-flex w-full max-w-full min-w-0 items-center gap-1.5 px-1 py-1 text-ui-sm"
         data-testid="folder-chip"
-        title={item.displayPath}
       >
         <Folder
           className="size-3.5 shrink-0 text-muted-foreground/70"
           aria-hidden
         />
-        <span className="min-w-0 truncate font-medium text-foreground/90">
-          {item.displayName}
-        </span>
+        {/* Scoped to the NAME, not the whole chip. The chip also holds the
+              missing-folder warning and the copy-path button, each with its own
+              tooltip - a chip-wide trigger meant hovering either one could
+              surface the path tooltip alongside theirs. */}
+        <TooltipWrapper
+          label={item.displayPath}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="min-w-0 truncate font-medium text-foreground/90">
+            {item.displayName}
+          </span>
+        </TooltipWrapper>
         {item.missing ? (
           <TooltipWrapper
             label="This bound folder is missing on disk."
@@ -56,6 +70,25 @@ export function FolderRow(props: {
               className="size-3.5 shrink-0 text-destructive opacity-100"
               aria-hidden
               data-testid="folder-row-missing"
+            />
+          </TooltipWrapper>
+        ) : null}
+        {/* Only when a NEW branch is actually the row's active choice - an
+            import/local row never uses the generated proposal this warns
+            about, so it would be noise there. Creation stays unblocked;
+            this only makes the already-applied fallback visible. */}
+        {item.branchPrefixWarning !== null &&
+        folderLocationValue(item) === "worktree" ? (
+          <TooltipWrapper
+            label={item.branchPrefixWarning}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <TriangleAlert
+              className="size-3.5 shrink-0 text-destructive opacity-100"
+              aria-hidden
+              data-testid="folder-row-branch-prefix-warning"
             />
           </TooltipWrapper>
         ) : null}
@@ -203,7 +236,7 @@ function PrimaryPinControl(props: {
       <TooltipWrapper
         label={
           primaryLocked
-            ? "Primary folder. New agent commands and terminals start here. Primary cannot be changed after the chat starts."
+            ? "Primary folder. New agent commands and terminals start here. Primary cannot be changed after the agent starts."
             : "Primary folder. New agent commands and terminals start here."
         }
         side="top"
@@ -233,7 +266,7 @@ function PrimaryPinControl(props: {
       label={
         item.canChangePrimary
           ? "Primary cannot be changed from this view."
-          : "Primary cannot be changed after the chat starts."
+          : "Primary cannot be changed after the agent starts."
       }
       side="top"
       sideOffset={undefined}
@@ -258,20 +291,26 @@ function EnvironmentButton(props: {
   readonly onEdit: (workspacePath: string) => void;
 }) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label="Edit setup and teardown scripts"
-      title="Setup & teardown scripts"
-      data-testid="folder-scripts-trigger"
-      onClick={() => props.onEdit(props.item.displayPath)}
-      // Always visible (muted, brightening on hover/focus) - user decision:
-      // hover-revealed row actions were not discoverable.
-      className="text-muted-foreground opacity-[var(--fc-opacity,0.7)] transition-opacity hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+    <TooltipWrapper
+      label="Setup & teardown scripts"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <FileSliders className="size-4" />
-    </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Edit setup and teardown scripts"
+        data-testid="folder-scripts-trigger"
+        onClick={() => props.onEdit(props.item.displayPath)}
+        // Always visible (muted, brightening on hover/focus) - user decision:
+        // hover-revealed row actions were not discoverable.
+        className="text-muted-foreground opacity-[var(--fc-opacity,0.7)] transition-opacity hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+      >
+        <FileSliders className="size-4" />
+      </Button>
+    </TooltipWrapper>
   );
 }
 
@@ -285,32 +324,32 @@ function EnvironmentButton(props: {
  */
 function MakePrimaryButton(props: { readonly item: WorkspaceRunItem }) {
   const { item } = props;
-  const button = (
-    <button
-      type="button"
-      aria-label="Set as primary"
-      aria-disabled={item.makePrimaryDisabled}
-      title="Set as primary"
-      data-testid="folder-make-primary"
-      onClick={item.makePrimaryDisabled ? undefined : item.onMakePrimary}
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-[var(--fc-opacity,0.7)] outline-none transition-[opacity,color,background-color] hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60 aria-disabled:cursor-not-allowed aria-disabled:text-muted-foreground/60 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/60 aria-disabled:hover:opacity-[var(--fc-opacity,0.7)]"
+  // ONE tooltip, not one per concern: when the pin is disabled the reason is
+  // strictly more informative than restating the action, and rendering both
+  // put two tooltips on a single trigger.
+  const label =
+    item.makePrimaryDisabled && item.makePrimaryDisabledReason !== null
+      ? item.makePrimaryDisabledReason
+      : "Set as primary";
+  return (
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Pin className="size-3.5" />
-    </button>
-  );
-  if (item.makePrimaryDisabled && item.makePrimaryDisabledReason !== null) {
-    return (
-      <TooltipWrapper
-        label={item.makePrimaryDisabledReason}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
+      <button
+        type="button"
+        aria-label="Set as primary"
+        aria-disabled={item.makePrimaryDisabled}
+        data-testid="folder-make-primary"
+        onClick={item.makePrimaryDisabled ? undefined : item.onMakePrimary}
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-[var(--fc-opacity,0.7)] outline-none transition-[opacity,color,background-color] hover:bg-accent/50 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60 aria-disabled:cursor-not-allowed aria-disabled:text-muted-foreground/60 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/60 aria-disabled:hover:opacity-[var(--fc-opacity,0.7)]"
       >
-        {button}
-      </TooltipWrapper>
-    );
-  }
-  return button;
+        <Pin className="size-3.5" />
+      </button>
+    </TooltipWrapper>
+  );
 }
 
 function RemoveFolderButton(props: { readonly item: WorkspaceRunItem }) {

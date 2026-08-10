@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPruneScheduler } from "@/lib/history-navigation/prune-scheduler";
 import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
@@ -51,6 +50,7 @@ describe("installPruneScheduler", () => {
         return () => {};
       },
       isLoadInFlight: () => false,
+      scheduleInitialPrune: false,
     });
 
     fire();
@@ -73,6 +73,7 @@ describe("installPruneScheduler", () => {
         return () => {};
       },
       isLoadInFlight: () => false,
+      scheduleInitialPrune: false,
     });
 
     fire();
@@ -93,6 +94,7 @@ describe("installPruneScheduler", () => {
         return () => {};
       },
       isLoadInFlight: () => loadInFlight,
+      scheduleInitialPrune: false,
     });
 
     fire();
@@ -115,6 +117,7 @@ describe("installPruneScheduler", () => {
         return () => {};
       },
       isLoadInFlight: () => false,
+      scheduleInitialPrune: false,
     });
 
     expect(() => {
@@ -138,6 +141,7 @@ describe("installPruneScheduler", () => {
         };
       },
       isLoadInFlight: () => false,
+      scheduleInitialPrune: false,
     });
 
     fire();
@@ -146,5 +150,24 @@ describe("installPruneScheduler", () => {
 
     expect(unsubscribed).toBe(true);
     expect(controller.pruneCalls.length).toBe(0); // pending flush was cancelled
+  });
+
+  it("arms one initial prune and retries it after router loading settles", () => {
+    const controller = fakeController();
+    let loading = true;
+    const uninstall = installPruneScheduler({
+      getController: () => controller,
+      subscribeStores: () => () => {},
+      isLoadInFlight: () => loading,
+      scheduleInitialPrune: true,
+    });
+
+    flushFrames();
+    expect(controller.pruneCalls.length).toBe(0);
+
+    loading = false;
+    flushFrames();
+    expect(controller.pruneCalls.length).toBe(1);
+    uninstall();
   });
 });

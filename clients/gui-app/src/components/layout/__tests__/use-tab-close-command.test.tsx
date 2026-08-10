@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useTabCloseCommand } from "@/components/layout/tabs/use-tab-close-command";
@@ -34,6 +33,7 @@ describe("useTabCloseCommand", () => {
       name: "Epic X",
       route: `/epics/epic-x/${tabId}`,
       icon: null,
+      canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
     });

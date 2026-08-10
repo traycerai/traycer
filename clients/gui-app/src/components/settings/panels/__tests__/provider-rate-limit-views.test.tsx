@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanup,
@@ -13,6 +12,8 @@ import { formatResetFullDateTime } from "@/lib/relative-time";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
+  GrokRateLimitView,
+  HuggingFaceRateLimitView,
   KiloCodeRateLimitView,
   OpenRouterRateLimitView,
   ProviderRateLimitBody,
@@ -29,8 +30,22 @@ type OpenRouterRateLimits = Extract<
   { provider: "openrouter" }
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
+type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type HuggingFaceRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "huggingface" }
+>;
 
 const NOW = Date.now();
+
+/** Same calendar formatting Grok's billing-period range uses (local TZ). */
+function formatGrokPeriodDate(epochMs: number): string {
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
 
 afterEach(() => {
   cleanup();
@@ -609,6 +624,97 @@ describe("OpenRouterRateLimitView", () => {
   });
 });
 
+describe("HuggingFaceRateLimitView", () => {
+  const huggingFace: HuggingFaceRateLimits = {
+    provider: "huggingface",
+    available: true,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  // A pay-as-you-go account: no included allowance, so no denominator exists.
+  const spendOnly: HuggingFaceRateLimits = {
+    ...huggingFace,
+    includedUsd: null,
+    remainingIncludedUsd: null,
+    limitUsd: null,
+    remainingLimitUsd: null,
+  };
+
+  it("renders a credits bar from the included allowance", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getAllByText("Included credits").length).toBeGreaterThan(0);
+    expect(screen.getByText("$0.50 / $2.00")).toBeTruthy();
+  });
+
+  it("leads with remaining included credits", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.getByText("$1.50")).toBeTruthy();
+  });
+
+  it("renders the spend-limit and request detail rows", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Spend limit")).toBeTruthy();
+    expect(screen.getByText("$10.00")).toBeTruthy();
+    expect(screen.getByText("Requests")).toBeTruthy();
+  });
+
+  it("falls back to spend-only wording with no bar when there is no included allowance", () => {
+    render(<HuggingFaceRateLimitView data={spendOnly} variant="settings" />);
+    // No denominator, so no bar and no invented "0 of unknown" row.
+    expect(screen.queryByText("$0.50 / $2.00")).toBeNull();
+    expect(screen.queryByText("Included credits left")).toBeNull();
+    expect(screen.getByText("Spent this period")).toBeTruthy();
+    expect(screen.getByText("$0.50")).toBeTruthy();
+  });
+
+  it("clamps the bar when spend has run past the included allowance", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, usedUsd: 5, remainingIncludedUsd: 0 }}
+        variant="settings"
+      />,
+    );
+    // Clamped to the allowance rather than overflowing the meter.
+    expect(screen.getByText("$2.00 / $2.00")).toBeTruthy();
+  });
+
+  it("renders the billing period the figures cover", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("drops the billing period rather than rendering Invalid Date", () => {
+    // The endpoint is schema-less, so an unparseable bound degrades to no row.
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, periodEnd: "not-a-date" }}
+        variant="settings"
+      />,
+    );
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  it("condenses the Overview to the bar and the headline figure", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={huggingFace}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.queryByText("Spend limit")).toBeNull();
+    expect(screen.queryByText("Requests")).toBeNull();
+  });
+});
+
 describe("KiloCodeRateLimitView", () => {
   const kilo: KiloCodeRateLimits = {
     provider: "kilocode",
@@ -636,7 +742,158 @@ describe("KiloCodeRateLimitView", () => {
   });
 });
 
+describe("GrokRateLimitView", () => {
+  // UTC midnights - local toLocaleDateString may shift the calendar day, so
+  // expected range strings are built with the same formatter as production.
+  const periodStart = Date.UTC(2026, 6, 22);
+  const periodEnd = Date.UTC(2026, 6, 29);
+  const expectedBillingPeriod = `${formatGrokPeriodDate(periodStart)} - ${formatGrokPeriodDate(periodEnd)}`;
+
+  const grokWithPeriod: GrokRateLimits = {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart,
+    periodEnd,
+    period: {
+      usedPercent: 12,
+      resetsAt: periodEnd,
+      durationMinutes: 10_080,
+    },
+    monthlyLimit: 100,
+    onDemandCap: 50,
+    onDemandUsed: 5.5,
+    prepaidBalance: 25,
+  };
+
+  const grokPeriodLess: GrokRateLimits = {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart,
+    periodEnd,
+    period: null,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+
+  it("renders a Weekly usage bar when period is present", () => {
+    const { container } = render(
+      <GrokRateLimitView data={grokWithPeriod} variant="settings" />,
+    );
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    // Real bar fill (MeterRow track + severity color), not a plain text row.
+    expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(1);
+    expect(container.querySelectorAll(".bg-blue-500").length).toBe(1);
+    // Fallback plan/date rows stay off when a real period window exists.
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  it("renders Plan + Billing period fallback when period is null (no bar)", () => {
+    const { container } = render(
+      <GrokRateLimitView data={grokPeriodLess} variant="settings" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    // Branded tier is shown verbatim, not title-cased ("Supergrok").
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+    expect(screen.queryByText("Weekly")).toBeNull();
+    expect(screen.queryByText("% used", { exact: false })).toBeNull();
+    expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(0);
+  });
+
+  it("suppresses the fallback Plan row on popover-detail (the header owns the tier chip), keeping the billing period", () => {
+    // In the single-provider popover tab the header already renders the tier as
+    // a chip (resolveProviderPlanLabel), so the body's Plan row would duplicate
+    // it - same reason Codex/Claude keep the tier out of their card bodies. The
+    // billing-period row, which the chip doesn't carry, still shows.
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-detail" />,
+    );
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("SuperGrok")).toBeNull();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+  });
+
+  it("keeps the fallback Plan row on the Overview tab, which renders no tier chip", () => {
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-overview" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("renders credit rows only when non-null", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          prepaidBalance: 25,
+          monthlyLimit: 100,
+          onDemandUsed: 5.5,
+          onDemandCap: null,
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$25.00")).toBeTruthy();
+    expect(screen.getByText("Monthly limit")).toBeTruthy();
+    expect(screen.getByText("$100.00")).toBeTruthy();
+    expect(screen.getByText("On-demand used")).toBeTruthy();
+    expect(screen.getByText("$5.50")).toBeTruthy();
+    // Null onDemandCap drops the On-demand limit row entirely.
+    expect(screen.queryByText("On-demand limit")).toBeNull();
+  });
+
+  it("condenses the Overview to period + Prepaid balance (drops monthly/on-demand)", () => {
+    render(
+      <GrokRateLimitView data={grokWithPeriod} variant="popover-overview" />,
+    );
+    // Kept: period bar + prepaid.
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$25.00")).toBeTruthy();
+    // Dropped: monthly + on-demand (detail/settings only).
+    expect(screen.queryByText("Monthly limit")).toBeNull();
+    expect(screen.queryByText("On-demand used")).toBeNull();
+    expect(screen.queryByText("On-demand limit")).toBeNull();
+  });
+});
+
 describe("ProviderRateLimitDetail dispatch", () => {
+  it("dispatches to the Hugging Face view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "huggingface",
+          available: true,
+          includedUsd: 2,
+          usedUsd: 0.5,
+          remainingIncludedUsd: 1.5,
+          limitUsd: null,
+          remainingLimitUsd: null,
+          numRequests: null,
+          periodStart: null,
+          periodEnd: null,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+  });
+
   it("dispatches to the OpenRouter view", () => {
     render(
       <ProviderRateLimitDetail
@@ -675,6 +932,32 @@ describe("ProviderRateLimitDetail dispatch", () => {
     );
     expect(screen.getByText("Credit balance")).toBeTruthy();
     expect(screen.getByText("$7.00")).toBeTruthy();
+  });
+
+  it("dispatches to the Grok view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "grok",
+          available: true,
+          subscriptionTier: "SuperGrok",
+          periodType: null,
+          periodStart: null,
+          periodEnd: null,
+          period: null,
+          monthlyLimit: null,
+          onDemandCap: null,
+          onDemandUsed: null,
+          prepaidBalance: 8,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$8.00")).toBeTruthy();
   });
 });
 

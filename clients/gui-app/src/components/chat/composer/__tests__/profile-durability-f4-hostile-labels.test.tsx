@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -37,6 +36,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -67,10 +67,12 @@ describe("F4: hostile profile labels in the rate-limit banner", () => {
             harnessId="claude"
             providerId="claude-code"
             severity="hard_limit"
+            limitedFamilies={[]}
             current={current}
             profiles={[current, target]}
             destinations={[destination]}
             primaryTarget={destination}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
             affectedChatCount={1}

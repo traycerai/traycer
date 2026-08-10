@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import type { TaskDeleteWorktreeCandidate } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface DeleteTasksDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -228,12 +229,16 @@ function WorktreeCleanupRow(props: {
               {candidate.repoLabel}
             </span>
           </span>
-          <span
-            className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground"
-            title={candidate.worktreePath}
+          <TooltipWrapper
+            label={candidate.worktreePath}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {candidate.worktreePath}
-          </span>
+            <span className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground">
+              {candidate.worktreePath}
+            </span>
+          </TooltipWrapper>
           {hint}
         </span>
       </label>

@@ -58,7 +58,7 @@ function openPinned(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
-  return openTile(state, node, false);
+  return openTile(state, node, false, null);
 }
 
 /** Preview open - `openTile` with `preview: true`. */
@@ -66,7 +66,7 @@ function openPreview(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
-  return openTile(state, node, true);
+  return openTile(state, node, true, null);
 }
 
 /** Max depth of the tree under `state.root` (a bare pane is depth 1). */
@@ -643,14 +643,70 @@ describe("splitPaneAtEdge", () => {
     expectCanvasInvariants(next);
   });
 
-  it("does not split a sole tab onto its own pane edge", () => {
+  // Dropping a pane's ONLY tab on that pane's own edge is the common way to
+  // split a freshly opened Git Diff / Terminal, and the pane drop zone paints
+  // the half-pane split preview for it. The commit must produce that split -
+  // the dragged tile in the highlighted half, the source pane left behind as
+  // an empty opener pane - instead of silently discarding the drop.
+  it("splits a sole tab onto its own pane edge, leaving an empty opener pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
+
     const next = splitPaneAtEdge(state, paneId, "right", {
       kind: "node",
       node: SPEC_A,
     });
-    expect(next).toBe(state);
+
+    const group = rootGroup(next);
+    expect(group.direction).toBe("horizontal");
+    const [leading, trailing] = collectPanes(next.root);
+    expect(leading.id).toBe(paneId);
+    expect(leading.tabInstanceIds).toEqual([]);
+    expect(paneTabIds(next, trailing)).toEqual([SPEC_A.id]);
+    expect(next.activePaneId).toBe(trailing.id);
+    expectCanvasInvariants(next);
+  });
+
+  it("splits a sole tab onto the leading edge with the tile in the leading pane", () => {
+    const state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+
+    const next = splitPaneAtEdge(state, paneId, "left", {
+      kind: "tab",
+      sourcePaneId: paneId,
+      tabId: SPEC_A.instanceId,
+      node: SPEC_A,
+    });
+
+    const [leading, trailing] = collectPanes(next.root);
+    expect(paneTabIds(next, leading)).toEqual([SPEC_A.id]);
+    expect(trailing.id).toBe(paneId);
+    expect(trailing.tabInstanceIds).toEqual([]);
+    expectCanvasInvariants(next);
+  });
+
+  // Only the SAME-pane drop keeps the emptied pane: dragging a pane's last tab
+  // into a DIFFERENT pane still collapses the pane it came from.
+  it("still collapses the source pane when its last tab lands on another pane's edge", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const targetPaneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, targetPaneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+    const sourcePaneId = state.activePaneId;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    const next = splitPaneAtEdge(state, targetPaneId, "bottom", {
+      kind: "tab",
+      sourcePaneId,
+      tabId: SPEC_B.instanceId,
+      node: SPEC_B,
+    });
+
+    expect(findPaneById(next.root, sourcePaneId)).toBeNull();
+    expect(collectPanes(next.root)).toHaveLength(2);
+    expectCanvasInvariants(next);
   });
 
   it("rejects an edge split that would exceed MAX_TREE_DEPTH (no-op)", () => {
@@ -778,6 +834,80 @@ describe("dropOnTabStrip", () => {
       SPEC_A.id,
     ]);
     expect(next.activePaneId).toBe(paneId);
+  });
+
+  it("activates an already-open sidebar node dropped at its current position", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)[0]).toBe(SPEC_A.id);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
+  });
+
+  it("focuses an inactive pane when its already-active tab is dropped in place", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, paneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+
+    expect(state.activePaneId).not.toBe(paneId);
+    expect(activationContentIds(state, paneById(state, paneId))).toEqual([
+      SPEC_A.id,
+    ]);
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(next.activePaneId).toBe(paneId);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("promotes a preview tab dropped at its current position", () => {
+    let state = openPreview(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    expect(rootPane(state).previewTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(state, rootPane(state))).toEqual([
+      SPEC_A.id,
+      SPEC_B.id,
+    ]);
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(pane.previewTabId).toBeNull();
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
   });
 });
 
@@ -1196,25 +1326,25 @@ describe("findActiveGitFileDiffTile", () => {
 describe("openTile no-op short-circuits (same reference)", () => {
   it("returns the same reference for a pinned re-open of the active tab in the focused pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, false)).toBe(state);
+    expect(openTile(state, SPEC_A, false, null)).toBe(state);
   });
 
   it("returns the same reference for a preview open of an already-active pinned tab in the focused pane", () => {
     // Previously `openTilePreview` rebuilt an identical state object here;
     // the unified `openTile` short-circuits to the same reference.
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, true)).toBe(state);
+    expect(openTile(state, SPEC_A, true, null)).toBe(state);
   });
 
   it("returns the same reference for a preview re-open of the active preview tab in the focused pane", () => {
     const state = openPreview(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, true)).toBe(state);
+    expect(openTile(state, SPEC_A, true, null)).toBe(state);
   });
 
   it("is NOT a no-op when a pinned open promotes the active preview tab", () => {
     // Promote-on-pin must still produce a new state with the preview cleared.
     const state = openPreview(createEmptyCanvas(), SPEC_A);
-    const next = openTile(state, SPEC_A, false);
+    const next = openTile(state, SPEC_A, false, null);
     expect(next).not.toBe(state);
     expect(rootPane(next).previewTabId).toBeNull();
     expect(rootPane(next).activeTabId).toBe(SPEC_A.instanceId);
@@ -1229,7 +1359,7 @@ describe("openTile no-op short-circuits (same reference)", () => {
       node: SPEC_B,
     });
     expect(state.activePaneId).not.toBe(holdingPaneId);
-    const next = openTile(state, SPEC_A, false);
+    const next = openTile(state, SPEC_A, false, null);
     expect(next).not.toBe(state);
     expect(next.root).toBe(state.root);
     expect(next.activePaneId).toBe(holdingPaneId);

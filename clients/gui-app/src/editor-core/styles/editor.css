@@ -293,6 +293,21 @@
   align-items: flex-start;
 }
 
+.tc-node-mermaid__expand {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.tc-node-mermaid__expand:focus-visible {
+  outline: 2px solid var(--color-ring, hsl(222 47% 40%));
+  outline-offset: 2px;
+}
+
 .tc-node-mermaid__svg svg {
   max-width: none;
 }

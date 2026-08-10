@@ -6,13 +6,17 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { FileTreeWorkspacePicker } from "../file-tree-workspace-picker";
 
 const selectById = vi.fn();
+const refreshDirectory = vi.fn(() => Promise.resolve([]));
+const hostBinding = {
+  directory: { refresh: refreshDirectory, selectById },
+};
 
 interface ListQueryStub {
-  readonly data: { readonly rows: WorktreeBindingSelectorRow[] } | undefined;
+  readonly data: { readonly rows: WorktreeBindingSelectorRowV12[] } | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
 }
@@ -45,10 +49,10 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ directory: { selectById } }),
+  useHostBinding: () => hostBinding,
 }));
 
-function makeRows(): WorktreeBindingSelectorRow[] {
+function makeRows(): WorktreeBindingSelectorRowV12[] {
   return [
     {
       hostId: "host-1",
@@ -64,6 +68,7 @@ function makeRows(): WorktreeBindingSelectorRow[] {
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
     {
       hostId: "host-1",
@@ -79,6 +84,7 @@ function makeRows(): WorktreeBindingSelectorRow[] {
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
   ];
 }
@@ -91,7 +97,7 @@ function stubLoadedWorkspaces(): void {
   };
 }
 
-function makeNonGitRow(): WorktreeBindingSelectorRow {
+function makeNonGitRow(): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/work/notes",
@@ -106,6 +112,7 @@ function makeNonGitRow(): WorktreeBindingSelectorRow {
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
   };
 }
 
@@ -136,6 +143,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   beforeEach(() => {
     cleanup();
     selectById.mockClear();
+    refreshDirectory.mockClear();
     stubLoadedWorkspaces();
   });
 
@@ -146,6 +154,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   it("opens a popover with the host section and flat workspace rows", () => {
     openPicker("/work/traycer", () => undefined);
 
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
     expect(
       screen.getByTestId("file-tree-workspace-picker-popover"),
     ).toBeDefined();
@@ -163,6 +172,32 @@ describe("<FileTreeWorkspacePicker />", () => {
       screen.getByRole("option", { name: /traycer.*redesign/i }),
     ).toBeDefined();
     expect(screen.getByRole("option", { name: /feature-x/i })).toBeDefined();
+  });
+
+  it("refreshes the host directory once per picker open", () => {
+    render(
+      <FileTreeWorkspacePicker
+        epicId="epic-1"
+        hostId="host-1"
+        selectedPath="/work/traycer"
+        onSelectPath={() => undefined}
+      />,
+    );
+
+    const trigger = screen.getByTestId("file-tree-workspace-picker-trigger");
+    expect(refreshDirectory).toHaveBeenCalledTimes(0);
+
+    fireEvent.click(trigger);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(trigger);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByTestId("file-tree-workspace-picker-popover"),
+    ).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(refreshDirectory).toHaveBeenCalledTimes(2);
   });
 
   it("uses the git-diff picker trigger style without a changes badge", () => {
@@ -244,6 +279,80 @@ describe("<FileTreeWorkspacePicker />", () => {
     fireEvent.click(screen.getByRole("option", { name: /notes.*detached/i }));
 
     expect(onSelectPath).toHaveBeenCalledWith("/work/notes");
+  });
+
+  // A cold worktree row the host marks `isGitResolvePending` (its
+  // `missing_worktree_path` derives from an unverified `isGitRepo: false`, not
+  // disk truth) must read as "checking", not "missing". A cold LOCAL row never
+  // needed git facts to be browsable, so it stays selectable.
+  it("renders an unverified worktree row as checking instead of missing, keeping cold local rows browsable", () => {
+    const onSelectPath = vi.fn();
+    const coldWorktree: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      isGitRepo: false,
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: true,
+    };
+    const coldLocal: WorktreeBindingSelectorRowV12 = {
+      ...makeNonGitRow(),
+      isGitResolvePending: true,
+    };
+    listQuery.current = {
+      data: { rows: [coldWorktree, coldLocal] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(null, onSelectPath);
+
+    const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
+    expect(within(worktreeOption).getByText("checking")).toBeDefined();
+    expect(within(worktreeOption).queryByText("missing")).toBeNull();
+    fireEvent.click(worktreeOption);
+    expect(onSelectPath).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("option", { name: /notes.*detached/i }));
+    expect(onSelectPath).toHaveBeenCalledWith("/work/notes");
+  });
+
+  // Once the host RESOLVES the worktree as gone, "missing" is a fact - the
+  // dead row is hidden from this browse picker rather than shown as noise.
+  it("hides a resolved missing worktree that is not the current selection", () => {
+    const missingWorktree: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      isGitRepo: false,
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: false,
+    };
+    listQuery.current = {
+      data: { rows: [missingWorktree] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(null, () => undefined);
+
+    expect(screen.queryByRole("option", { name: /feature-x/i })).toBeNull();
+  });
+
+  // The current selection is exempt from hiding: a root deleted while
+  // selected keeps its labeled row (with the destructive badge) instead of
+  // silently vanishing out from under the user.
+  it("keeps the destructive missing badge on the selected missing worktree", () => {
+    const missingWorktree: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      isGitRepo: false,
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: false,
+    };
+    listQuery.current = {
+      data: { rows: [missingWorktree] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(missingWorktree.runningDir, () => undefined);
+
+    const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
+    expect(within(worktreeOption).getByText("missing")).toBeDefined();
+    expect(within(worktreeOption).queryByText("checking")).toBeNull();
   });
 
   it("swaps the bound host without selecting a folder when a host row is clicked", () => {

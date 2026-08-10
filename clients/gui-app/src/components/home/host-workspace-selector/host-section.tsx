@@ -13,6 +13,12 @@ interface HostSectionProps {
   readonly entries: ReadonlyArray<HostDirectoryEntry>;
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
+  /**
+   * A pending submission owns the host selection. The rows must go inert, not
+   * just have their handler no-op: an interactive row that silently discards
+   * the click reads as a broken control rather than a busy one.
+   */
+  readonly disabled: boolean;
 }
 
 /**
@@ -43,6 +49,7 @@ export function HostSection(props: HostSectionProps) {
               <li key={entry.hostId} className="min-w-0">
                 <button
                   type="button"
+                  disabled={props.disabled}
                   data-testid={`host-workspace-selector-host-row-${entry.hostId}`}
                   data-selected={isActive ? "true" : "false"}
                   onClick={() => {
@@ -51,6 +58,7 @@ export function HostSection(props: HostSectionProps) {
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-ui-sm transition-colors hover:bg-accent/50 hover:text-foreground",
                     isActive ? "text-foreground" : "text-muted-foreground",
+                    "disabled:pointer-events-none disabled:opacity-60",
                   )}
                 >
                   <HostKindIcon kind={entry.kind} />

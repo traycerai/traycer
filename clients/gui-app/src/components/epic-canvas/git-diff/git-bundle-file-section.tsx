@@ -1,42 +1,34 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
-  type GitChangedFile,
-} from "@traycer/protocol/host";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import type { GitChangedFile } from "@traycer/protocol/host";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { useGitGetFileDiffQuery } from "@/hooks/git/use-git-get-file-diff-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
+import { getBasename } from "@/lib/path/cross-platform-path";
+import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
 import { NO_HIGHLIGHT } from "@/lib/git/path-highlight";
 import { useBundleDiffFindRegistrationContext } from "@/components/diff/bundle-diff-find-registration-hooks";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
   DiffBundleCollapseChevron,
+  DiffBundleFileHeaderPortal,
   DiffBundleFileSectionFrame,
 } from "./diff-bundle-file-section";
-import { GitChangedFileRow } from "./git-changed-file-row";
+import { GitChangedFileRow, GitChangedFileStats } from "./git-changed-file-row";
 import { FileDiffContent } from "./file-diff-content";
 import { GitErrorBlock } from "./git-error-block";
 import {
   gitBundleDiffFindFileId,
   gitBundleLoadedPatchCacheKey,
 } from "./git-bundle-diff-find";
-import {
-  fileDiffLoadFullIdentity,
-  type GitBundleDiffTileRef,
-} from "./git-diff-tile-shared";
+import { type GitBundleDiffTileRef } from "./git-diff-tile-shared";
+import { useEditableGitDiffSurface } from "./git-diff-editing";
+import { GitDiffEditStatusContent } from "./git-diff-edit-status";
 
 interface BundleFileSectionProps {
   readonly node: GitBundleDiffTileRef;
@@ -44,6 +36,7 @@ interface BundleFileSectionProps {
   readonly file: GitChangedFile;
   readonly headSha: string;
   readonly diffViewerPreferences: DiffViewerPreferences;
+  readonly isActive: boolean;
 }
 
 export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
@@ -64,12 +57,13 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
   const isLarge = totalChangedLines > BUNDLE_INLINE_LINE_THRESHOLD;
 
   const handleOpenFileTile = useCallback(() => {
-    const tile = makeGitFileDiffTileForFile({
-      hostId: props.node.hostId,
-      runningDir: props.node.diff.runningDir,
-      file: props.file,
-      repositoryContext: props.node.repositoryContext,
-    });
+    const tile = workspaceFileRefFromTreePath(
+      props.node.hostId,
+      props.node.diff.runningDir,
+      props.file.path,
+      getBasename(props.file.path),
+    );
+    if (tile === null) return;
     navigateNested(epicId, props.viewTabId, () =>
       prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
     );
@@ -77,10 +71,9 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     epicId,
     navigateNested,
     prepareOpenTileInTabFocusTarget,
-    props.file,
+    props.file.path,
     props.node.hostId,
     props.node.diff.runningDir,
-    props.node.repositoryContext,
     props.viewTabId,
   ]);
 
@@ -102,6 +95,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
         active={false}
         leading={leading}
         trailing={null}
+        showStats={false}
         pathRanges={NO_HIGHLIGHT}
         onClick={handleToggleCollapsed}
         onDoubleClick={undefined}
@@ -117,6 +111,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     <DiffBundleFileSectionFrame
       collapsed={collapsed}
       headerRow={headerRow}
+      headerStats={<GitChangedFileStats file={props.file} className="flex" />}
       onOpenFileTile={handleOpenFileTile}
       findFilePath={props.file.path}
       bundleFindFileId={bundleFindFileId}
@@ -129,6 +124,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
         bundleFindFileId={bundleFindFileId}
         onOpenFileTile={handleOpenFileTile}
         diffViewerPreferences={props.diffViewerPreferences}
+        isActive={props.isActive}
       />
     </DiffBundleFileSectionFrame>
   );
@@ -142,6 +138,7 @@ interface BundleFileSectionBodyProps {
   readonly bundleFindFileId: string;
   readonly onOpenFileTile: () => void;
   readonly diffViewerPreferences: DiffViewerPreferences;
+  readonly isActive: boolean;
 }
 
 function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
@@ -186,6 +183,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
       headSha={props.headSha}
       bundleFindFileId={props.bundleFindFileId}
       diffViewerPreferences={props.diffViewerPreferences}
+      isActive={props.isActive}
     />
   );
 }
@@ -196,48 +194,39 @@ interface BundleInlineDiffProps {
   readonly headSha: string;
   readonly bundleFindFileId: string;
   readonly diffViewerPreferences: DiffViewerPreferences;
+  readonly isActive: boolean;
 }
 
 function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
+  const tabHostClient = useTabHostClient();
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
-  const diffIdentity = fileDiffLoadFullIdentity({
-    runningDir: props.node.diff.runningDir,
-    filePath: props.file.path,
-    previousPath: props.file.previousPath,
-    stage: props.file.stage,
-    headSha: props.headSha,
-    stagedOid: props.file.stagedOid,
-    worktreeOid: props.file.worktreeOid,
-    ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-  });
-  const [fullDiffIdentity, setFullDiffIdentity] = useState<string | null>(null);
-  const byteBudget =
-    fullDiffIdentity === diffIdentity
-      ? null
-      : DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET;
-
-  const diffQuery = useGitGetFileDiffQuery({
+  const {
+    displayedDiff,
+    displayedDiffError,
+    displayedDiffPending,
+    editing,
+    loadFull,
+  } = useEditableGitDiffSurface({
+    client: tabHostClient,
     hostId: props.node.hostId,
     runningDir: props.node.diff.runningDir,
-    filePath: props.file.path,
-    previousPath: props.file.previousPath,
-    stage: props.file.stage,
+    file: props.file,
     headSha: props.headSha,
-    stagedOid: props.file.stagedOid,
-    worktreeOid: props.file.worktreeOid,
     ignoreWhitespace: props.diffViewerPreferences.ignoreWhitespace,
-    byteBudget,
-    enabled: true,
+    surfaceId: bundleEditSurfaceId(props.node, props.file),
+    isActive: props.isActive,
+    queryEnabled: true,
+    resumeDetachedDraft: true,
   });
   useEffect(() => {
-    if (diffQuery.error === null) return;
+    if (displayedDiffError === null) return;
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,
       "failed",
     );
-  }, [bundleFindRegistration, diffQuery.error, props.bundleFindFileId]);
+  }, [bundleFindRegistration, displayedDiffError, props.bundleFindFileId]);
   useEffect(() => {
-    const diff = diffQuery.data;
+    const diff = displayedDiff;
     if (diff === undefined) return;
     if (diff.isBinary) {
       bundleFindRegistration.registerCoverageState(
@@ -258,13 +247,13 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
     });
   }, [
     bundleFindRegistration,
-    diffQuery.data,
+    displayedDiff,
     props.bundleFindFileId,
     props.file,
     props.node,
   ]);
 
-  if (diffQuery.isPending) {
+  if (displayedDiffPending) {
     return (
       <DiffContentLoadingSkeleton
         mode={props.diffViewerPreferences.mode}
@@ -274,16 +263,19 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
       />
     );
   }
-  if (diffQuery.error !== null)
-    return <GitErrorBlock error={diffQuery.error} />;
+  if (displayedDiffError !== null) {
+    return <GitErrorBlock error={displayedDiffError} />;
+  }
 
-  if (diffQuery.data.isBinary) {
+  if (displayedDiff === undefined) return null;
+
+  if (displayedDiff.isBinary) {
     return <BundleBinaryPlaceholder file={props.file} />;
   }
 
   return (
     <FileDiffContent
-      diff={diffQuery.data}
+      diff={displayedDiff}
       mode={props.diffViewerPreferences.mode}
       wordWrap={props.diffViewerPreferences.wordWrap}
       backgrounds={props.diffViewerPreferences.backgrounds}
@@ -292,11 +284,28 @@ function BundleInlineDiff(props: BundleInlineDiffProps): ReactNode {
       sizing="content"
       scrollContainerRef={null}
       onScroll={null}
-      onLoadFull={() => {
-        setFullDiffIdentity(diffIdentity);
+      onLoadFull={loadFull}
+      fileIdentity={{
+        findFilePath: props.file.path,
+        bundleFindFileId: props.bundleFindFileId,
       }}
+      isEmptyFile={editing.canOfferEdit ? props.file.sizeBytes === 0 : false}
+      editStatus={
+        <DiffBundleFileHeaderPortal>
+          <GitDiffEditStatusContent editing={editing} appearance="quiet" />
+        </DiffBundleFileHeaderPortal>
+      }
+      editAdapter={editing.editAdapter}
+      editSession={editing.editSession}
     />
   );
+}
+
+function bundleEditSurfaceId(
+  node: GitBundleDiffTileRef,
+  file: GitChangedFile,
+): string {
+  return `git-diff:${node.instanceId}:bundle:${encodeURIComponent(file.path)}:${file.stage}`;
 }
 
 function BundleBinaryPlaceholder(props: {

@@ -9,10 +9,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import {
-  MockRunnerHost,
-  MockTraycerCli,
-} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useEffect } from "react";
 
@@ -49,18 +46,6 @@ function buildHost(): MockRunnerHost {
   });
 }
 
-function buildHostWithCli(cli: MockTraycerCli): MockRunnerHost {
-  return new MockRunnerHost({
-    signInUrl: "https://auth.traycer.invalid/sign-in",
-    authnBaseUrl: "http://localhost:5005",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: cli,
-  });
-}
-
 function makeMessengerFactory(): (args: {
   registry: HostRpcRegistry;
 }) => IHostMessenger<HostRpcRegistry> {
@@ -74,6 +59,9 @@ function makeMessengerFactory(): (args: {
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
           }),
       },
     });
@@ -162,7 +150,7 @@ function mountSignInButton(host: MockRunnerHost): MountResult {
           messengerFactory={makeMessengerFactory()}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve([])}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback">…</div>}
         >
           <AuthSessionExpiredToastBridge />
@@ -221,7 +209,7 @@ function mountDeviceCodeProgress(host: MockRunnerHost): () => void {
           messengerFactory={makeMessengerFactory()}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve([])}
+          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback">…</div>}
         >
           <DeviceCodeProgress
@@ -232,6 +220,7 @@ function mountDeviceCodeProgress(host: MockRunnerHost): () => void {
               verificationUriComplete:
                 "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
               expiresAtMs: 0,
+              phase: "waiting-approval",
             }}
           />
         </HostRuntimeProvider>
@@ -374,10 +363,13 @@ describe("<SignInButton />", () => {
 
   it("toasts and clears session-expired instead of rendering persistent inline copy", async () => {
     const host = buildHost();
-    await host.tokenStore.set({
-      token: "revoked-stored-token",
-      refreshToken: "revoked-stored-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      {
+        token: "revoked-stored-token",
+        refreshToken: "revoked-stored-token-refresh",
+      },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     const result = mountSignInButton(host);
 
     // The HostRuntimeProvider auto-starts the AuthService, which calls
@@ -394,14 +386,18 @@ describe("<SignInButton />", () => {
     result.cleanupClient();
   });
 
-  it("clears local CLI credentials when a stored session is rejected", async () => {
-    const cli = new MockTraycerCli();
-    await cli.cliLogin("stale-cli-token", "stale-cli-refresh");
-    const host = buildHostWithCli(cli);
-    await host.tokenStore.set({
-      token: "revoked-stored-token",
-      refreshToken: "revoked-stored-token-refresh",
-    });
+  it("keeps credentials file when a stored session is rejected (UI-only sign-out)", async () => {
+    // Automatic failure paths never destroy the shared credentials file —
+    // only explicit sign-out does (tech plan §5). CLI seeding is gone; the
+    // file is the single store.
+    const host = buildHost();
+    await host.tokenStore.signIn(
+      {
+        token: "revoked-stored-token",
+        refreshToken: "revoked-stored-token-refresh",
+      },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     const result = mountSignInButton(host);
 
     await waitFor(() => {
@@ -410,9 +406,16 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    expect(await host.tokenStore.get()).toBeNull();
-    expect(cli.lastLoginToken).toBeNull();
-    expect(cli.lastLoginRefreshToken).toBeNull();
+    // UI is signed out but the file is kept so a sibling rotation can recover.
+    expect(await host.tokenStore.get()).toEqual({
+      token: "revoked-stored-token",
+      refreshToken: "revoked-stored-token-refresh",
+      authnBaseUrl: host.authnBaseUrl,
+      // `expect.any(String)` is an `any`-typed matcher; type it as the string
+      // field it stands in for so the object literal stays free of unsafe `any`.
+      savedAt: expect.any(String) as string,
+      user: { id: "user-1", email: "test@example.com", name: "Test User" },
+    });
     result.cleanupClient();
   });
 
@@ -476,7 +479,11 @@ describe("<SignInButton />", () => {
     });
     await screen.findByRole("heading", { name: "Approve in your browser" });
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Use code instead" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Use code instead" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
     const code = await screen.findByText("ABCDE-FGHIJ");
     expect(code.textContent).toBe("ABCDE-FGHIJ");
     expect(screen.getByText("https://app.traycer.ai/device").textContent).toBe(

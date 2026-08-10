@@ -1,32 +1,25 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { useSettingsDensity } from "@/providers/settings-density-context";
+import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
-import { useRunnerHost } from "@/providers/use-runner-host";
-import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
-import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
-import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import {
-  hostQueryKeys,
-  runnerMutationKeys,
-  snapshotsMutationKeys,
-} from "@/lib/query-keys";
+import { runnerMutationKeys } from "@/lib/query-keys";
 import { clearAllPersistedStores } from "@/lib/persist";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import type {
   DesktopJsonValue,
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
-import { toastFromHostError } from "@/lib/host-error-toast";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import {
   epicsSeen,
@@ -36,18 +29,15 @@ import {
 } from "@/stores/migration/migration-run-store";
 import { startMigrationRun } from "@/components/migration/migration-run-handle";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
+import { modLabel } from "@/lib/keybindings/platform";
+import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
+import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
+import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
-const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
-
-interface ClearLocalSnapshotsMutationContext {
-  readonly hostId: string | null;
-  readonly userId: string | null;
-}
+const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 function formatMigrationProgress(state: MigrationRunState): string | null {
   if (state.status !== "running") return null;
@@ -103,344 +93,248 @@ export function GeneralSettingsPanel() {
   );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
+  const steerOnModEnterEnabled = useSettingsStore(
+    (s) => s.steerOnModEnterEnabled,
+  );
+  const setSteerOnModEnterEnabled = useSettingsStore(
+    (s) => s.setSteerOnModEnterEnabled,
+  );
+  const compact = useSettingsDensity() === "compact";
+  const featureSettings = useRunnerFeatureSettingsQuery();
+  const setAgentRoles = useRunnerAgentRolesSet();
+  const featureSettingsAvailable = getFeatureSettingsBridge() !== null;
 
   return (
-    <SettingsPanelShell title="General">
-      <SettingsRow
-        label="Prevent sleep while running"
-        description="Keep the computer awake while a chat or terminal agent is running, so work continues when you step away."
-        control={
-          <Switch
-            checked={preventSleepWhileRunning}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("preventSleepWhileRunning");
-              setPreventSleepWhileRunning(value);
-            }}
-            aria-label="Prevent sleep while running"
-          />
-        }
-      />
-      <SettingsRow
-        label="Show global resources button"
-        description="Show the app-wide resource monitor in the header."
-        control={
-          <Switch
-            checked={showGlobalResourceMonitor}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("showGlobalResourceMonitor");
-              setShowGlobalResourceMonitor(value);
-            }}
-            aria-label="Show global resources button"
-          />
-        }
-      />
-      <SettingsRow
-        label="Show navigator resource stats"
-        description="Show compact live CPU and memory chips in task navigator rows."
-        control={
-          <Switch
-            checked={showNavigatorResourceStats}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("showNavigatorResourceStats");
-              setShowNavigatorResourceStats(value);
-            }}
-            aria-label="Show navigator resource stats"
-          />
-        }
-      />
-      <SettingsRow
-        label="Pin context usage breakdown"
-        description="Keep the context window breakdown visible near the chat composer when usage data is available."
-        control={
-          <Switch
-            checked={pinContextUsageBreakdown}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("pinContextUsageBreakdown");
-              setPinContextUsageBreakdown(value);
-            }}
-            aria-label="Pin context usage breakdown"
-          />
-        }
-      />
-      <SettingsRow
-        label="Quote reply on text selection"
-        description="Selecting assistant text shows a quote button that inserts the selection into the composer."
-        control={
-          <Switch
-            checked={quoteReplyEnabled}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("quoteReplyEnabled");
-              setQuoteReplyEnabled(value);
-            }}
-            aria-label="Quote reply on text selection"
-          />
-        }
-      />
-      <VoiceSettingsSection />
-      <SettingsRow
-        label="Data migration"
-        description={
-          migrationProgressLabel ??
-          "Retry moving local SQLite tasks and epics to cloud."
-        }
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={migrationIsRunning}
-            data-testid="settings-reattempt-migration"
-            onClick={() => {
-              startMigrationRun();
-            }}
-          >
-            {migrationIsRunning ? (
-              <AgentSpinningDots
-                className="text-muted-foreground"
-                testId="settings-reattempt-migration-spinner"
-                variant={undefined}
+    <SettingsPanelShell
+      title="General"
+      description="App behavior, agent activity, and local data controls."
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+        <SettingsGroup
+          title="Chat & composer"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <VoiceSettingsSection />
+          <SettingsRow
+            label="Quote reply on text selection"
+            description="Selecting assistant text shows a quote button that inserts the selection into the composer."
+            control={
+              <Switch
+                checked={quoteReplyEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("quoteReplyEnabled");
+                  setQuoteReplyEnabled(value);
+                }}
+                aria-label="Quote reply on text selection"
               />
-            ) : null}
-            Re-attempt migration
-          </Button>
-        }
-      />
-      <SettingsRow
-        label="Product tour"
-        description="Replay the first-launch onboarding tour."
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-testid="settings-replay-onboarding"
-            onClick={() => {
-              restartOnboarding();
-              void navigate({
-                to: "/onboarding",
-                search: { replay: true },
-              });
-            }}
+            }
+          />
+          <SettingsRow
+            label={`Steer with ${MOD_ENTER_LABEL}`}
+            description={`While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`}
+            control={
+              <Switch
+                checked={steerOnModEnterEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("steerOnModEnterEnabled");
+                  setSteerOnModEnterEnabled(value);
+                }}
+                aria-label={`Steer with ${MOD_ENTER_LABEL}`}
+              />
+            }
+          />
+          <SettingsRow
+            label="Pin context usage breakdown"
+            description="Keep the context window breakdown visible near the chat composer when usage data is available."
+            control={
+              <Switch
+                checked={pinContextUsageBreakdown}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("pinContextUsageBreakdown");
+                  setPinContextUsageBreakdown(value);
+                }}
+                aria-label="Pin context usage breakdown"
+              />
+            }
+          />
+        </SettingsGroup>
+
+        <SettingsGroup
+          title="Running agents"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            label="Prevent sleep while running"
+            description="Keep the computer awake while an agent is running, so work continues when you step away."
+            control={
+              <Switch
+                checked={preventSleepWhileRunning}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("preventSleepWhileRunning");
+                  setPreventSleepWhileRunning(value);
+                }}
+                aria-label="Prevent sleep while running"
+              />
+            }
+          />
+          <SettingsRow
+            label="Show global resources button"
+            description="Show the app-wide resource monitor in the header."
+            control={
+              <Switch
+                checked={showGlobalResourceMonitor}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("showGlobalResourceMonitor");
+                  setShowGlobalResourceMonitor(value);
+                }}
+                aria-label="Show global resources button"
+              />
+            }
+          />
+          <SettingsRow
+            label="Show navigator resource stats"
+            description="Show compact live CPU and memory chips in task navigator rows."
+            control={
+              <Switch
+                checked={showNavigatorResourceStats}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("showNavigatorResourceStats");
+                  setShowNavigatorResourceStats(value);
+                }}
+                aria-label="Show navigator resource stats"
+              />
+            }
+          />
+        </SettingsGroup>
+
+        <SettingsGroup
+          title="Worktrees"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <WorktreeBranchPrefixSection />
+        </SettingsGroup>
+
+        {featureSettingsAvailable ? (
+          <SettingsGroup
+            title="Experimental"
+            tone="default"
+            dataTestId={undefined}
+            fill={false}
           >
-            Replay tour
-          </Button>
-        }
-      />
-      <DangerZoneSection />
+            <SettingsRow
+              label="Agent roles"
+              description={
+                featureSettings.isError
+                  ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
+                  : "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts."
+              }
+              control={
+                <Switch
+                  checked={featureSettings.data?.agentRoles === true}
+                  disabled={
+                    featureSettings.data === undefined ||
+                    setAgentRoles.isPending
+                  }
+                  onCheckedChange={(enabled) => {
+                    setAgentRoles.mutate(enabled);
+                  }}
+                  aria-label="Agent roles"
+                />
+              }
+            />
+          </SettingsGroup>
+        ) : null}
+
+        <SettingsGroup
+          title="Setup & migration"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            label="Product tour"
+            description="Replay the first-launch onboarding tour."
+            control={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="settings-replay-onboarding"
+                onClick={() => {
+                  restartOnboarding();
+                  void navigate({
+                    to: "/onboarding",
+                    search: { replay: true },
+                  });
+                }}
+              >
+                Replay tour
+              </Button>
+            }
+          />
+          <SettingsRow
+            label="Data migration"
+            description={
+              migrationProgressLabel ??
+              "Retry moving local SQLite tasks and epics to cloud."
+            }
+            control={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={migrationIsRunning}
+                data-testid="settings-reattempt-migration"
+                onClick={() => {
+                  startMigrationRun();
+                }}
+              >
+                {migrationIsRunning ? (
+                  <AgentSpinningDots
+                    className="text-muted-foreground"
+                    testId="settings-reattempt-migration-spinner"
+                    variant={undefined}
+                  />
+                ) : null}
+                Re-attempt migration
+              </Button>
+            }
+          />
+        </SettingsGroup>
+
+        <DangerZoneSection />
+      </div>
     </SettingsPanelShell>
   );
 }
 
-// Destructive local actions live inline so the settings panel keeps one
-// rounded outer border while each action still reads as its own row.
+/**
+ * App-global destruction only.
+ *
+ * This box used to hold three rows at three different scopes: "File Edit
+ * Snapshots" (ONE MACHINE's data - and it carried its own host dropdown, so a
+ * red button took its target from a control shaped like a form field),
+ * "Remove Traycer" (THIS DEVICE's installation) and "Local app state" (THIS
+ * APP). Only the last is app-global, so only it stays. The other two moved to
+ * the machine's own page, where the page title already names the target.
+ */
 function DangerZoneSection() {
-  const { hostManagement } = useRunnerHost();
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const uninstall = useRunnerUninstallTraycer();
-
   return (
-    <>
-      <section className="bg-destructive/5" data-testid="settings-danger-zone">
-        <div className="border-b border-border/40 px-5 py-4">
-          <h2 className="text-ui font-semibold text-foreground">Danger Zone</h2>
-        </div>
-        <SettingsFileEditSnapshotsSection />
-        <SettingsLocalAppStateSection />
-        {hostManagement === null ? null : (
-          <RemoveTraycerDangerRow
-            isPending={uninstall.isPending}
-            isSuccess={uninstall.isSuccess}
-            onRemove={() => {
-              setConfirmOpen(true);
-            }}
-          />
-        )}
-      </section>
-      {hostManagement === null ? null : (
-        <ConfirmDestructiveDialog
-          open={confirmOpen}
-          onOpenChange={setConfirmOpen}
-          title="Remove Traycer from this device?"
-          description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your chats, history, and credentials stay on this device - you can reinstall anytime from Settings."
-          cascadeSummary={null}
-          actionLabel="Remove Traycer"
-          isPending={uninstall.isPending}
-          onConfirm={() => {
-            uninstall.mutate(undefined, {
-              onSuccess: () => {
-                setConfirmOpen(false);
-              },
-            });
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function RemoveTraycerDangerRow(props: {
-  readonly isPending: boolean;
-  readonly isSuccess: boolean;
-  readonly onRemove: () => void;
-}) {
-  const { isPending, isSuccess, onRemove } = props;
-
-  if (isSuccess) {
-    return (
-      <SettingsRow
-        label="Traycer removed"
-        description="Background components were removed. Your chats, history, and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
-        control={
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            data-testid="settings-quit-after-uninstall"
-            onClick={() => {
-              requestAppQuit();
-            }}
-          >
-            Quit Traycer
-          </Button>
-        }
-      />
-    );
-  }
-
-  return (
-    <SettingsRow
-      label="Remove Traycer"
-      description="Stops the background host and services and removes the installed components from this device. Your chats and history are preserved, and the host won't reinstall itself."
-      control={
-        <Button
-          type="button"
-          variant="destructive"
-          size="sm"
-          disabled={isPending}
-          data-testid="settings-remove-traycer"
-          onClick={onRemove}
-        >
-          {isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId="settings-remove-traycer-spinner"
-              variant={undefined}
-            />
-          ) : null}
-          Remove Traycer
-        </Button>
-      }
-    />
-  );
-}
-
-function SettingsFileEditSnapshotsSection() {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const client = useHostClient();
-  const queryClient = useQueryClient();
-  const currentUserId = useAuthStore(
-    (state) => state.contextMetadata?.userId ?? state.profile?.userId ?? null,
-  );
-  const storageSizeQuery = useHostQuery<
-    HostRpcRegistry,
-    "snapshots.getLocalStorageSize"
-  >({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "snapshots.getLocalStorageSize",
-    params: SNAPSHOTS_LOCAL_STORAGE_PARAMS,
-    options: null,
-  });
-  const clearSnapshotsMutation = useHostMutation<
-    HostRpcRegistry,
-    "snapshots.clearLocalSnapshots",
-    ClearLocalSnapshotsMutationContext
-  >({
-    client,
-    method: "snapshots.clearLocalSnapshots",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: snapshotsMutationKeys.clearLocalSnapshots(),
-      onMutate: () => ({
-        hostId: client.getActiveHostId(),
-        userId: currentUserId,
-      }),
-      onSuccess: (result, _variables, context) => {
-        if (context.hostId !== null) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.method<
-              HostRpcRegistry,
-              "snapshots.getLocalStorageSize"
-            >(
-              context.hostId,
-              "snapshots.getLocalStorageSize",
-              SNAPSHOTS_LOCAL_STORAGE_PARAMS,
-            ),
-          });
-        }
-        if (context.hostId !== null && context.userId !== null) {
-          useLocalSnapshotClearStore
-            .getState()
-            .markCleared(context.userId, context.hostId, Date.now());
-        }
-        setConfirmOpen(false);
-        toast.success("Cleared file edit snapshots", {
-          description: `${formatSnapshotBytes(result.clearedBytes)} removed.`,
-        });
-      },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't clear file edit snapshots."),
-    },
-  });
-
-  return (
-    <>
-      <SettingsRow
-        label="File Edit Snapshots"
-        description="Pre-edit file snapshots for Undo and cached long plan content on this device. This data stays local and is not synced."
-        control={
-          <div className="flex flex-col items-end gap-2">
-            <div
-              className="font-mono text-code-xs text-muted-foreground"
-              data-testid="settings-local-snapshots-size"
-            >
-              <SnapshotsSize query={storageSizeQuery} />
-            </div>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={clearSnapshotsMutation.isPending}
-              data-testid="settings-clear-file-edit-snapshots"
-              onClick={() => {
-                setConfirmOpen(true);
-              }}
-            >
-              {clearSnapshotsMutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="settings-clear-file-edit-snapshots-spinner"
-                  variant={undefined}
-                />
-              ) : null}
-              Clear file edit snapshots
-            </Button>
-          </div>
-        }
-      />
-      <ConfirmDestructiveDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Clear file edit snapshots?"
-        description="Cleared snapshots cannot be restored. Existing chat history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
-        cascadeSummary={null}
-        actionLabel="Clear file edit snapshots"
-        isPending={clearSnapshotsMutation.isPending}
-        onConfirm={() => {
-          clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);
-        }}
-      />
-    </>
+    <SettingsGroup
+      title="Danger Zone"
+      tone="danger"
+      dataTestId="settings-danger-zone"
+      fill={false}
+    >
+      <SettingsLocalAppStateSection />
+    </SettingsGroup>
   );
 }
 
@@ -503,7 +397,7 @@ function SettingsLocalAppStateSection() {
     <>
       <SettingsRow
         label="Local app state"
-        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared separately above."
+        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared from the host's own Overview page."
         control={
           <Button
             type="button"
@@ -540,41 +434,4 @@ function SettingsLocalAppStateSection() {
       />
     </>
   );
-}
-
-function SnapshotsSize(props: {
-  readonly query: {
-    readonly isPending: boolean;
-    readonly isError: boolean;
-    readonly data: { readonly bytes: number } | undefined;
-  };
-}) {
-  const { query } = props;
-  if (query.isPending) {
-    return (
-      <span className="inline-flex items-center gap-1.5">
-        <AgentSpinningDots
-          className="text-muted-foreground"
-          testId="settings-local-snapshots-size-spinner"
-          variant={undefined}
-        />
-        Calculating
-      </span>
-    );
-  }
-  if (query.isError) return "Unavailable";
-  return formatSnapshotBytes(query.data?.bytes ?? 0);
-}
-
-function formatSnapshotBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"] as const;
-  const exponent = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = bytes / 1024 ** exponent;
-  const precision =
-    exponent === 0 || value >= 10 || Number.isInteger(value) ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[exponent] ?? "TB"}`;
 }

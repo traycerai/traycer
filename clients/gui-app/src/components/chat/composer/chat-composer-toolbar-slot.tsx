@@ -15,6 +15,7 @@ interface ChatComposerToolbarSlotProps {
   readonly store: ComposerToolbarStore;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
   readonly canSubmit: boolean;
+  readonly attachmentPending: boolean;
   readonly onSubmit: () => void;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly hasPendingApprovals: boolean;
@@ -72,8 +73,8 @@ function ChatComposerToolbarSlotView(props: ChatComposerToolbarSlotViewProps) {
       store={props.store}
       onAttachImages={props.onAttachImages}
       showNextTurnPermissionNote={props.showNextTurnPermissionNote}
-      showAgentModeTooltip={false}
       canSubmit={props.canSubmit}
+      attachmentPending={props.attachmentPending}
       onSubmit={props.onSubmit}
       activeTurnStatus={props.activeTurnStatus}
       stopDisabled={props.stopDisabled}

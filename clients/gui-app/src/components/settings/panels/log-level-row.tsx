@@ -31,6 +31,10 @@ interface LogLevelRowProps {
   readonly scope: LogLevelScope;
   readonly label: string;
   readonly description: string;
+  // Externally-driven disable, e.g. a caller-coordinated bulk reset across
+  // several `LogLevelRow`s - so the row can't fire a conflicting per-scope
+  // mutation while that coordinated operation is in flight.
+  readonly disabled: boolean;
 }
 
 /**
@@ -40,7 +44,7 @@ interface LogLevelRowProps {
  * therefore the config — is absent.
  */
 export function LogLevelRow(props: LogLevelRowProps) {
-  const { scope, label, description } = props;
+  const { scope, label, description, disabled } = props;
   const query = useRunnerLogLevelsQuery();
   const setMutation = useRunnerLogLevelsSet();
 
@@ -56,7 +60,12 @@ export function LogLevelRow(props: LogLevelRowProps) {
       control={
         <Select
           value={value}
-          disabled={query.isPending || query.isError || setMutation.isPending}
+          disabled={
+            disabled ||
+            query.isPending ||
+            query.isError ||
+            setMutation.isPending
+          }
           onValueChange={(next) => {
             if (isLogLevel(next)) {
               setMutation.mutate({ scope, level: next });

@@ -7,18 +7,26 @@
  * from the runtime tray PNGs: Windows Start menu and desktop shortcuts resolve
  * their image from the icon resource embedded in the packaged executable, so a
  * missing `icon.ico` silently falls back to Electron's generic executable icon.
+ *
+ * Linux fails the same way for a subtler reason: the freedesktop icon theme
+ * spec only searches size directories declared in the theme's `index.theme`,
+ * and hicolor stops at 512x512. Given a lone 1024x1024 source PNG,
+ * electron-builder installs exactly one icon at `hicolor/1024x1024/apps/` -
+ * which no icon lookup visits - so the `.desktop` entry's `Icon=` key resolves
+ * to nothing. The `icons/` set below is what `build.linux.icon` points at.
  */
 
 const { openSync, fstatSync, readSync, closeSync } = require("node:fs");
 const { resolve } = require("node:path");
+const { PNG_SIGNATURE } = require("../assets/png-codec.cjs");
 
 const bundleDir = resolve(__dirname, "..", "..", "resources", "bundle");
 
-const PNG_SIGNATURE = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
 const ICNS_SIGNATURE = Buffer.from("icns", "ascii");
 const REQUIRED_ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
+// Kept in sync with `ICON_SIZES` in `scripts/assets/generate-linux-icons.cjs`.
+// Every entry must be a size hicolor's `index.theme` declares.
+const REQUIRED_LINUX_ICON_SIZES = [16, 24, 32, 48, 64, 128, 256, 512];
 
 const problems = [];
 
@@ -132,9 +140,30 @@ function checkIco(name) {
   }
 }
 
+function checkLinuxIconSet() {
+  for (const size of REQUIRED_LINUX_ICON_SIZES) {
+    const name = `icons/${size}x${size}.png`;
+    const buffer = readAsset(name);
+    if (buffer === null) continue;
+    if (!buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+      problems.push(`not a valid PNG (bad signature): ${name}`);
+      continue;
+    }
+    // electron-builder maps each file to a hicolor size directory, so a
+    // filename that disagrees with its IHDR installs the icon under the
+    // wrong size and renders blurry (or not at all).
+    const width = buffer.readUInt32BE(16);
+    const height = buffer.readUInt32BE(20);
+    if (width !== size || height !== size) {
+      problems.push(`${name} is ${width}x${height}, expected ${size}x${size}`);
+    }
+  }
+}
+
 checkPng("icon.png");
 checkIcns("icon.icns");
 checkIco("icon.ico");
+checkLinuxIconSet();
 
 if (problems.length > 0) {
   console.error(
@@ -144,11 +173,15 @@ if (problems.length > 0) {
       "         The desktop build refuses to package without native app icons.\n" +
       "         Windows requires resources/bundle/icon.ico so Start menu and\n" +
       "         desktop shortcuts use the Traycer icon instead of Electron's\n" +
-      "         default executable icon.",
+      "         default executable icon.\n" +
+      "         Linux requires the resources/bundle/icons set so the hicolor\n" +
+      "         theme can resolve the .desktop entry's Icon= key - regenerate\n" +
+      "         it via 'bun scripts/assets/generate-linux-icons.cjs'.",
   );
   process.exit(1);
 }
 
 console.log(
-  `[desktop] app icon precheck ok - icon.png, icon.icns, and icon.ico present at ${bundleDir}.`,
+  `[desktop] app icon precheck ok - icon.png, icon.icns, icon.ico, and the ` +
+    `${REQUIRED_LINUX_ICON_SIZES.length}-size Linux icons set present at ${bundleDir}.`,
 );

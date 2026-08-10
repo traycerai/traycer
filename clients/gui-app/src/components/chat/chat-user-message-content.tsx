@@ -129,8 +129,12 @@ function MentionChipIcon({
   if (mention.contextType === "epic") {
     return <Layers className={MENTION_ICON_CLASS} aria-hidden />;
   }
-  if (mention.contextType === "chat") {
-    const Icon = EPIC_NODE_ICONS.chat;
+  if (
+    mention.contextType === "chat" ||
+    mention.contextType === "terminal-agent" ||
+    mention.contextType === "terminal"
+  ) {
+    const Icon = EPIC_NODE_ICONS[mention.contextType];
     return <Icon className={MENTION_ICON_CLASS} aria-hidden />;
   }
   if (

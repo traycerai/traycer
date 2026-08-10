@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -14,6 +13,7 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
+  AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
   MessageSegment,
@@ -78,7 +78,14 @@ const STOPPED: ChatMessageStoppedInfo = {
   stoppedAt: 1_700_000_000_000,
   reason: "Stop requested by owner.",
   turnHadOutput: true,
-  turnReplyText: "Here is the answer.",
+  turnReplySegments: [
+    {
+      id: "seg-reply",
+      kind: "text",
+      markdown: "Here is the answer.",
+      isStreaming: false,
+    },
+  ],
 };
 
 // A content-less boundary row whose turn genuinely never produced anything -
@@ -86,7 +93,18 @@ const STOPPED: ChatMessageStoppedInfo = {
 const STOPPED_NO_OUTPUT: ChatMessageStoppedInfo = {
   ...STOPPED,
   turnHadOutput: false,
-  turnReplyText: "",
+  turnReplySegments: [],
+};
+
+const META: AssistantTurnMeta = {
+  provider: "claude",
+  providerLabel: "Claude Code",
+  profileLabel: "Work",
+  modelLabel: "Claude Sonnet 4",
+  reasoningEffort: "high",
+  reasoningEffortLabel: "High",
+  serviceTier: null,
+  costUsd: null,
 };
 
 interface BodyPropsOverrides {
@@ -95,6 +113,7 @@ interface BodyPropsOverrides {
   readonly createdAt?: number;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
+  readonly meta?: AssistantTurnMeta | null;
 }
 
 function bodyProps(overrides: BodyPropsOverrides) {
@@ -108,7 +127,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     pausedSinceMs: null,
     completedAt: overrides.completedAt ?? null,
     stopped: overrides.stopped ?? null,
-    meta: null,
+    meta: overrides.meta ?? null,
     nextStepActions: null,
     forkAction: null,
   };
@@ -230,7 +249,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
 
     const copyButton = screen.getByTestId("assistant-reply-copy");
     fireEvent.click(copyButton);
-    expect(clipboard.writeText).toHaveBeenCalledWith(STOPPED.turnReplyText);
+    expect(clipboard.writeText).toHaveBeenCalledWith("Here is the answer.");
   });
 
   it("renders nothing for an empty, non-stopped, ended turn (unchanged baseline)", () => {
@@ -304,5 +323,28 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       ).toBeGreaterThan(0);
     });
     expect(screen.getAllByText("Stopped").length).toBeGreaterThan(0);
+  });
+
+  it("shows the turn's profile snapshot in the elapsed footer tooltip", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          createdAt: 0,
+          completedAt: 5_000,
+          meta: META,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Profile").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Work").length).toBeGreaterThan(0);
   });
 });

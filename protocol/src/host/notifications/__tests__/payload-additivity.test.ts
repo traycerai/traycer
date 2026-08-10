@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   findBreakingChange,
+  toUnknownKeyTree,
   toJsonSchemaFingerprint,
 } from "@traycer/protocol/framework/json-schema-fingerprint";
 import {
@@ -12,6 +13,7 @@ import {
   hostNotificationInterviewPayloadSchema,
   hostNotificationKnownPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
+  hostNotificationWorktreeDeletionPayloadSchema,
   type HostNotificationKnownPayloadKind,
 } from "@traycer/protocol/host/notifications/payloads";
 import { PAYLOAD_FINGERPRINT_BASELINE } from "./payload-additivity-baseline";
@@ -32,6 +34,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<HostNotificationKnownPayloadKind, z.ZodType> 
       hostNotificationWorkspaceOperationFailedPayloadSchema,
     approval: hostNotificationApprovalPayloadSchema,
     interview: hostNotificationInterviewPayloadSchema,
+    worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
   };
 
 const KINDS = [
@@ -41,6 +44,7 @@ const KINDS = [
   "workspace_operation_failed",
   "approval",
   "interview",
+  "worktree_deletion",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {
@@ -64,6 +68,11 @@ describe("host notification payload additivity", () => {
       const breaking = findBreakingChange(
         PAYLOAD_FINGERPRINT_BASELINE[kind],
         current,
+        // The committed baseline is a stored fingerprint with no schema to
+        // re-render, so no input tree is available for the previous side;
+        // unknown-key policy is not part of what this guard checks.
+        null,
+        toUnknownKeyTree(LIVE_PAYLOAD_SCHEMAS[kind]),
       );
       const failure =
         breaking === null

@@ -3,23 +3,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 // In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
-// string hash; the store argument is ignored. Re-created on every
-// `vi.resetModules()` so each test starts with an empty IndexedDB.
+// string hash; the store argument is ignored. The Map is hoisted so tests can
+// reinstall a working `set` after a rejecting override without losing the body.
+const idbData = vi.hoisted(() => new Map<string, unknown>());
+
+function idbStringKey(key: IDBValidKey): string {
+  if (typeof key !== "string") {
+    throw new Error("landing image store keys are string hashes");
+  }
+  return key;
+}
+
 vi.mock("idb-keyval", () => {
-  const data = new Map<string, unknown>();
   const dummyStore = () => Promise.reject(new Error("unused"));
   return {
     createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(data.get(key))),
+    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
     set: vi.fn((key: string, value: unknown) => {
-      data.set(key, value);
+      idbData.set(key, value);
       return Promise.resolve();
     }),
     del: vi.fn((key: string) => {
-      data.delete(key);
+      idbData.delete(key);
       return Promise.resolve();
     }),
-    keys: vi.fn(() => Promise.resolve(Array.from(data.keys()))),
+    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
   };
 });
 
@@ -33,6 +41,13 @@ let urlCounter = 0;
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
+}
+
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 const EMPTY_DOC: JsonContent = {
@@ -69,7 +84,7 @@ type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
   readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
-  readonly composer: typeof import("@/stores/composer/landing-composer-store");
+  readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
   readonly idb: typeof import("idb-keyval");
 };
 
@@ -77,6 +92,7 @@ async function loadModules(opts: {
   readonly desktop: boolean;
 }): Promise<Modules> {
   vi.resetModules();
+  idbData.clear();
   if (opts.desktop) {
     Reflect.set(globalThis, "runnerHost", {
       windows: { windowId: "win-test" },
@@ -84,17 +100,30 @@ async function loadModules(opts: {
   } else {
     Reflect.deleteProperty(globalThis, "runnerHost");
   }
+  const idb = await import("idb-keyval");
+  // Always reinstall a working set after reset - prior tests may have left a
+  // rejecting mockImplementation on the shared idb-keyval mock module.
+  vi.mocked(idb.set).mockImplementation((key, value) => {
+    idbData.set(idbStringKey(key), value);
+    return Promise.resolve();
+  });
+  vi.mocked(idb.get).mockImplementation((key) =>
+    Promise.resolve(idbData.get(idbStringKey(key))),
+  );
+  vi.mocked(idb.del).mockImplementation((key) => {
+    idbData.delete(idbStringKey(key));
+    return Promise.resolve();
+  });
+  vi.mocked(idb.keys).mockImplementation(() =>
+    Promise.resolve(Array.from(idbData.keys())),
+  );
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
   const draft = await import("@/stores/home/landing-draft-store");
-  const composer = await import("@/stores/composer/landing-composer-store");
-  const idb = await import("idb-keyval");
+  const runtime = await import("@/stores/home/draft-runtime-registry");
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  composer.useLandingComposerStore.setState({
-    currentContent: EMPTY_DOC,
-    createdDraftId: null,
-  });
-  return { gc, store, draft, composer, idb };
+  runtime.draftRuntimeRegistry.resetForTesting();
+  return { gc, store, draft, runtime, idb };
 }
 
 function makeDraft(
@@ -148,6 +177,12 @@ describe("landing-image-gc", () => {
 
   it("[C1] the first desktop projection flips the ready gate and runs the sweep", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] Open the deletion gate WITHOUT flipping readiness: a non-empty
+    // authoritative snapshot marks the roots trustworthy but, unlike
+    // `markLandingEditorMounted`, does not itself fire `markLandingDraftsReady`
+    // (which mount now does). That keeps `landingDraftsReady()` false below so
+    // this test still exercises the FIRST projection flipping the ready gate.
+    m.gc.markLandingDraftsAuthoritativeNonEmpty();
     await m.idb.set(
       "restored-orphan",
       bytesOf([7, 8, 9]),
@@ -170,8 +205,35 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain("restored-orphan");
   });
 
+  it("[B2] defers orphan deletion on desktop while the roots are untrustworthy", async () => {
+    const m = await loadModules({ desktop: true });
+    // Restored bytes, ready gate open (draft set known), but NO trustworthy
+    // signal yet: neither markLandingDraftsAuthoritativeNonEmpty nor
+    // markLandingEditorMounted. A cold-start empty projection would otherwise
+    // reap every restored image as an "orphan".
+    await m.idb.set("cold-orphan", bytesOf([1, 2, 3, 4]), m.store.imageStore());
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    await m.gc.reconcile();
+    await flush();
+
+    // Gate closed → no delete.
+    expect(await m.store.imageHashKeys()).toContain("cold-orphan");
+
+    // Opening the gate (editor mounted) re-runs a scheduled reconcile so the
+    // genuine orphan is reaped once roots are trustworthy.
+    m.gc.markLandingEditorMounted();
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+
+    expect(await m.store.imageHashKeys()).not.toContain("cold-orphan");
+  });
+
   it("once ready, a referenced restored image survives while an unreferenced one is collected", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] Roots are trustworthy (landing editor mounted) so the sweep may delete.
+    m.gc.markLandingEditorMounted();
     await m.idb.set("restored-keep", bytesOf([4, 5, 6]), m.store.imageStore());
     await m.idb.set(
       "restored-orphan",
@@ -204,17 +266,24 @@ describe("landing-image-gc", () => {
     m.gc.markLandingDraftsReady();
     await flush();
 
-    // Pasted image: bytes in IDB + session, node synchronously in the live editor.
+    // Pasted image: bytes in IDB + session, node synchronously in this draft's
+    // keyed live runtime.
     const pasted = await m.store.putImage(bytesOf([10, 11, 12]));
-    m.composer.useLandingComposerStore.setState({
-      currentContent: docWithImages(imageNode(pasted, 3)),
-      createdDraftId: null,
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, { id: "live", content: EMPTY_DOC, lastTouchedAt: 1 }),
+      ],
+      activeDraftId: "live",
     });
+    const runtime = m.runtime.draftRuntimeRegistry.getOrHydrate("live");
+    if (runtime === null) throw new Error("expected live draft runtime");
+    runtime.setSnapshot(docWithImages(imageNode(pasted, 3)), null);
 
     // An unrelated, image-free draft is closed → triggers a reconcile.
     m.draft.useLandingDraftStore.setState({
       drafts: [
-        makeDraft(m, { id: "other", content: EMPTY_DOC, lastTouchedAt: 1 }),
+        makeDraft(m, { id: "live", content: EMPTY_DOC, lastTouchedAt: 1 }),
+        makeDraft(m, { id: "other", content: EMPTY_DOC, lastTouchedAt: 2 }),
       ],
       activeDraftId: "other",
     });
@@ -277,8 +346,12 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).toContain(pasted);
   });
 
-  it("deletes orphan bytes on the cold-start sweep (session empty)", async () => {
+  it("deletes orphan bytes once the sweep is unblocked (session empty)", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] The deleting sweep only runs once the roots are trustworthy; mounting
+    // the landing editor unblocks it. (The cold-start deferral itself — no delete
+    // while untrustworthy — is covered separately.)
+    m.gc.markLandingEditorMounted();
     await m.idb.set("orphan", bytesOf([1]), m.store.imageStore());
     m.gc.markLandingDraftsReady();
     await flush();
@@ -290,6 +363,9 @@ describe("landing-image-gc", () => {
 
   it("close reclaims the session entry, then the bytes on the settling sweep", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] Roots are trustworthy (landing editor mounted) so post-close sweeps
+    // may reclaim the session entry and then the bytes.
+    m.gc.markLandingEditorMounted();
     m.gc.markLandingDraftsReady();
     await flush();
 
@@ -326,199 +402,8 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain(hash);
   });
 
-  it("budget eviction never targets the active draft, even when it is the oldest", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const big = 40 * 1024 * 1024;
-    const activeHash = await m.store.putImage(bytesOf([1, 1, 1]));
-    const inactiveHash = await m.store.putImage(bytesOf([2, 2, 2]));
-
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        // Active is the OLDEST by lastTouchedAt — it must still be spared.
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(activeHash, big)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "inactive",
-          content: docWithImages(imageNode(inactiveHash, big)),
-          lastTouchedAt: 2,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // 80 MB referenced + a tiny paste exceeds the 64 MB budget.
-    const allowed = m.gc.reserveLandingImageBudget(1024);
-    await flush();
-
-    expect(allowed).toBe(true);
-    const draftIds = m.draft.useLandingDraftStore
-      .getState()
-      .drafts.map((d) => d.id);
-    expect(draftIds).toEqual(["active"]);
-    const keys = await m.store.imageHashKeys();
-    expect(keys).toContain(activeHash);
-    expect(keys).not.toContain(inactiveHash);
-  });
-
-  it("budget eviction picks the oldest inactive draft and reclaims its bytes", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const size = 30 * 1024 * 1024;
-    const oldHash = await m.store.putImage(bytesOf([3, 3, 3]));
-    const midHash = await m.store.putImage(bytesOf([4, 4, 4]));
-    const activeHash = await m.store.putImage(bytesOf([5, 5, 5]));
-
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "old",
-          content: docWithImages(imageNode(oldHash, size)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "mid",
-          content: docWithImages(imageNode(midHash, size)),
-          lastTouchedAt: 2,
-        }),
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(activeHash, size)),
-          lastTouchedAt: 3,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // 90 MB referenced; evicting the single oldest inactive draft (30 MB) drops
-    // it to 60 MB ≤ 64 MB, so only "old" is evicted.
-    const allowed = m.gc.reserveLandingImageBudget(1024);
-    await flush();
-
-    expect(allowed).toBe(true);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
-    const draftIds = m.draft.useLandingDraftStore
-      .getState()
-      .drafts.map((d) => d.id);
-    expect(draftIds).toEqual(["mid", "active"]);
-    const keys = await m.store.imageHashKeys();
-    expect(keys).not.toContain(oldHash);
-    expect(keys).toContain(midHash);
-    expect(keys).toContain(activeHash);
-  });
-
-  it("budget counts a hash shared across drafts once (content-addressed dedupe)", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const size = 40 * 1024 * 1024;
-    const shared = await m.store.putImage(bytesOf([9, 9, 9]));
-    // Two drafts reference the SAME hash — one stored copy, so it must count once.
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "a",
-          content: docWithImages(imageNode(shared, size)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(shared, size)),
-          lastTouchedAt: 2,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // Deduped referenced bytes = 40 MB; +10 MB = 50 MB ≤ 64 MB → allowed, no
-    // eviction. (Double-counting would read 80 MB and evict draft "a".)
-    const allowed = m.gc.reserveLandingImageBudget(10 * 1024 * 1024);
-    await flush();
-
-    expect(allowed).toBe(true);
-    expect(toastInfo).not.toHaveBeenCalled();
-    expect(
-      m.draft.useLandingDraftStore.getState().drafts.map((d) => d.id),
-    ).toEqual(["a", "active"]);
-  });
-
-  it("blocks the paste when only the active draft remains and it still exceeds budget", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const activeHash = await m.store.putImage(bytesOf([6, 6, 6]));
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(activeHash, 60 * 1024 * 1024)),
-          lastTouchedAt: 1,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // Active alone is 60 MB; a 10 MB paste exceeds 64 MB and there is nothing
-    // inactive to evict → block.
-    const allowed = m.gc.reserveLandingImageBudget(10 * 1024 * 1024);
-    await flush();
-
-    expect(allowed).toBe(false);
-    expect(toastError).toHaveBeenCalledTimes(1);
-    expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
-  });
-
-  it("blocks the paste rather than evicting other drafts when there is no active draft", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const big = 40 * 1024 * 1024;
-    const hashA = await m.store.putImage(bytesOf([7, 7, 7]));
-    const hashB = await m.store.putImage(bytesOf([8, 8, 8]));
-
-    // Two inactive drafts (80 MB) with NO active draft — e.g. the active draft
-    // was just closed while these remain. A paste here is unattributed, so it
-    // must be blocked, never evict (destroy) the surviving drafts.
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "a",
-          content: docWithImages(imageNode(hashA, big)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "b",
-          content: docWithImages(imageNode(hashB, big)),
-          lastTouchedAt: 2,
-        }),
-      ],
-      activeDraftId: null,
-    });
-
-    const allowed = m.gc.reserveLandingImageBudget(1024);
-    await flush();
-
-    expect(allowed).toBe(false);
-    expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastInfo).not.toHaveBeenCalled();
-    // Both drafts and their bytes survive — nothing was evicted.
-    expect(
-      m.draft.useLandingDraftStore.getState().drafts.map((d) => d.id),
-    ).toEqual(["a", "b"]);
-    const keys = await m.store.imageHashKeys();
-    expect(keys).toContain(hashA);
-    expect(keys).toContain(hashB);
-  });
+  // Budget admission tests live in landing-image-budget.test.ts (canonical
+  // service). GC no longer owns reserveLandingImageBudget.
 
   it("browser readies the sweep automatically after synchronous hydration", async () => {
     const m = await loadModules({ desktop: false });
@@ -526,5 +411,133 @@ describe("landing-image-gc", () => {
     await flush();
 
     expect(m.gc.landingDraftsReady()).toBe(true);
+  });
+
+  it("partial putImage failure rolls back failed presence and reclaims the successful sibling orphan", async () => {
+    // Real scheduleLandingImageReconcile + reconcile (not a no-op mock): after a
+    // multi-image ingest where one putImage rejects, the failed hash must not
+    // report present without durable bytes, and the successful sibling's now-
+    // unreferenced IDB bytes must be reclaimed by the two-phase reconcile chain.
+    const m = await loadModules({ desktop: false });
+    await flush();
+    expect(m.gc.landingDraftsReady()).toBe(true);
+
+    // Empty live roots (no drafts, no live runtime mirror - loadModules already
+    // reset draftRuntimeRegistry and this test never attaches one) so a
+    // successful put with no editor node is unreferenced and eligible for
+    // reclaim — the same shape as Promise.all multi-file attach after
+    // onRejected (no nodes inserted).
+    m.draft.useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+    });
+
+    const successBytes = bytesOf([11, 11, 11]);
+    const failBytes = bytesOf([22, 22, 22]);
+    const successHashExpected = await sha256Hex(successBytes);
+    const failedHash = await sha256Hex(failBytes);
+
+    // Reject by content hash so the failure is deterministic even if callers
+    // ever switch to concurrent putImage (call-count races which write fails).
+    vi.mocked(m.idb.set).mockImplementation((key, value) => {
+      const hash = idbStringKey(key);
+      if (hash === failedHash) {
+        return Promise.reject(new Error("idb write failed"));
+      }
+      idbData.set(hash, value);
+      return Promise.resolve();
+    });
+
+    const successHash = await m.store.putImage(successBytes);
+    expect(successHash).toBe(successHashExpected);
+    await expect(m.store.putImage(failBytes)).rejects.toThrow(
+      "idb write failed",
+    );
+
+    // (a) Failed hash is NOT left present with no durable bytes (putImage rollback).
+    expect(m.store.hasLandingImageBytes(failedHash)).toBe(false);
+    expect(await m.store.imageHashKeys()).not.toContain(failedHash);
+    expect(m.store.sessionObjectUrl(failedHash)).toBeNull();
+    // Successful sibling is still durable + session-cached (no node inserted).
+    expect(m.store.hasLandingImageBytes(successHash)).toBe(true);
+    expect(await m.store.imageHashKeys()).toContain(successHash);
+    expect(m.store.sessionObjectUrl(successHash)).not.toBeNull();
+
+    // (b) Real scheduler: onRejected would schedule reconcile. First sweep
+    // releases the unreferenced session entry and schedules a follow-up; the
+    // follow-up reclaims the now-unprotected IDB bytes.
+    m.gc.scheduleLandingImageReconcile();
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    expect(m.store.sessionObjectUrl(successHash)).toBeNull();
+    expect(await m.store.imageHashKeys()).toContain(successHash);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    expect(await m.store.imageHashKeys()).not.toContain(successHash);
+    expect(m.store.hasLandingImageBytes(successHash)).toBe(false);
+
+    // Restore a working set so later cases (same idb mock module) are not poisoned.
+    vi.mocked(m.idb.set).mockImplementation((key, value) => {
+      idbData.set(idbStringKey(key), value);
+      return Promise.resolve();
+    });
+  });
+
+  it("[B1+B2] later empty-inbound guard preserves roots; mount then reaps unreferenced restored bytes", async () => {
+    // Real projection → GC seam (no stubbed gates): the first empty desktop
+    // hydrate is authoritative and opens readiness, but NOT the deletion gate.
+    // After a live draft exists, a later spurious empty inbound preserves its
+    // roots. markLandingEditorMounted then opens the deletion gate and reaps
+    // genuine orphans while keeping the live draft's bytes.
+    const m = await loadModules({ desktop: true });
+    m.draft.applyLandingDraftDesktopProjection({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    await flush();
+    expect(m.gc.landingDraftsReady()).toBe(true);
+
+    await m.idb.set("keep", bytesOf([1, 1, 1]), m.store.imageStore());
+    await m.idb.set("orphan", bytesOf([2, 2, 2]), m.store.imageStore());
+
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, {
+          id: "alive",
+          content: docWithImages(imageNode("keep", 3)),
+          lastTouchedAt: 1,
+        }),
+      ],
+      activeDraftId: "alive",
+    });
+
+    // Later spurious empty inbound: B1 preserves the live draft.
+    m.draft.applyLandingDraftDesktopProjection({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    await flush();
+
+    expect(m.gc.landingDraftsReady()).toBe(true);
+    expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(await m.store.imageHashKeys()).toContain("keep");
+    expect(await m.store.imageHashKeys()).toContain("orphan");
+
+    // Mount: B2 deletion gate opens → orphan reaped, keep survives.
+    m.gc.markLandingEditorMounted();
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+
+    expect(m.gc.landingDraftsReady()).toBe(true);
+    const keys = await m.store.imageHashKeys();
+    expect(keys).toContain("keep");
+    expect(keys).not.toContain("orphan");
   });
 });

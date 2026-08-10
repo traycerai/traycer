@@ -1,10 +1,10 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type {
@@ -23,6 +23,29 @@ const spies = vi.hoisted(() => ({
     >(),
 }));
 
+const DEEPEST_SUBPAGE: CommandSubpage = {
+  id: "open:cat:nested",
+  title: "Nested",
+  useItems: (ctx: CommandContext): ReadonlyArray<CommandItem> => [
+    {
+      id: "open:cat:nested:create",
+      label: "Deep Create Leaf",
+      description: null,
+      keywords: ["create"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () =>
+        spies.openTileIntoTargetGroup({
+          tabId: ctx.activeTabId,
+          groupId: ctx.targetGroupId,
+        }),
+    },
+  ],
+};
+
 const INNER_SUBPAGE: CommandSubpage = {
   id: "open:cat",
   title: "Category",
@@ -37,6 +60,44 @@ const INNER_SUBPAGE: CommandSubpage = {
       shortcut: null,
       actionId: null,
       subpage: null,
+      run: () => undefined,
+    },
+    {
+      id: "open:cat:badged",
+      label: "Badged Leaf",
+      description: null,
+      keywords: ["badged"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () => undefined,
+      hostBadge: "Remote Box",
+    },
+    {
+      id: "open:cat:status",
+      label: "Unavailable Leaf",
+      description: null,
+      keywords: ["unavailable"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () => undefined,
+      statusBadge: "Unavailable: Remote Box",
+    },
+    {
+      id: "open:cat:nested",
+      label: "Nested",
+      description: null,
+      keywords: ["nested"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: DEEPEST_SUBPAGE,
       run: () => undefined,
     },
   ],
@@ -100,6 +161,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * The opener's search box. cmdk renders its input as a combobox (same accessor
+ * shape the modal palette's tests use), named by the `aria-label` the opener
+ * sets.
+ */
+function searchInput(): HTMLElement {
+  return screen.getByRole("combobox", { name: "Open into pane" });
+}
+
 describe("PaneOpener", () => {
   it("renders the opener categories inline in the pane", () => {
     render(
@@ -134,6 +204,34 @@ describe("PaneOpener", () => {
     );
     const input = container.querySelector('input[data-slot="command-input"]');
     expect(document.activeElement).not.toBe(input);
+  });
+
+  it("wraps arrow-key selection around both ends of the root list", async () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-loop"
+        groupId="group-loop"
+        active
+      />,
+    );
+    const rows = screen.getAllByRole("option");
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+
+    await waitFor(() => {
+      expect(first.getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(searchInput(), { key: "ArrowUp" });
+    await waitFor(() => {
+      expect(last.getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    await waitFor(() => {
+      expect(first.getAttribute("data-selected")).toBe("true");
+    });
   });
 
   it("selecting a leaf opens into THIS pane's group", () => {
@@ -176,6 +274,76 @@ describe("PaneOpener", () => {
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
 
+  it("root query surfaces leaves n levels deep with their full path", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-deep"
+        groupId="group-deep"
+        active={false}
+      />,
+    );
+    // Deep rows are absent while the query is empty.
+    expect(
+      screen.queryByRole("option", { name: /Deep Create Leaf/ }),
+    ).toBeNull();
+
+    fireEvent.change(searchInput(), { target: { value: "create" } });
+
+    // The level-3 leaf matches from the root; its accessible name carries the
+    // full path, so the hierarchy is what the user actually reads.
+    expect(
+      screen.getByRole("option", {
+        name: "Category → Nested → Deep Create Leaf",
+      }),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("option", { name: /Deep Create Leaf/ }));
+    expect(spies.openTileIntoTargetGroup).toHaveBeenCalledWith({
+      tabId: "tab-deep",
+      groupId: "group-deep",
+    });
+  });
+
+  it("includes a deep row's status badge in its accessible name", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-status"
+        groupId="group-status"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "unavailable" } });
+
+    expect(
+      screen.getByRole("option", {
+        name: "Category → Unavailable Leaf → Unavailable: Remote Box",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("selecting a deep row that bears a sub-page drills into it", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-drill"
+        groupId="group-drill"
+        active={false}
+      />,
+    );
+    fireEvent.change(searchInput(), { target: { value: "nested" } });
+
+    fireEvent.click(screen.getByRole("option", { name: "Category → Nested" }));
+
+    // Now inside the "Nested" sub-page: its leaf shows, Back is available.
+    expect(
+      screen.getByRole("option", { name: "Deep Create Leaf" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Back" })).not.toBeNull();
+  });
+
   it("two empty panes keep independent sub-page state", () => {
     render(
       <>
@@ -204,5 +372,25 @@ describe("PaneOpener", () => {
     expect(within(paneA).getByText("Inner Leaf")).not.toBeNull();
     expect(within(paneB).queryByText("Inner Leaf")).toBeNull();
     expect(within(paneB).getByText("Category")).not.toBeNull();
+  });
+
+  it("renders a host badge only on a sub-page row that carries one", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-badge"
+        groupId="group-badge"
+        active={false}
+      />,
+    );
+    fireEvent.click(screen.getByText("Category"));
+
+    expect(screen.getByText("Badged Leaf")).not.toBeNull();
+    expect(screen.getByText("Remote Box")).not.toBeNull();
+    // The unbadged row's own container carries no badge text.
+    const innerLeafRow = screen
+      .getByText("Inner Leaf")
+      .closest('[data-slot="command-item"]');
+    expect(innerLeafRow?.textContent).not.toContain("Remote Box");
   });
 });

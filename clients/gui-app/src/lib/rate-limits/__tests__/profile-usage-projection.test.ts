@@ -60,6 +60,24 @@ function openRouter(
   };
 }
 
+function huggingFace(
+  includedUsd: number | null,
+  usedUsd: number,
+): Extract<ProviderRateLimits, { provider: "huggingface"; available: true }> {
+  return {
+    provider: "huggingface",
+    available: true,
+    includedUsd,
+    usedUsd,
+    remainingIncludedUsd: includedUsd === null ? null : includedUsd - usedUsd,
+    limitUsd: null,
+    remainingLimitUsd: null,
+    numRequests: null,
+    periodStart: null,
+    periodEnd: null,
+  };
+}
+
 function claude(
   fiveHour: ProviderRateLimitWindow | null,
   sevenDay: ProviderRateLimitWindow | null,
@@ -74,6 +92,24 @@ function claude(
     sevenDaySonnet: null,
     modelScoped: [],
     extraUsage: null,
+  };
+}
+
+function grok(
+  period: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "grok"; available: true }> {
+  return {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: NOW,
+    periodEnd: NOW + 7 * 24 * 60 * 60 * 1000,
+    period,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
   };
 }
 
@@ -122,6 +158,40 @@ describe("projectProfileUsage", () => {
     expect(projection.compactWindow?.severity).toBe("running_low");
   });
 
+  it("projects Hugging Face included credits as a Credits meter with the projected severity", () => {
+    // Regression guard: `classifyProviderRateLimits` answers "unknown" for a
+    // credit provider (it has no windows by design), so taking severity from
+    // there instead of from the projected window discarded the bar entirely and
+    // reported the profile as unavailable.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(huggingFace(2, 1.8), NOW),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "credits",
+        name: "Included credits",
+        severity: "limited",
+        window: { usedPercent: 90, durationMinutes: null, resetsAt: null },
+      },
+    });
+  });
+
+  it("projects no Hugging Face window when the account has no included allowance", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(huggingFace(null, 5), NOW),
+      false,
+    );
+    // No denominator, so nothing to meter - not a failure state.
+    expect(projection.compactWindow).toBeNull();
+  });
+
   it("projects OpenRouter hard limits as an equivalent Credits meter", () => {
     const projection = project(
       "ok",
@@ -154,6 +224,49 @@ describe("projectProfileUsage", () => {
       reason: "missing_windows",
       compactWindow: null,
       windows: [],
+    });
+  });
+
+  it("projects Grok's billing-period window via the shared window path", () => {
+    // Grok rides `rateLimits.period` through the shared window projection, not
+    // the OpenRouter-style credit path - a live period yields a real compact
+    // bar and a non-unknown severity.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(grok(window(12, 10_080, NOW + 1)), NOW),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.severity).not.toBe("unknown");
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "healthy",
+      compactWindow: {
+        id: "period",
+        severity: "healthy",
+        window: {
+          usedPercent: 12,
+          durationMinutes: 10_080,
+          resetsAt: NOW + 1,
+        },
+      },
+    });
+    expect(projection.windows).toHaveLength(1);
+  });
+
+  it("projects a period-less Grok snapshot as unmeasured, not unavailable", () => {
+    // Zero-usage SuperGrok returns tier + period bounds only - no synthesized
+    // period window - so there is nothing to meter. That is available-but-
+    // unmeasured (severity `unknown`, consistent with protocol semantics), not
+    // the alarming unavailable/`missing_windows` state that reads as a fetch or
+    // account failure for a perfectly healthy account.
+    expect(project("ok", NOW, envelope(grok(null), NOW), false)).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
     });
   });
 

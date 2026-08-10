@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeAll,
@@ -522,7 +521,7 @@ describe("new chat command actions", () => {
         type: "chat",
         // Empty stored title renders the "Untitled chat" fallback as the
         // node's snapshot name - never the "New chat" placeholder.
-        name: "Untitled chat",
+        name: "Untitled agent",
         hostId: "test-host",
       }),
     );

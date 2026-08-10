@@ -1,6 +1,10 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
+  HostRequestAbortedError,
+  HostTransportFailureError,
+  RetryableTransportError,
+  type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -108,6 +112,7 @@ export class MockHostMessenger<
     readonly method: string;
     readonly params: unknown;
     readonly requestId: string;
+    readonly authority: HostRequestAuthority;
   }> = [];
   readonly phases: MockPhaseEvent[] = [];
 
@@ -136,19 +141,21 @@ export class MockHostMessenger<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     // The mock runs handlers inline with no transport timers, so the extended
     // response budget has nothing to bound - the call delegates unchanged.
     void responseTimeoutMs;
-    return this.request(method, params);
+    return this.request(method, params, authority);
   }
 
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
-    this.calls.push({ method, params, requestId });
+    this.calls.push({ method, params, requestId, authority });
 
     this.emit({ kind: "open", method, requestId });
     this.emit({ kind: "auth", method, requestId });
@@ -176,17 +183,31 @@ export class MockHostMessenger<
     }
 
     let result: ResponseOfMethod<Registry, Method>;
+    let detachAbortListener = (): void => undefined;
     try {
-      result = await handler(params);
+      result = await awaitAbortableHandler(
+        handler(params),
+        authority,
+        requestId,
+        method,
+        (detach) => {
+          detachAbortListener = detach;
+        },
+      );
     } catch (cause) {
-      if (cause instanceof HostRpcError) {
-        const error = new HostRpcError({
-          code: cause.code,
-          message: cause.message,
-          requestId,
+      if (cause instanceof HostRequestAbortedError) {
+        this.emit({
+          kind: "response",
           method,
-          fatalDetails: cause.fatalDetails,
+          requestId,
+          result: null,
+          error: cause,
         });
+        this.emit({ kind: "close", method, requestId });
+        throw cause;
+      }
+      if (cause instanceof HostRpcError) {
+        const error = restampHostRpcError(cause, requestId, method);
         this.emit({
           kind: "response",
           method,
@@ -213,6 +234,8 @@ export class MockHostMessenger<
       });
       this.emit({ kind: "close", method, requestId });
       throw error;
+    } finally {
+      detachAbortListener();
     }
 
     this.emit({
@@ -232,4 +255,62 @@ export class MockHostMessenger<
       listener(event);
     }
   }
+}
+
+/**
+ * Re-stamp a handler-thrown `HostRpcError` with THIS request's id/method while
+ * preserving its class.
+ *
+ * The class is part of the contract, not decoration: `HostTransportFailureError`
+ * is what tells a caller the host never answered, and `RetryableTransportError`
+ * is what the retrying messenger and the compat gate branch on. Rebuilding
+ * every throw as a plain `HostRpcError` silently downgraded those to
+ * "the host answered with an error", so no test could reach the code paths that
+ * exist precisely to tell the two apart.
+ */
+function restampHostRpcError(
+  cause: HostRpcError,
+  requestId: string,
+  method: string,
+): HostRpcError {
+  const details = {
+    code: cause.code,
+    message: cause.message,
+    requestId,
+    method,
+    fatalDetails: cause.fatalDetails,
+  };
+  if (cause instanceof RetryableTransportError) {
+    return new RetryableTransportError(details);
+  }
+  if (cause instanceof HostTransportFailureError) {
+    return new HostTransportFailureError(details);
+  }
+  return new HostRpcError(details);
+}
+
+function awaitAbortableHandler<Response>(
+  handlerResult: Promise<Response> | Response,
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+  setDetachAbortListener: (detach: () => void) => void,
+): Promise<Response> {
+  const abortError = (): HostRequestAbortedError =>
+    new HostRequestAbortedError({
+      message: "Mock host request authority was aborted",
+      requestId,
+      method,
+    });
+  if (authority.abortSignal.aborted) {
+    return Promise.reject(abortError());
+  }
+  return new Promise<Response>((resolve, reject) => {
+    const abort = (): void => reject(abortError());
+    authority.abortSignal.addEventListener("abort", abort, { once: true });
+    setDetachAbortListener(() => {
+      authority.abortSignal.removeEventListener("abort", abort);
+    });
+    Promise.resolve(handlerResult).then(resolve, reject);
+  });
 }

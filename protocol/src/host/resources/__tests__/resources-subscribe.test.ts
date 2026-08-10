@@ -1,13 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import {
+  ownerResourceSnapshotSchemaV13,
+  resourcesKillRequestSchema,
+  resourcesKillResponseSchema,
+  resourcesKillV10,
   resourcesSubscribeClientFrameSchema,
   resourcesSubscribeOpenRequestV11Schema,
   resourcesSubscribeServerFrameSchema,
   resourcesSubscribeServerFrameSchemaV12,
+  resourcesSubscribeServerFrameSchemaV13,
+  resourcesSubscribeServerFrameSchemaV14,
   resourcesSubscribeV10,
   resourcesSubscribeV11,
   resourcesSubscribeV12,
+  resourcesSubscribeV13,
+  resourcesSubscribeV14,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -300,12 +311,221 @@ describe("resources.subscribe@1.0 registry membership", () => {
   it("is registered on the stream registry at major 1 / minor 0", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(2);
+    expect(entry[1].latestMinor).toBe(4);
     expect(entry[1].versions[0].contract).toBe(resourcesSubscribeV10);
     expect(entry[1].versions[1].contract).toBe(resourcesSubscribeV11);
     expect(entry[1].versions[2].contract).toBe(resourcesSubscribeV12);
+    expect(entry[1].versions[3].contract).toBe(resourcesSubscribeV13);
     expect(resourcesSubscribeV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(resourcesSubscribeV11.schemaVersion).toEqual({ major: 1, minor: 1 });
     expect(resourcesSubscribeV12.schemaVersion).toEqual({ major: 1, minor: 2 });
+    expect(resourcesSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+  });
+});
+
+describe("resources.subscribe@1.3 owner harnessId", () => {
+  it("adds a nullable harnessId to the owner snapshot, frozen prior minors", () => {
+    const owner = {
+      kind: "chat" as const,
+      hostId: "host-1",
+      epicId: "epic-1",
+      ownerId: "chat-1",
+    };
+    const base = {
+      owner,
+      sampledAt: 1,
+      rootPids: [10],
+      activeProcessName: null,
+      processCount: 1,
+      cpuPercent: 0,
+      rssBytes: 0,
+      processes: [],
+    };
+    expect(
+      ownerResourceSnapshotSchemaV13.parse({ ...base, harnessId: "claude" })
+        .harnessId,
+    ).toBe("claude");
+    expect(
+      ownerResourceSnapshotSchemaV13.parse({ ...base, harnessId: null })
+        .harnessId,
+    ).toBeNull();
+    // The frozen `@1.2` frame strips `harnessId` from its owner shape (Zod
+    // drops unknown object keys), proving a pre-`@1.3` client never surfaces it.
+    const framedV12 = resourcesSubscribeServerFrameSchemaV12.parse({
+      kind: "snapshot",
+      epicId: "epic-1",
+      sampledAt: 1,
+      app: null,
+      owners: [{ ...base, harnessId: "codex" }],
+      hostTree: null,
+      other: null,
+      epic: null,
+      hasBinaryPayload: false,
+    });
+    expect(framedV12.kind).toBe("snapshot");
+    if (framedV12.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(framedV12.owners[0]).not.toHaveProperty("harnessId");
+    // `@1.3` keeps it.
+    const framedV13 = resourcesSubscribeServerFrameSchemaV13.parse({
+      kind: "snapshot",
+      epicId: "epic-1",
+      sampledAt: 1,
+      app: null,
+      owners: [{ ...base, harnessId: "codex" }],
+      hostTree: null,
+      other: null,
+      epic: null,
+      hasBinaryPayload: false,
+    });
+    expect(framedV13.kind).toBe("snapshot");
+    if (framedV13.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(framedV13.owners[0].harnessId).toBe("codex");
+  });
+});
+
+describe("resources.subscribe@1.4 managed-command owners", () => {
+  const MANAGED_OWNER = {
+    owner: {
+      kind: "managed-command" as const,
+      hostId: "host-1",
+      epicId: "epic-1",
+      ownerId: "cmd-1",
+    },
+    sampledAt: 1_000,
+    rootPids: [77],
+    activeProcessName: "node",
+    processCount: 2,
+    cpuPercent: 3,
+    rssBytes: 8_192,
+    processes: [],
+    harnessId: null,
+    managedCommand: {
+      commandId: "cmd-1",
+      monitoring: true,
+      description: "deploy watcher",
+      createdByAgentId: "chat-1",
+    },
+  };
+
+  function frameWithOwners(owners: unknown[]) {
+    return {
+      kind: "snapshot",
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: null,
+      owners,
+      epic: null,
+      hostTree: null,
+      other: null,
+      hasBinaryPayload: false,
+    };
+  }
+
+  it("carries the shell's monitoring state with its command descriptor", () => {
+    const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
+      frameWithOwners([MANAGED_OWNER]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.owners[0].owner.kind).toBe("managed-command");
+    expect(parsed.owners[0].managedCommand).toEqual({
+      commandId: "cmd-1",
+      monitoring: true,
+      description: "deploy watcher",
+      createdByAgentId: "chat-1",
+    });
+  });
+
+  it("defaults an absent creator to the empty string", () => {
+    // A host from before the field exists must degrade to the flat list (the
+    // GUI leaves a creatorless shell at the task level), not fail the whole
+    // frame's parse - a required field here blacks out the entire panel, every
+    // owner row included, the moment fleets skew.
+    const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
+      frameWithOwners([
+        {
+          ...MANAGED_OWNER,
+          managedCommand: {
+            commandId: "cmd-1",
+            monitoring: true,
+            description: "deploy watcher",
+          },
+        },
+      ]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot frame");
+    expect(parsed.owners[0].managedCommand?.createdByAgentId).toBe("");
+  });
+
+  it("requires managedCommand on every owner, null for the other kinds", () => {
+    const parsed = resourcesSubscribeServerFrameSchemaV14.parse(
+      frameWithOwners([
+        { ...OWNER_FIXTURE, harnessId: "claude", managedCommand: null },
+      ]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.owners[0].managedCommand).toBeNull();
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV14.parse(
+        frameWithOwners([{ ...OWNER_FIXTURE, harnessId: null }]),
+      ),
+    ).toThrow();
+  });
+
+  it("requires `monitoring` to be stated on a managed-command owner", () => {
+    // Not defaulted: this row is projected fresh from the record on every
+    // sampler tick, so an absent flag is a host bug, never an old write.
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV14.parse(
+        frameWithOwners([
+          {
+            ...MANAGED_OWNER,
+            managedCommand: {
+              commandId: "cmd-1",
+              description: "deploy watcher",
+              createdByAgentId: "chat-1",
+            },
+          },
+        ]),
+      ),
+    ).toThrow();
+  });
+
+  it("keeps the @1.3 owner vocabulary frozen against the new kind", () => {
+    expect(() =>
+      resourcesSubscribeServerFrameSchemaV13.parse(
+        frameWithOwners([MANAGED_OWNER]),
+      ),
+    ).toThrow();
+    // A `@1.3` peer that does receive a legal owner never sees the new field.
+    const framedV13 = resourcesSubscribeServerFrameSchemaV13.parse(
+      frameWithOwners([
+        { ...OWNER_FIXTURE, harnessId: null, managedCommand: null },
+      ]),
+    );
+    if (framedV13.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(framedV13.owners[0]).not.toHaveProperty("managedCommand");
+  });
+
+  it("is registered on the stream registry at minor 4", () => {
+    const entry = hostStreamRpcRegistry["resources.subscribe"];
+    expect(entry[1].latestMinor).toBe(4);
+    expect(entry[1].versions[4].contract).toBe(resourcesSubscribeV14);
+    expect(resourcesSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
+  });
+});
+
+describe("resources.kill@1.0 registry membership", () => {
+  it("is registered as a brand-new unary method that degrades unsupported", () => {
+    const entry = hostRpcRegistry["resources.kill"];
+    expect(entry).toBeDefined();
+    expect(entry.degrade).toEqual({ kind: "unsupported" });
+    expect(entry[1].versions[0].contract).toBe(resourcesKillV10);
+    expect(resourcesKillV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(resourcesKillRequestSchema.parse({ pids: [1, 2, 3] }).pids).toEqual([
+      1, 2, 3,
+    ]);
+    expect(resourcesKillResponseSchema.parse({ killed: [1] }).killed).toEqual([
+      1,
+    ]);
   });
 });

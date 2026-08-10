@@ -16,6 +16,25 @@ export enum ContextType {
   Review = "review",
   WorkflowCommand = "workflow_command",
   Chat = "chat",
+  /**
+   * A referenceable Agent that uses the Terminal interface.
+   *
+   * Additive sibling of `Chat`, NOT a replacement: `Chat` is a released token
+   * carried by persisted mentions and must keep its value. Agent is the durable
+   * entity and Chat/Terminal are its interfaces, so both members serialize to
+   * the same interface-agnostic `@agent:` reference form for the coding agent -
+   * referring to an Agent means the same thing either way (Core Flows, Flow 3).
+   */
+  TerminalAgent = "terminal-agent",
+  /**
+   * A plain interactive terminal - a shell a person or an agent is working
+   * in, not an Agent. Distinct from `TerminalAgent` for exactly that reason:
+   * `TerminalAgent` names an Agent reached through the terminal interface and
+   * projects as `@agent:`, while this names the terminal itself, which a
+   * coding agent can only READ (`traycer_read_terminal` / `traycer terminal
+   * output`) and never talk to.
+   */
+  Terminal = "terminal",
   Execution = "execution",
   User = "user",
 }
@@ -232,6 +251,7 @@ export interface MentionAttrs {
   fileName?: string;
   phaseId?: string;
   reviewCommentId?: string;
+  terminalId?: string;
   commandName?: string;
   workflowId?: string;
   b64content?: string;
@@ -289,9 +309,19 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const name = attrs.commandName || attrs.label || "";
       return `workflow:${name}`;
     }
-    case ContextType.Chat: {
+    // Agent is the durable entity a human reads here; Chat and Terminal are
+    // only the interfaces used to reach one. Both arms therefore project as
+    // `agent:` - prefixing by interface (`chat:` / `terminal-agent:`) would
+    // render the two as sibling entity types, which is the model this replaces.
+    // The enum values stay `chat` / `terminal-agent`; only the projection moved.
+    case ContextType.Chat:
+    case ContextType.TerminalAgent: {
       const title = attrs.label || attrs.id || "";
-      return `chat:${title}`;
+      return `agent:${title}`;
+    }
+    case ContextType.Terminal: {
+      const title = attrs.label || attrs.terminalId || attrs.id || "";
+      return `terminal:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -401,12 +431,30 @@ function formatMentionForLLMQuery(
       const cmdName = attrs.commandName || "";
       return cmdName ? `workflow:${wfId}/${cmdName}` : `workflow:${wfId}`;
     }
-    case ContextType.Chat: {
+    // Both Agent interfaces share this arm deliberately. "Refer to Agent B"
+    // must mean the same thing to the coding agent whether B uses the Chat or
+    // the Terminal interface, so both emit the interface-agnostic `@agent:`
+    // marker plus the durable id the agent needs for `traycer_send_message` /
+    // `traycer_get_transcript`. Falling through to `default:` dropped the id
+    // entirely and handed the runtime a bare title.
+    case ContextType.Chat:
+    case ContextType.TerminalAgent: {
       const agentId = attrs.id || "";
       const title = attrs.label || "untitled";
       return agentId.length === 0
         ? `@agent:${title} [agentId is unavailable]`
         : `@agent:${title} [agentId=${agentId}]`;
+    }
+    // Mirrors the agent arm above: a human-readable title so the reference
+    // reads as the user wrote it, plus the durable id the read tools address
+    // (`traycer_read_terminal`, `traycer terminal output`). Without the id the
+    // runtime is handed a bare title it cannot resolve.
+    case ContextType.Terminal: {
+      const terminalId = attrs.terminalId || attrs.id || "";
+      const title = attrs.label || "untitled";
+      return terminalId.length === 0
+        ? `@terminal:${title} [terminalId is unavailable]`
+        : `@terminal:${title} [terminalId=${terminalId}]`;
     }
     case ContextType.Execution: {
       const epicPart = attrs.epicId ? `${attrs.epicId}/` : "";
@@ -629,7 +677,7 @@ function serializeOrderedList(
   };
 
   if (node.content) {
-    let index = 1;
+    let index = readNumberAttr(node.attrs, "start", 1);
     for (const child of node.content) {
       if (child.type === "listItem") {
         items.push(serializeListItem(child, childCtx, true, index));

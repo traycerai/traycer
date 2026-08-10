@@ -38,29 +38,53 @@ describe("openSource", () => {
     expect(readSyncItems(openSource.getItems(ctx(null)))).toEqual([]);
   });
 
-  it("emits the opener categories when bound to a target group", () => {
+  it("emits exactly one Agent category, ahead of the other openers", () => {
     const items = readSyncItems(openSource.getItems(ctx("group-1")));
+    // ONE Agent category: Chat and Terminal are interfaces inside it, never
+    // peer entity collections. The communication graph trails them as a LEAF -
+    // one graph per epic, so a sub-page listing a single row would be a wasted
+    // step.
     expect(items.map((item) => item.label)).toEqual([
-      "Chats",
-      "TUI agents",
+      "Agents",
       "Terminals",
       "Artifacts",
       "Files",
       "Diff",
+      "Text search",
+      "Communication graph",
     ]);
     for (const item of items) {
       expect(item.group).toBe("open");
-      expect(item.subpage).not.toBeNull();
+    }
+  });
+
+  it("keeps legacy chat/tui vocabulary reaching the Agent category", () => {
+    const items = readSyncItems(openSource.getItems(ctx("group-1")));
+    const agents = items.find((item) => item.label === "Agents");
+    expect(agents).toBeDefined();
+    for (const legacy of ["chat", "chats", "tui", "terminal", "agent"]) {
+      expect(agents?.keywords).toContain(legacy);
     }
   });
 
   it("every category entry carries a pushable sub-page", () => {
     const items = readSyncItems(openSource.getItems(ctx("group-1")));
+    const categories = items.filter((item) =>
+      item.id.startsWith("open:category:"),
+    );
+    expect(categories).toHaveLength(6);
     // Sub-page item lists are hooks (live records / file trees), exercised in
     // the per-sub-page renderHook tests; here we only assert the wiring.
-    for (const item of items) {
+    for (const item of categories) {
       expect(item.subpage).not.toBeNull();
       expect(item.subpage?.id).toBe(item.id.replace("open:category:", "open:"));
     }
+  });
+
+  it("opens the communication graph directly, with no sub-page step", () => {
+    const items = readSyncItems(openSource.getItems(ctx("group-1")));
+    const commGraph = items.find((item) => item.id === "open:comm-graph");
+    expect(commGraph?.subpage).toBeNull();
+    expect(commGraph?.keywords).toContain("a2a");
   });
 });

@@ -1,5 +1,22 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type {
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  RetainedStepUpVerifyFetchResult,
+} from "../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+import type { HostListFetchResult } from "../host-client/remote-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "../host-client/host-version-policy-fetcher";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+
+export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -54,45 +71,121 @@ export interface IRunnerHost {
   readonly authnBaseUrl: string;
 
   /**
-   * Validates a Traycer bearer token against the shell-owned AuthnV3 base URL
-   * and projects the minimum profile shape the GUI needs for signed-in state.
-   * If the user lookup fails but the bundled refresh token is still accepted,
-   * implementations return a valid result with `refreshedToken`.
-   *
-   * Desktop shells perform this in Electron main so renderer-origin CORS does
-   * not decide auth success. Browser-only test/dev shells may satisfy the same
-   * contract with a direct HTTP fetch.
+   * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
+   * (Architecture §3/§4b, S2/T14), e.g. `wss://relay.traycer.ai/attach`.
+   * Shell-owned, read-only, parity with `authnBaseUrl`. Populated onto a
+   * connectable `RemoteHostDirectoryEntry.websocketUrl` so the existing
+   * `kind === "remote"` transport branch (`createRemoteHostTransport`) can
+   * dial it — the relay itself routes by the opaque `rendezvousId` carried
+   * inside the CS-minted attach grant, so this URL never varies per host.
    */
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult>;
+  readonly relayBaseUrl: string;
 
   /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
-   * shape required to mint a client `RequestContext`. Desktop shells perform
-   * this in Electron main so renderer CSP/CORS cannot turn a valid OAuth
-   * callback into a false invalid-token result. Browser-only test/dev shells
-   * may call the shared HTTP helper directly.
+   * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
+   * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it
+   * can never spend a refresh token - a stale token comes back `rejected` and
+   * the caller routes the spend through the locked `tokenStore.rotate`. Desktop
+   * shells perform this in Electron main so renderer CSP/CORS cannot turn a
+   * valid OAuth callback into a false invalid-token result.
    */
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
 
   /**
-   * Force-refreshes the access token against authn's `POST /api/v3/auth/refresh`
-   * WITHOUT a prior `/api/v3/user` validation, rotating both the bearer and the
-   * refresh token. The proactive refresh scheduler calls this shortly before the
-   * ~4h TTL so a long-open session never carries a dead bearer into a live host
-   * call. Desktop shells run this in Electron main so renderer-origin CORS does
-   * not block the authn request; browser/test shells may call the shared
-   * `refreshAuthTokenViaHttp` helper directly.
+   * Fetches the signed-in user's host registry + live status from authn-v3's
+   * `GET /api/v3/hosts` with the user bearer (Remote Host Support §7). Desktop
+   * shells run this in Electron main so renderer-origin CORS does not block the
+   * request — authn-v3's CORS allow-list is the web dashboard origin, not the
+   * app renderer — exactly as the token-validation calls above do. Browser/dev
+   * shells may call the shared `fetchRegisteredHostsViaHttp` helper directly.
+   * Never throws: transport failures collapse into the discriminated result.
    */
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult>;
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+
+  /**
+   * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
+   * run this in Electron main for the same renderer-origin CORS reason as token
+   * validation. Transport failures collapse into the result rather than
+   * throwing; a cancellation via `signal` is the one case that may reject.
+   *
+   * `signal` is the reading TanStack query's cancellation. It matters beyond
+   * saving a request: the caller's repair path spends a single-use refresh
+   * rotation, so a list nobody is waiting on must stop before it gets there.
+   * Shells that own the request in-process abort it for real; shells that run it
+   * behind an IPC boundary settle the caller and let the bounded request finish.
+   */
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult>;
+
+  /**
+   * Revokes one session family. Callers pass the user's normal session bearer
+   * plus whether the runner-host boundary should attach its retained step-up
+   * credential. Renderer callers never pass the raw step-up bearer.
+   */
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+
+  /**
+   * Revokes all other sessions and broadcasts host/session invalidation. This
+   * is the panic lever: callers verify a fresh step-up challenge for every
+   * invocation, then the runner-host boundary attaches the retained step-up
+   * credential internally.
+   */
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+
+  /**
+   * Mints a device credential for a connected host, so the host can keep
+   * working on the user's behalf after this client disconnects. The renderer
+   * passes its ordinary bearer; there is no step-up variant, because the mint is
+   * not step-up gated (see the mint route's doc comment).
+   *
+   * Unlike the revoke calls, the RESULT here carries live credentials (a
+   * host-audience access JWS and a refresh JWE). They necessarily cross back
+   * into the renderer, because the stream socket that must carry them to the
+   * host lives there.
+   */
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+
+  /**
+   * Verifies a step-up OTP and retains the short-TTL bearer credential inside
+   * the runner-host boundary. Returns only expiry metadata for renderer batch
+   * window logic.
+   */
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
+
+  /**
+   * Applies a version-policy write for one host with the user bearer
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
+   * now" (`desiredVersion`), the auto-update toggle (`updatePolicy`), or the
+   * drain-gate force ("Apply now — ends N sessions", `force: true`). Desktop
+   * shells run this in Electron main for the same CORS reason as
+   * `listRegisteredHosts`; browser/dev shells may call the shared
+   * `updateHostVersionPolicyViaHttp` helper directly. Never throws: transport
+   * failures collapse into the discriminated result.
+   */
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 
@@ -213,6 +306,22 @@ export interface IRunnerHost {
   ): Disposable;
 
   /**
+   * The `hostId` this machine's local host most recently published, read from
+   * durable host metadata rather than from a live connection - so it still
+   * answers while the host is stopped, restarting, or unreachable.
+   *
+   * `onLocalHostChange` deliberately emits a snapshot only for a host that is
+   * actually dialable, which leaves a blind spot: the registry also lists this
+   * machine, and during a local restart its remote-kind twin is the only entry
+   * carrying that id. Without this, a shell cannot tell "another machine" from
+   * "my own host, currently down" in exactly the window where it matters.
+   *
+   * `null` when this shell has no local host, or when no host has ever
+   * published metadata on this machine.
+   */
+  getLastKnownLocalHostId(): Promise<string | null>;
+
+  /**
    * Subscribes to OS wake events (device resume / screen unlock). The handler
    * fires shortly after the machine wakes from sleep - the signal `gui-app`
    * uses to force-reconnect its host streams so an open epic recovers from
@@ -230,10 +339,14 @@ export interface IRunnerHost {
    * Asks the shell to re-spawn its detached local host. Desktop delegates
    * to `HostLifecycle.respawn()` via the preload IPC bridge; mobile shells
    * (and any shell without a local host) implement this as a resolved
-   * no-op. `gui-app` drives this from the host-Retry UX so the renderer
-   * never touches the lifecycle process directly.
+   * `restarted` no-op. `gui-app` drives this from the host-Retry UX so the
+   * renderer never touches the lifecycle process directly. Resolves
+   * `declined` when the host was deliberately not restarted (busy with
+   * in-progress work, removed by the user, lock contention) - callers
+   * present that as information, not as an error; the promise rejects only
+   * on genuine failures.
    */
-  requestHostRespawn(): Promise<void>;
+  requestHostRespawn(): Promise<HostRestartRequestResult>;
 
   /**
    * OS-service control surface used by the Service Health settings pane.
@@ -302,6 +415,12 @@ export interface IFileDropHost {
    * return the original path so the caller is never worse off.
    */
   copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
+  /**
+   * Reads file paths from the native clipboard formats that Chromium does not
+   * surface through `ClipboardEvent`. Callers only use this from a direct
+   * paste event whose DOM clipboard has no usable content.
+   */
+  readNativeClipboardFilePaths(): Promise<readonly string[]>;
 }
 
 /**
@@ -480,26 +599,11 @@ export interface ITraycerCli {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
-  /**
-   * Seeds the CLI's stored credentials from a captured bearer + refresh token so
-   * the CLI keeps using them for host comms (and can self-refresh on a 401).
-   * The host pipes a JSON `{ token, refreshToken }` payload to the CLI over
-   * stdin (never argv) to keep the secrets out of the process list. Resolves
-   * once the credentials file has been written; rejects if the token was
-   * rejected by the authn service.
-   */
-  cliLogin(token: string, refreshToken: string): Promise<void>;
-  /**
-   * Deletes the machine-local CLI credentials so the host's owner-binding
-   * gate falls back to deny-by-default. Mirrors `cliLogin`: invoked at sign-out
-   * to deprovision the host on this machine.
-   */
-  cliLogout(): Promise<void>;
 }
 
 /**
- * Snapshot of the OS-managed host service, mirrored from the shell's
- * `ServiceController.status()` call. Field semantics:
+ * Renderer display snapshot derived from the local host publication and the
+ * committed install record. Field semantics:
  *   - `state`: `running` when the service is registered AND its PID
  *     metadata describes a live process; `stopped` when registered but the
  *     PID is missing or stale; `not-installed` when the manifest is absent.
@@ -515,7 +619,6 @@ export interface ServiceStatusSnapshot {
 }
 
 export interface IServiceHost {
-  status(): Promise<ServiceStatusSnapshot>;
   install(): Promise<void>;
   uninstall(purge: boolean): Promise<void>;
   start(): Promise<void>;
@@ -608,31 +711,6 @@ export interface IDeviceFlowHost {
   start(): Promise<DeviceFlowSession | null>;
 }
 
-export interface AuthValidationProfile {
-  readonly userId: string;
-  readonly userName: string;
-  readonly email: string;
-}
-
-export type AuthTokenValidResult =
-  | {
-      readonly kind: "valid";
-      readonly profile: AuthValidationProfile;
-    }
-  | {
-      readonly kind: "valid";
-      readonly profile: AuthValidationProfile;
-      // A refresh rotates BOTH the bearer (`refreshedToken`) and the refresh
-      // token (`refreshedRefreshToken`); callers must persist both.
-      readonly refreshedToken: string;
-      readonly refreshedRefreshToken: string;
-    };
-
-export type AuthTokenValidationResult =
-  | AuthTokenValidResult
-  | { readonly kind: "rejected" }
-  | { readonly kind: "network-error" };
-
 /**
  * Outcome of a forced access-token refresh (`POST /api/v3/auth/refresh`),
  * independent of any `/api/v3/user` validation. `refreshed` rotates BOTH the
@@ -667,17 +745,190 @@ export interface StoredAuthTokens {
 }
 
 /**
- * Typed credential store owned by the shell. Narrower than `ISecureStorage` on
- * purpose: there is a single logical entry per shell, so callers never pick a
- * key. Desktop and mobile implementations back this with their native keychain;
- * in-memory implementations keep a single slot that round-trips through
- * `set` / `get` / `delete`.
+ * The identity block a caller supplies on interactive sign-in. The `authnBaseUrl`
+ * and `savedAt` are NOT supplied here — the main-process `FileTokenStore` stamps
+ * them (env-scoped `authnBaseUrl` from its own config, `savedAt` at write time),
+ * so the renderer can never write a mismatched authn origin into the shared file.
+ */
+export type StoredCredentialsIdentity = StoredCredentials["user"];
+
+/**
+ * Typed outcomes of the locked `rotate` op, mirrored from the credentials
+ * mutation store (tech plan §2). `rotate` never returns `tombstoned` (that is a
+ * guarded-first-write outcome), but the union is kept whole so callers switch
+ * exhaustively:
+ *   - `applied`         → the newly-committed rotated pair (adopt it);
+ *   - `superseded`      → a sibling already rotated; `pair` is the file's pair to adopt;
+ *   - `deleted`         → the file was signed out mid-rotate (sign-out wins);
+ *   - `user-mismatch`   → the file now holds a different account (`pair` is theirs);
+ *   - `lock-busy`       → a live holder held the lock; bounded retry, no state lost;
+ *   - `refresh-rejected`→ authn rejected the refresh; UI-only sign-out, file KEPT;
+ *   - `refresh-network` → transient; the access token in hand stays valid, retry;
+ *   - `commit-failed`   → spent + local-commit failed; `pair` is the minted pair
+ *                         the caller keeps active while main retries the commit.
+ */
+export type TokenRotateOutcome =
+  | "applied"
+  | "superseded"
+  | "deleted"
+  | "user-mismatch"
+  | "tombstoned"
+  | "lock-busy"
+  | "refresh-rejected"
+  | "refresh-network"
+  | "commit-failed";
+
+export interface TokenRotateResult {
+  readonly outcome: TokenRotateOutcome;
+  // The credentials the caller should act on: the committed/adopted/minted pair
+  // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
+  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
+  // `refresh-rejected`/`refresh-network`).
+  readonly pair: StoredCredentials | null;
+}
+
+/**
+ * A change broadcast the store emits when the underlying credentials file
+ * changes (the §4 owned watcher — external writes AND self-writes). `present`
+ * is whether a file now exists; `userId` is the signed-in user id (or `null`
+ * when absent). `revision` is a monotonic emit counter (dedup / WindowsBridge
+ * fence hint). Consumers re-read the store before acting (events are a hint,
+ * disk is the truth). Reconcile never writes and never spends — a self-write
+ * echo is a guarded no-op, so there is no self-write suppression.
+ */
+export interface TokenStoreChange {
+  readonly present: boolean;
+  readonly userId: string | null;
+  readonly revision: number;
+}
+
+/**
+ * Terminal outcome of the one-time legacy→file credentials migration (tech plan
+ * §6). The renderer hands the decrypted legacy localStorage pair to the main
+ * store, which reconciles it against the shared file:
+ *   - `committed`              → the legacy refresh was spent under the lock and
+ *                                its rotated pair now lives in the file;
+ *   - `fallback-file-validated`→ the legacy refresh was dead but the file's own
+ *                                access is still valid (or its refresh landed the
+ *                                commit); the file session stands;
+ *   - `file-wins`              → the file already holds a live, different-or-same
+ *                                account; the legacy remnant is discarded;
+ *   - `terminal-dead`          → the legacy refresh was explicitly rejected;
+ *                                a present-but-invalid file is still left for
+ *                                start() to revive on its own token;
+ *   - `tombstoned`             → the file carries a sign-out tombstone; the
+ *                                legacy remnant must never resurrect it;
+ *   - `identity-unknown`       → the legacy access token expired AND no file to
+ *                                migrate onto, so identity was unknowable without
+ *                                spending; auto-migration declined (measured rare);
+ *   - `retryable`              → a pre-spend failure (network/lock-busy/abort)
+ *                                left the legacy pair unspent; re-migrate later;
+ *   - `commit-failed`          → spent, but the local commit failed; the minted
+ *                                pair is held in the store overlay and a
+ *                                background continuation is still landing it.
+ *
+ * The file — not this value — is authoritative for the resulting session: after
+ * migration the caller runs its normal file rehydrate, which itself revives a
+ * stale-access file via the locked `rotate`. So `terminal-dead`/`identity-unknown`
+ * only truly sign the user out when the file also cannot be revived.
+ */
+export type CredentialsMigrationOutcome =
+  | "committed"
+  | "fallback-file-validated"
+  | "file-wins"
+  | "terminal-dead"
+  | "tombstoned"
+  | "identity-unknown"
+  | "retryable"
+  | "commit-failed";
+
+/**
+ * Whether a completed migration should wipe the legacy localStorage token slots
+ * (tech plan §6). Wiped once the legacy pair is consolidated into the file or
+ * proven unusable; KEPT only while a retry could still land it — `retryable`
+ * (nothing was spent; re-migrate next launch) and `commit-failed` (spent and
+ * held in the store overlay; the legacy pair stays as the crash-recovery
+ * fallback until the background continuation commits).
+ */
+export function shouldWipeLegacyCredentials(
+  outcome: CredentialsMigrationOutcome,
+): boolean {
+  return outcome !== "retryable" && outcome !== "commit-failed";
+}
+
+/**
+ * Typed credential store owned by the shell, backed by the single machine-local
+ * `~/.traycer/cli/<env>/credentials` file (tech plan §3). It carries the FULL
+ * identity now (the host reads `user.id` from the same file to pin its owner
+ * gate), and every token *spend* happens inside the file lock via `rotate` — the
+ * renderer never refreshes a token itself.
+ *
+ *   - `get()`      — current credentials (with the process-local commit-failed
+ *                    overlay), or `null` when signed out. Rejects when the store
+ *                    is unavailable (I/O fault); the caller maps that to a
+ *                    UI-only signed-out state and never a write.
+ *   - `signIn()`   — interactive create/replace (device-flow sign-in). Supplies
+ *                    only the token pair + identity; the store stamps the rest.
+ *   - `rotate()`   — the locked adopt-or-refresh+commit (the spend lives here).
+ *   - `delete()`   — sign-out only. Rejects if the delete cannot land, so a
+ *                    failed sign-out stays signed in rather than lie.
+ *   - `subscribe()`— change notifications from the owned watcher.
+ *
+ * Desktop backs this with an IPC client of the main-process `FileTokenStore`;
+ * in-memory implementations (dev runner, tests) keep a single round-trippable
+ * slot and a no-op `subscribe`.
  */
 export interface ITokenStore {
-  get(): Promise<StoredAuthTokens | null>;
-  set(tokens: StoredAuthTokens): Promise<void>;
+  get(): Promise<StoredCredentials | null>;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<void>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  subscribe(listener: (change: TokenStoreChange) => void): Disposable;
+  /**
+   * One-time migration of the legacy per-window localStorage token pair onto the
+   * shared file (tech plan §6). The renderer reads + decrypts the legacy slots
+   * and hands the pair here; main single-flights the reconcile across windows and
+   * never deletes the file. The caller wipes the legacy slots per
+   * `shouldWipeLegacyCredentials(outcome)`, then runs its normal file rehydrate.
+   */
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
 }
+
+/**
+ * What the shell's delivery decision actually did with a `show` request.
+ *
+ * - `presented`: an alert surface exists somewhere - an OS banner was shown,
+ *   the display was relayed to the focused window, or the focused sender
+ *   already owns its own in-app surfaces.
+ * - `duplicate`: this delivery key was already handled app-wide; another
+ *   window's request won.
+ * - `undeliverable`: the platform cannot present notifications and no window
+ *   is focused, so NOTHING was shown or relayed and the key is burnt. The
+ *   caller is the sole owner of any fallback cue. This is a resolved outcome,
+ *   not a rejection, deliberately: rejection semantics are load-bearing for
+ *   retry loops (see `drainPendingNotifications`), and an unsupported
+ *   platform must not retry forever.
+ */
+export type NotificationShowOutcome =
+  "presented" | "duplicate" | "undeliverable";
+
+/**
+ * Which feed produced the notification being shown - delivery provenance,
+ * carried SEPARATELY from the activation payload on purpose. The payload is
+ * click routing and degrades to `null` for unrecognized/cross-kind rows, so
+ * anything derived from it loses provenance exactly on the rows that need it
+ * most; the foreground relay's receive-side gates key redundancy decisions
+ * off this field instead.
+ */
+export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
 
 export interface INotificationHost {
   show(
@@ -686,8 +937,35 @@ export interface INotificationHost {
     payload: unknown,
     replaceKey: string | null,
     deliveryKey: string | null,
-  ): Promise<void>;
+    feedSource: NotificationFeedSource | null,
+    foregroundAppLocal: NotificationForegroundAppLocal | null,
+  ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
+  onForegroundDisplay(
+    handler: (display: NotificationForegroundDisplay) => void,
+  ): Disposable;
+}
+
+/**
+ * App-local data that must cross renderer realms when another Traycer window
+ * owns the foreground. `entry` stays unknown at the shell boundary; gui-app
+ * validates it before merging it into the focused renderer's store.
+ */
+export interface NotificationForegroundAppLocal {
+  readonly userId: string;
+  readonly entry: unknown;
+}
+
+/** Plain-data main -> renderer relay used instead of an OS notification while
+ * another Traycer window is focused. */
+export interface NotificationForegroundDisplay {
+  readonly title: string;
+  readonly body: string;
+  readonly payload: unknown;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
 export interface ITrayState {
@@ -727,6 +1005,13 @@ export interface IHostPicker {
 }
 
 export interface IWorkspaceFoldersHost {
+  /**
+   * Whether THIS shell can open a native OS folder dialog (desktop shells).
+   * Shells without one (mobile/browser) install a no-op pickFolders and set
+   * this false - gui-app then routes remote-host folder adds through the
+   * RPC-backed remote folder picker instead.
+   */
+  readonly canPickNatively: boolean;
   pickFolders(): Promise<readonly string[]>;
 }
 
@@ -756,39 +1041,6 @@ export interface LocalHostSnapshot {
  * shapes from the platform contract instead of reaching across into the
  * desktop workspace.
  */
-export interface HostProgressEvent {
-  readonly operationId: string;
-  readonly stage: string;
-  readonly percent: number | null;
-  readonly bytes: number | null;
-  readonly totalBytes: number | null;
-  readonly message: string | null;
-}
-
-export type HostOperationKind =
-  "install" | "update" | "register-service" | "ensure";
-
-/**
- * Canonical cross-surface snapshot of the single host mutation currently
- * running (if any), mirrored from Desktop main to every renderer window via
- * `hostOperationStatusChange`. Unlike `HostProgressEvent` - which is scoped to
- * the `operationId` of the caller that started it - this is the single source
- * of truth every UI surface (landing-page banner, Settings → Host, a second
- * window) reads to disable its trigger and render progress, regardless of
- * which surface (or the background auto-update reconciler) started the
- * operation. `null` means no host mutation is in flight.
- */
-export interface HostOperationStatus {
-  readonly operationId: string;
-  readonly kind: HostOperationKind;
-  readonly stage: string | null;
-  readonly percent: number | null;
-  readonly bytes: number | null;
-  readonly totalBytes: number | null;
-  readonly message: string | null;
-  readonly startedAt: string;
-}
-
 export interface HostInstallSourceTag {
   readonly kind: "registry" | "local-file";
   readonly value: string;
@@ -917,6 +1169,133 @@ export interface HostRegistryUpdateState {
   readonly errorMessage: string | null;
 }
 
+/**
+ * Renderer-facing mirror of `HostController`'s canonical two-lane status
+ * (Host Update Layer Redesign Tech Plan, "Desktop main: HostController" >
+ * "Canonical status"). Source of truth is
+ * `clients/desktop/src/electron-main/host/host-controller-types.ts`; this is
+ * the renderer-safe copy, following the same duplication pattern as every
+ * other host-management type in this file (mirrors the NDJSON/controller
+ * shape so `gui-app` never imports across the desktop-main boundary).
+ */
+export interface MutationProgress {
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+}
+
+export type MutationKind =
+  | "ensure"
+  | "apply"
+  | "activate"
+  | "install"
+  | "register"
+  | "deregister"
+  | "respawn"
+  | "recoverIfDown"
+  | "freePortAndRestart"
+  | "uninstallHost"
+  | "removeTraycer";
+
+export interface MutationLaneStatus {
+  readonly kind: MutationKind;
+  readonly progress: MutationProgress | null;
+  readonly startedAt: string;
+}
+
+export interface DownloadProgress {
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+}
+
+export interface DownloadLaneStatus {
+  readonly version: string;
+  readonly progress: DownloadProgress | null;
+  readonly lastError: string | null;
+}
+
+export type HostActivationState =
+  "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
+
+export interface HostControllerStatus {
+  readonly download: DownloadLaneStatus | null;
+  readonly mutation: MutationLaneStatus | null;
+  readonly installedVersion: string | null;
+  readonly latestVersion: string | null;
+  readonly stagedVersion: string | null;
+  readonly installedRuntimeVersion: string | null;
+  readonly runningRuntimeVersion: string | null;
+  readonly updateReady: boolean;
+  readonly activation: HostActivationState;
+  readonly reachable: boolean;
+  readonly removedByUser: boolean;
+  readonly checkedAt: string;
+}
+
+// Pre-commit busy (CLI-owned apply/pin refused before the stop):
+// `"retry-with-force"` - Force re-submits the same intent with `force`.
+// Post-commit busy (packaged macOS, bytes already committed):
+// `"activate"` - Force submits `activateInstalled{force}`, never a retry
+// of the consumed apply/pin.
+export type BusyContinuation = "retry-with-force" | "activate";
+
+// Result of an explicit restart request (`requestHostRespawn` /
+// `IHostManagement.restartHost`). `declined` is a resolved value, not an
+// error: the host was deliberately NOT restarted - it denied the shutdown
+// claim to protect in-progress work, was removed by the user, or another
+// Traycer process holds the management lock - and the condition clears on
+// its own or on a later retry. Surfaces render `declined` as plain
+// information; only a rejected promise means something actually broke and
+// deserves an error affordance (field RCA 2026-07-28: a busy denial inside
+// the SMAppService-register fallback surfaced as a reportable error toast,
+// inviting issue reports for a self-recovering condition).
+export type HostRestartRequestResult =
+  | { readonly kind: "restarted" }
+  | { readonly kind: "declined"; readonly message: string };
+
+// Per-intent result. Every mutation intent resolves ONE of these - the
+// lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
+// outcome is a normal resolved value the calling surface renders.
+export type MutationOutcome<TOk> =
+  | { readonly kind: "ok"; readonly value: TOk }
+  | {
+      readonly kind: "busy";
+      readonly continuation: BusyContinuation;
+      readonly message: string;
+    }
+  | { readonly kind: "deferred"; readonly message: string }
+  | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
+  | { readonly kind: "installed-not-converged"; readonly message: string }
+  | { readonly kind: "failed"; readonly message: string };
+
+export interface ConvergeReadyOk {
+  readonly running: boolean;
+  readonly version: string | null;
+}
+
+export interface ApplyStagedOk {
+  readonly appliedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ActivateInstalledOk {
+  readonly activated: boolean;
+}
+
+export interface InstallVersionOk {
+  readonly installedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ServiceRegistrationOk {
+  readonly registered: boolean;
+}
+
+export type ApplyStagedTrigger = "launch" | "manual";
+
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
   readonly deregisteredService: boolean;
@@ -996,13 +1375,42 @@ export interface CliInstallManifestSnapshot {
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
-  readonly installHost: (input: {
-    readonly version: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<HostInstallResult>;
-  readonly updateHost: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<HostInstallResult>;
+  // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
+  // once on mount to prime the shared query cache; live updates arrive via
+  // the desktop-only `hostControllerStatus` push bridge (see
+  // `HostControllerStatusListener`) - the mutation lane pushes on every
+  // progress/status change, the download lane is polled internally by the
+  // desktop main process (it has no live subscription in `HostController`
+  // itself; see `host-controller-status-broadcast.ts`).
+  readonly getHostControllerStatus: () => Promise<HostControllerStatus>;
+  // Idempotently converges the host to reachable (post-auth provisioning,
+  // manual retry, Force restart). `force` skips the busy check.
+  readonly convergeReady: (
+    force: boolean,
+  ) => Promise<MutationOutcome<ConvergeReadyOk>>;
+  // Applies the currently-staged version. `trigger` distinguishes a
+  // boot-time/idle-gated apply from a manual (banner/menu) click - both
+  // resolve the same `MutationOutcome`, but the caller's UI treats a busy
+  // outcome differently (gate progress vs. Force/Defer dialog).
+  readonly applyStaged: (
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ) => Promise<MutationOutcome<ApplyStagedOk>>;
+  // Activates an already-installed-but-not-running-activated record
+  // (packaged-macOS post-commit activation, or clearing
+  // pendingActivation/activationUnknown debt). `force` is the Force
+  // continuation after a busy `applyStaged`/pin outcome that carried
+  // `continuation: "activate"`.
+  readonly activateInstalled: (
+    force: boolean,
+  ) => Promise<MutationOutcome<ActivateInstalledOk>>;
+  // Pins an explicit version (incl. downgrades), bypassing the staged
+  // update. `force` is the Force continuation after a busy outcome that
+  // carried `continuation: "retry-with-force"`.
+  readonly installVersion: (
+    pin: string,
+    force: boolean,
+  ) => Promise<MutationOutcome<InstallVersionOk>>;
   readonly uninstallHost: (input: {
     readonly all: boolean;
   }) => Promise<HostUninstallResult>;
@@ -1016,7 +1424,10 @@ export interface IHostManagement {
   // Clears the removal sentinel so a subsequent `ensureHost` reinstalls the
   // host (the Reinstall escape hatch on the removed surface).
   readonly clearRemoval: () => Promise<void>;
-  readonly restartHost: () => Promise<void>;
+  // Explicit "restart the host now" (Settings / tray). Same contract as
+  // `IRunnerHost.requestHostRespawn`: resolves `declined` when the host
+  // was deliberately not restarted; rejects only on genuine failures.
+  readonly restartHost: () => Promise<HostRestartRequestResult>;
   readonly getHostLogs: (input: {
     readonly tailLines: number;
   }) => Promise<HostLogsTailResult>;
@@ -1025,28 +1436,19 @@ export interface IHostManagement {
     input: HostAvailableVersionsInput,
   ) => Promise<HostAvailableSnapshot>;
   readonly installedRecord: () => Promise<HostInstalledRecord | null>;
-  readonly registerService: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<void>;
-  // Post-auth provisioning: idempotently ensure the host is installed,
-  // registered, and running. The desktop delegates the whole lifecycle to
-  // the CLI (`traycer host ensure`) and streams progress; a fast no-op
-  // when the persistent host is already reachable.
-  readonly ensureHost: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-    // `true` = the desktop "Force restart" (skip the busy check and restart a
-    // running host unconditionally). Normal/Retry ensures pass `false`.
-    readonly force: boolean;
-  }) => Promise<HostEnsureResult>;
+  readonly registerService: () => Promise<
+    MutationOutcome<ServiceRegistrationOk>
+  >;
   readonly deregisterService: () => Promise<void>;
+  // Forces (or, on cache hit, reuses) a network registry probe -
+  // "Check now"/"Retry" on Settings → Host's Updates row. Distinct from
+  // `getHostControllerStatus`: this hits the network and reports
+  // probe-specific reachability/error state; it does not gate any
+  // surface's visibility (that's `HostControllerStatus.updateReady` /
+  // `.activation` now - "quiet until ready", Tech Plan D5).
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
-  // Current cross-surface host operation status (or `null` when idle), read
-  // once on mount to prime the shared query cache; live updates arrive via
-  // the desktop-only `hostOperationStatus` push bridge (see
-  // `HostOperationStatusListener`).
-  readonly getOperationStatus: () => Promise<HostOperationStatus | null>;
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;

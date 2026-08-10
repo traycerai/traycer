@@ -1,5 +1,9 @@
-import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/subscribe";
+import {
+  notificationsSubscribeV10,
+  notificationsSubscribeV11,
+} from "@traycer/protocol/host/notifications/subscribe";
 
 export * from "@traycer/protocol/host/notifications/host-notifications";
 export * from "@traycer/protocol/host/notifications/payloads";
-export { notificationsSubscribeV10 };
+export * from "@traycer/protocol/host/notifications/presentation";
+export { notificationsSubscribeV10, notificationsSubscribeV11 };

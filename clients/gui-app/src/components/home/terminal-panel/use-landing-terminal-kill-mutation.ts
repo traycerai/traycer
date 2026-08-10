@@ -3,6 +3,8 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -38,31 +40,37 @@ export function useLandingTerminalKill(): UseMutationResult<
   const defaultClient = useHostClient();
   const directory = useHostDirectory();
 
-  return useMutation({
-    mutationKey: terminalMutationKeys.kill(),
-    mutationFn: (variables) => {
-      const client = clientForLandingTerminal(
-        defaultClient,
-        directory.findById(variables.hostId),
-      );
-      if (client === null) {
-        return Promise.reject(hostClientUnavailableError("terminal.kill"));
-      }
-      return client.request("terminal.kill", {
-        sessionId: variables.sessionId,
-      });
-    },
-    onSuccess: (_response, variables) => {
-      // An acknowledgement is the durable boundary: only now can a tombstone
-      // be cleared without reopening adoption to a still-running PTY.
-      useLandingTerminalStore
-        .getState()
-        .clearPendingKill(variables.hostId, variables.sessionId);
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(variables.hostId, "terminal.list"),
-      });
-    },
-  });
+  return useMutation(
+    withHostMutationLifecycleBoundary("terminal.kill", {
+      mutationKey: terminalMutationKeys.kill(),
+      mutationFn: (variables) =>
+        withHostQueryErrorBoundary("terminal.kill", () => {
+          const client = clientForLandingTerminal(
+            defaultClient,
+            directory.findById(variables.hostId),
+          );
+          if (client === null) {
+            return Promise.reject(hostClientUnavailableError("terminal.kill"));
+          }
+          return client.request("terminal.kill", {
+            sessionId: variables.sessionId,
+          });
+        }),
+      onSuccess: (_response, variables) => {
+        // An acknowledgement is the durable boundary: only now can a tombstone
+        // be cleared without reopening adoption to a still-running PTY.
+        useLandingTerminalStore
+          .getState()
+          .clearPendingKill(variables.hostId, variables.sessionId);
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            variables.hostId,
+            "terminal.list",
+          ),
+        });
+      },
+    }),
+  );
 }
 
 function clientForLandingTerminal(

@@ -44,6 +44,7 @@ export interface ProviderRateLimitRefreshInput {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
 }
@@ -52,6 +53,7 @@ export function useProviderRateLimitRefresh({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
   isFetching,
   refetch,
 }: ProviderRateLimitRefreshInput): {
@@ -65,9 +67,15 @@ export function useProviderRateLimitRefresh({
   // serial queue rather than TanStack's own (deliberately disabled)
   // refetch-on-mount - see providerRateLimitQueryOptions' doc comment. No-ops
   // for the httpFetch lane, which keeps TanStack's refetch-on-mount instead.
-  useRefreshProviderRateLimitsOnMount(providerId, profileId, usageUpdatedAt);
+  useRefreshProviderRateLimitsOnMount(
+    providerId,
+    profileId,
+    usageUpdatedAt,
+    fetchEligible,
+  );
 
   const refresh = useCallback(async (): Promise<void> => {
+    if (!fetchEligible) return;
     if (lane === "ephemeralProcess") {
       await enqueueRateLimitFetchForScope(
         queueScope,
@@ -81,9 +89,10 @@ export function useProviderRateLimitRefresh({
       return;
     }
     await refetch();
-  }, [lane, profileId, providerId, queueScope, refetch]);
+  }, [fetchEligible, lane, profileId, providerId, queueScope, refetch]);
 
-  const isRefreshing = isFetching || (lane === "ephemeralProcess" && draining);
+  const isRefreshing =
+    fetchEligible && (isFetching || (lane === "ephemeralProcess" && draining));
 
   return { refresh, isRefreshing };
 }

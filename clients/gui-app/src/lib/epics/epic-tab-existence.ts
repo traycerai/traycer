@@ -1,36 +1,11 @@
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
-
-type FetchEpicListPage = (
-  cursor: string | undefined,
-) => Promise<ListTasksResponse>;
-
-export async function fetchExistingEpicIdsFromPages(
-  fetchPage: FetchEpicListPage,
-): Promise<ReadonlySet<string>> {
-  const epicIds = new Set<string>();
-  let cursor: string | undefined = undefined;
-
-  for (;;) {
-    const page = await fetchPage(cursor);
-
-    for (const task of page.tasks) {
-      const epic = task.epic?.light ?? null;
-      if (epic !== null) {
-        epicIds.add(epic.id);
-      }
-    }
-
-    if (
-      !page.hasMore ||
-      typeof page.nextCursor !== "string" ||
-      page.nextCursor.length === 0
-    ) {
-      return epicIds;
-    }
-    cursor = page.nextCursor;
-  }
-}
-
+/**
+ * Open epic tabs whose ids the host did NOT confirm as existing epics.
+ *
+ * `existingEpicIds` must be a positively-established set - see
+ * `EpicTabExistenceReconciler`, whose only action on the result is destructive
+ * (force-closing tabs), so an absent or failed lookup must never reach here as
+ * an empty set.
+ */
 export function missingEpicIds(
   openEpicIds: ReadonlyArray<string>,
   existingEpicIds: ReadonlySet<string>,

@@ -11,31 +11,33 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
+import { useHostNotificationsConfigForClient } from "@/hooks/host/use-host-notifications-config-query";
+import { useHostNotificationsSetConfigForClient } from "@/hooks/host/use-host-notifications-set-config-mutation";
 import {
-  useHostNotificationsConfig,
-  useHostNotificationsConfigForClient,
-} from "@/hooks/host/use-host-notifications-config-query";
-import {
-  useHostNotificationsSetConfig,
-  useHostNotificationsSetConfigForClient,
-} from "@/hooks/host/use-host-notifications-set-config-mutation";
-import {
-  useNotificationHooksSave,
   useNotificationHooksSaveForClient,
-  useNotificationHooksStatus,
   useNotificationHooksStatusForClient,
-  useNotificationHooksTest,
   useNotificationHooksTestForClient,
   type NotificationHooksSaveMutation,
   type NotificationHooksStatusQuery,
   type NotificationHooksTestMutation,
 } from "@/hooks/host/use-notification-hooks-query";
 import { NotificationHooksSection } from "@/components/settings/panels/notification-hooks-section";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 
 type NotificationConfig = ResponseOfMethod<
   HostRpcRegistry,
@@ -73,31 +75,33 @@ const SEVERITY_ROWS: ReadonlyArray<{
   },
 ];
 
-const CHANNELS: ReadonlyArray<{
-  readonly id: HostNotificationChannelId;
-  readonly label: string;
-  readonly description: string;
-}> = [
-  {
-    id: "renderer",
-    label: "In-app",
-    description: "Native OS toast and chime from the Traycer app.",
-  },
-];
-
 const EMPTY_RENDERER_CONFIG = {};
 const LEAVE_SECRET_UNCHANGED: HostNotificationsSecretWrite = {
   kind: "leaveUnchanged",
 };
 
+/**
+ * The route / modal entry point.
+ *
+ * Notification policy and hooks are stored BY THE HOST, so this panel was
+ * always host-scoped — it just never said which host, and silently configured
+ * whichever one happened to be active under a heading that read "Current
+ * host". It was the worst of the invisible bindings: a person could toggle
+ * severities all evening and never learn that the bell they were watching
+ * belonged to a different host. It now reads the one Settings host scope, and
+ * the sidebar that owns that scope names the host and says so explicitly when
+ * it is not the one this window's bell reads from.
+ */
 export function NotificationsSettingsPanel() {
+  const scope = useHostScope();
   return (
     <NotificationsSettingsPanelContent
-      configQuery={useHostNotificationsConfig()}
-      setConfig={useHostNotificationsSetConfig()}
-      hooksStatusQuery={useNotificationHooksStatus()}
-      testHook={useNotificationHooksTest()}
-      saveHooks={useNotificationHooksSave()}
+      scope={scope}
+      configQuery={useHostNotificationsConfigForClient(scope.client)}
+      setConfig={useHostNotificationsSetConfigForClient(scope.client)}
+      hooksStatusQuery={useNotificationHooksStatusForClient(scope.client)}
+      testHook={useNotificationHooksTestForClient(scope.client)}
+      saveHooks={useNotificationHooksSaveForClient(scope.client)}
     />
   );
 }
@@ -107,6 +111,7 @@ export function NotificationsSettingsPanelForClient(props: {
 }) {
   return (
     <NotificationsSettingsPanelContent
+      scope={null}
       configQuery={useHostNotificationsConfigForClient(props.client)}
       setConfig={useHostNotificationsSetConfigForClient(props.client)}
       hooksStatusQuery={useNotificationHooksStatusForClient(props.client)}
@@ -117,23 +122,78 @@ export function NotificationsSettingsPanelForClient(props: {
 }
 
 function NotificationsSettingsPanelContent(props: {
+  /** `null` when the caller supplied a client directly and owns the gating. */
+  readonly scope: HostScope | null;
   readonly configQuery: UseQueryResult<NotificationConfig, HostRpcError>;
   readonly setConfig: NotificationSetConfigMutation;
   readonly hooksStatusQuery: NotificationHooksStatusQuery;
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
 }) {
+  const compact = useSettingsDensity() === "compact";
+  const { scope } = props;
+  const body = (
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-col",
+        compact ? "gap-3.5" : "gap-5",
+      )}
+    >
+      <SettingsGroup
+        // Was "In-app notifications · Current host" — a title whose only
+        // qualifier was the one fact the screen refused to resolve. The sidebar
+        // names the host now, so the title is free to name the setting.
+        title="In-app notifications"
+        tone="default"
+        dataTestId="notifications-severity-policy"
+        fill={false}
+      >
+        {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
+      </SettingsGroup>
+      <div className="min-h-0 flex-1">
+        {/* Keyed by host. The editor below holds an open hook draft and an
+            armed pending-delete, and a save rebuilds the host's ENTIRE hooks
+            file from the list it is looking at. Those two pieces of state
+            belong to one machine, but nothing here unmounts when the scope
+            moves: switching to a host whose hooks are already cached kept the
+            draft and the armed delete on screen while every mutation prop
+            re-pointed at the new client, so confirming wrote the new host's
+            file using an intent armed against the old one — copying a hook
+            across machines, or deleting whichever hook happened to share the
+            id. Changing hosts has to DESTROY that state, not re-point it.
+            Same guarantee, and the same reasoning, as the key on
+            `HostRegistryUpdates`. */}
+        <NotificationHooksSection
+          key={scope?.hostId}
+          statusQuery={props.hooksStatusQuery}
+          testHook={props.testHook}
+          saveHooks={props.saveHooks}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="Configure interruptions from Traycer. The bell feed always shows every notification, including collaboration updates; these controls only decide which events interrupt you."
+      description="What this host surfaces, and what its automation receives."
+      fillHeight
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      // The header named the scoped host until the sidebar started doing it a
+      // row away and permanently. Two statements of one fact is how the old
+      // surface got confusing; this is the one place it was still true.
+      headerAction={undefined}
     >
-      {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
-      <NotificationHooksSection
-        statusQuery={props.hooksStatusQuery}
-        testHook={props.testHook}
-        saveHooks={props.saveHooks}
-      />
+      {scope === null ? (
+        body
+      ) : (
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          {body}
+        </HostScopeGate>
+      )}
     </SettingsPanelShell>
   );
 }
@@ -174,104 +234,51 @@ function renderNotificationsSettingsContent(
     );
   }
   return (
-    <div className="divide-y divide-border/40">
-      <NotificationMatrix
-        config={data}
-        configIsFetching={isFetching}
-        setConfig={setConfig}
-      />
-    </div>
+    <NotificationSeverityList
+      config={data}
+      configIsFetching={isFetching}
+      setConfig={setConfig}
+    />
   );
 }
 
-function NotificationMatrix(props: {
+function NotificationSeverityList(props: {
   readonly config: NotificationConfig;
   readonly configIsFetching: boolean;
   readonly setConfig: NotificationSetConfigMutation;
 }) {
   return (
-    <section className="space-y-4 px-5 py-5">
-      <SectionHeading
-        title="Interruptions"
-        description="Choose which severities can interrupt you in each channel. Informational collaboration activity stays feed-only."
-        trailing={undefined}
-      />
-      <div className="overflow-x-auto">
-        <div className="grid min-w-full grid-cols-[minmax(0,1.35fr)_repeat(1,minmax(0,1fr))] gap-px overflow-hidden rounded-md border border-border/60 bg-border/60">
-          <div className="bg-muted/40 px-3 py-3 text-ui-xs font-medium uppercase text-muted-foreground">
-            Severity
-          </div>
-          {CHANNELS.map((channel) => (
-            <div key={channel.id} className="bg-muted/40 px-3 py-3 text-center">
-              <div className="text-ui-sm font-medium text-foreground">
-                {channel.label}
-              </div>
-              <p className="mt-1 text-ui-xs text-muted-foreground">
-                {channel.description}
-              </p>
-            </div>
-          ))}
-          {SEVERITY_ROWS.flatMap((severity) => [
-            <div key={`${severity.id}:label`} className="bg-card px-3 py-3">
-              <div className="text-ui-sm font-medium text-foreground">
-                {severity.label}
-              </div>
-              <p className="mt-1 text-ui-xs text-muted-foreground">
-                {severity.description}
-              </p>
-            </div>,
-            ...CHANNELS.map((channel) => (
-              <div
-                key={`${severity.id}:${channel.id}`}
-                className="flex items-center justify-center bg-card px-3 py-3"
-              >
-                <Switch
-                  checked={matrixValue(props.config, severity.id, channel.id)}
-                  disabled={props.setConfig.isPending || props.configIsFetching}
-                  aria-label={`${severity.label} ${channel.label} interruptions`}
-                  data-testid={`notifications-matrix-${severity.id}-${channel.id}`}
-                  onCheckedChange={(checked) => {
-                    props.setConfig.mutate(
-                      createMatrixToggleRequest(
-                        props.config,
-                        severity.id,
-                        channel.id,
-                        checked,
-                      ),
-                    );
-                  }}
-                />
-              </div>
-            )),
-          ])}
-        </div>
-      </div>
+    <>
+      {SEVERITY_ROWS.map((severity) => (
+        <SettingsRow
+          key={severity.id}
+          label={severity.label}
+          description={severity.description}
+          control={
+            <Switch
+              checked={matrixValue(props.config, severity.id, "renderer")}
+              disabled={props.setConfig.isPending || props.configIsFetching}
+              aria-label={`${severity.label} In-app notifications`}
+              data-testid={`notifications-severity-${severity.id}`}
+              onCheckedChange={(checked) => {
+                props.setConfig.mutate(
+                  createSeverityToggleRequest(
+                    props.config,
+                    severity.id,
+                    checked,
+                  ),
+                );
+              }}
+            />
+          }
+        />
+      ))}
       {props.setConfig.error === null ? null : (
-        <p className="text-ui-xs text-destructive">
+        <p className="border-t border-border/40 px-4 py-2.5 text-ui-xs text-destructive">
           {props.setConfig.error.message}
         </p>
       )}
-    </section>
-  );
-}
-
-function SectionHeading(props: {
-  readonly title: string;
-  readonly description: string;
-  readonly trailing: ReactNode | undefined;
-}) {
-  return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0 space-y-1">
-        <h2 className="text-ui font-semibold text-foreground">{props.title}</h2>
-        <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
-          {props.description}
-        </p>
-      </div>
-      {props.trailing === undefined ? null : (
-        <div className="shrink-0">{props.trailing}</div>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -295,10 +302,9 @@ function InlineState(props: {
   );
 }
 
-function createMatrixToggleRequest(
+function createSeverityToggleRequest(
   config: NotificationConfig,
   severity: HostNotificationSeverity,
-  channelId: HostNotificationChannelId,
   enabled: boolean,
 ): NotificationSetConfigRequest {
   const matrix = completeMatrix(config);
@@ -307,7 +313,7 @@ function createMatrixToggleRequest(
       ...matrix,
       [severity]: {
         ...matrix[severity],
-        [channelId]: enabled,
+        renderer: enabled,
       },
     },
     channels: configChannelsForSet(config),

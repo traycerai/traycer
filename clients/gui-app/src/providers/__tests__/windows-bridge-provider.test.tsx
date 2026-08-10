@@ -1,10 +1,11 @@
-import "../../../__tests__/test-browser-apis";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import {
   useWindowsBridge,
   useWindowsBridgeHydrated,
@@ -28,6 +29,9 @@ import {
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import { emptyTabStripLayout } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   DesktopAuthSessionSnapshot,
@@ -43,6 +47,7 @@ interface FakeWindowsBridgeHandle {
   readonly bridge: DesktopWindowsBridge;
   readonly perWindowUpdates: readonly DesktopPerWindowStatePatch[];
   readonly authSessionSets: readonly DesktopAuthSessionSnapshot[];
+  emitPerWindowSnapshot(snapshot: DesktopPerWindowSnapshot): void;
 }
 
 function createDesktopWindowsBridge(): FakeWindowsBridgeHandle {
@@ -139,72 +144,22 @@ function createDesktopWindowsBridge(): FakeWindowsBridgeHandle {
     },
     perWindowUpdates,
     authSessionSets,
+    emitPerWindowSnapshot: (snapshot) => {
+      perWindowHandlers.forEach((handler) => handler(snapshot));
+    },
   };
 }
 
 function createBaseRunnerHost(): IRunnerHost {
-  return {
-    signInUrl: "https://auth.example.invalid/sign-in",
-    authnBaseUrl: "https://auth.example.invalid",
-    hasLocalHost: true,
-    validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
-    validateAuthTokenIdentity: () =>
-      Promise.resolve({ kind: "rejected" as const }),
-    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
-    openExternalLink: () => Promise.resolve(),
-    getRegisteredUrlSchemes: () => Promise.resolve([]),
-    requestMicrophoneAccess: () => Promise.resolve("granted" as const),
-    openMicrophoneSettings: () => Promise.resolve(),
-    beginAuthAttempt: () => undefined,
-    onAuthCallback: () => ({ dispose: () => undefined }),
-    deviceFlow: { start: () => Promise.resolve(null) },
-    secureStorage: {
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-      delete: () => Promise.resolve(),
-    },
-    notifications: {
-      show: () => Promise.resolve(),
-      onClick: () => ({ dispose: () => undefined }),
-    },
-    tray: {
-      setEpics: () => Promise.resolve(),
-      setIndicator: () => Promise.resolve(),
-      onEpicSelected: () => ({ dispose: () => undefined }),
-    },
-    hostPicker: {
-      get isOpen() {
-        return false;
-      },
-      requestOpen: () => undefined,
-      requestClose: () => undefined,
-      onChange: () => ({ dispose: () => undefined }),
-    },
-    workspaceFolders: {
-      pickFolders: () => Promise.resolve([]),
-    },
-    fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
-      copyDroppedFilePaths: (paths) => Promise.resolve(paths),
-    },
-    tokenStore: {
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-      delete: () => Promise.resolve(),
-    },
+  return createFakeRunnerHost({
+    // The bridge provider hydrates its local-host state off this callback, so
+    // (unlike the other renderer/bridge tests sharing this factory) it must
+    // fire synchronously with "no local host" rather than staying a no-op.
     onLocalHostChange: (handler) => {
       handler(null);
       return { dispose: () => undefined };
     },
-    onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
-    service: null,
-    traycerCli: null,
-    migration: null,
-    hostManagement: null,
-    hostTray: null,
-    zoom: null,
-  } satisfies IRunnerHost;
+  });
 }
 
 function createRunnerHostWithWindows(value: unknown): IRunnerHost {
@@ -254,6 +209,13 @@ function emptyPerWindowSnapshot(): DesktopPerWindowSnapshot {
     landingDrafts: [],
     activeLandingDraftId: null,
   };
+}
+
+function tabsStorageKey(): string {
+  const name = useTabsStore.persist.getOptions().name;
+  if (name === undefined)
+    throw new Error("tabs persistence storage key missing");
+  return name;
 }
 
 function landingTextContent(text: string): JsonContent {
@@ -382,6 +344,91 @@ describe("<WindowsBridgeProvider />", () => {
         "hydrated",
       );
     });
+  });
+
+  it("fails closed when the capability handshake acknowledges an older revision", async () => {
+    const fake = createDesktopWindowsBridge();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const staleHandshakeBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () =>
+          Promise.resolve({ ...emptyPerWindowSnapshot(), revision: 5 }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 4 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(staleHandshakeBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(getTabSplitCompatibility().supported).toBe(false);
+  });
+
+  it("keeps a subscribed newer snapshot when the initial get resolves stale", async () => {
+    const fake = createDesktopWindowsBridge();
+    const deferredSnapshot = createDeferred<DesktopPerWindowSnapshot>();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const racedBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () => deferredSnapshot.promise,
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 3 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider runnerHost={createRunnerHostWithWindows(racedBridge)}>
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    fake.emitPerWindowSnapshot({
+      ...emptyPerWindowSnapshot(),
+      revision: 2,
+      epicTabs: [{ id: "tab-new", epicId: "epic-new", name: "New" }],
+      activeTabId: "tab-new",
+    });
+    await act(async () => {
+      deferredSnapshot.resolve({
+        ...emptyPerWindowSnapshot(),
+        revision: 1,
+        epicTabs: [{ id: "tab-old", epicId: "epic-old", name: "Old" }],
+        activeTabId: "tab-old",
+      });
+      await deferredSnapshot.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(useEpicCanvasStore.getState().tabsById["tab-new"]).toBeDefined();
+    expect(useEpicCanvasStore.getState().tabsById["tab-old"]).toBeUndefined();
   });
 
   it("still marks hydration complete when the per-window snapshot fetch rejects", async () => {
@@ -514,6 +561,45 @@ describe("<WindowsBridgeProvider />", () => {
     );
     expect(observed.at(-1)).toBeNull();
     expect(getDesktopEpicOwnershipBridge()).toBeNull();
+
+    const storageKey = tabsStorageKey();
+    window.localStorage.removeItem(storageKey);
+    useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+    useTabsStore
+      .getState()
+      .setStripOrder([{ kind: "epic", id: "browser-tab" }]);
+    expect(getTabSplitCompatibility().supported).toBe(true);
+    expect(window.localStorage.getItem(storageKey)).not.toBeNull();
+  });
+
+  it("flushes file-edit recovery on pagehide/beforeunload without a desktop bridge (web path)", async () => {
+    const flushRecoverySpy = vi
+      .spyOn(fileEditRuntimeRegistry, "flushRecovery")
+      .mockResolvedValue(undefined);
+
+    render(
+      <RunnerHostProvider runnerHost={createBaseRunnerHost()}>
+        <WindowsBridgeProvider>
+          <BridgeProbe onBridge={() => undefined} />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    expect((await screen.findByTestId("bridge-state")).textContent).toBe(
+      "none",
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(flushRecoverySpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event("beforeunload"));
+    });
+    expect(flushRecoverySpy).toHaveBeenCalledTimes(2);
+
+    flushRecoverySpy.mockRestore();
   });
 
   it("coalesces bursty desktop per-window projections into one bridge write", async () => {

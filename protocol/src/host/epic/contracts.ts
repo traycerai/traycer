@@ -16,6 +16,7 @@ import {
   createEpicRequestSchema,
   createEpicResponseSchema,
   createTuiAgentRequestSchema,
+  createTuiAgentRequestSchemaV10,
   createTuiAgentResponseSchema,
   deleteArtifactRequestSchema,
   deleteArtifactResponseSchema,
@@ -45,12 +46,15 @@ import {
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
   listTasksRequestSchema,
+  listTasksRequestSchemaV11,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
   removeEpicRepoRequestSchema,
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
   resolveArtifactByPathResponseSchema,
+  searchArtifactsRequestSchema,
+  searchArtifactsResponseSchema,
   renameArtifactRequestSchema,
   renameArtifactResponseSchema,
   renameChatRequestSchema,
@@ -63,28 +67,37 @@ import {
   reparentChatResponseSchema,
   replyToCommentThreadRequestSchema,
   replyToCommentThreadResponseSchema,
+  recordEpicViewedRequestSchema,
+  recordEpicViewedResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  setChatArchivedRequestSchema,
+  setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
   setEpicPinnedResponseSchema,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
+  updateChatProfileRequestSchema,
+  updateChatProfileResponseSchema,
   updateChatRunSettingsRequestSchema,
+  updateChatRunSettingsRequestSchemaV11,
   updateChatRunSettingsResponseSchema,
   updateEpicRequestSchema,
   updateEpicResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { epicSubscribeV10 } from "@traycer/protocol/host/epic/subscribe";
+import {
+  epicSubscribeV10,
+  epicSubscribeV11,
+} from "@traycer/protocol/host/epic/subscribe";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
-// task-list query. The request remains shared with the latest contract while
-// the response preserves the released row shape.
+// task-list query. Both request and response preserve the released wire shape.
 export const epicListTasksV10 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaV11,
   responseSchema: listTasksResponseSchemaV10,
 });
 
@@ -94,7 +107,7 @@ export const epicListTasksV10 = defineRpcContract({
 export const epicListTasksV11 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaV11,
   responseSchema: listTasksResponseSchema,
 });
 
@@ -111,6 +124,25 @@ export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
+// `epic.listTasks@1.2` adds the centrally evaluated `last-viewed` sort. The
+// response is unchanged; older requests are already valid latest requests.
+export const epicListTasksV12 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListTasksV11,
+  typeof epicListTasksV12
+>({
+  from: epicListTasksV11.schemaVersion,
+  to: epicListTasksV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 // Personal cloud preference. Optional/non-floor so clients retain the released
 // unary handshake against older hosts and receive E_HOST_UNSUPPORTED only when
 // they try to change a pin.
@@ -119,6 +151,15 @@ export const epicSetPinnedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setEpicPinnedRequestSchema,
   responseSchema: setEpicPinnedResponseSchema,
+});
+
+// Personal cloud recency. Optional/non-floor so older hosts remain compatible;
+// route activation silently skips the write when the capability is absent.
+export const epicRecordViewedV10 = defineRpcContract({
+  method: "epic.recordViewed",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: recordEpicViewedRequestSchema,
+  responseSchema: recordEpicViewedResponseSchema,
 });
 
 // Batch resolve task ids → list-row shapes (titles/context). Optional/non-floor
@@ -267,6 +308,41 @@ export const epicUpdateChatRunSettingsV10 = defineRpcContract({
   responseSchema: updateChatRunSettingsResponseSchema,
 });
 
+// v1.1 tightens `settings` to the wire-strict tuple (no zod-default
+// backstops): a subset-field patch is a validation error at the canonical
+// minor instead of a silent null-clobber. Shipped as a minor so the loose
+// v1.0 shape stays an explicitly bridged legacy line rather than the live
+// contract. See `updateChatRunSettingsRequestSchemaV11`.
+export const epicUpdateChatRunSettingsV11 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV11,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+
+// A parsed v1.0 request has already materialized the loose schema's defaults
+// (serviceTier/profileId -> null), so it satisfies the strict tuple as-is;
+// the request upgrade is the identity. The response is unchanged.
+export const epicUpdateChatRunSettingsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV10,
+  typeof epicUpdateChatRunSettingsV11
+>({
+  from: epicUpdateChatRunSettingsV10.schemaVersion,
+  to: epicUpdateChatRunSettingsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Optional (non-floor) capability: narrow profile-only settings update - the
+// host patches its own authoritative persisted tuple. See the schema doc in
+// `unary-schemas.ts` for why no sibling model/harness update exists.
+export const epicUpdateChatProfileV10 = defineRpcContract({
+  method: "epic.updateChatProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: updateChatProfileRequestSchema,
+  responseSchema: updateChatProfileResponseSchema,
+});
+
 export const epicDeleteChatV10 = defineRpcContract({
   method: "epic.deleteChat",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -281,9 +357,37 @@ export const epicReparentChatV10 = defineRpcContract({
   responseSchema: reparentChatResponseSchema,
 });
 
+// Optional (non-floor) capability: durable host-backed archive toggle for a
+// chat or terminal-agent record. Registered with a `degrade: unsupported`
+// strategy (see registry.ts) so an old host that lacks it fails only this
+// call - it must never enter the released floor, which would be
+// handshake-fatal for existing peers. See the schema doc in `unary-schemas.ts`.
+export const epicSetChatArchivedV10 = defineRpcContract({
+  method: "epic.setChatArchived",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setChatArchivedRequestSchema,
+  responseSchema: setChatArchivedResponseSchema,
+});
+
 export const epicCreateTuiAgentV10 = defineRpcContract({
   method: "epic.createTuiAgent",
   schemaVersion: { major: 1, minor: 0 } as const,
+  // Frozen: `host-v1.1.10` shipped this line. It pointed at the live request
+  // schema until then, which is how `forkSourceHarnessSessionId` grew an
+  // already-released contract.
+  requestSchema: createTuiAgentRequestSchemaV10,
+  responseSchema: createTuiAgentResponseSchema,
+});
+
+// v1.1 adds `forkSourceHarnessSessionId`: the upstream session a forked TUI
+// agent was minted from, persisted verbatim so a provider failure between PTY
+// spawn and destination-transcript establishment still has durable provenance
+// to retry the fork from. Folded onto this method as a minor rather than a new
+// method name, which would fatally fail the equal-set handshake against an
+// already-shipped host. See the RPC backward-compat decision log.
+export const epicCreateTuiAgentV11 = defineRpcContract({
+  method: "epic.createTuiAgent",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: createTuiAgentRequestSchema,
   responseSchema: createTuiAgentResponseSchema,
 });
@@ -397,4 +501,15 @@ export const epicResolveArtifactByPathV10 = defineRpcContract({
   responseSchema: resolveArtifactByPathResponseSchema,
 });
 
-export { epicSubscribeV10 };
+// `epic.searchArtifacts@1.0` - Epic-scoped artifact title/path/body search over
+// the epic's on-disk Markdown mirror + authoritative Y.Doc metadata. Optional
+// (non-floor): an old host lacks it in its optional manifest and returns
+// E_HOST_UNSUPPORTED for this call only, so the sidebar degrades to no search.
+export const epicSearchArtifactsV10 = defineRpcContract({
+  method: "epic.searchArtifacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: searchArtifactsRequestSchema,
+  responseSchema: searchArtifactsResponseSchema,
+});
+
+export { epicSubscribeV10, epicSubscribeV11 };

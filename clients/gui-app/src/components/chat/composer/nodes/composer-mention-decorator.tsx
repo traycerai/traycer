@@ -48,8 +48,12 @@ function DecoratorIcon({
       <Layers className={cn(className, "text-muted-foreground")} aria-hidden />
     );
   }
-  if (mention.contextType === "chat") {
-    const Icon = EPIC_NODE_ICONS.chat;
+  if (
+    mention.contextType === "chat" ||
+    mention.contextType === "terminal-agent" ||
+    mention.contextType === "terminal"
+  ) {
+    const Icon = EPIC_NODE_ICONS[mention.contextType];
     return (
       <Icon className={cn(className, "text-muted-foreground")} aria-hidden />
     );

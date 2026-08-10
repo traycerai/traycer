@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Same UI/infra scaffolding `harness-model-picker.test.tsx` mocks - none of it
@@ -387,7 +386,6 @@ function renderPickerWithFixture(
       selection,
       reasoning: "",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: false,
@@ -405,6 +403,7 @@ function renderPickerWithFixture(
             registerActivation={false}
             createProfileHostId={null}
             runTargetHostId={null}
+            profileAdmission={null}
           />
         </TooltipProvider>
       </SurfaceActivityProvider>

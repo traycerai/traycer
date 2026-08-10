@@ -18,6 +18,7 @@ import {
 } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { CanvasAddon } from "@xterm/addon-canvas";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import {
@@ -31,13 +32,15 @@ import {
   inactiveCursorStyleFor,
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
-import {
-  DEFAULT_MONO_FONT_STACK,
-  buildFontFamilyValue,
-} from "@/lib/default-font-stacks";
+import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import {
+  dataTransferHasFiles,
+  resolveFileTransferPaths,
+  uniquePaths,
+} from "@/lib/files/file-transfer-paths";
 import { cn } from "@/lib/utils";
+import { appLogger } from "@/lib/logger";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
@@ -45,11 +48,16 @@ import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
 import {
   useActivePaneEffect,
-  useVisiblePaneValue,
+  useFocusedPaneValue,
+  useVisiblePaneEffect,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { registerTerminalFocus } from "@/lib/terminals/terminal-focus-registry";
 import {
   acquireXtermHost,
+  adoptWarmSessionInstance,
+  hasPeerXtermHostForSession,
   releaseXtermHost,
   type XtermHostControls,
   type XtermHostEntry,
@@ -65,6 +73,14 @@ import {
 
 const RESIZE_DEBOUNCE_MS = 50;
 const XTERM_STARTUP_DISPOSE_DELAY_MS = 0;
+// Consecutive dedupe-skipped fits (box unchanged) observed while the local grid
+// still differs from that box's natural size before the engine logs the
+// latched-grid warning. The mismatch is legitimate for the one round-trip
+// between reporting a size and the host echoing the effective grid back; a
+// streak this long means the echo never arrived (or was never requested) and
+// the session is stuck rendering at the wrong size - the field-reported
+// "TUI latched at 80 cols in a wide pane" state.
+const GRID_LATCH_WARN_STREAK = 5;
 // Below this (px, both axes) the container is mid-relayout - a collapsed flex
 // height on window restore, a hidden pane, or a box detached mid-reattach -
 // rather than a real terminal surface. Measuring it yields xterm's floored 2x1
@@ -81,23 +97,6 @@ interface XtermInitialOptions extends ITerminalOptions {
 const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
-
-// xterm measures glyph cell width on a hidden canvas using the configured
-// `fontFamily`, so CSS variables (which don't resolve in that measurement
-// pass) are not usable here. Instead the effective terminal font is built
-// directly from settings-store values against the same default mono stack
-// `theme-provider.tsx` uses for `--traycer-font-mono` - `letterSpacing` /
-// `lineHeight` are pinned on the constructed Terminal so paint and
-// measurement agree.
-function resolveEffectiveFontFamily(
-  terminalFontFamily: string | null,
-  codeFontFamily: string | null,
-): string {
-  return buildFontFamilyValue(
-    terminalFontFamily ?? codeFontFamily,
-    DEFAULT_MONO_FONT_STACK,
-  );
-}
 
 export interface TerminalXtermHostProps {
   /**
@@ -143,6 +142,13 @@ export interface TerminalXtermHostProps {
    */
   readonly shouldFocusOnActivePane: boolean;
   /**
+   * Whether this host is an interactive focus target for explicit surface
+   * gestures. Measurement-only hosts reuse the real xterm engine before a
+   * session handle exists, but must leave a parked focus request untouched so
+   * the live host can fulfil it after taking ownership of input.
+   */
+  readonly registerImperativeFocus: boolean;
+  /**
    * Whether the underlying terminal session is still live. The host keeps the
    * persistent xterm engine cached across unmount when true, so splitting a
    * pane / switching tabs / reopening does not dispose the `Terminal` and lose
@@ -172,6 +178,17 @@ export interface TerminalXtermHostProps {
    * around a rectangle of terminal background.
    */
   readonly chrome: "padded" | "flush";
+  /**
+   * Hands the pane's live `Terminal` to the owner (and `null` on unmount), for
+   * surfaces that must read the engine's own state rather than the session
+   * store's - today the quote control, which needs xterm's selection and buffer
+   * coordinates. `null` opts out; only the epic terminal tile passes one.
+   *
+   * Deliberately narrower than it looks: the engine is shared and cached, so an
+   * owner may READ it and subscribe to its events, but writing to it here would
+   * race the resize/appearance/find hooks below that already own those knobs.
+   */
+  readonly onTerminalReady: ((term: Terminal | null) => void) | null;
 }
 
 export function TerminalXtermHost(props: TerminalXtermHostProps) {
@@ -200,21 +217,19 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // effects below. These initial options apply on first create only - a
   // reattached engine keeps its already-synced options.
   const theme = useTerminalTheme();
-  const codeFontSize = useSettingsStore((s) => s.codeFontSize);
-  const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
-  const codeFontFamily = useSettingsStore((s) => s.codeFontFamily);
-  const terminalFontFamily = useSettingsStore((s) => s.terminalFontFamily);
   const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
   const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
-  const effectiveFontSize = terminalFontSize ?? codeFontSize;
-  const fontFamily = resolveEffectiveFontFamily(
-    terminalFontFamily,
-    codeFontFamily,
-  );
+  // xterm measures glyph cell width on a hidden canvas where CSS variables do
+  // not resolve, so the font is applied as concrete values here; `letterSpacing`
+  // / `lineHeight` are pinned on the constructed Terminal so paint and
+  // measurement agree.
+  const { fontFamily, fontSize: effectiveFontSize } =
+    useEffectiveTerminalFont();
   const runnerHost = useRunnerHost();
-  // Inactive panes unregister global find ownership. They stay mounted, but
-  // app-level find should only target the visible terminal.
-  const activeFindTargetId = useVisiblePaneValue(props.findTargetId, null);
+  // Unfocused panes unregister global find ownership. Both split halves stay
+  // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
+  // visibility alone would leave two panes claiming it.
+  const activeFindTargetId = useFocusedPaneValue(props.findTargetId, null);
   const markSearchResultSource = useCallback(
     (source: TerminalSearchResultSource): void => {
       terminalSearchResultSourceRef.current = source;
@@ -249,6 +264,16 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     cursorBlink,
     allowProposedApi: true,
     scrollback: 5000,
+    // xterm's own slider defaults to a 14px VS Code-width gutter. The app's
+    // scrollbars are 4px (`index.css`), and a terminal tile is routinely docked
+    // beside a chat pane, so the two bars have to agree. Slider colors come
+    // through the ITheme in `terminal-theme.ts`.
+    //
+    // Setting a width is also the only switch that turns xterm's overview ruler
+    // on, which is what finally gives find-in-terminal's `matchOverviewRuler`
+    // color somewhere to paint. The ruler's own left-edge outline is suppressed
+    // via `overviewRulerBorder` in the theme.
+    scrollbar: { width: 4 },
     fontFamily,
     fontSize: effectiveFontSize,
     letterSpacing: 0,
@@ -282,12 +307,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   const onUserInputRef = useRef(props.onUserInput);
   const onContainerResizeRef = useRef(props.onContainerResize);
   const onWriterReadyRef = useRef(props.onWriterReady);
+  const onTerminalReadyRef = useRef(props.onTerminalReady);
   const runnerHostRef = useRef(runnerHost);
   const keepAliveRef = useRef(props.keepAlive);
   useEffect(() => {
     onUserInputRef.current = props.onUserInput;
     onContainerResizeRef.current = props.onContainerResize;
     onWriterReadyRef.current = props.onWriterReady;
+    onTerminalReadyRef.current = props.onTerminalReady;
     runnerHostRef.current = runnerHost;
     findTargetIdRef.current = activeFindTargetId;
     keepAliveRef.current = props.keepAlive;
@@ -295,6 +322,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     props.onUserInput,
     props.onContainerResize,
     props.onWriterReady,
+    props.onTerminalReady,
     props.keepAlive,
     activeFindTargetId,
     runnerHost,
@@ -312,6 +340,12 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     if (mount === null) return;
     const sessionId = sessionIdRef.current;
     const instanceId = instanceIdRef.current;
+    // Adopt a closed tab's warm handle + engine for this session BEFORE the
+    // acquire below can build a fresh engine under the new instance id. This
+    // host is the earliest toucher of the engine registry (child layout
+    // effects run before any parent bootstrap effect), so adoption must
+    // happen here to keep the reopened tab's scrollback. Idempotent.
+    adoptWarmSessionInstance(sessionId, instanceId);
     const entry = acquireXtermHost(instanceId, () =>
       createXtermEntry(sessionId, initialOptionsRef.current),
     );
@@ -348,12 +382,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     // reattach (same proxy, already-drained queue); on a fresh plain-terminal
     // open it triggers the buffered-snapshot flush.
     onWriterReadyRef.current(entry.writerProxy);
+    onTerminalReadyRef.current?.(entry.term);
     markTerminalLoad(sessionId, "writer-ready");
 
     return () => {
       if (entry.containerEl.parentElement === mount) {
         mount.removeChild(entry.containerEl);
       }
+      onTerminalReadyRef.current?.(null);
       termRef.current = null;
       searchAddonRef.current = null;
       tileFindAdapterRef.current.setSearchAddon(null);
@@ -397,6 +433,16 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     theme,
   });
   useActiveTerminalFocus(termRef, props.shouldFocusOnActivePane);
+  // Imperative focus bridge. Surfaces whose reveal is not a pane-visibility
+  // flip (the landing panel expanding around an always-mounted tile, or a tab
+  // created before its engine exists) focus through the registry instead of
+  // `shouldFocusOnActivePane`.
+  useEffect(() => {
+    if (!props.registerImperativeFocus) return;
+    return registerTerminalFocus(props.instanceId, () => {
+      termRef.current?.focus();
+    });
+  }, [props.instanceId, props.registerImperativeFocus]);
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));
@@ -564,6 +610,22 @@ function createXtermEntry(
   containerEl.dataset.testid = "terminal-xterm-host";
 
   const term = new Terminal(initialOptions);
+  // Measure cells with the Unicode 11 width tables, not xterm's Unicode 6
+  // default. The host advertises `TERM_PROGRAM=kitty` to TUI sessions, so chat
+  // TUIs (claude-code, codex) lay out their frames with string-width
+  // semantics, where emoji like U+2705/U+274C are two columns wide. Unicode 6
+  // calls those one column, and the disagreement only shows up on INCREMENTAL
+  // repaints: the TUI moves the cursor relatively (column 1 + cursor-forward)
+  // to rewrite a span, lands one column short per emoji, and paints over its
+  // own table borders - garble that "fixes itself" on the next resize because
+  // that forces a full redraw with absolute positioning.
+  //
+  // This is one half of a width contract with the host's snapshot emulator
+  // (traycer-host `terminal-snapshot-emulator.ts`), which sets the same
+  // unicode version so a reattach snapshot replays into an identically
+  // measured grid. The two must move together.
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = "11";
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   // Route every clicked link to the host's external-browser path. Left at its
@@ -627,6 +689,28 @@ function createXtermEntry(
     live.onSearchResults(result);
   });
 
+  // Dedupe so the host isn't spammed with identical resize frames on every
+  // render tick (cursor blink, keystroke echo, etc.). Scoped to one host
+  // session: a snapshot (fresh subscribe / reconnect / revive) clears it, so a
+  // recreated host session - which never heard what this engine reported to
+  // its predecessor - always gets one fresh report. Without the clear, a
+  // revive that spawned at the 80x24 bootstrap defaults dedupe-skipped every
+  // re-report (the box hadn't changed since the previous session) and the TUI
+  // stayed latched at 80 cols in a full-width pane.
+  let lastSentCols = 0;
+  let lastSentRows = 0;
+  let resizeDebounce: number | null = null;
+  // A reconcile that found the container unmeasurable (hidden pane, collapsed
+  // box) is remembered here and retried by the next successful fit measurement
+  // (pane-show refit / onRender) instead of being dropped. Dropping it was the
+  // second half of the latch: the host's effective grid only changes once per
+  // resize, so a reconcile missed while the pane was hidden never re-fired.
+  let pendingHostGrid: { cols: number; rows: number } | null = null;
+  // Latched-grid field evidence (see GRID_LATCH_WARN_STREAK). One warn per
+  // latch episode; re-armed once the grid matches the box again.
+  let latchSkipStreak = 0;
+  let latchWarned = false;
+
   const writerProxy: TerminalDataWriter = (write) => {
     if (write.kind === "snapshot") {
       // Resize the grid to the snapshot's dimensions BEFORE replaying it. The
@@ -646,6 +730,17 @@ function createXtermEntry(
       ) {
         term.resize(write.cols, write.rows);
       }
+      // A snapshot marks a (re)attach to a host session that may have been
+      // recreated since this kept-alive engine last reported its size (idle
+      // reap -> revive, host restart). That session was born at the bootstrap
+      // defaults and never heard `lastSent*`, so the dedupe must not carry
+      // over: clear it so the next measurable fit re-reports the container's
+      // natural grid once. (When nothing actually changed, the host's
+      // recompute is a no-op - one redundant frame per snapshot, not a loop.)
+      lastSentCols = 0;
+      lastSentRows = 0;
+      latchSkipStreak = 0;
+      latchWarned = false;
       // Reset before replaying a snapshot into an engine that already holds
       // content. A snapshot is always the host's AUTHORITATIVE full-screen state
       // (serialized emulator screen + scrollback + OSC colour preamble), so it
@@ -681,12 +776,6 @@ function createXtermEntry(
     hasReceivedContent = true;
     term.write(write.chunk, write.onAckable);
   };
-
-  // Dedupe so the host isn't spammed with identical resize frames on every
-  // render tick (cursor blink, keystroke echo, etc.).
-  let lastSentCols = 0;
-  let lastSentRows = 0;
-  let resizeDebounce: number | null = null;
 
   // Measure the container's natural grid, or return null when the box is in a
   // state we must NOT report from. `proposeDimensions` floors to its 2x1
@@ -726,17 +815,89 @@ function createXtermEntry(
   const reportDims = (cols: number, rows: number): void => {
     lastSentCols = cols;
     lastSentRows = rows;
+    // A report is progress toward re-sync; the latch detector only measures
+    // stretches where nothing is reported at all. `latchWarned` is NOT reset
+    // here: the latch self-heal below re-reports through this path, and a
+    // still-stuck session must retry without re-warning on every attempt.
+    // The episode flag resets once the grid matches the box again (or on a
+    // snapshot).
+    latchSkipStreak = 0;
     live.onContainerResize(cols, rows);
   };
 
   // Fit the local grid to the container and report it to the host, deduped
   // against the last size we reported so render-tick churn doesn't re-send.
   // Repairing a stale *shared* grid (the box hasn't changed, but the host's
-  // min(cols/rows) is pinned tiny) is `reconcileWithHost`'s job, not this one's.
+  // min(cols/rows) is pinned tiny) is `reconcileWithHost`'s job, not this one's
+  // - except for a reconcile that was deferred because the box was unmeasurable
+  // at the time, which this path completes on the next good measurement.
   const fitToContainer = (): void => {
     const dims = proposeContainerDims();
     if (dims === null) return;
-    if (dims.cols === lastSentCols && dims.rows === lastSentRows) return;
+    if (pendingHostGrid !== null) {
+      const hostGrid = pendingHostGrid;
+      pendingHostGrid = null;
+      if (dims.cols !== hostGrid.cols || dims.rows !== hostGrid.rows) {
+        // Peer check: with a second tab instance of this session ("smaller
+        // pane wins"), the host grid legitimately differs from this pane's
+        // natural size - still re-report (the host recompute no-ops), but
+        // don't log it as a heal.
+        if (!hasPeerXtermHostForSession(sessionId, containerEl)) {
+          appLogger.warn(
+            "[terminal] deferred grid reconcile healed a stale grid",
+            {
+              sessionId,
+              hostCols: hostGrid.cols,
+              hostRows: hostGrid.rows,
+              cols: dims.cols,
+              rows: dims.rows,
+            },
+          );
+        }
+        reportDims(dims.cols, dims.rows);
+        return;
+      }
+    }
+    if (dims.cols === lastSentCols && dims.rows === lastSentRows) {
+      // Latch detector + self-heal: the box hasn't changed since the last
+      // report, yet the local grid never became that size - the host echo is
+      // missing (report frame lost on a dying socket, host-side resize
+      // hiccup, stale dedupe). Legitimate for one report->echo round trip,
+      // and as a steady state when a smaller peer pane holds the shared grid
+      // down; a streak with no peer means the session is stuck rendering at
+      // the wrong size (the field-reported "half-width TUI in a fullscreen
+      // pane"). Warn once per episode for field evidence, then re-report
+      // THROUGH the dedupe - whatever link dropped, the host recompute runs
+      // again and the echo resizes the grid. `reportDims` resets the streak,
+      // so a still-stuck session retries at most once per
+      // GRID_LATCH_WARN_STREAK fits, without re-warning.
+      if (term.cols !== dims.cols || term.rows !== dims.rows) {
+        latchSkipStreak += 1;
+        if (
+          latchSkipStreak >= GRID_LATCH_WARN_STREAK &&
+          !hasPeerXtermHostForSession(sessionId, containerEl)
+        ) {
+          if (!latchWarned) {
+            latchWarned = true;
+            appLogger.warn(
+              "[terminal] grid latch detected: re-reporting the container's size",
+              {
+                sessionId,
+                termCols: term.cols,
+                termRows: term.rows,
+                cols: dims.cols,
+                rows: dims.rows,
+              },
+            );
+          }
+          reportDims(dims.cols, dims.rows);
+        }
+      } else {
+        latchSkipStreak = 0;
+        latchWarned = false;
+      }
+      return;
+    }
     reportDims(dims.cols, dims.rows);
   };
 
@@ -745,9 +906,17 @@ function createXtermEntry(
   // unsticks a session whose shared grid was latched to a stale/tiny value by a
   // transient (or by a client that has since corrected); without it the engine
   // dedupe keeps us pinned because nothing re-measures the unchanged box.
+  // An unmeasurable container (hidden pane, collapsed box) defers the
+  // reconcile to the next good fit measurement instead of dropping it - the
+  // host grid only changes once per resize, so a dropped reconcile never
+  // re-fires and the session latches at the stale size.
   const reconcileWithHost = (hostCols: number, hostRows: number): void => {
     const dims = proposeContainerDims();
-    if (dims === null) return;
+    if (dims === null) {
+      pendingHostGrid = { cols: hostCols, rows: hostRows };
+      return;
+    }
+    pendingHostGrid = null;
     if (dims.cols === hostCols && dims.rows === hostRows) return;
     reportDims(dims.cols, dims.rows);
   };
@@ -904,132 +1073,6 @@ function handleTerminalCustomKeyEvent(
 // (existing renderer registry, tests) keep using the named export.
 export default TerminalXtermHost;
 
-function dataTransferHasFiles(dataTransfer: DataTransfer): boolean {
-  const types = Array.from(dataTransfer.types);
-  return (
-    types.includes("Files") ||
-    types.includes("text/uri-list") ||
-    types.includes("public.file-url") ||
-    dataTransferItems(dataTransfer).some((item) => item.kind === "file")
-  );
-}
-
-function collectDroppedFiles(dataTransfer: DataTransfer): readonly File[] {
-  const files = Array.from(dataTransfer.files);
-  if (files.length > 0) return files;
-  return dataTransferItems(dataTransfer).flatMap((item) => {
-    if (item.kind !== "file") return [];
-    const file = item.getAsFile();
-    return file === null ? [] : [file];
-  });
-}
-
-function resolveFileTransferPaths(
-  dataTransfer: DataTransfer,
-  fileDrops: IRunnerHost["fileDrops"],
-): Promise<readonly string[]> | null {
-  const files = collectDroppedFiles(dataTransfer);
-  // File URLs are a fallback for sources that expose no `File` object - notably
-  // macOS screenshot thumbnails. Their backing file can disappear after either
-  // a drag or paste, so copy it into an app-managed temporary location before
-  // insertion. Real Finder files can carry a duplicate URI list; favor their
-  // original path rather than a copied one.
-  const fileUrlPaths =
-    files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [];
-  if (files.length === 0 && fileUrlPaths.length === 0) return null;
-  const resolvedFilePaths =
-    files.length === 0
-      ? Promise.resolve([] as readonly string[])
-      : fileDrops.resolveDroppedFilePaths(files);
-  const stableUrlPaths =
-    fileUrlPaths.length === 0
-      ? Promise.resolve([] as readonly string[])
-      : fileDrops.copyDroppedFilePaths(fileUrlPaths);
-  return Promise.all([resolvedFilePaths, stableUrlPaths]).then(
-    ([paths, urlPaths]) => [...paths, ...urlPaths],
-  );
-}
-
-function collectDroppedFileUrlPaths(
-  dataTransfer: DataTransfer,
-): readonly string[] {
-  const uriList = readDataTransferData(dataTransfer, "text/uri-list");
-  const publicFileUrl = readDataTransferData(dataTransfer, "public.file-url");
-  return uniquePaths(
-    [...parseFileUriList(uriList), fileUriToPath(publicFileUrl)].filter(
-      isNonNullString,
-    ),
-  );
-}
-
-function readDataTransferData(
-  dataTransfer: DataTransfer,
-  type: string,
-): string {
-  try {
-    return dataTransfer.getData(type);
-  } catch {
-    return "";
-  }
-}
-
-function dataTransferItems(
-  dataTransfer: DataTransfer,
-): readonly DataTransferItem[] {
-  const indexedItems = Array.from(dataTransfer.items).filter(
-    isDataTransferItem,
-  );
-  if (indexedItems.length === dataTransfer.items.length) return indexedItems;
-  return Array.from({ length: dataTransfer.items.length }, (_value, index) => {
-    return dataTransfer.items[index];
-  }).filter(isDataTransferItem);
-}
-
-function isDataTransferItem(
-  value: DataTransferItem | null | undefined,
-): value is DataTransferItem {
-  return value !== null && value !== undefined;
-}
-
-function parseFileUriList(value: string): readonly string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .map(fileUriToPath)
-    .filter(isNonNullString);
-}
-
-function fileUriToPath(value: string): string | null {
-  if (!value.startsWith("file://")) return null;
-  const withoutScheme = value.slice("file://".length);
-  const slashIndex = withoutScheme.indexOf("/");
-  if (slashIndex === -1) return null;
-  const host = withoutScheme.slice(0, slashIndex);
-  const rawPath = withoutScheme.slice(slashIndex);
-  const path = decodeFileUriPath(rawPath);
-  if (path === null) return null;
-  if (/^\/[A-Za-z]:\//.test(path)) return path.slice(1);
-  if (host.length === 0 || host === "localhost") return path;
-  return `//${host}${path}`;
-}
-
-function decodeFileUriPath(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
-function isNonNullString(value: string | null): value is string {
-  return value !== null;
-}
-
-function uniquePaths(paths: readonly string[]): readonly string[] {
-  return Array.from(new Set(paths.filter((path) => path.length > 0)));
-}
-
 function terminalPathInput(paths: readonly string[]): string {
   return paths.map(escapeTerminalPath).join(" ");
 }
@@ -1109,6 +1152,11 @@ function useHostGridReconcile(
   // because nothing re-measures the unchanged box, and the store dedupes the
   // re-report against its last-requested size so this can't loop.
   useEffect(() => {
+    // A non-positive grid is a placeholder, not a host-decided size - the
+    // measurement probe mounts with 0x0 before any session exists. There is
+    // nothing to reconcile against; arming the deferred-reconcile path with
+    // zeros would force a spurious re-report (and heal-log) on first fit.
+    if (effectiveCols <= 0 || effectiveRows <= 0) return;
     controlsRef.current?.reconcileWithHost(effectiveCols, effectiveRows);
   }, [controlsRef, effectiveCols, effectiveRows]);
 }
@@ -1227,7 +1275,7 @@ function useVisibleTerminalRepair(input: {
     clearTerminalAtlasSafely(canvasRef.current);
     term.refresh(0, term.rows - 1);
   }, [controlsRef, termRef, canvasRef, theme]);
-  useActivePaneEffect(refitVisiblePane);
+  useVisiblePaneEffect(refitVisiblePane);
 }
 
 function clearTerminalAtlasSafely(canvas: CanvasAddon | null): void {
@@ -1244,15 +1292,17 @@ function useActiveTerminalFocus(
   termRef: RefObject<Terminal | null>,
   shouldFocusOnActivePane: boolean,
 ): void {
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const focusVisibleTerminal = useCallback(() => {
     if (!shouldFocusOnActivePane) return;
+    if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     const focusTimer = window.setTimeout(() => {
       termRef.current?.focus();
     }, 0);
     return () => {
       clearTimeout(focusTimer);
     };
-  }, [shouldFocusOnActivePane, termRef]);
+  }, [paneActivationFocusIntent, shouldFocusOnActivePane, termRef]);
   useActivePaneEffect(focusVisibleTerminal);
 }
 

@@ -50,6 +50,60 @@ describe("<AutonomousResumeSegment />", () => {
     hostQueryMock.calls = [];
   });
 
+  it("never claims a still-running producer finished", () => {
+    // `status` is a persisted enum with no value for "running", so a digest
+    // from a shell still streaming carries
+    // `completed` for older readers. A reader that understands `live` must
+    // prefer it - otherwise the most glanceable line in the turn says the
+    // command is done while it is still going.
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "monitor",
+            title: "build watch",
+            status: "completed",
+            live: true,
+            summary: "still running - 12 new log lines",
+            blockId: "",
+            outputFile: null,
+            mcp: null,
+            managedCommand: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("Shell completed")).toBeNull();
+    expect(screen.getByText("Command still running")).toBeTruthy();
+    expect(screen.getByText("still running - 12 new log lines")).toBeTruthy();
+  });
+
+  it("still reports a terminal outcome once the producer has stopped", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "monitor",
+            title: "build watch",
+            status: "failed",
+            live: false,
+            summary: "3 new log lines",
+            blockId: "",
+            outputFile: null,
+            mcp: null,
+            managedCommand: null,
+          },
+        ]}
+      />,
+    );
+
+    // Kind-only trigger (no `managedCommand` block): the harness's own
+    // Monitor tool, which keeps its real name.
+    expect(screen.getByText("Monitor failed")).toBeTruthy();
+    expect(screen.queryByText("Command still running")).toBeNull();
+  });
+
   it("renders an mcp-identified trigger as an MCP tool card with structured identity", () => {
     render(
       <AutonomousResumeSegment
@@ -62,6 +116,8 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "tool-9",
             outputFile: null,
             mcp: { serverName: "probe", toolName: "slow_op" },
+            managedCommand: null,
+            live: false,
           },
         ]}
       />,
@@ -87,6 +143,8 @@ describe("<AutonomousResumeSegment />", () => {
               filePath: "task.output",
             },
             mcp: null,
+            managedCommand: null,
+            live: false,
           },
         ]}
       />,
@@ -139,6 +197,8 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "tool-1",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
+            live: false,
           },
         ]}
       />,
@@ -156,7 +216,7 @@ describe("<AutonomousResumeSegment />", () => {
     expect(hostQueryMock.calls).toHaveLength(0);
   });
 
-  it("renders monitor triggers as non-expandable cards with no output row", () => {
+  it("renders shell triggers as non-expandable cards with no output row", () => {
     render(
       <AutonomousResumeSegment
         triggers={[
@@ -168,14 +228,16 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "tool-2",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
+            live: false,
           },
         ]}
       />,
     );
 
     expect(screen.queryByRole("status", { name: "Resumed" })).toBeNull();
-    // Monitor never has a capturable output file, so the card is a static
-    // header - no expand toggle/button, no "Output file unavailable" row.
+    // A monitor trigger never has a capturable output file, so the card is a
+    // static header - no expand toggle/button, no "Output file unavailable".
     expect(
       screen.queryByRole("button", { name: /Monitor stopped/ }),
     ).toBeNull();
@@ -199,6 +261,8 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "wake-tool",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
+            live: false,
           },
         ]}
       />,

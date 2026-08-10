@@ -23,6 +23,7 @@ import {
 } from "@/stores/tile-find/tile-find-store";
 import type { TileFindStateSnapshot } from "@/stores/tile-find/types";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // Chat search scans the whole transcript, so keystrokes are coalesced into a
 // single search instead of one per character. Mirrors the artifact adapter's
 // rescan debounce window (ARTIFACT_FIND_RESCAN_DEBOUNCE_MS).
@@ -391,17 +392,23 @@ function TileFindStatusLabel(props: {
       snapshot.query.length > 0 &&
       snapshot.total === 0);
   return (
-    <span
-      className={cn(
-        "min-w-[5ch] text-right text-ui-xs text-muted-foreground",
-        destructive && "text-destructive",
-        snapshot.status === "partial" && "text-amber-600 dark:text-amber-400",
-      )}
-      data-status={snapshot.status}
-      title={snapshot.coverageMessage ?? snapshot.errorMessage ?? undefined}
+    <TooltipWrapper
+      label={snapshot.coverageMessage ?? snapshot.errorMessage ?? undefined}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {label}
-    </span>
+      <span
+        className={cn(
+          "min-w-[5ch] text-right text-ui-xs text-muted-foreground",
+          destructive && "text-destructive",
+          snapshot.status === "partial" && "text-amber-600 dark:text-amber-400",
+        )}
+        data-status={snapshot.status}
+      >
+        {label}
+      </span>
+    </TooltipWrapper>
   );
 }
 

@@ -40,6 +40,7 @@ import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-provider
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
+import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
@@ -53,6 +54,52 @@ import {
 } from "./use-provider-profile-login-flow";
 
 const COPY_CONFIRMATION_RESET_MS = 1600;
+
+/**
+ * Whether a new managed profile for this provider can SHARE the ambient
+ * `skills/` and `plugins/` directories instead of copying them - i.e. whether
+ * the "Share skills and plugins" checkbox does anything.
+ *
+ * The real driver is host-side: `seedManagedProfileDir` honours
+ * `shareSkillsAndPlugins` only on the `partial-overlay` layout branch
+ * (`profile-seeding.ts`), which today is claude-code alone. Codex also has
+ * profiles and is also excluded, and that exclusion is CORRECT rather than an
+ * oversight: codex takes the `overlay` branch, whose seeding never reads the
+ * flag, so offering the checkbox there would send a request the host silently
+ * discards.
+ *
+ * Exhaustive rather than the `providerId === "claude-code"` test it replaces.
+ * The old check would have kept quietly answering "no" for a future provider on
+ * the partial-overlay layout - a checkbox that should render and doesn't is
+ * invisible, so nothing would ever have reported it. This is still a second
+ * registration point for a host-side fact; a capability flag on the wire would
+ * be the deeper fix, and is deliberately not being minted for a single-member
+ * set on a released schema.
+ */
+const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
+  ProviderCliState["providerId"],
+  boolean
+> = {
+  "claude-code": true,
+  codex: false,
+  opencode: false,
+  cursor: false,
+  traycer: false,
+  openrouter: false,
+  huggingface: false,
+  grok: false,
+  qwen: false,
+  kiro: false,
+  droid: false,
+  kimi: false,
+  copilot: false,
+  kilocode: false,
+  amp: false,
+  devin: false,
+  pi: false,
+  hermes: false,
+  omp: false,
+};
 
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
@@ -80,7 +127,8 @@ export function AddProviderProfileDialog({
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
-  const supportsShareSkillsAndPlugins = state.providerId === "claude-code";
+  const supportsShareSkillsAndPlugins =
+    PROVIDER_SHARES_SKILLS_AND_PLUGINS[state.providerId];
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
     supportsShareSkillsAndPlugins,
   );
@@ -88,7 +136,17 @@ export function AddProviderProfileDialog({
   const [accentColor, setAccentColor] = useState<ProviderProfileAccentColor>(
     () => nextAvailableAccentColor(state.profiles),
   );
+  const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
+  // Set once naming is committed (a rename RPC succeeded, or none was needed
+  // because the label was left at its default) for a given profileId - marks
+  // the transition from the naming step into the ordinary finalize/recolor
+  // path below, so a later recolor failure/retry never re-shows naming. State
+  // (not a ref) because it feeds the naming-step derivation below, which runs
+  // during render.
+  const [namingCommittedFor, setNamingCommittedFor] = useState<string | null>(
+    null,
+  );
   const startLogin = useProvidersStartLoginForClient(client);
   const awaitLogin = useProvidersAwaitLoginForClient({
     client,
@@ -98,6 +156,7 @@ export function AddProviderProfileDialog({
   const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
   const touchLogin = useProvidersTouchLoginForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
+  const renameProfile = useRenameProviderProfileForClient(client);
   const flow = useProviderProfileLoginFlow({
     mode: "create",
     providerId: state.providerId,
@@ -118,13 +177,23 @@ export function AddProviderProfileDialog({
   });
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";
-  const finalizing = recolorProfile.isPending;
-  const identityCompletionPending =
-    flow.state.kind === "identity" &&
-    flow.state.existingProfileId === null &&
-    recolorProfile.error === null;
-  const dismissalLocked =
-    flow.commitPending || finalizing || identityCompletionPending;
+  const { finalizing, dismissalLocked } = resolveDialogLockState({
+    flowState: flow.state,
+    commitPending: flow.commitPending,
+    recolorPending: recolorProfile.isPending,
+    recolorError: recolorProfile.error,
+    renamePending: renameProfile.isPending,
+    renameError: renameProfile.error,
+  });
+
+  // Post-auth naming step: a freshly created (non-duplicate) profile whose
+  // resolved email matches another active profile of the same provider -
+  // the split-by-organization case now possible now that same-email,
+  // different-org sign-ins mint distinct profiles instead of deduping. Holds
+  // the dialog open on the resolved identity so the user can tell the two
+  // apart before the default label sticks. Cleared once `namingCommittedFor`
+  // is set (see `commitNaming`), so a later recolor retry never re-shows it.
+  const naming = resolveNamingStep(flow.state, namingCommittedFor);
 
   const complete = (profileId: string): void => {
     onFailedAttempt(null);
@@ -147,6 +216,34 @@ export function AddProviderProfileDialog({
     );
   };
 
+  const commitNaming = (profile: ProviderProfile): void => {
+    if (trimmedLabel.length === 0) return;
+    if (trimmedLabel === profile.label) {
+      setNamingCommittedFor(profile.profileId);
+      // Claim the attempt before finalizing directly - otherwise the render
+      // this triggers flips `naming` to null, and the effect below (which
+      // has no dependency array) sees an unclaimed `finalizeAttemptRef` and
+      // calls `finalizeProfile` a second time.
+      finalizeAttemptRef.current = profile.profileId;
+      finalizeProfile(profile);
+      return;
+    }
+    renameProfile.mutate(
+      {
+        providerId: state.providerId,
+        profileId: profile.profileId,
+        label: trimmedLabel,
+      },
+      {
+        onSuccess: () => {
+          setNamingCommittedFor(profile.profileId);
+          finalizeAttemptRef.current = profile.profileId;
+          finalizeProfile(profile);
+        },
+      },
+    );
+  };
+
   useEffect(() => {
     if (flow.state.kind === "cancelled") {
       onOpenChange(false);
@@ -155,7 +252,8 @@ export function AddProviderProfileDialog({
     if (
       flow.state.kind !== "identity" ||
       flow.state.existingProfileId !== null ||
-      finalizeAttemptRef.current === flow.state.profileId
+      finalizeAttemptRef.current === flow.state.profileId ||
+      naming !== null
     ) {
       return;
     }
@@ -227,7 +325,7 @@ export function AddProviderProfileDialog({
             onLabelChange={setLabel}
             selectedColor={accentColor}
             onSelectColor={setAccentColor}
-            disabled={linking || finalizing}
+            disabled={(linking && naming === null) || finalizing}
           />
 
           {supportsShareSkillsAndPlugins ? (
@@ -247,6 +345,10 @@ export function AddProviderProfileDialog({
             finalizing={finalizing}
             finalizeError={recolorProfile.error}
             duplicateProfile={duplicateProfile}
+            naming={naming}
+            namingError={renameProfile.error}
+            emailRevealed={emailRevealed}
+            setEmailRevealed={setEmailRevealed}
             linkDisabled={trimmedLabel.length === 0 || flow.busy}
             onLink={linkAccount}
             onOpenExternalLink={(url) => openExternalLink.mutate(url)}
@@ -268,8 +370,30 @@ export function AddProviderProfileDialog({
             </Button>
           </DialogFooter>
         ) : null}
+        {naming !== null ? (
+          <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={trimmedLabel.length === 0 || finalizing}
+              onClick={() => commitNaming(naming.profile)}
+            >
+              {finalizing ? <MutedAgentSpinner /> : null}
+              Save profile
+            </Button>
+          </DialogFooter>
+        ) : null}
         {duplicateProfile !== null ? (
           <DialogFooter className="mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-muted/20 px-5 py-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={linkAccount}
+            >
+              Sign in again
+            </Button>
             <Button
               type="button"
               size="sm"
@@ -294,6 +418,10 @@ function AddProfileAccountSection({
   finalizing,
   finalizeError,
   duplicateProfile,
+  naming,
+  namingError,
+  emailRevealed,
+  setEmailRevealed,
   linkDisabled,
   onLink,
   onOpenExternalLink,
@@ -309,6 +437,10 @@ function AddProfileAccountSection({
   readonly finalizing: boolean;
   readonly finalizeError: Error | null;
   readonly duplicateProfile: ProviderProfile | null;
+  readonly naming: NamingStepState | null;
+  readonly namingError: Error | null;
+  readonly emailRevealed: boolean;
+  readonly setEmailRevealed: (value: boolean) => void;
   readonly linkDisabled: boolean;
   readonly onLink: () => void;
   readonly onOpenExternalLink: (url: string) => void;
@@ -384,6 +516,18 @@ function AddProfileAccountSection({
     return <DuplicateAccountNotice profile={duplicateProfile} />;
   }
 
+  if (naming !== null) {
+    return (
+      <AddProfileNamingStep
+        profile={naming.profile}
+        collisionProfile={naming.collisionProfile}
+        error={namingError}
+        emailRevealed={emailRevealed}
+        setEmailRevealed={setEmailRevealed}
+      />
+    );
+  }
+
   if (finalizeError !== null) {
     return (
       <AddProfileFailureStep
@@ -413,10 +557,45 @@ function DuplicateAccountNotice({
       <div className="min-w-0">
         <div className="text-ui-sm font-medium">Account already linked</div>
         <p className="mt-0.5 text-ui-xs leading-relaxed">
-          This account is already linked to {profile.label}. No new profile was
-          created.
+          {profile.label} already uses this account and organization. Sign in
+          again and choose a different organization.
         </p>
       </div>
+    </div>
+  );
+}
+
+function AddProfileNamingStep({
+  profile,
+  collisionProfile,
+  error,
+  emailRevealed,
+  setEmailRevealed,
+}: {
+  readonly profile: ProviderProfile;
+  readonly collisionProfile: ProviderProfile;
+  readonly error: Error | null;
+  readonly emailRevealed: boolean;
+  readonly setEmailRevealed: (value: boolean) => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-3">
+      <AddProfileIdentityStep
+        profile={profile}
+        duplicateLabel={null}
+        emailRevealed={emailRevealed}
+        setEmailRevealed={setEmailRevealed}
+      />
+      <p className="text-ui-xs leading-relaxed text-muted-foreground">
+        {collisionProfile.label} already uses this email. Name this profile so
+        you can tell them apart.
+      </p>
+      {error !== null ? (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-xs text-destructive">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span>Couldn&apos;t save the name. Try again.</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -678,4 +857,92 @@ function nextAvailableAccentColor(
     PROVIDER_PROFILE_ACCENT_COLORS.find((color) => !used.has(color)) ??
     PROVIDER_PROFILE_ACCENT_COLORS[0]
   );
+}
+
+/**
+ * Another active profile of the same provider sharing `profile`'s email -
+ * the split-by-organization case (same Anthropic account, different
+ * subscription/org) the naming step exists for. Independent of the host's
+ * `duplicateOfProfileId` verdict, which is org-aware and deliberately does
+ * NOT mark this pair - this check only needs "tell them apart", not "are
+ * these the same account".
+ */
+function findEmailCollisionProfile(
+  profiles: readonly ProviderProfile[],
+  profile: ProviderProfile,
+): ProviderProfile | null {
+  const email = profile.identity?.email ?? null;
+  if (email === null) return null;
+  const normalized = email.toLowerCase();
+  return (
+    profiles.find((candidate) => {
+      const candidateEmail = candidate.identity?.email ?? null;
+      return (
+        candidate.profileId !== profile.profileId &&
+        candidateEmail !== null &&
+        candidateEmail.toLowerCase() === normalized
+      );
+    }) ?? null
+  );
+}
+
+interface DialogLockState {
+  readonly finalizing: boolean;
+  readonly dismissalLocked: boolean;
+}
+
+/** Same complexity-budget rationale as `resolveNamingStep` below. */
+function resolveDialogLockState({
+  flowState,
+  commitPending,
+  recolorPending,
+  recolorError,
+  renamePending,
+  renameError,
+}: {
+  readonly flowState: ProviderProfileLoginFlowState;
+  readonly commitPending: boolean;
+  readonly recolorPending: boolean;
+  readonly recolorError: Error | null;
+  readonly renamePending: boolean;
+  readonly renameError: Error | null;
+}): DialogLockState {
+  const finalizing = recolorPending || renamePending;
+  const identityCompletionPending =
+    flowState.kind === "identity" &&
+    flowState.existingProfileId === null &&
+    recolorError === null &&
+    renameError === null;
+  return {
+    finalizing,
+    dismissalLocked: commitPending || finalizing || identityCompletionPending,
+  };
+}
+
+interface NamingStepState {
+  readonly profile: ProviderProfile;
+  readonly collisionProfile: ProviderProfile;
+}
+
+/** Pulled out of the dialog component to keep its own branching out of the
+ *  component's cyclomatic complexity count (react-doctor/eslint `complexity`
+ *  budget) - see `naming`'s call site for what this gates. */
+function resolveNamingStep(
+  flowState: ProviderProfileLoginFlowState,
+  namingCommittedFor: string | null,
+): NamingStepState | null {
+  if (
+    flowState.kind !== "identity" ||
+    flowState.existingProfileId !== null ||
+    namingCommittedFor === flowState.profileId
+  ) {
+    return null;
+  }
+  const collisionProfile = findEmailCollisionProfile(
+    flowState.profiles,
+    flowState.profile,
+  );
+  return collisionProfile === null
+    ? null
+    : { profile: flowState.profile, collisionProfile };
 }

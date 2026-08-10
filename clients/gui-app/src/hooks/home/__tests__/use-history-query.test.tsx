@@ -6,6 +6,7 @@ import type {
   ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import {
   DEFAULT_HISTORY_SEARCH,
   patchHistorySearch,
@@ -26,36 +27,83 @@ const testState = vi.hoisted(() => {
     isPlaceholderData: false,
     hasNextPage: false,
     worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
-    worktreeMetadataError: null as Error | null,
+    worktreeIndex: [] as readonly WorktreeHostEntryV12[],
+    worktreeIndexError: null as Error | null,
+    activityWorktrees: [] as readonly WorktreeHostEntryV12[],
+    activityError: null as Error | null,
+    taskContexts: new Map<string, ListTaskLight>(),
+    taskContextsError: null as Error | null,
     refetch: vi.fn(),
     fetchNextPage: vi.fn(),
   };
 });
 
+// The fake cloud applies the request's text query as a title filter, the way
+// the real cloud task index does - so a query that only matches local
+// worktree strings comes back empty from the "server" and must be satisfied
+// by the id-fetched union.
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
-  useCloudEpicTasksQuery: () => ({
-    hostId: "host-test",
-    currentUserId: "user-1",
-    tasks: testState.tasks,
-    query: {
-      data: testState.response,
-      isPending: false,
-      isFetching: testState.isFetching,
-      isPlaceholderData: testState.isPlaceholderData,
-      error: null,
-      refetch: testState.refetch,
-    },
-    fetchNextPage: testState.fetchNextPage,
-    hasNextPage: testState.hasNextPage,
-    isFetchingNextPage: false,
-  }),
+  useCloudEpicTasksQuery: (request: ListCloudTasksRequest) => {
+    const query = request.filters?.query?.trim().toLowerCase() ?? "";
+    const tasks =
+      query.length === 0
+        ? testState.tasks
+        : testState.tasks.filter((task) =>
+            (task.epic?.light?.title ?? task.phase?.light?.title ?? "")
+              .toLowerCase()
+              .includes(query),
+          );
+    return {
+      hostId: "host-test",
+      currentUserId: "user-1",
+      tasks,
+      query: {
+        data:
+          query.length === 0 ? testState.response : { tasks, hasMore: false },
+        isPending: false,
+        isFetching: testState.isFetching,
+        isPlaceholderData: testState.isPlaceholderData,
+        error: null,
+        refetch: testState.refetch,
+      },
+      fetchNextPage: testState.fetchNextPage,
+      hasNextPage: testState.hasNextPage,
+      isFetchingNextPage: false,
+    };
+  },
 }));
 
 vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
   useTaskWorktreeMetadata: () => ({
     worktreesByEpicId: testState.worktreesByEpicId,
     isFetching: false,
-    error: testState.worktreeMetadataError,
+    error: null,
+  }),
+  useWorktreeHostIndex: () => ({
+    worktrees: testState.worktreeIndex,
+    isFetching: false,
+    error: testState.worktreeIndexError,
+  }),
+  // Mirrors the real hook: when disabled, both underlying queries are off, so
+  // it reports no worktrees AND no error. Leaking an error through the
+  // disabled path would let an error-handling regression pass unnoticed.
+  useWorktreeHostActivityIndex: (enabled: boolean) => ({
+    worktrees: enabled ? testState.activityWorktrees : [],
+    isFetching: false,
+    error: enabled ? testState.activityError : null,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (taskIds: readonly string[]) => ({
+    tasksById: new Map(
+      taskIds.flatMap((taskId) => {
+        const task = testState.taskContexts.get(taskId);
+        return task === undefined ? [] : [[taskId, task] as const];
+      }),
+    ),
+    isFetching: false,
+    error: testState.taskContextsError,
   }),
 }));
 
@@ -73,7 +121,12 @@ describe("useHistoryQuery", () => {
     testState.isPlaceholderData = false;
     testState.hasNextPage = false;
     testState.worktreesByEpicId = new Map();
-    testState.worktreeMetadataError = null;
+    testState.worktreeIndex = [];
+    testState.worktreeIndexError = null;
+    testState.activityWorktrees = [];
+    testState.activityError = null;
+    testState.taskContexts = new Map();
+    testState.taskContextsError = null;
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
   });
@@ -90,9 +143,9 @@ describe("useHistoryQuery", () => {
 
     expect(screen.getByTestId("pending").textContent).toBe("false");
     expect(screen.getByTestId("fetching").textContent).toBe("false");
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Alpha workbench|Beta search flow",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Alpha workbench|Beta search flow");
 
     rerender(
       <HistoryQueryHarness
@@ -104,7 +157,30 @@ describe("useHistoryQuery", () => {
 
     expect(screen.getByTestId("pending").textContent).toBe("false");
     expect(screen.getByTestId("fetching").textContent).toBe("true");
-    expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
+  });
+
+  it("preserves the central last-viewed row order", () => {
+    testState.tasks = [
+      taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          sort: "last-viewed",
+          sortExplicit: true,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|Alpha workbench");
   });
 
   it("does not expose stale facet counts while projecting placeholder rows", () => {
@@ -150,10 +226,14 @@ describe("useHistoryQuery", () => {
   });
 
   it.each(["84", "#84", "PR #84"])(
-    "locally matches a task by enriched PR query %s",
+    "unions a task matched by PR number %s via id fetch",
     (query) => {
-      testState.worktreesByEpicId = new Map([
-        ["epic-beta", [worktreeWithPullRequest(84)]],
+      testState.activityWorktrees = [worktreeWithPullRequest(84)];
+      testState.taskContexts = new Map([
+        [
+          "epic-beta",
+          taskLight("epic-beta", "Beta search flow", "traycer/server"),
+        ],
       ]);
 
       render(
@@ -164,14 +244,20 @@ describe("useHistoryQuery", () => {
         />,
       );
 
-      expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("Beta search flow");
     },
   );
 
   it("keeps pagination available for a settled PR query", () => {
     testState.hasNextPage = true;
-    testState.worktreesByEpicId = new Map([
-      ["epic-beta", [worktreeWithPullRequest(84)]],
+    testState.activityWorktrees = [worktreeWithPullRequest(84)];
+    testState.taskContexts = new Map([
+      [
+        "epic-beta",
+        taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      ],
     ]);
 
     render(
@@ -183,6 +269,118 @@ describe("useHistoryQuery", () => {
     );
 
     expect(screen.getByTestId("has-next-page").textContent).toBe("true");
+  });
+
+  it("unions a task matched by its worktree branch via id fetch", () => {
+    testState.worktreeIndex = [worktreeWithPullRequest(84)];
+    testState.taskContexts = new Map([
+      [
+        "epic-beta",
+        taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      ],
+    ]);
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "task-history",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
+  });
+
+  it("unions a task matched by its worktree directory name via id fetch", () => {
+    testState.worktreeIndex = [
+      {
+        ...worktreeWithPullRequest(84),
+        branch: null,
+        worktreePath: "/worktrees/slot-rework-v2",
+      },
+    ];
+    testState.taskContexts = new Map([
+      [
+        "epic-beta",
+        taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      ],
+    ]);
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "slot-rework-v2",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
+  });
+
+  it("appends branch-matched extras without hijacking the cloud title search", () => {
+    // "flow" is a real title match for epic-beta on the cloud side AND a
+    // branch match for epic-alpha's worktree. Both must appear: server rows
+    // first, id-fetched extras appended.
+    testState.worktreeIndex = [
+      {
+        ...worktreeWithPullRequest(84),
+        branch: "flow-experiments",
+        owners: [
+          {
+            epicId: "epic-alpha",
+            ownerKind: "chat",
+            ownerId: "chat-1",
+            updatedAt: 1,
+          },
+        ],
+      },
+    ];
+    testState.taskContexts = new Map([
+      [
+        "epic-alpha",
+        taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
+      ],
+    ]);
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "flow",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|Alpha workbench");
+  });
+
+  it("dedups a task matched by both the cloud query and a local worktree string", () => {
+    testState.worktreeIndex = [
+      { ...worktreeWithPullRequest(84), branch: "beta-live" },
+    ];
+    testState.taskContexts = new Map([
+      [
+        "epic-beta",
+        taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      ],
+    ]);
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "beta",
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
   });
 
   it("lifts an optimistically pinned row above unpinned rows in the settled server order", () => {
@@ -201,9 +399,9 @@ describe("useHistoryQuery", () => {
 
     render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
 
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Beta search flow|Alpha workbench",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|Alpha workbench");
   });
 
   it("floats pinned rows above a higher-relevance unpinned match under relevance sort", () => {
@@ -231,13 +429,13 @@ describe("useHistoryQuery", () => {
       />,
     );
 
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Beta search flow|search",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|search");
   });
 
-  it("surfaces a worktree metadata failure for a PR-number search", () => {
-    testState.worktreeMetadataError = new Error("Worktree metadata failed");
+  it("surfaces a worktree activity failure for a PR-number search", () => {
+    testState.activityError = new Error("Worktree activity probe failed");
 
     render(
       <HistoryQueryHarness
@@ -248,7 +446,44 @@ describe("useHistoryQuery", () => {
     );
 
     expect(screen.getByTestId("error").textContent).toBe(
-      "Worktree metadata failed",
+      "Worktree activity probe failed",
+    );
+  });
+
+  it("degrades quietly when the worktree host index fails", () => {
+    // The base index is enabled for EVERY query, so surfacing its failure
+    // would put a worktree error on ordinary title searches. Branch matching
+    // is an additive bonus: losing it must cost the cloud results nothing.
+    testState.worktreeIndexError = new Error("Worktree index failed");
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "beta",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("error").textContent).toBe("");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
+  });
+
+  it("surfaces a task-context fetch failure", () => {
+    testState.worktreeIndex = [worktreeWithPullRequest(84)];
+    testState.taskContextsError = new Error("Task contexts failed");
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "task-history",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("error").textContent).toBe(
+      "Task contexts failed",
     );
   });
 });
@@ -263,7 +498,7 @@ function HistoryQueryHarness(props: {
       <div data-testid="fetching">{String(result.isFetching)}</div>
       <div data-testid="error">{result.error?.message ?? ""}</div>
       <div data-testid="has-next-page">{String(result.hasNextPage)}</div>
-      <div data-testid="titles">
+      <div role="status" aria-label="History titles">
         {result.data?.items.map((item) => item.title).join("|") ?? ""}
       </div>
       <div data-testid="repo-facets">

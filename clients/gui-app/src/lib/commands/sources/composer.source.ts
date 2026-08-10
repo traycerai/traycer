@@ -52,6 +52,9 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const modelPickerShortcut = useKeybindingStore(
     (state) => state.bindings["composer.model-picker.toggle"],
   );
+  const stashShortcut = useKeybindingStore(
+    (state) => state.bindings["composer.stash"],
+  );
   // Live snapshot of the active composer picker - the top-of-stack controller,
   // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
   // which no-ops on an empty stack (a locked/pending composer registers its
@@ -73,7 +76,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     if (kind === null) return NO_ITEMS;
-    const items: Array<CommandItem> = [];
+    const items: Array<CommandItem> = [buildStashPromptItem(stashShortcut)];
     if (activeModelPicker !== null) {
       items.push(
         buildChangeModelItem(
@@ -102,6 +105,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeEpicId,
     ctx.activeTabId,
     modelPickerShortcut,
+    stashShortcut,
     activeModelPicker,
   ]);
 }
@@ -110,6 +114,21 @@ export const composerSource: ReactCommandSource = {
   id: "composer",
   useItems: useComposerItems,
 };
+
+function buildStashPromptItem(shortcut: ChordString | null): CommandItem {
+  return {
+    id: "composer:stash-prompt",
+    label: "Stash prompt",
+    description: "Save this prompt so it can be restored in any composer.",
+    keywords: ["stash", "save", "prompt", "draft"],
+    group: "suggested",
+    scope: "actions",
+    shortcut,
+    actionId: "composer.stash",
+    subpage: null,
+    run: () => undefined,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Change model (open the focused composer's picker popover)
@@ -186,7 +205,7 @@ function openNewConversationModal(
   useNewConversationModalStore.getState().setComposerMode(epicId, mode);
   useNewConversationModalOpenStore
     .getState()
-    .open({ epicId, tabId, placement, parentId: null });
+    .open({ epicId, tabId, placement, parentId: null, hostId: null });
 }
 
 function buildNewChatReplaceItem(args: {
@@ -196,9 +215,10 @@ function buildNewChatReplaceItem(args: {
   const { epicId, tabId } = args;
   return {
     id: "composer:new-chat:replace",
-    label: "New chat in active tile",
-    description: "Compose a new chat in place of the currently active tile.",
-    keywords: ["new", "chat", "replace"],
+    label: "New agent in active tile",
+    description:
+      "Compose a new Chat-interface agent in place of the currently active tile.",
+    keywords: ["new", "chat", "agent", "replace"],
     group: "suggested",
     scope: "actions",
     shortcut: null,
@@ -217,13 +237,13 @@ function buildNewChatSplitItem(args: {
   const { epicId, tabId, position } = args;
   const label =
     position === "right"
-      ? "New chat in split (right)"
-      : "New chat in split (bottom)";
+      ? "New agent in split (right)"
+      : "New agent in split (bottom)";
   return {
     id: `composer:new-chat:split:${position}`,
     label,
-    description: `Split the active tile and compose a new chat on the ${position}.`,
-    keywords: ["new", "chat", "split", position],
+    description: `Split the active tile and compose a new Chat-interface agent on the ${position}.`,
+    keywords: ["new", "chat", "agent", "split", position],
     group: "suggested",
     scope: "actions",
     shortcut: null,
@@ -249,8 +269,8 @@ function buildNewTerminalAgentItem(args: {
   const { epicId, tabId } = args;
   return {
     id: "composer:new-terminal-agent",
-    label: "New terminal agent",
-    description: "Compose a new terminal agent in the active tile.",
+    label: "New Terminal-interface agent",
+    description: "Compose a new Terminal-interface agent in the active tile.",
     keywords: ["new", "terminal", "agent", "tui"],
     group: "suggested",
     scope: "actions",

@@ -10,7 +10,6 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 
 import type {
   PermissionMode,
-  AgentMode,
   HarnessModelSelection,
   ModelOption,
   ProviderId,
@@ -36,7 +35,6 @@ import type { FocusedComposerKind } from "@/lib/commands/types";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   permissionFromChatRunSettings,
-  agentModeFromChatRunSettings,
   reasoningFromChatRunSettings,
   selectionFromChatRunSettings,
   serviceTierFromChatRunSettings,
@@ -94,7 +92,6 @@ export function useComposerToolbarStore(
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
   const defaultReasoning = useSettingsStore((s) => s.defaultReasoning);
   const defaultServiceTier = useSettingsStore((s) => s.defaultServiceTier);
-  const defaultAgentMode = useSettingsStore((s) => s.defaultAgentMode);
   const settingsSeed = seedSource.kind === "none" ? null : seedSource.settings;
   const seedIsAuthoritative = seedSource.kind === "authoritative";
   const seedClient = seedSource.kind === "fallback" ? seedSource.client : null;
@@ -122,11 +119,9 @@ export function useComposerToolbarStore(
         selection: defaultSelection,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
-        agentMode: defaultAgentMode,
       }),
     [
       defaultPermission,
-      defaultAgentMode,
       defaultReasoning,
       defaultServiceTier,
       defaultSelection,
@@ -191,17 +186,22 @@ export function useComposerToolbarStore(
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const harnesses = activityEnabled
-    ? harnessesQuery.data?.harnesses
-    : undefined;
-  const models = activityEnabled
-    ? (modelsQuery.data?.models ?? EMPTY_MODELS)
-    : EMPTY_MODELS;
+  // Read the cache regardless of `activityEnabled`. The gate above already does
+  // the whole job it exists for - an inactive surface fetches nothing and holds
+  // no observer - and `enabled:false` does not evict what is already cached.
+  // Blanking the catalog on top of that is not a narrower subscription, it is
+  // this composer throwing away its own resolved state: `selectedModel` goes
+  // null, and with it the reasoning-effort and fast-mode chips (both derived
+  // from the model's advertised options) plus `supportedPermissionModes`. That
+  // was invisible while an inactive surface was also a hidden one, and became a
+  // visible defect with split panes, where the unfocused pane stays on screen.
+  const harnesses = harnessesQuery.data?.harnesses;
+  const models = modelsQuery.data?.models ?? EMPTY_MODELS;
   // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
   // the store so it can tell "loading" from "loaded empty" (the query is keyed
   // on `harnessId`, so `data` resets to undefined during a cross-harness switch
   // until the new harness's models land). Never inferred from `models.length`.
-  const modelsLoaded = activityEnabled && modelsQuery.data !== undefined;
+  const modelsLoaded = modelsQuery.data !== undefined;
   useEffect(() => {
     store.getState().setCatalog({
       harnesses,
@@ -240,7 +240,6 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
-  readonly agentMode: AgentMode;
 }
 
 function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
@@ -251,7 +250,6 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.permissionMode,
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
-    settingsSeed.agentMode,
     settingsSeed.profileId ?? "",
   ].join("\u0000");
 }
@@ -266,6 +264,5 @@ function valuesFromSettingsSeed(
     selection: selectionFromChatRunSettings(settingsSeed),
     reasoning: reasoningFromChatRunSettings(settingsSeed),
     serviceTier: serviceTierFromChatRunSettings(settingsSeed),
-    agentMode: agentModeFromChatRunSettings(settingsSeed),
   };
 }

@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type { DesktopLocalHostSnapshot } from "../ipc-contracts/host-types";
+import type { HostRestartRequestResult } from "../ipc-contracts/host-management-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
@@ -43,7 +44,8 @@ export interface HostBridgeSurface {
     handler: Listener<DesktopLocalHostSnapshot | null>,
   ): Disposable;
   onSystemResumed(handler: () => void): Disposable;
-  requestHostRespawn(): Promise<void>;
+  requestHostRespawn(): Promise<HostRestartRequestResult>;
+  getLastKnownLocalHostId(): Promise<string | null>;
   hostPicker: {
     requestOpen(): Promise<void>;
     requestClose(): Promise<void>;
@@ -62,7 +64,14 @@ export function buildHostBridge(): HostBridgeSurface {
       subscribe<void>(RunnerHostEvent.systemResumed, handler),
 
     requestHostRespawn: () =>
-      ipcRenderer.invoke(RunnerHostInvoke.requestHostRespawn) as Promise<void>,
+      ipcRenderer.invoke(
+        RunnerHostInvoke.requestHostRespawn,
+      ) as Promise<HostRestartRequestResult>,
+
+    getLastKnownLocalHostId: () =>
+      ipcRenderer.invoke(RunnerHostInvoke.lastKnownLocalHostId) as Promise<
+        string | null
+      >,
 
     hostPicker: {
       requestOpen: () =>

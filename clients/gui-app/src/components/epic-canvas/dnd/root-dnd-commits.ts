@@ -11,10 +11,12 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import {
+  ACTIVE_AGENT_DND_TYPE,
   ARTIFACT_TAB_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  MANAGED_COMMAND_OUTPUT_DND_TYPE,
   PANEL_NODE_FAMILY,
   SIDEBAR_NODE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
@@ -37,6 +39,7 @@ import {
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
+  type ManagedCommandOutputTileRef,
 } from "@/stores/epics/canvas/types";
 import {
   areLeftPanelGroupsEqual,
@@ -68,6 +71,26 @@ export interface ResolvedEpicCanvasDrop {
   readonly preview: EpicCanvasDropPreview;
 }
 
+/** Reject cross-pane drops before preview or mutation under the root DnD tree. */
+export function isCanvasDropCompatible(
+  source: EpicCanvasDragSourceData,
+  target: EpicCanvasDropTargetData,
+): boolean {
+  // Direct unit callers predate pane-scoped target data. Runtime targets are
+  // parsed through `readEpicCanvasDropTargetData`, which requires this field.
+  if (target.viewTabId === undefined) return true;
+  if (source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
+    return (
+      (target.kind === "left-panel-rail-item" ||
+        target.kind === "left-panel-rail-list" ||
+        target.kind === "left-panel-group") &&
+      target.viewTabId === source.viewTabId
+    );
+  }
+  if (source.viewTabId !== target.viewTabId) return false;
+  return true;
+}
+
 export function canDropOnHeaderStrip(
   source: EpicCanvasDragSourceData | null,
 ): source is Extract<
@@ -79,21 +102,25 @@ export function canDropOnHeaderStrip(
       | typeof TERMINAL_TILE_DND_TYPE
       | typeof GIT_DIFF_TILE_DND_TYPE
       | typeof WORKSPACE_FILE_DND_TYPE
-      | typeof CHAT_ARTIFACT_DND_TYPE;
+      | typeof CHAT_ARTIFACT_DND_TYPE
+      | typeof ACTIVE_AGENT_DND_TYPE
+      | typeof MANAGED_COMMAND_OUTPUT_DND_TYPE;
   }
 > {
-  // Every openable canvas source can tear off into a new header tab. A
-  // chat-artifact belongs here alongside sidebar nodes / workspace files:
-  // collision already offers it the header slot (via EPIC_CANVAS_DND_SOURCE_TYPES
-  // -> CANVAS_TARGET_KINDS), so omitting it here would leave the header strip a
-  // silent dead zone (preview + commit both gate on this predicate).
+  // Every openable canvas source can tear off into a new header tab. The
+  // self-describing chat-artifact and active-agent sources belong here beside
+  // sidebar nodes / workspace files: collision already offers them the header
+  // slot (via EPIC_CANVAS_DND_SOURCE_TYPES -> CANVAS_TARGET_KINDS), so omitting
+  // either would leave the header strip a silent dead zone.
   return (
     source?.kind === ARTIFACT_TAB_DND_TYPE ||
     source?.kind === SIDEBAR_NODE_DND_TYPE ||
     source?.kind === TERMINAL_TILE_DND_TYPE ||
     source?.kind === GIT_DIFF_TILE_DND_TYPE ||
     source?.kind === WORKSPACE_FILE_DND_TYPE ||
-    source?.kind === CHAT_ARTIFACT_DND_TYPE
+    source?.kind === CHAT_ARTIFACT_DND_TYPE ||
+    source?.kind === ACTIVE_AGENT_DND_TYPE ||
+    source?.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE
   );
 }
 
@@ -113,7 +140,7 @@ function activeHostIdOrPlaceholder(): string {
  */
 export function sourceToTileRef(
   source: EpicCanvasDragSourceData,
-): EpicNodeRef | GitDiffTileRef | null {
+): EpicNodeRef | GitDiffTileRef | ManagedCommandOutputTileRef | null {
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
     const handle = getOpenEpicRegistry().peek(source.epicId);
     if (handle === null) return null;
@@ -125,12 +152,21 @@ export function sourceToTileRef(
   }
   if (source.kind === TERMINAL_TILE_DND_TYPE) return source.tile;
   if (source.kind === GIT_DIFF_TILE_DND_TYPE) return source.tile;
+  // The ref was minted at the menu row; the drop dedupes on its content id
+  // (the command id), so an already-open output window moves rather than
+  // doubling.
+  if (source.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE) return source.tile;
   if (source.kind === WORKSPACE_FILE_DND_TYPE) return source.ref;
   if (source.kind === CHAT_ARTIFACT_DND_TYPE) {
     // Mint a FRESH instanceId per call (constraint C2): the payload carries
     // artifact identity only, so two drags of the same card never reuse an
     // instanceId and collide in `tilesByInstanceId`.
     return makeOpenableNodeRef({ ...source.artifact, instanceId: uuidv4() });
+  }
+  if (source.kind === ACTIVE_AGENT_DND_TYPE) {
+    // The payload preserves the agent's bound host; never substitute the app's
+    // currently selected host for a chat or terminal-agent tile.
+    return makeOpenableNodeRef({ ...source.agent, instanceId: uuidv4() });
   }
   return null;
 }
@@ -387,7 +423,7 @@ function commitArtifactTabDrop(
 function placeResolvedCanvasTile(
   resolved: {
     readonly epicId: string;
-    readonly tile: EpicNodeRef | GitDiffTileRef;
+    readonly tile: EpicNodeRef | GitDiffTileRef | ManagedCommandOutputTileRef;
     readonly target: EpicCanvasDropTargetData;
     readonly preview: NonNullable<EpicCanvasDropPreview>;
   },
@@ -455,6 +491,7 @@ export function commitResolvedCanvasDrop(
   navigateNested: NavigateNestedFocus,
 ): void {
   if (drop.preview === null) return;
+  if (!isCanvasDropCompatible(drop.source, drop.target)) return;
   if (drop.source.kind === ARTIFACT_TAB_DND_TYPE) {
     commitArtifactTabDrop(
       drop.source,
@@ -497,9 +534,11 @@ export interface HeaderStripDropResult {
 
 /**
  * Drop of a canvas source onto the header tab strip. An existing artifact
- * tab tears off into a fresh header tab (clone semantics: new instance ids,
- * copied sidebar state); every other openable source opens in a new header
- * tab at the insertion index. Returns the new header tab for navigation.
+ * tab tears off into a fresh header tab (MOVE semantics: `tearOffTabIntoNew
+ * HeaderTab` preserves the tile's own instanceId, only the new header tab
+ * record gets a fresh id; sidebar state is copied); every other openable
+ * source opens in a new header tab at the insertion index. Returns the new
+ * header tab for navigation.
  */
 export function commitHeaderStripDrop(
   source: EpicCanvasDragSourceData,

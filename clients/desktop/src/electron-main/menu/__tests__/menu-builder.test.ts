@@ -3,10 +3,12 @@ import type { MenuCommandId } from "../../../ipc-contracts/window-types";
 import type { MenuState } from "../menu-state";
 
 interface CapturedMenuItem {
+  readonly id?: string;
   readonly label?: string;
   readonly role?: string;
   readonly type?: string;
   readonly accelerator?: string;
+  readonly registerAccelerator?: boolean;
   readonly enabled?: boolean;
   readonly submenu?: readonly CapturedMenuItem[];
   readonly click?: (menuItem: unknown, browserWindow: unknown) => void;
@@ -81,6 +83,54 @@ function menuByLabel(
 }
 
 describe("buildApplicationMenu", () => {
+  it("assigns stable ids to every renderer-visible Windows submenu", () => {
+    const items = template(
+      buildApplicationMenu(buildState("win32"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+      }),
+    );
+
+    expect(items.map((item) => item.id)).toEqual([
+      "traycer.top-level-menu.file",
+      "traycer.top-level-menu.edit",
+      "traycer.top-level-menu.view",
+      "traycer.top-level-menu.window",
+      "traycer.top-level-menu.help",
+    ]);
+  });
+
+  it("renders the exact pending host-update version only when one is available", () => {
+    const commands: MenuCommandId[] = [];
+    const state = buildState("darwin");
+    const withUpdate: MenuState = {
+      ...state,
+      hostUpdateAvailableVersion: "2.0.0",
+    };
+    const actions = {
+      command: (command: MenuCommandId) => commands.push(command),
+      focusWindow: () => undefined,
+      openExternal: () => undefined,
+    };
+    const appMenu =
+      menuByLabel(
+        template(buildApplicationMenu(withUpdate, actions)),
+        "Traycer",
+      ).submenu ?? [];
+
+    const update = menuByLabel(appMenu, "Update to 2.0.0");
+    update.click?.(null, null);
+    expect(commands).toEqual(["host.installUpdate"]);
+
+    const withoutUpdate =
+      menuByLabel(template(buildApplicationMenu(state, actions)), "Traycer")
+        .submenu ?? [];
+    expect(
+      withoutUpdate.some((item) => item.label?.startsWith("Update to ")),
+    ).toBe(false);
+  });
+
   it("maps macOS app and Help About to the rich details command", () => {
     const commands: MenuCommandId[] = [];
     const externalUrls: string[] = [];
@@ -168,6 +218,37 @@ describe("buildApplicationMenu", () => {
     expect(item.accelerator).toBe("CmdOrCtrl+W");
     item.click?.(null, null);
     expect(commands).toEqual(["epic.closeTab"]);
+  });
+
+  it("leaves undo and redo accelerators with the focused renderer", () => {
+    const actions = {
+      command: () => undefined,
+      focusWindow: () => undefined,
+      openExternal: () => undefined,
+    };
+    const macEditMenu =
+      menuByLabel(
+        template(buildApplicationMenu(buildState("darwin"), actions)),
+        "Edit",
+      ).submenu ?? [];
+    const macUndo = macEditMenu.find((item) => item.role === "undo");
+    const macRedo = macEditMenu.find((item) => item.role === "redo");
+    expect(macUndo?.accelerator).toBe("");
+    expect(macRedo?.accelerator).toBe("");
+
+    for (const platform of ["win32", "linux"] as const) {
+      const editMenu =
+        menuByLabel(
+          template(buildApplicationMenu(buildState(platform), actions)),
+          "Edit",
+        ).submenu ?? [];
+      expect(
+        editMenu.find((item) => item.role === "undo")?.registerAccelerator,
+      ).toBe(false);
+      expect(
+        editMenu.find((item) => item.role === "redo")?.registerAccelerator,
+      ).toBe(false);
+    }
   });
 
   it("omits the obsolete Switch Host file menu item", () => {

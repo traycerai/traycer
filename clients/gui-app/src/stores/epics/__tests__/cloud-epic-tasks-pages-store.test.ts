@@ -8,6 +8,7 @@ import {
   cloudEpicTasksPageGeneration,
   registerCloudEpicTasksPageIdentity,
   resetCloudEpicTasksPagesForScope,
+  resetLastViewedCloudEpicTasksPagesForScope,
   setCloudEpicTasksPagePinned,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
@@ -156,6 +157,25 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(cloudEpicTasksPageGeneration(matchingFirst)).toBe(1);
     expect(cloudEpicTasksPageGeneration(matchingSecond)).toBe(1);
     expect(cloudEpicTasksPageGeneration(otherUser)).toBe(0);
+  });
+
+  it("resets only last-viewed pagination identities for one host and user", () => {
+    const lastViewed =
+      'host-a|user-a|{"limit":20,"filters":null,"sort":"last-viewed"}';
+    const recent = 'host-a|user-a|{"limit":20,"filters":null,"sort":"recent"}';
+    const otherUser =
+      'host-a|user-b|{"limit":20,"filters":null,"sort":"last-viewed"}';
+    const state = useCloudEpicTasksPagesStore.getState();
+    [lastViewed, recent, otherUser].forEach((identity) => {
+      state.appendPage(identity, 0, page(identity));
+    });
+
+    resetLastViewedCloudEpicTasksPagesForScope("host-a", "user-a");
+
+    expect(pagesFor(lastViewed)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(lastViewed)).toBe(1);
+    expect(pagesFor(recent)).toHaveLength(1);
+    expect(pagesFor(otherUser)).toHaveLength(1);
   });
 
   it("patches one epic's pin bit across a scope's tails without resetting them", () => {

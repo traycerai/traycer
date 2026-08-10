@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -11,6 +10,8 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -19,6 +20,21 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+} = vi.hoisted(() => ({
+  client: null,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: hostScopeMocks.client }),
+  };
+});
 
 interface ManagementMock {
   readonly management: IHostManagement;
@@ -34,10 +50,28 @@ function makeManagement(
       Promise.reject(new Error(`${method} not implemented in mock`));
   const cliManifestMock = vi.fn(() => Promise.resolve(cliManifest));
   const management: IHostManagement = {
-    installHost: vi.fn(notImplemented("installHost")),
-    updateHost: vi.fn(notImplemented("updateHost")),
+    getHostControllerStatus: vi.fn(() =>
+      Promise.resolve({
+        download: null,
+        mutation: null,
+        installedVersion: null,
+        latestVersion: null,
+        stagedVersion: null,
+        installedRuntimeVersion: null,
+        runningRuntimeVersion: null,
+        updateReady: false,
+        activation: "unavailable" as const,
+        reachable: false,
+        removedByUser: false,
+        checkedAt: "2026-05-15T00:00:00Z",
+      }),
+    ),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(notImplemented("applyStaged")),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
-    restartHost: vi.fn(() => Promise.resolve()),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),
@@ -56,9 +90,7 @@ function makeManagement(
     ),
     installedRecord: vi.fn(() => Promise.resolve(null)),
     registerService: vi.fn(notImplemented("registerService")),
-    ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     registryCheck: vi.fn(() =>
       Promise.resolve({
         checkedAt: null,
@@ -67,6 +99,7 @@ function makeManagement(
         updateAvailable: false,
         reachable: false,
         errorMessage: null,
+        includePreReleases: false,
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),

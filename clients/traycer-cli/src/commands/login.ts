@@ -1,9 +1,13 @@
-import { validateAuthTokenViaHttp } from "../../../shared/auth/auth-validation";
+import {
+  credentialsIdentityFromAuthenticatedUser,
+  validateAuthTokenIdentityAccessOnly,
+} from "../../../shared/auth/auth-validation";
 import { runDeviceAuthFlow } from "../auth/login-flow";
 import { config } from "../config";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { readCredentials, writeCredentials } from "../store/credentials";
+import type { StoredCredentials } from "../store/credentials";
+import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
 // `traycer login` only authenticates: it opens the browser sign-in and
 // persists the resulting credentials. It does NOT provision the host -
@@ -34,12 +38,14 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
 };
 
 // Resolves the right `login` behaviour from the parsed `--token` flag.
-//   - no `--token` → the interactive browser sign-in (`loginCommand`).
-//   - `--token -` → the non-interactive credential-seeding path the Desktop
-//     drives after sign-in: read a JSON `{ token, refreshToken }` payload from
-//     stdin, validate the captured bearer, and persist it to
-//     `~/.traycer/cli/credentials` so the CLI keeps using it. No browser, no
-//     host auto-bootstrap (the Desktop owns provisioning).
+//   - no `--token` → the interactive device-flow sign-in (`loginCommand`).
+//   - `--token -` → a non-interactive credential-seeding path: read a JSON
+//     `{ token, refreshToken }` payload from stdin, validate the captured bearer
+//     access-only, and persist it to the shared credentials file via the locked
+//     store. No browser, no host auto-bootstrap. (The Desktop app used to drive
+//     this after its own sign-in; that seam was removed in the credentials-file
+//     refactor now that the CLI reads the same shared file, so this path now
+//     serves scripted/support use.)
 //
 // `--token` only accepts `-`; passing a literal bearer on argv is rejected so
 // secrets never land in the process list.
@@ -89,14 +95,19 @@ function loginWithToken(rawToken: string): CommandFn {
     }
 
     const { authnBaseUrl } = config;
-    // `--token -` carries a JSON `{ token, refreshToken }` payload, so the CLI
-    // can persist the paired refresh token and self-refresh on a 401 instead of
-    // dead-ending at the access TTL. Back-compat: a non-JSON stdin string is
-    // treated as a bare bearer with no refresh token.
-    const validation = await validateAuthTokenViaHttp(
+    // `--token -` carries a JSON `{ token, refreshToken }` payload; the CLI
+    // persists the paired refresh token so LATER host calls can self-refresh on
+    // a 401 through the locked `rotate` (§7). Back-compat: a non-JSON stdin
+    // string is treated as a bare bearer with no refresh token.
+    //
+    // Validation here is access-only and FAILS FAST (§7): the Desktop pipes a
+    // fresh pair right after sign-in, so a valid access token is expected. This
+    // seam must NEVER spend the refresh token to recover a stale access token -
+    // an expired/invalid token is rejected and the Desktop re-seeds on its own
+    // next sign-in.
+    const validation = await validateAuthTokenIdentityAccessOnly(
       authnBaseUrl,
       token,
-      refreshToken,
     );
     if (validation.kind === "network-error") {
       ctx.runtime.logger.warn("Token login validation hit network error", {
@@ -116,49 +127,50 @@ function loginWithToken(rawToken: string): CommandFn {
       });
       throw cliError({
         code: CLI_ERROR_CODES.AUTH_REJECTED,
-        message: "The provided token was rejected by the authn service.",
+        message:
+          "The provided token was rejected by the authn service (expired or invalid) - re-run sign-in.",
         details: null,
         exitCode: 1,
       });
     }
 
-    // The validation helper may rotate the token once on a stale lookup; honor
-    // the refreshed value so the stored credential matches what the server now
-    // considers current (mirrors the browser flow in login-flow.ts).
-    const finalToken =
-      "refreshedToken" in validation ? validation.refreshedToken : token;
-    // Prefer a rotation, then the paired token from stdin. When neither is
-    // present - a rotation re-seed carries only the bearer (refreshToken "") -
-    // KEEP the refresh token already on disk instead of clobbering it to "",
-    // else every rotation would strip the host's ability to self-refresh.
-    const rotatedRefreshToken =
-      "refreshedRefreshToken" in validation
-        ? validation.refreshedRefreshToken
-        : "";
-    const finalRefreshToken =
-      rotatedRefreshToken.length > 0
-        ? rotatedRefreshToken
-        : refreshToken.length > 0
-          ? refreshToken
-          : ((await readCredentials())?.refreshToken ?? "");
-    const user = {
-      id: validation.profile.userId,
-      email: validation.profile.email,
-      name: validation.profile.userName,
-    };
-    await writeCredentials({
-      token: finalToken,
-      refreshToken: finalRefreshToken,
+    const user = credentialsIdentityFromAuthenticatedUser(validation.user);
+    const credentials: StoredCredentials = {
+      token,
+      // A bare-bearer re-seed carries no refresh token (refreshToken ""); the
+      // locked `signIn` KEEPS the refresh token already on disk in that case
+      // instead of clobbering it, else the host loses its ability to
+      // self-refresh. Read fresh under the same lock that performs the write,
+      // so a concurrent rotate can't race this fallback.
+      refreshToken,
       authnBaseUrl,
       savedAt: new Date().toISOString(),
       user,
-    });
+    };
+    // Persist through the locked mutation store (§7); `signIn` is unconditional
+    // (aside from the refresh-token preservation above) and clears any
+    // tombstone - the interactive re-seed semantics.
+    const persisted = await runWithCliStore((store) =>
+      withCommitRetry(() => store.signIn(credentials, true, null)),
+    );
+    if (persisted.outcome !== "applied") {
+      ctx.runtime.logger.warn("Token login credentials persist failed", {
+        environment: ctx.runtime.environment,
+        outcome: persisted.outcome,
+      });
+      throw cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message:
+          "Signed in but the credentials could not be saved - please try again.",
+        details: null,
+        exitCode: 1,
+      });
+    }
     ctx.runtime.logger.info("Token login credentials persisted", {
       environment: ctx.runtime.environment,
-      tokenRotatedDuringValidation: finalToken !== token,
       refreshTokenFromStdin: refreshToken.length > 0,
-      refreshTokenRotatedDuringValidation: rotatedRefreshToken.length > 0,
-      hasFinalRefreshToken: finalRefreshToken.length > 0,
+      hasFinalRefreshToken:
+        (persisted.credentials?.refreshToken.length ?? 0) > 0,
     });
     return {
       data: { user, bootstrap: null },
