@@ -487,13 +487,12 @@ export const providerNativeCapabilitiesSchema = z.object({
    * is not the `opencode` module.
    *
    * Required-and-nullable, exactly like its three siblings, rather than
-   * `.optional()`: this field rides `providers.list@7.0` and every hop that
-   * lands on the live shape fills it explicitly
-   * every hop that lands on this shape. Making it optional would let a
-   * missing fill pass type-checking and reach the wire as an absent key, which
-   * the whole-object `.catch()` on `providerCliStateSchema` then turns into a
-   * silent collapse of the entire capability object - the failure mode this
-   * block's own version bridge exists to prevent.
+   * `.optional()`: every hop that lands on this shape has to fill it, and
+   * required is what makes forgetting fail loudly. Optional would let a missed
+   * fill pass type-checking and reach the wire as an absent key, which the
+   * whole-object `.catch()` on `providerCliStateSchema` turns into a silently
+   * empty capability object - MCP, Plugins and Skills gone with it, for a
+   * field nobody set.
    */
   modelProviders: providerModelProvidersCapabilitiesSchema.nullable(),
 });
