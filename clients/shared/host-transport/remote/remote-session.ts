@@ -7,7 +7,11 @@ import {
   type SchemaVersion,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { canonicalForMethodVersionLine } from "@traycer/protocol/framework/compat-helpers";
+import {
+  mergeConnectionManifests,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/capability-manifest";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
@@ -28,6 +32,7 @@ import type {
 import type { TimerHandle } from "../timer-handle";
 import {
   HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -45,6 +50,7 @@ import { backoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
   CLIENT_REAUTH_JITTER_MS,
+  DIAL_FAILURE_RESTATE_MS,
   HOST_STANDING_BOUND_MS,
   INITIAL_BULK_SEND_CREDITS,
   ATTACH_ACK_TIMEOUT_MS,
@@ -54,6 +60,9 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
 } from "./config";
+import { DialFailureLog } from "./dial-failure-log";
+import { recordNegotiatedHostMethods } from "../negotiated-manifest-registry";
+import { resolveUnavailableMethodDegrade } from "../unavailable-method-degrade";
 import {
   CURRENT_MUX_VERSION,
   MuxFrameType,
@@ -177,12 +186,36 @@ export interface IRemoteSession<
    */
   onClosed(listener: () => void): () => void;
   /**
-   * Subscribes to positive evidence that the session just re-reached its
-   * ready boundary after a drop (reconnecting → full re-attach + every live
-   * stream restored). A clean FIRST open never fires - nothing recovered.
-   * The remote analog of the recovery evidence `WsStreamClient` surfaces via
-   * `subscribeAvailabilityRecovered`, consumed to un-strand errored
-   * host-scoped queries.
+   * The terminal fatal that closed this session, or `null` while it is alive
+   * OR when it was closed by a caller (`close()` at refcount zero is a
+   * lifecycle event, not a verdict). This is how a consumer reacting to
+   * `onClosed` distinguishes "the host rejected this session for a reason
+   * that will repeat" (incompatible protocol, plan restriction, revoked
+   * credential) from "the cache retired an idle session" - the former is
+   * worth surfacing and NOT worth immediately redialing, the latter is
+   * routine.
+   */
+  terminalFatal(): FatalErrorDetails | null;
+  /**
+   * Subscribes to positive evidence that the session just reached its ready
+   * boundary (full attach + every live stream restored) - EVERY boundary,
+   * including the clean first open. The remote analog of the recovery
+   * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
+   * consumed to un-strand errored host-scoped queries.
+   *
+   * The clean first open fires deliberately, unlike the local transport:
+   * a remote session is built on demand and torn down at refcount zero
+   * (after the cache's keep-warm linger), so its FIRST dial races the very
+   * queries that created it. Those queries
+   * error pre-send ("Remote session is not ready"), exhaust their retry, and
+   * then have no automatic signal left - in production that stranded the
+   * Providers panel on an error card for 15-20s (until the query layer's own
+   * doubling backoff happened to re-fire) when the session had been ready
+   * since second two. For a local transport "first open" happens once per
+   * app run before anything could have errored, so never-on-first-open costs
+   * nothing there; for the remote session it is precisely the gap. Consumers
+   * already cooldown-coalesce (`wireAvailabilityRecovery`), so the extra
+   * emission is at most one host-scope invalidation per session build.
    */
   subscribeAvailabilityRecovered(listener: () => void): () => void;
   close(): void;
@@ -221,6 +254,13 @@ interface ActiveConnection {
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
+  /**
+   * `hostManifest.rpc` + `hostManifest.optionalRpc`, merged once at ack.
+   * Version selection and dispatch read THIS (an optional method must
+   * dispatch like any other); only the session-level compatibility check
+   * reads the raw floor.
+   */
+  hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
   hostAttached: boolean;
 }
@@ -233,6 +273,8 @@ export class RemoteSession<
 {
   private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
   private readonly clientManifests: SessionManifests;
+  /** `clientManifests.rpc` + `.optionalRpc` merged - the dispatch view. */
+  private readonly clientRpcMerged: ConnectionManifest;
 
   private phase: SessionPhase = "idle";
   private connectGeneration = 0;
@@ -265,24 +307,52 @@ export class RemoteSession<
    * transport's no-progress bound).
    */
   private noProgressUnauthorizedReconnects = 0;
-  /**
-   * Set on every connection drop; consumed at the next ready boundary to
-   * emit availability-recovered evidence. A boundary reached without a prior
-   * drop is the clean first open - NOT recovery - so it stays silent.
-   */
-  private droppedSinceReady = false;
 
   private phaseTimer: TimerHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
 
+  /**
+   * Throttled connect-loop failure logging (see `dial-failure-log.ts`). The
+   * loop otherwise fails in TOTAL silence — a relay hostname that does not
+   * resolve in DNS produced months of "Remote session is not ready" with not
+   * one diagnostic line anywhere on the client.
+   */
+  private readonly dialFailures: DialFailureLog;
+
+  /** See {@link IRemoteSession.terminalFatal}. Set once, by `goTerminalFatal`. */
+  private terminalFatalDetails: FatalErrorDetails | null = null;
+
   constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
     this.options = options;
+    // The same floor/optional split the local `WsRpcClient` advertises, from
+    // the same released-floor list - the remote handshake's compatibility
+    // check runs over the floor ONLY, so a peer that lacks an optional
+    // method degrades instead of fataling the session.
+    const rpcSplit = splitConnectionManifest(
+      options.rpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+    );
     this.clientManifests = {
-      rpc: buildRpcManifest(options.rpcRegistry),
+      rpc: rpcSplit.manifest,
+      optionalRpc: rpcSplit.optionalManifest,
       stream: buildStreamManifest(options.streamRegistry),
     };
+    this.clientRpcMerged = mergeConnectionManifests(
+      rpcSplit.manifest,
+      rpcSplit.optionalManifest,
+    );
+    this.dialFailures = new DialFailureLog({
+      label: `remote session (host ${options.hostId})`,
+      now: () => Date.now(),
+      repeatIntervalMs: DIAL_FAILURE_RESTATE_MS,
+      // Console on purpose: this is shared OSS transport code with no logger
+      // seam (parity with `WsStreamClient`), and the desktop shell forwards
+      // renderer console output into `traycer-desktop.log`.
+      warn: (message) => console.warn(message),
+      info: (message) => console.info(message),
+    });
   }
 
   // ---- Public surface (consumed by the messenger + stream client) -------- //
@@ -298,6 +368,11 @@ export class RemoteSession<
     return this.phase === "closed";
   }
 
+  /** See {@link IRemoteSession.terminalFatal}. */
+  terminalFatal(): FatalErrorDetails | null {
+    return this.terminalFatalDetails;
+  }
+
   /**
    * True once the Noise handshake + in-channel `open`/`openAck` have both
    * completed and the mux is actively carrying traffic — the live, firsthand
@@ -306,20 +381,42 @@ export class RemoteSession<
    * reads. `false` while idle/connecting/handshaking/reconnecting, so a
    * session that is merely attempting to attach is never mistaken for proof
    * of liveness.
+   *
+   * `hostAttached` is part of that evidence: after a relay `host_detached`
+   * the session keeps its socket and `phase === "ready"` while it waits for
+   * the host to come back, but the mux is carrying nothing — the scheduler is
+   * paused and every stream is reconnecting. Answering "ready" there is the
+   * standing lie R4-B5 exists to kill (Settings would render Online, off this
+   * session, for a host that is OFF — for up to the 15-min standing bound).
    */
   isReady(): boolean {
     return (
       this.phase === "ready" &&
-      this.readyBoundaryGeneration === this.connectGeneration
+      this.readyBoundaryGeneration === this.connectGeneration &&
+      this.connection !== null &&
+      this.connection.hostAttached
     );
   }
 
   /**
    * Issues a single unary RPC over the session (single-flight, no post-send
    * auto-retry — local parity). Rejects with a `RetryableTransportError` only
-   * when the session is not yet ready (provably pre-send, safe to retry); any
-   * failure after the request frame is enqueued surfaces as a plain
-   * `HostRpcError`, since the host may already have begun applying it.
+   * when the session is not yet ready AND can still get there (provably
+   * pre-send, safe to retry); any failure after the request frame is enqueued
+   * surfaces as a plain `HostRpcError`, since the host may already have begun
+   * applying it.
+   *
+   * A CLOSED session is not-ready too, but it is never going to become ready:
+   * `close()` is terminal (a rejected credential, a plan restriction, an
+   * incompatible handshake, or the reconnect cap), and `start()` above only
+   * re-dials from `idle`. Calling that "retryable" would be a lie with real
+   * consequences - `createRetryingMessenger` would burn its whole budget on a
+   * session that cannot answer, and a UI that reads the class as "still
+   * dialing" (the Providers panel) would park on a spinner waiting for a ready
+   * boundary no one will ever emit. So a terminal session degrades to the
+   * non-retryable `HostTransportFailureError`, exactly as
+   * `HostRequestAbortedError` does for a disposed request authority: still a
+   * transport fault, no longer a promise that waiting will help.
    */
   sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
@@ -329,10 +426,35 @@ export class RemoteSession<
     const requestId = this.options.requestId();
     const connection = this.connection;
     if (this.phase !== "ready" || connection === null) {
+      const notReady = {
+        code: "RPC_ERROR" as const,
+        message: this.isClosed()
+          ? "Remote session is closed"
+          : "Remote session is not ready",
+        requestId,
+        method,
+        // A terminally-closed session carries its verdict so the surface that
+        // shows the failure can say WHY (plan restriction vs incompatible
+        // protocol vs revoked credential), not just "closed".
+        fatalDetails: this.isClosed() ? this.terminalFatalDetails : null,
+      };
+      return Promise.reject(
+        this.isClosed()
+          ? new HostTransportFailureError(notReady)
+          : new RetryableTransportError(notReady),
+      );
+    }
+    if (!connection.hostAttached) {
+      // Relay said `host_detached`: the scheduler is paused and nothing will
+      // drain it (host re-attach forces a full re-dial — see
+      // `onHostAttached`). Enqueueing here would park the frame until the
+      // 30s unary timeout kills it as a NON-retryable `HostRpcError`.
+      // Pre-send and provably undeliverable ⇒ retryable, same as any other
+      // not-ready-yet state.
       return Promise.reject(
         new RetryableTransportError({
           code: "RPC_ERROR",
-          message: "Remote session is not ready",
+          message: "Remote host is detached from the relay",
           requestId,
           method,
           fatalDetails: null,
@@ -352,24 +474,60 @@ export class RemoteSession<
       );
     }
 
-    const clientCanonical = this.clientManifests.rpc[method];
-    const hostCanonical = hostManifest.rpc[method];
-    if (clientCanonical === undefined || hostCanonical === undefined) {
-      return Promise.reject(
-        new HostRpcError({
-          code: "RPC_ERROR",
-          message: `Method '${method}' is not in both manifests`,
-          requestId,
-          method,
-          fatalDetails: null,
-        }),
-      );
-    }
+    const clientCanonical = this.clientRpcMerged[method];
+    const hostCanonical = connection.hostRpcMerged?.[method];
     const methodRegistry = indexMethodRegistry(
       this.options.rpcRegistry,
       method,
     );
+    if (clientCanonical === undefined || hostCanonical === undefined) {
+      // Now that optional methods no longer fatal the handshake, "this host
+      // doesn't have that method" is a NORMAL runtime outcome here, and it
+      // must honor the registry's declared degrade exactly as `WsRpcClient`
+      // does - callers key off the resulting `E_HOST_UNSUPPORTED` (e.g. the
+      // run-settings write queue suppresses only that code to fall back to
+      // legacy persist-on-next-send). A generic `RPC_ERROR` would surface as
+      // a real failure instead.
+      return this.executeUnavailableMethodDegrade(
+        connection,
+        method,
+        methodRegistry,
+        clientCanonical,
+        connection.hostRpcMerged ?? {},
+        params,
+        requestId,
+      );
+    }
 
+    return this.dispatchNegotiatedUnary(
+      connection,
+      method,
+      methodRegistry,
+      clientCanonical,
+      hostCanonical,
+      params,
+      requestId,
+    ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
+  /**
+   * Sends an ALREADY-negotiated method at EXPLICIT versions.
+   *
+   * The versions are parameters rather than re-derived from the manifests
+   * because a degrade fallback targets the version its declaration names
+   * (`degrade.to`), which is not necessarily the target method's canonical
+   * version - re-deriving would validate the already-adapted request, and
+   * transform the response, against the wrong contract.
+   */
+  private dispatchNegotiatedUnary(
+    connection: ActiveConnection,
+    method: string,
+    methodRegistry: MethodVersionRegistry,
+    clientCanonical: SchemaVersion,
+    hostCanonical: SchemaVersion,
+    params: unknown,
+    requestId: string,
+  ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
       prepared = prepareRequestPayload(
@@ -385,8 +543,8 @@ export class RemoteSession<
     }
 
     const streamId = this.allocateStreamId();
-    return new Promise<ResponseOfMethod<RpcRegistry, Method>>(
-      (resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
+      {
         const timer = setTimeout(() => {
           this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
         }, UNARY_RESPONSE_TIMEOUT_MS);
@@ -396,8 +554,7 @@ export class RemoteSession<
           clientCanonical,
           hostCanonical,
           methodRegistry,
-          resolve: (result) =>
-            resolve(result as ResponseOfMethod<RpcRegistry, Method>),
+          resolve,
           reject,
           timer,
         });
@@ -419,8 +576,8 @@ export class RemoteSession<
           this.clearPendingUnary(streamId);
           reject(asHostRpcError(cause, requestId, method));
         }
-      },
-    );
+      }
+    });
   }
 
   /** Opens a logical subscribe stream (interactive class; see §3 QoS note). */
@@ -512,6 +669,7 @@ export class RemoteSession<
     if (this.phase === "closed") {
       return;
     }
+    this.dialFailures.recordAbandoned();
     this.phase = "closed";
     this.restoredStreamIds.clear();
     this.clearAllTimers();
@@ -612,7 +770,18 @@ export class RemoteSession<
     }
     if (provision.kind === "unavailable") {
       // No grant (signed out / revoked / transient CS failure): stay in backoff.
-      this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnect();
+      this.dialFailures.recordFailure({
+        cause: `could not mint an attach grant: ${provision.detail}`,
+        // The per-attempt text goes in the CONTEXT, never the cause: a server
+        // body routinely carries a request id or timestamp, and a socket-level
+        // throw carries the address THIS attempt resolved, so a cause built
+        // from either would differ on every attempt and defeat this log's
+        // throttle entirely. It arrives already attributed to its source — see
+        // `AttachGrantFailure` — so it is passed through, not re-worded.
+        context: provision.context,
+        retryInMs,
+      });
       return;
     }
     const grant = provision.grant;
@@ -639,7 +808,11 @@ export class RemoteSession<
         onReauthAck: () => undefined,
         onPeerGone: (reason) => this.onPeerGone(generation, reason),
         onError: () => undefined,
-        onClose: () => this.handleConnectionLost(generation, "socket-closed"),
+        onClose: (info) =>
+          this.handleConnectionLost(
+            generation,
+            describeSocketClose(this.phase, info),
+          ),
       },
     });
 
@@ -651,6 +824,7 @@ export class RemoteSession<
       reassembler: new ChunkReassembler(),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
+      hostRpcMerged: null,
       credentialUpdateSupported: false,
       hostAttached: true,
     };
@@ -855,6 +1029,51 @@ export class RemoteSession<
     void connection;
   }
 
+  /**
+   * A method this host never advertised. Applies the registry's DECLARED
+   * degrade through the shared policy (see `unavailable-method-degrade.ts`) -
+   * `E_HOST_UNSUPPORTED` for an `unsupported` declaration, or the declared
+   * floor fallback dispatched back through this same session.
+   */
+  private executeUnavailableMethodDegrade<
+    Method extends keyof RpcRegistry & string,
+  >(
+    connection: ActiveConnection,
+    method: Method,
+    methodRegistry: MethodVersionRegistry,
+    clientCanonical: SchemaVersion | undefined,
+    hostRpcMerged: ConnectionManifest,
+    params: RequestOfMethod<RpcRegistry, Method>,
+    requestId: string,
+  ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+    return resolveUnavailableMethodDegrade({
+      registry: this.options.rpcRegistry,
+      method,
+      methodRegistry,
+      clientCanonical,
+      clientManifest: this.clientRpcMerged,
+      hostManifest: hostRpcMerged,
+      params,
+      requestId,
+      // Dispatched at the versions the DECLARATION names, not the target's
+      // canonical pair: `degrade.to` may anchor an older version, and the
+      // request handed over here is already adapted to it. Re-entering
+      // `sendUnary` would re-derive canonical versions and validate the
+      // adapted payload - and transform the response - against the wrong
+      // contract. Same anchoring the local transport's fallback tests pin.
+      execute: (input) =>
+        this.dispatchNegotiatedUnary(
+          connection,
+          input.method,
+          input.methodRegistry,
+          input.clientCanonical,
+          input.hostCanonical,
+          input.params,
+          requestId,
+        ),
+    }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
   private handleOpenAck(
     generation: number,
     connection: ActiveConnection,
@@ -868,6 +1087,24 @@ export class RemoteSession<
       this.handleConnectionLost(generation, "malformed-openAck");
       return;
     }
+    const hostRpcMerged = mergeConnectionManifests(
+      parsed.data.manifest.rpc,
+      parsed.data.manifest.optionalRpc,
+    );
+    // Publish what this host advertised so UI layers can gate an optional
+    // (non-floor) affordance without calling the method - the exact mirror of
+    // `WsRpcClient`'s publish on the local path, and recorded BEFORE the
+    // compatibility check for the same reason: an incompatible pairing still
+    // tells us truthfully which methods the host has. A long-lived session
+    // refreshes this on every re-attach, which is when a host upgraded
+    // underneath us re-handshakes.
+    recordNegotiatedHostMethods(
+      this.options.hostId,
+      Object.keys(hostRpcMerged),
+    );
+    // Floor vs floor ONLY - optional methods are deliberately outside the
+    // session-fatal surface (see `SessionManifests`); a peer lacking one
+    // degrades per-call/per-gate instead.
     const compat = checkCompatibility(
       this.options.rpcRegistry,
       this.clientManifests.rpc,
@@ -879,6 +1116,7 @@ export class RemoteSession<
       return;
     }
     connection.hostManifest = parsed.data.manifest;
+    connection.hostRpcMerged = hostRpcMerged;
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -1055,7 +1293,8 @@ export class RemoteSession<
       return;
     }
     this.dropConnection(cause);
-    this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnect();
+    this.dialFailures.recordFailure({ cause, context: "", retryInMs });
   }
 
   /**
@@ -1067,7 +1306,6 @@ export class RemoteSession<
    */
   private dropConnection(cause: string): void {
     this.phase = "reconnecting";
-    this.droppedSinceReady = true;
     this.restoredStreamIds.clear();
     this.teardownConnection(cause);
     // In-flight unary calls are post-send from the caller's view → not
@@ -1180,7 +1418,13 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnect();
+      this.dialFailures.recordFailure({
+        cause:
+          "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
+        context: "",
+        retryInMs,
+      });
       return;
     }
     // outcome === "rotated": authn accepts the credential. If the bearer the
@@ -1200,7 +1444,13 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnect();
+    this.dialFailures.recordFailure({
+      cause:
+        "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
+      context: "",
+      retryInMs,
+    });
   }
 
   /**
@@ -1243,6 +1493,12 @@ export class RemoteSession<
     if (this.phase === "closed") {
       return;
     }
+    // One-shot, not throttled: terminal means the loop is OVER, so the
+    // absence of further retry lines must not read as recovery.
+    console.warn(
+      `[remote-session] remote session (host ${this.options.hostId}) closed terminally: ${details.code}: ${details.reason}`,
+    );
+    this.terminalFatalDetails = details;
     this.phase = "closed";
     this.restoredStreamIds.clear();
     this.clearAllTimers();
@@ -1263,9 +1519,14 @@ export class RemoteSession<
     this.emitClosed();
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Arms the backoff redial and returns the armed delay, so failure paths can
+   * report the SAME value they actually scheduled (never a second jitter/
+   * growth roll purely for the log line).
+   */
+  private scheduleReconnect(): number {
     if (this.phase === "closed") {
-      return;
+      return 0;
     }
     if (this.backoffTimer !== null) {
       clearTimeout(this.backoffTimer);
@@ -1280,6 +1541,7 @@ export class RemoteSession<
       this.backoffTimer = null;
       void this.beginConnect();
     }, delay);
+    return delay;
   }
 
   // ---- Re-auth loop + host-standing watchdog (R4-D2) --------------------- //
@@ -1459,13 +1721,13 @@ export class RemoteSession<
     }
     this.readyBoundaryGeneration = this.connectGeneration;
     this.reconnectAttempt = 0;
-    if (this.droppedSinceReady) {
-      // The session just fully recovered from a drop (re-attach + streams
-      // restored) - the "endpoint recovered" evidence availability-recovered
-      // consumers refetch on. A clean first open never sets the flag.
-      this.droppedSinceReady = false;
-      this.emitAvailabilityRecovered();
-    }
+    this.dialFailures.recordSuccess();
+    // EVERY ready boundary is availability evidence, the clean first open
+    // included: queries that raced this session's first dial have already
+    // errored pre-send and exhausted their retry, and this emission is the
+    // only automatic signal that can un-strand them (see the
+    // `subscribeAvailabilityRecovered` contract).
+    this.emitAvailabilityRecovered();
   }
 
   private clientStreamCanonical(method: string): SchemaVersion {
@@ -1610,20 +1872,34 @@ const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
  */
 const UNAUTHORIZED_REVALIDATE_TIMEOUT_MS = 10_000;
 
-function buildRpcManifest(registry: VersionedRpcRegistry): ConnectionManifest {
-  const manifest: Record<string, SchemaVersion> = {};
-  for (const method of Object.keys(registry)) {
-    manifest[method] = canonicalForMethodVersionLine(registry[method], method);
-  }
-  return manifest;
-}
-
 function indexMethodRegistry(
   registry: VersionedRpcRegistry,
   method: string,
 ): MethodVersionRegistry {
   const entry = registry[method];
   return entry as MethodVersionRegistry;
+}
+
+/**
+ * A `DialFailureLog` cause for a relay-socket close. The browser WebSocket
+ * strips the discriminating fault: a DNS failure (the outage this logging was
+ * written for was a relay hostname with NO DNS record), a refused/blocked
+ * connection, and a relay-rejected upgrade (bad grant, wrong relay) ALL
+ * surface as `code=1006` with an empty reason. When the close happened before
+ * `attach_ack` (phase "connecting") the line says so explicitly, because that
+ * is the one client-side observable that narrows the fault to the dial
+ * itself. Stable per fault (code + reason + phase bucket), so it dedups.
+ */
+function describeSocketClose(
+  phase: SessionPhase,
+  info: { readonly code: number; readonly reason: string },
+): string {
+  const reason = info.reason === "" ? "" : ` reason=${info.reason}`;
+  const base = `the relay socket closed (code=${info.code}${reason})`;
+  if (phase === "connecting") {
+    return `${base} before attach_ack - a DNS failure, a refused/blocked connection, and a relay-rejected upgrade (bad or wrong-environment grant) all look exactly like this`;
+  }
+  return base;
 }
 
 function unaryTimeoutError(requestId: string, method: string): HostRpcError {

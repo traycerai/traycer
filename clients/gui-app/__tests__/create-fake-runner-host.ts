@@ -44,7 +44,7 @@ export function createFakeRunnerHost(
       delete: () => Promise.resolve(),
     },
     notifications: {
-      show: () => Promise.resolve(),
+      show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
     },
@@ -62,6 +62,7 @@ export function createFakeRunnerHost(
       onChange: () => ({ dispose: () => undefined }),
     },
     workspaceFolders: {
+      canPickNatively: true,
       pickFolders: () => Promise.resolve([]),
     },
     fileDrops: {

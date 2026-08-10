@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  defineFallbackMethodDegrade,
+  defineFloorAwareVersionedRpcRegistry,
+  defineRpcContract,
+  defineUpgradePath,
   defineVersionedRpcRegistry,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
@@ -28,6 +32,15 @@ import {
   encodeMuxFrame,
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "../../host-messenger";
+import {
+  getNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "../../negotiated-manifest-registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type {
   IStreamWebSocketFactory,
@@ -161,6 +174,31 @@ class FakeRelayHost {
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
   streamManifest = buildStreamManifest(emptyStreamRegistry);
+  /**
+   * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
+   * stays empty (matching the empty client registries here); optional
+   * methods are the interesting surface - they must publish to the
+   * negotiated-manifest registry and must NEVER fatal the session, however
+   * unknown to the client they are.
+   */
+  optionalRpcManifest: Record<string, { major: number; minor: number }> = {};
+  /** The FLOOR rpc manifest advertised in `openAck` (compat-checked). */
+  floorRpcManifest: Record<string, { major: number; minor: number }> = {};
+  /**
+   * When false the `openAck` omits `optionalRpc` entirely - the shape a peer
+   * built before the floor/optional split would send. `sessionManifestsSchema`
+   * requires the field, so this exercises the parse-rejection path rather
+   * than a silently half-understood manifest.
+   */
+  sendOptionalRpc = true;
+  /** Every REQUEST frame the client sent: method + on-wire version + params. */
+  readonly unaryRequests: {
+    method: string;
+    schemaVersion: unknown;
+    params: unknown;
+  }[] = [];
+  /** Answers the next REQUEST with this result payload. */
+  unaryResult: unknown = { ready: true };
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -202,6 +240,20 @@ class FakeRelayHost {
       return connection.socket;
     },
   };
+
+  /** Relay control frame: the host's leg of the tunnel went away/came back. */
+  sendHostAttachment(state: "host_detached" | "host_attached"): void {
+    const connection = [...this.connections]
+      .reverse()
+      .find((entry) => !entry.closed);
+    if (connection === undefined) {
+      throw new Error("no live connection to signal on");
+    }
+    connection.socket.onmessage?.({
+      type: "text",
+      data: JSON.stringify({ type: state }),
+    });
+  }
 
   /** Server-side drop of the live socket (relay restart / network cut). */
   dropCurrentConnection(): void {
@@ -274,6 +326,27 @@ class FakeRelayHost {
       this.subscribeParams.push(message.json?.params);
       return;
     }
+    if (message.type === MuxFrameType.REQUEST) {
+      const json = message.json ?? {};
+      this.unaryRequests.push({
+        method: typeof json.method === "string" ? json.method : "",
+        schemaVersion: json.schemaVersion,
+        params: json.params,
+      });
+      await this.sendMux(connection, {
+        type: MuxFrameType.RESPONSE,
+        streamId: message.streamId,
+        qos: QosClass.INTERACTIVE,
+        json: {
+          requestId: typeof json.requestId === "string" ? json.requestId : "",
+          method: typeof json.method === "string" ? json.method : "",
+          result: this.unaryResult,
+          error: null,
+        },
+        binary: null,
+      });
+      return;
+    }
     if (
       message.streamId !== SESSION_CONTROL_STREAM_ID ||
       message.type !== MuxFrameType.OPEN
@@ -293,7 +366,13 @@ class FakeRelayHost {
         streamId: SESSION_CONTROL_STREAM_ID,
         qos: QosClass.INTERACTIVE,
         json: {
-          manifest: { rpc: {}, stream: this.streamManifest },
+          manifest: this.sendOptionalRpc
+            ? {
+                rpc: this.floorRpcManifest,
+                optionalRpc: this.optionalRpcManifest,
+                stream: this.streamManifest,
+              }
+            : { rpc: this.floorRpcManifest, stream: this.streamManifest },
           capabilities: [],
         },
         binary: null,
@@ -667,7 +746,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
 
 describe("RemoteSession availability-recovered evidence", () => {
   it(
-    "fires (through RemoteStreamClient) on a ready boundary re-reached after a drop, never on the clean first open",
+    "fires (through RemoteStreamClient) at EVERY ready boundary - the clean first open AND a post-drop re-attach",
     async () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
@@ -684,15 +763,64 @@ describe("RemoteSession availability-recovered evidence", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        // Clean first open: nothing recovered, so nothing fires.
-        expect(recoveredEvents).toBe(0);
+        // The clean first open IS evidence: queries that raced this dial have
+        // already errored pre-send and this is their only automatic refetch
+        // signal (the 15-20s stranded Providers card). Exactly one emission.
+        expect(recoveredEvents).toBe(1);
 
         relay.dropCurrentConnection();
-        await vi.waitFor(() => expect(recoveredEvents).toBe(1), WAIT);
-        // The recovery was a reconnect, not a terminal close.
+        await vi.waitFor(() => expect(recoveredEvents).toBe(2), WAIT);
+        // The second emission was a reconnect, not a terminal close.
         expect(session.isReady()).toBe(true);
         expect(closedEvents).toBe(0);
         expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession host_detached readiness evidence", () => {
+  it(
+    "stops answering ready and rejects sends as retryable while the host leg is detached, then recovers through the full re-attach",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = buildSession(relay, lease, null);
+      let recoveredEvents = 0;
+      session.subscribeAvailabilityRecovered(() => {
+        recoveredEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(1);
+
+        // Relay says the HOST's leg is gone. The session keeps its socket and
+        // its "ready" phase while it waits - but the scheduler is paused and
+        // nothing will drain it, so answering "ready" would be the standing
+        // lie R4-B5 kills (Settings rendering Online, off this session, for a
+        // host that is OFF - for up to the 15-min standing bound), and an
+        // enqueued unary would just die at the 30s timeout as NON-retryable.
+        relay.sendHostAttachment("host_detached");
+        expect(session.isReady()).toBe(false);
+        expect(session.isClosed()).toBe(false);
+
+        const error: unknown = await session.sendUnary("host.status", {}).then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(RetryableTransportError);
+
+        // `host_attached` out of detached means the host rebuilt its Noise
+        // state - the session routes it through a FULL re-attach, whose ready
+        // boundary restores the evidence and fires availability recovery.
+        relay.sendHostAttachment("host_attached");
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(recoveredEvents).toBe(2);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -742,6 +870,489 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         expect(relay.errors).toEqual([]);
       } finally {
         stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession dial-failure logging", () => {
+  // These pin the WIRING, not the throttle itself (dial-failure-log.test.ts
+  // owns that): a failing connect loop must produce a line saying WHY, and a
+  // recovered session must say it recovered. The console is the sink on
+  // purpose - shared OSS transport code has no logger seam, and the desktop
+  // shell forwards renderer console output into its log file.
+
+  function sessionLines(
+    calls: ReadonlyArray<ReadonlyArray<unknown>>,
+  ): string[] {
+    return calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith("[remote-session]"));
+  }
+
+  it(
+    "logs a grant-mint failure once, with its detail, and suppresses identical retries",
+    async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      let mintCalls = 0;
+      const options = buildSessionOptions(relay, lease, null);
+      const session = new RemoteSession({
+        ...options,
+        grantProvider: () => {
+          mintCalls += 1;
+          return Promise.resolve({
+            kind: "unavailable" as const,
+            detail: "authn answered HTTP 500",
+            context: "signing key missing",
+          });
+        },
+      });
+      try {
+        session.start();
+        // Three attempts land inside ~4s of backoff (0s, 1s, 3s).
+        await vi.waitFor(() => expect(mintCalls).toBeGreaterThanOrEqual(3), {
+          timeout: 10_000,
+          interval: 50,
+        });
+        const lines = sessionLines(warnSpy.mock.calls);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("could not mint an attach grant");
+        expect(lines[0]).toContain("authn answered HTTP 500");
+        expect(lines[0]).toMatch(/retrying in \d+ms/);
+      } finally {
+        session.close();
+        warnSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "names a pre-attach_ack socket close for what it cannot distinguish (DNS / refused / rejected upgrade)",
+    async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      // A factory whose sockets die instantly with the browser's opaque
+      // 1006/empty close - exactly what a nonexistent relay hostname
+      // produced in the real outage.
+      const deadFactory: IStreamWebSocketFactory = {
+        create: (): StreamWebSocketLike => {
+          const socket = new FakeSocket(
+            () => undefined,
+            () => undefined,
+          );
+          queueMicrotask(() => {
+            socket.onclose?.({ code: 1006, reason: "", wasClean: false });
+          });
+          return socket;
+        },
+      };
+      const options = buildSessionOptions(relay, lease, null);
+      const session = new RemoteSession({
+        ...options,
+        webSocketFactory: deadFactory,
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () =>
+            expect(sessionLines(warnSpy.mock.calls).length).toBeGreaterThan(0),
+          { timeout: 10_000, interval: 50 },
+        );
+        const line = sessionLines(warnSpy.mock.calls)[0];
+        expect(line).toContain("code=1006");
+        expect(line).toContain("before attach_ack");
+        expect(line).toContain("DNS failure");
+      } finally {
+        session.close();
+        warnSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "logs the recovery line when a previously-failing session reaches ready",
+    async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      let mintCalls = 0;
+      const options = buildSessionOptions(relay, lease, null);
+      const session = new RemoteSession({
+        ...options,
+        grantProvider: () => {
+          mintCalls += 1;
+          if (mintCalls < 3) {
+            return Promise.resolve({
+              kind: "unavailable" as const,
+              detail: "authn answered HTTP 500",
+              context: "",
+            });
+          }
+          return Promise.resolve({
+            kind: "ok" as const,
+            grant: { grant: "grant-jws", expiresInSeconds: 300 },
+          });
+        },
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const recoveries = infoSpy.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.startsWith("[remote-session]"));
+        expect(recoveries).toHaveLength(1);
+        expect(recoveries[0]).toContain(
+          "recovered after 2 consecutive failures",
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+        warnSpy.mockRestore();
+        infoSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it("rejects on a TERMINAL session as a non-retryable transport failure", async () => {
+    // "Not ready" covers two opposite futures. A dialing session will become
+    // ready; a closed one never will - `close()` is terminal and `start()`
+    // only re-dials from idle. Calling both retryable makes the retry wrapper
+    // spend its whole budget on a session that cannot answer, and makes any UI
+    // reading the class as "still connecting" wait for a ready boundary no one
+    // will ever emit (the Providers panel did exactly that).
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    session.close();
+    expect(session.isClosed()).toBe(true);
+
+    const error: unknown = await session.sendUnary("host.status", {}).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+  });
+
+  it("still rejects a session that is merely DIALING as retryable", async () => {
+    // The other side of the same branch, so the change above reads as a
+    // narrowing rather than a blanket downgrade: a session on its way to ready
+    // keeps its retry license, which is what the pre-send no-dispatch
+    // guarantee exists for.
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      expect(session.isReady()).toBe(false);
+      expect(session.isClosed()).toBe(false);
+
+      const error: unknown = await session.sendUnary("host.status", {}).then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+
+      expect(error).toBeInstanceOf(RetryableTransportError);
+    } finally {
+      session.close();
+    }
+  });
+});
+
+describe("RemoteSession negotiated-manifest publication", () => {
+  // The registry is module-level by design (a host's manifest is a property
+  // of the host process, not of one messenger), so these tests reset it.
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  it(
+    "publishes the openAck's merged rpc manifest at the ready boundary - optional methods included",
+    async () => {
+      const relay = new FakeRelayHost();
+      // Methods the CLIENT's registry does not know: exactly the shape of an
+      // optional (non-floor) method a newer host advertises - the case that
+      // silently failed closed when the remote path did not publish.
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+        "workspace.writeFile": { major: 2, minor: 1 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      // Fail-closed before any handshake: unknown, never false.
+      expect(getNegotiatedHostMethods("host-1")).toBeNull();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(getNegotiatedHostMethods("host-1")).toEqual(
+          new Set(["host.usage.summary", "workspace.writeFile"]),
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "refreshes the published set on re-attach - a host upgraded under a live session self-corrects",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(getNegotiatedHostMethods("host-1")).toEqual(
+          new Set(["host.usage.summary"]),
+        );
+        // The host restarts on a newer binary advertising one more optional
+        // method; the client's re-attach after the drop must overwrite the
+        // stale entry without an app restart.
+        relay.optionalRpcManifest = {
+          "host.usage.summary": { major: 1, minor: 0 },
+          "host.newly.added": { major: 1, minor: 0 },
+        };
+        relay.dropCurrentConnection();
+        await vi.waitFor(
+          () =>
+            expect(getNegotiatedHostMethods("host-1")).toEqual(
+              new Set(["host.usage.summary", "host.newly.added"]),
+            ),
+          WAIT,
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession absent optional method", () => {
+  // A method the client knows and the host never advertised. Before the
+  // floor/optional split this was unreachable - the handshake fataled on the
+  // skew - so the remote path had no degrade at all and would have answered a
+  // generic RPC_ERROR. Callers key off E_HOST_UNSUPPORTED (the run-settings
+  // write queue suppresses exactly that code to fall back to legacy
+  // persist-on-next-send), so a generic error reads as a real failure.
+  const unsupportedV10 = defineRpcContract({
+    method: "host.syntheticUnsupported",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ok: z.boolean() }),
+  });
+  // Typed as the erased `VersionedRpcRegistry` at the declaration (same shape
+  // as `emptyRpcRegistry` above) so the session can take it directly - the
+  // repo bans chained/`as unknown` assertions, and none is needed here.
+  const unsupportedRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry([] as const, {
+      "host.syntheticUnsupported": {
+        degrade: { kind: "unsupported" },
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: unsupportedV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "applies the declared unsupported degrade instead of a generic RPC_ERROR",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: unsupportedRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary("host.syntheticUnsupported", {})
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect((error as HostRpcError).code).toBe("E_HOST_UNSUPPORTED");
+        expect(
+          (error as HostRpcError).fatalDetails?.upgradeGuidance
+            ?.hostShouldUpgrade,
+        ).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession fallback degrade version anchoring", () => {
+  // `degrade.to` names version 1.0 while the target's canonical is 1.1. The
+  // request handed to the fallback is ALREADY adapted to 1.0, so dispatching
+  // it at canonical would validate `{}` against 1.1's `{verbose}` schema and
+  // transform the response with the wrong contract. Re-entering the public
+  // `sendUnary` would do exactly that - hence the version-preserving internal
+  // dispatch this pins.
+  const statusV10 = defineRpcContract({
+    method: "host.status",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ready: z.boolean() }),
+  });
+  const statusV11 = defineRpcContract({
+    method: "host.status",
+    schemaVersion: { major: 1, minor: 1 } as const,
+    requestSchema: z.object({ verbose: z.boolean() }),
+    responseSchema: z.object({ ready: z.boolean(), detail: z.string() }),
+  });
+  const skewFallbackV10 = defineRpcContract({
+    method: "host.syntheticSkewFallback",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ label: z.string() }),
+    // `detailSeen` is the DISCRIMINATOR: `detail` exists only on the 1.1
+    // response, so it is true exactly when the response was decoded (and
+    // upgraded) at canonical instead of at the declared 1.0.
+    responseSchema: z.object({ summary: z.string(), detailSeen: z.boolean() }),
+  });
+  const upgradeStatus = defineUpgradePath<typeof statusV10, typeof statusV11>({
+    from: statusV10.schemaVersion,
+    to: statusV11.schemaVersion,
+    upgradeRequest: () => ({ verbose: false }),
+    upgradeResponse: (response) => ({
+      ready: response.ready,
+      detail: "upgraded",
+    }),
+  });
+  const skewRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+      "host.status": {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: statusV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: statusV11,
+              upgradeFromPreviousVersion: upgradeStatus,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+      "host.syntheticSkewFallback": {
+        degrade: defineFallbackMethodDegrade<
+          typeof skewFallbackV10,
+          typeof statusV10,
+          "host.status"
+        >({
+          kind: "fallback",
+          to: { method: "host.status", major: 1, minor: 0 },
+          adaptRequest: () => ({}),
+          adaptResponse: (response) => ({
+            summary: response.ready ? "ready" : "not-ready",
+            detailSeen: Object.prototype.hasOwnProperty.call(
+              response,
+              "detail",
+            ),
+          }),
+        }),
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: skewFallbackV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "dispatches the fallback at degrade.to, not the target's canonical version",
+    async () => {
+      const relay = new FakeRelayHost();
+      // The host has the older 1.0 target on its FLOOR and NOT the
+      // fallback's own (optional) method.
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryResult = { ready: true };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: skewRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const result: unknown = await session.sendUnary(
+          "host.syntheticSkewFallback",
+          { label: "x" },
+        );
+        // adaptResponse ran over the DECLARED 1.0 response shape: no `detail`
+        // key, i.e. no canonical-version upgrade was applied on the way back.
+        expect(result).toEqual({ summary: "ready", detailSeen: false });
+        // ONE request, sent as host.status anchored at the DECLARED 1.0 -
+        // canonical 1.1 here would have rejected the adapted `{}` payload.
+        expect(relay.unaryRequests).toHaveLength(1);
+        expect(relay.unaryRequests[0]?.method).toBe("host.status");
+        expect(relay.unaryRequests[0]?.schemaVersion).toEqual({
+          major: 1,
+          minor: 0,
+        });
+        expect(relay.unaryRequests[0]?.params).toEqual({});
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession openAck without optionalRpc", () => {
+  // The registry is module-level, so a sibling suite's successful handshake
+  // would otherwise leave this host's entry populated.
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  it(
+    "refuses a manifest missing the required optionalRpc rather than half-reading it",
+    async () => {
+      const relay = new FakeRelayHost();
+      // The pre-split frame shape. `sessionManifestsSchema` requires
+      // `optionalRpc`, so this is rejected at parse - it never reaches the
+      // floor compat check, and the merged legacy set is never mistaken for a
+      // floor. The session stays un-ready and retries rather than proceeding
+      // on a manifest it did not understand.
+      relay.sendOptionalRpc = false;
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(session.isReady()).toBe(false);
+        expect(getNegotiatedHostMethods("host-1")).toBeNull();
+        expect(session.isClosed()).toBe(false);
+      } finally {
         session.close();
       }
     },

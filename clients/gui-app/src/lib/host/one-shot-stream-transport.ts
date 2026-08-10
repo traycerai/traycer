@@ -50,10 +50,14 @@ export function openOneShotStreamTransport(params: {
     autoStart: true,
   });
   if (wsStreamClient === null) {
-    // Only reachable for a remote target whose registry-published public key
-    // does not decode (a corrupt row) — genuinely exceptional.
+    // Two refusals map here: a remote target whose registry-published public
+    // key does not decode (a corrupt row), or the transport bearer gate
+    // finding no presentable credential (a null/released/empty lease - e.g.
+    // this delete racing a sign-out or a context handoff). Both mean the
+    // transport cannot be built RIGHT NOW; don't blame the key for what may
+    // be an auth-transition race.
     throw new Error(
-      `Remote host ${params.target.hostId} has an invalid public key; cannot open a one-shot stream`,
+      `Cannot open a one-shot stream to remote host ${params.target.hostId}: no valid public key or presentable credential`,
     );
   }
   appLogger.debug("[stream] one-shot transport opened", {

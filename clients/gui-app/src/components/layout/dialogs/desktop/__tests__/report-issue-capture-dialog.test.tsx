@@ -236,7 +236,7 @@ function createBaseRunnerHost(): IRunnerHost {
       delete: () => Promise.resolve(),
     },
     notifications: {
-      show: () => Promise.resolve(),
+      show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
     },
@@ -254,6 +254,7 @@ function createBaseRunnerHost(): IRunnerHost {
       onChange: () => ({ dispose: () => undefined }),
     },
     workspaceFolders: {
+      canPickNatively: true,
       pickFolders: () => Promise.resolve([]),
     },
     fileDrops: {

@@ -95,6 +95,7 @@ function renderPanelWithCapabilities(
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        initialHistoryCaughtUp
         canOpenAgentForEvent={() => capabilities.plainOpen}
         canJump={() => canJump}
         onJump={onJump}
@@ -132,6 +133,7 @@ function renderPanel(events: ReadonlyArray<CommGraphEvent>): () => void {
         edge={edge}
         epicId="epic-1"
         agentNames={AGENT_NAMES}
+        initialHistoryCaughtUp
         canOpenAgentForEvent={() => true}
         canJump={() => false}
         onJump={() => undefined}
@@ -176,6 +178,83 @@ describe("CommGraphThreadPanel", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("first");
     expect(rows[1].textContent).toContain("second");
+  });
+
+  it("opens at the newest row while keeping oldest-to-newest DOM order", () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(720);
+
+    renderPanel([
+      event({ id: 1, timestamp: 100, messageText: "oldest" }),
+      event({ id: 2, timestamp: 200, messageText: "newest" }),
+    ]);
+
+    const eventList = screen.getByTestId("comm-graph-thread-panel-events");
+    expect(eventList.scrollTop).toBe(720);
+    expect(messageRows().map((row) => row.textContent)).toEqual([
+      expect.stringContaining("oldest"),
+      expect.stringContaining("newest"),
+    ]);
+  });
+
+  it("waits for streamed initial backlog before positioning at the newest row", () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(720);
+    const events = [
+      event({ id: 1, timestamp: 100, messageText: "snapshot" }),
+      event({ id: 2, timestamp: 200, messageText: "backlog" }),
+    ];
+    const [edge] = aggregateCommGraphEdges(events, new Set(["a", "b"]));
+    const panel = (currentEdge: typeof edge, caughtUp: boolean) => (
+      <TooltipProvider>
+        <CommGraphThreadPanel
+          edge={currentEdge}
+          epicId="epic-1"
+          agentNames={AGENT_NAMES}
+          initialHistoryCaughtUp={caughtUp}
+          canOpenAgentForEvent={() => true}
+          canJump={() => false}
+          onJump={() => undefined}
+          canJumpToSender={() => false}
+          onJumpToSender={() => undefined}
+          canJumpToCreated={() => false}
+          onJumpToCreated={() => undefined}
+          onOpenAgentId={() => undefined}
+          onClose={() => undefined}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = render(panel(edge, false));
+
+    const eventList = screen.getByTestId("comm-graph-thread-panel-events");
+    expect(eventList.scrollTop).toBe(0);
+
+    rerender(panel(edge, true));
+
+    expect(eventList.scrollTop).toBe(720);
+    eventList.scrollTop = 240;
+    const [edgeWithLiveEvent] = aggregateCommGraphEdges(
+      [...events, event({ id: 3, timestamp: 300, messageText: "live" })],
+      new Set(["a", "b"]),
+    );
+
+    rerender(panel(edgeWithLiveEvent, true));
+
+    expect(eventList.scrollTop).toBe(240);
+    rerender(panel({ ...edgeWithLiveEvent, events: [] }, false));
+    expect(screen.queryByTestId("comm-graph-thread-panel-events")).toBeNull();
+
+    rerender(panel(edgeWithLiveEvent, true));
+
+    expect(screen.getByTestId("comm-graph-thread-panel-events").scrollTop).toBe(
+      720,
+    );
+
+    rerender(panel({ ...edgeWithLiveEvent, events: [] }, false));
+    rerender(panel({ ...edgeWithLiveEvent, events: [] }, true));
+    rerender(panel(edgeWithLiveEvent, true));
+
+    expect(screen.getByTestId("comm-graph-thread-panel-events").scrollTop).toBe(
+      0,
+    );
   });
 
   it("keeps reused cloud origin sequences as distinct rows and open state", async () => {

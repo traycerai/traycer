@@ -12,7 +12,7 @@
  * must not be labelled as either - an agent's turn is full of work that never
  * reaches this record.
  */
-import { useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -39,6 +39,8 @@ export interface CommGraphDetailPanelProps {
   readonly ariaLabel: string;
   readonly testId: string;
   readonly events: ReadonlyArray<CommGraphEvent>;
+  /** The selected events' initial subscription history is fully present. */
+  readonly initialHistoryCaughtUp: boolean;
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly emptyLabel: string;
@@ -68,6 +70,7 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
     emptyLabel,
     epicId,
     events,
+    initialHistoryCaughtUp,
     onClose,
     onJump,
     onJumpToCreated,
@@ -77,6 +80,35 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
     title,
   } = props;
   const panelWidthPx = useCommGraphPanelWidthPx();
+  const eventListRef = useRef<HTMLDivElement | null>(null);
+  const hasPositionedInitialEventsRef = useRef(false);
+
+  // Chronology reads down the panel (oldest first), but the useful opening
+  // position is its newest row. A snapshot is bounded, so wait until the
+  // selected hosts have drained their initial backlog before positioning. This
+  // is deliberately a one-time position: later arrivals must not pull a reader
+  // away from older rows they intentionally scrolled back to.
+  useLayoutEffect(() => {
+    const eventList = eventListRef.current;
+    if (events.length === 0) {
+      // An authority handoff is temporarily empty while its new source is
+      // still catching up, so its later rows need a fresh initial position.
+      // A genuinely caught-up empty panel has no initial rows to position;
+      // freeze it so later live rows do not become a false initial batch.
+      hasPositionedInitialEventsRef.current = initialHistoryCaughtUp;
+      return;
+    }
+    if (
+      eventList === null ||
+      !initialHistoryCaughtUp ||
+      hasPositionedInitialEventsRef.current
+    ) {
+      return;
+    }
+    eventList.scrollTop = eventList.scrollHeight;
+    hasPositionedInitialEventsRef.current = true;
+  }, [events.length, initialHistoryCaughtUp]);
+
   return (
     <aside
       aria-label={ariaLabel}
@@ -124,7 +156,11 @@ export function CommGraphDetailPanel(props: CommGraphDetailPanelProps) {
           {emptyLabel}
         </p>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          ref={eventListRef}
+          data-testid={`${testId}-events`}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
           {events.map((event) => (
             <CommGraphEventRow
               key={commGraphEventKey(event)}

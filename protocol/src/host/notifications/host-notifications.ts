@@ -1174,10 +1174,20 @@ export type HostNotificationsCloudFeedClearAllRequest = z.infer<
 >;
 
 /**
+ * Mark every notification read in the cloud snapshot the user was looking at.
+ * The shape matches clear-all because both operations are bounded by observed
+ * feed membership rather than a host timestamp.
+ */
+export const hostNotificationsCloudFeedMarkAllReadRequestSchema =
+  hostNotificationsCloudFeedClearAllRequestSchema;
+export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
+  typeof hostNotificationsCloudFeedMarkAllReadRequestSchema
+>;
+
+/**
  * `unavailable` means the relay could not reach the cloud, and NOTHING was
  * changed anywhere - the host deliberately keeps no local shadow of the cloud
- * feed to mutate optimistically. The client keeps showing the rows it has and
- * surfaces the degraded state; it must not treat the mutation as applied.
+ * feed to mutate optimistically. Neither is an applied mutation.
  */
 export const hostNotificationsCloudFeedMutationResponseSchema = z
   .object({
@@ -1186,15 +1196,38 @@ export const hostNotificationsCloudFeedMutationResponseSchema = z
     version: z.number().int().nonnegative().nullable(),
   })
   .superRefine((value, context) => {
-    if ((value.status === "unavailable") === (value.version === null)) return;
+    if ((value.status === "applied") === (value.version !== null)) return;
     context.addIssue({
       code: "custom",
       path: ["version"],
-      message: "version must be null exactly when status is unavailable",
+      message: "version must be non-null exactly when status is applied",
     });
   });
 export type HostNotificationsCloudFeedMutationResponse = z.infer<
   typeof hostNotificationsCloudFeedMutationResponseSchema
+>;
+
+/**
+ * The atomic bulk operation is additive. `unsupported` means an older cloud
+ * server accepted its envelope but could not acknowledge this new operation;
+ * the client may then use the released per-entry compatibility path.
+ */
+export const hostNotificationsCloudFeedMarkAllReadResponseSchema = z
+  .object({
+    status: z.enum(["applied", "unavailable", "unsupported"]),
+    /** The feed version after the mutation; `null` when it was not applied. */
+    version: z.number().int().nonnegative().nullable(),
+  })
+  .superRefine((value, context) => {
+    if ((value.status === "applied") === (value.version !== null)) return;
+    context.addIssue({
+      code: "custom",
+      path: ["version"],
+      message: "version must be non-null exactly when status is applied",
+    });
+  });
+export type HostNotificationsCloudFeedMarkAllReadResponse = z.infer<
+  typeof hostNotificationsCloudFeedMarkAllReadResponseSchema
 >;
 
 export const hostNotificationsCloudFeedMarkRead = defineRpcContract({
@@ -1216,6 +1249,13 @@ export const hostNotificationsCloudFeedClear = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsCloudFeedEntryRequestSchema,
   responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+});
+
+export const hostNotificationsCloudFeedMarkAllRead = defineRpcContract({
+  method: "host.notifications.cloudFeed.markAllRead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedMarkAllReadRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMarkAllReadResponseSchema,
 });
 
 export const hostNotificationsCloudFeedClearAll = defineRpcContract({

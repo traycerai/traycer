@@ -835,6 +835,80 @@ describe("dropOnTabStrip", () => {
     ]);
     expect(next.activePaneId).toBe(paneId);
   });
+
+  it("activates an already-open sidebar node dropped at its current position", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(paneTabIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)[0]).toBe(SPEC_A.id);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
+  });
+
+  it("focuses an inactive pane when its already-active tab is dropped in place", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, paneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+
+    expect(state.activePaneId).not.toBe(paneId);
+    expect(activationContentIds(state, paneById(state, paneId))).toEqual([
+      SPEC_A.id,
+    ]);
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(next.activePaneId).toBe(paneId);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id]);
+    expectCanvasInvariants(next);
+  });
+
+  it("promotes a preview tab dropped at its current position", () => {
+    let state = openPreview(createEmptyCanvas(), SPEC_A);
+    state = openPinned(state, SPEC_B);
+    const paneId = rootPane(state).id;
+    state = setActiveTab(state, paneId, SPEC_A.instanceId);
+
+    expect(rootPane(state).previewTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(state, rootPane(state))).toEqual([
+      SPEC_A.id,
+      SPEC_B.id,
+    ]);
+
+    const next = dropOnTabStrip(
+      state,
+      { kind: "node", node: SPEC_A },
+      paneId,
+      0,
+    );
+    const pane = paneById(next, paneId);
+
+    expect(pane.previewTabId).toBeNull();
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(activationContentIds(next, pane)).toEqual([SPEC_A.id, SPEC_B.id]);
+    expect(next.activePaneId).toBe(paneId);
+    expectCanvasInvariants(next);
+  });
 });
 
 describe("splitPaneEmpty", () => {

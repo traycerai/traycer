@@ -366,6 +366,9 @@ ${condition}
 Type=simple
 SyslogIdentifier=${options.label.id}
 ExecStart=${execStart}
+# Keep an OOM-killed agent/tool process from causing systemd to stop the
+# entire host unit and every sibling workload in its cgroup.
+OOMPolicy=continue
 Restart=on-failure
 RestartSec=5
 

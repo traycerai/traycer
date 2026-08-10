@@ -18,6 +18,7 @@ function agent(
     active: false,
     folderPaths: [],
     isWorktree: false,
+    runConfig: null,
     ...over,
   };
 }
@@ -44,6 +45,10 @@ function section(output: string, label: string): string[] {
     body.push(lines[i]);
   }
   return body;
+}
+
+function agentLine(output: string, linePrefix: string): string {
+  return output.split("\n").find((line) => line.startsWith(linePrefix)) ?? "";
 }
 
 describe("formatAgentListResponse categorization", () => {
@@ -285,6 +290,77 @@ describe("formatAgentListResponse categorization", () => {
     expect(output).toContain("b");
     expect(output).not.toContain("You:");
   });
+
+  it("renders model/effort/fast on a GUI row after the surface/harness token", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const configured = agent({
+      id: "done",
+      parentId: "caller",
+      runConfig: {
+        model: { kind: "concrete", slug: "gpt-5.6-sol" },
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+    const output = formatAgentListResponse(
+      response([caller, configured], "caller"),
+    );
+
+    expect(output).toContain(
+      "done gui/claude model: gpt-5.6-sol effort: high fast",
+    );
+  });
+
+  it("omits null effort and disabled fast tokens", () => {
+    const configured = agent({
+      id: "done",
+      runConfig: {
+        model: { kind: "concrete", slug: "gpt-5.6-sol" },
+        reasoningEffort: null,
+        fastMode: false,
+      },
+    });
+    const output = formatAgentListResponse(response([configured], "done"));
+    const line = agentLine(output, "done gui/claude");
+
+    expect(line).toContain("model: gpt-5.6-sol");
+    expect(line).not.toContain("effort:");
+    expect(line).not.toContain("fast");
+    expect(output).toContain("model: <slug>");
+  });
+
+  it("renders provider default for TUI and never renders a fast token", () => {
+    const configured = agent({
+      id: "term",
+      surface: "tui",
+      runConfig: {
+        model: { kind: "provider-default" },
+        reasoningEffort: null,
+        fastMode: null,
+      },
+    });
+    const output = formatAgentListResponse(response([configured], "term"));
+    const line = agentLine(output, "term tui/claude");
+
+    expect(line).toContain("model: provider default");
+    expect(line).not.toContain("null");
+    expect(line).not.toContain("fast");
+  });
+
+  it("default-fills runConfig to null for a v7 host row without the field", () => {
+    const legacy = { ...agent({ id: "legacy", isSelf: true }) };
+    delete (legacy as { runConfig?: unknown }).runConfig;
+    const parsed = listAgentsResponseSchema.parse(
+      response([legacy as AgentSummary], "legacy"),
+    );
+    const output = formatAgentListResponse(parsed);
+
+    expect(parsed.agents[0].runConfig).toBeNull();
+    expect(agentLine(output, "legacy [self] gui/claude")).not.toContain(
+      "model:",
+    );
+    expect(output).not.toContain("model: <slug>");
+  });
 });
 
 describe("formatAgentSelf", () => {
@@ -335,5 +411,62 @@ describe("formatAgentSelf", () => {
 
   it("returns a not-found message for a null self", () => {
     expect(formatAgentSelf(null)).toBe("Current agent not found.");
+  });
+
+  it("reports GUI model/effort/fast as separate lines", () => {
+    const output = formatAgentSelf(
+      agent({
+        id: "self",
+        isSelf: true,
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-5.6-sol" },
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      }),
+    );
+    expect(output).toContain("model: gpt-5.6-sol");
+    expect(output).toContain("effort: high");
+    expect(output).toContain("fast: yes");
+  });
+
+  it("omits null effort and reports disabled GUI fast mode as no", () => {
+    const output = formatAgentSelf(
+      agent({
+        id: "self",
+        runConfig: {
+          model: { kind: "concrete", slug: "gpt-5.6-sol" },
+          reasoningEffort: null,
+          fastMode: false,
+        },
+      }),
+    );
+    expect(output).toContain("model: gpt-5.6-sol");
+    expect(output).not.toContain("effort:");
+    expect(output).toContain("fast: no");
+  });
+
+  it("reports TUI provider default and omits the fast line", () => {
+    const output = formatAgentSelf(
+      agent({
+        id: "self",
+        surface: "tui",
+        runConfig: {
+          model: { kind: "provider-default" },
+          reasoningEffort: null,
+          fastMode: null,
+        },
+      }),
+    );
+    expect(output).toContain("model: provider default");
+    expect(output).not.toContain("null");
+    expect(output).not.toContain("fast:");
+  });
+
+  it("renders no run-config lines when runConfig is null", () => {
+    const output = formatAgentSelf(agent({ id: "self", runConfig: null }));
+    expect(output).not.toContain("model:");
+    expect(output).not.toContain("effort:");
+    expect(output).not.toContain("fast:");
   });
 });

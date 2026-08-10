@@ -106,6 +106,49 @@ jobs:
         run: git fetch --depth=1 origin tag host-v1.1.5
       - name: Test
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false ${{ matrix.test_args }}
+      # Diagnostics for the gui-app shard flake: shards die with every visible
+      # test passing, a log truncated mid-write, and exit 1 with no vitest
+      # failure summary — the signature of the runner killing the process, not
+      # of a failing assertion. Nothing in this job recorded WHY, so every
+      # occurrence has been triaged by guesswork and cleared by a rerun.
+      #
+      # `dmesg` names an OOM kill and its victim; the memory/disk lines bound
+      # the alternative (a full tmpfs, an exhausted runner). `|| true`
+      # throughout: this step must never convert a diagnostic gap into a
+      # second failure, and `dmesg` is not always readable on hosted runners.
+      - name: Capture runner diagnostics on test failure
+        if: failure()
+        run: |
+          echo "::group::Kernel OOM / kill records"
+          # Capture dmesg FIRST, then grep, and report which case we are in.
+          # Piping dmesg straight into grep makes "dmesg is not readable"
+          # indistinguishable from "no OOM records" - both render as an empty
+          # section, which is the one ambiguity this step exists to remove.
+          if dmesg -T >/tmp/dmesg.txt 2>/dev/null || dmesg >/tmp/dmesg.txt 2>/dev/null; then
+            # Test grep with -q SEPARATELY from printing. `grep ... | tail`
+            # reports tail's status, which is 0 even when grep matched
+            # nothing - so the pipeline form would claim OOM records exist
+            # every time. A diagnostic that invents the very finding it is
+            # meant to adjudicate is worse than no diagnostic at all.
+            if grep -qiE "killed process|out of memory|oom[-_]kill" /tmp/dmesg.txt; then
+              grep -iE "killed process|out of memory|oom[-_]kill" /tmp/dmesg.txt | tail -40
+              echo "(OOM records found above)"
+            else
+              echo "dmesg READ OK, and it contains NO OOM/kill records."
+            fi
+          else
+            echo "dmesg NOT READABLE on this runner (permission denied)."
+            echo "An OOM kill can NOT be ruled out from this section alone;"
+            echo "use the runner's exit code instead - 137 means SIGKILL."
+          fi
+          echo "::endgroup::"
+          echo "::group::Memory"
+          free -m 2>/dev/null || true
+          cat /proc/meminfo 2>/dev/null | head -5 || true
+          echo "::endgroup::"
+          echo "::group::Disk"
+          df -h 2>/dev/null | head -10 || true
+          echo "::endgroup::"
 
   # Windows job: the ONLY Windows execution of CLI code in PR CI. Until this
   # existed, `smoke:sea` ran solely inside the release workflows, so every

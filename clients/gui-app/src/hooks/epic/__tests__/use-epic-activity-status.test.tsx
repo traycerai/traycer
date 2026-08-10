@@ -12,8 +12,15 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  __getChatSessionRegistryForTests,
+  disposeAllChatSessions,
+} from "@/lib/registries/chat-session-registry";
+import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -25,6 +32,7 @@ import {
 
 const EPIC_ID = "epic-activity";
 const AGENT_ID = "chat-1";
+const OTHER_AGENT_ID = "chat-2";
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
@@ -36,7 +44,16 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 function registerEmptySession(): void {
-  __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
+  registerSessionHoldingAgents([]);
+}
+
+/**
+ * A live epic projection holding `agentIds`. The projection is the liveness
+ * filter the aggregation runs its candidates through, so a chat session only
+ * counts once its id is in there.
+ */
+function registerSessionHoldingAgents(agentIds: readonly string[]): void {
+  const handle = __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
     createOpenEpicStore({
       epicId: EPIC_ID,
       userId: null,
@@ -44,6 +61,46 @@ function registerEmptySession(): void {
       onAuthError: null,
     }),
   );
+  handle.store.setState({ chats: { allIds: [...agentIds], byId: {} } });
+}
+
+/** A live chat session for `chatId`, owning `managedCommands`. */
+function registerChatSession(
+  chatId: string,
+  managedCommands: readonly ManagedCommand[],
+): void {
+  const handle = __getChatSessionRegistryForTests().acquire(
+    EPIC_ID,
+    chatId,
+    "activity-test-scope",
+    () =>
+      createChatSessionStore({
+        epicId: EPIC_ID,
+        chatId,
+        userId: null,
+        onAuthError: null,
+        onProviderAuthError: null,
+        streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+        streamClientFactory: () => ({
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          close: () => undefined,
+        }),
+      }),
+  );
+  handle.store.setState({ managedCommands: [...managedCommands] });
+}
+
+function runningShell(chatId: string): ManagedCommand {
+  return {
+    id: `cmd-${chatId}`,
+    monitoring: false,
+    description: "dev server",
+    status: { state: "running", pid: 4242, startedAtMs: 1 },
+    chatId,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
 }
 
 function publishWorking(
@@ -60,6 +117,7 @@ function publishWorking(
 
 afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
+  disposeAllChatSessions();
   resetAgentActivity();
 });
 
@@ -128,6 +186,31 @@ describe("useEpicActivityStatus", () => {
       publishAgentActivity([]);
     });
     expect(result.current).toBe("idle");
+  });
+
+  it("reports background when one of the epic's chats owns a running shell", () => {
+    // Nothing is published for this epic and every chat reads idle: the shell
+    // is the only live thing, and the Task tab has to show it.
+    registerSessionHoldingAgents([AGENT_ID, OTHER_AGENT_ID]);
+    registerChatSession(AGENT_ID, []);
+    registerChatSession(OTHER_AGENT_ID, [runningShell(OTHER_AGENT_ID)]);
+
+    const { result } = renderHook(() => useEpicActivityStatus(EPIC_ID));
+
+    expect(result.current).toBe("background");
+  });
+
+  it("reports a turn over a chat whose shell is running", () => {
+    registerSessionHoldingAgents([AGENT_ID, OTHER_AGENT_ID]);
+    registerChatSession(AGENT_ID, []);
+    registerChatSession(OTHER_AGENT_ID, [runningShell(OTHER_AGENT_ID)]);
+
+    const { result } = renderHook(() => useEpicActivityStatus(EPIC_ID));
+    act(() => {
+      publishWorking([AGENT_ID], [AGENT_ID]);
+    });
+
+    expect(result.current).toBe("turn");
   });
 
   it("reads idle for a null epic id", () => {
