@@ -571,6 +571,81 @@ const NON_CONSTRAINING_SCHEMA_KEYS = new Set([
  * Structural identity of a leaf, ignoring annotation-only keywords. Keys are
  * sorted so declaration order never reads as a change.
  */
+/**
+ * Bound keywords where a LOWER value on the newer side narrows the accepted
+ * set, so `next <= previous` still projects.
+ */
+const UPPER_BOUND_KEYS = new Set([
+  "maximum",
+  "exclusiveMaximum",
+  "maxLength",
+  "maxItems",
+  "maxProperties",
+]);
+
+/** Bound keywords where a HIGHER value on the newer side narrows. */
+const LOWER_BOUND_KEYS = new Set([
+  "minimum",
+  "exclusiveMinimum",
+  "minLength",
+  "minItems",
+  "minProperties",
+]);
+
+/**
+ * Whether every value the NEWER leaf can emit is still accepted by the OLDER
+ * leaf. Narrowing a scalar constraint (`z.string().max(10)` ->
+ * `z.string().max(5)`) is projection-safe and must not be reported;
+ * widening it is not. Non-bound keywords (`type`, `format`, `pattern`,
+ * `multipleOf`, ...) are compared for identity, because deciding subset
+ * relationships between them in general is not something this checker can
+ * do soundly - so it stays conservative there.
+ */
+function leafProjectsOnto(previous: unknown, next: unknown): boolean {
+  const previousShape = constrainingRecord(previous);
+  const nextShape = constrainingRecord(next);
+  if (previousShape === null || nextShape === null) {
+    return constrainingShape(previous) === constrainingShape(next);
+  }
+
+  for (const key of new Set([
+    ...Object.keys(previousShape),
+    ...Object.keys(nextShape),
+  ])) {
+    const previousValue = previousShape[key];
+    const nextValue = nextShape[key];
+    if (UPPER_BOUND_KEYS.has(key) || LOWER_BOUND_KEYS.has(key)) {
+      // An unbounded older side accepts anything the newer side bounds.
+      if (previousValue === undefined) continue;
+      if (typeof previousValue !== "number" || typeof nextValue !== "number") {
+        return false;
+      }
+      const narrows = UPPER_BOUND_KEYS.has(key)
+        ? nextValue <= previousValue
+        : nextValue >= previousValue;
+      if (!narrows) return false;
+      continue;
+    }
+    if (constrainingShape(previousValue) !== constrainingShape(nextValue)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Plain-object view of a leaf's constraining keywords, or null if not one. */
+function constrainingRecord(node: unknown): Record<string, unknown> | null {
+  if (typeof node !== "object" || node === null || Array.isArray(node)) {
+    return null;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (NON_CONSTRAINING_SCHEMA_KEYS.has(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function constrainingShape(node: unknown): string {
   if (typeof node !== "object" || node === null) return JSON.stringify(node) ?? String(node);
   if (Array.isArray(node)) {
@@ -832,10 +907,7 @@ function findNodeAdditivityViolation(
   }
 
   if (previousNode.kind === "opaque" && nextNode.kind === "opaque") {
-    if (
-      constrainingShape(previousNode.node) ===
-      constrainingShape(nextNode.node)
-    ) {
+    if (leafProjectsOnto(previousNode.node, nextNode.node)) {
       return null;
     }
     return {

@@ -439,6 +439,44 @@ describe("findAdditivityViolation - review-hardening cases", () => {
     ).toBeNull();
   });
 
+
+  it("accepts narrowing a scalar constraint", () => {
+    // Every value the newer schema emits is still accepted by the older one.
+    const previous = fingerprint(z.object({ s: z.string().max(10) }));
+    const next = fingerprint(z.object({ s: z.string().max(5) }));
+    expect(findAdditivityViolation(previous, next, "lenient", null)).toBeNull();
+  });
+
+  it("accepts adding a bound the older side did not have", () => {
+    const previous = fingerprint(z.object({ s: z.string() }));
+    const next = fingerprint(z.object({ s: z.string().max(5) }));
+    expect(findAdditivityViolation(previous, next, "lenient", null)).toBeNull();
+  });
+
+  it("rejects widening a scalar constraint", () => {
+    const previous = fingerprint(z.object({ s: z.string().max(5) }));
+    const next = fingerprint(z.object({ s: z.string().max(10) }));
+    const violation = findAdditivityViolation(previous, next, "lenient", null);
+    expect(violation?.kind).toBe("schema-kind");
+  });
+
+  it("rejects dropping a bound the older side enforced", () => {
+    const previous = fingerprint(z.object({ s: z.string().min(3) }));
+    const next = fingerprint(z.object({ s: z.string() }));
+    const violation = findAdditivityViolation(previous, next, "lenient", null);
+    expect(violation?.kind).toBe("schema-kind");
+  });
+
+  it("narrows lower bounds in the opposite direction", () => {
+    const previous = fingerprint(z.object({ n: z.number().min(1) }));
+    const wider = fingerprint(z.object({ n: z.number().min(0) }));
+    const narrower = fingerprint(z.object({ n: z.number().min(5) }));
+    expect(findAdditivityViolation(previous, narrower, "lenient", null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, wider, "lenient", null),
+    ).not.toBeNull();
+  });
+
   it("still flags a constraining leaf change", () => {
     const previous = fingerprint(z.object({ id: z.string() }));
     const next = fingerprint(z.object({ id: z.number() }));
