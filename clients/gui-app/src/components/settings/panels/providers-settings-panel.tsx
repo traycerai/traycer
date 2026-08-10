@@ -27,6 +27,7 @@ import {
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
   type HostScope,
@@ -358,14 +359,31 @@ function ProvidersSettingsPanelInner({
       // No host readout here — the sidebar states the scoped host one row
       // above and repeating it was the same fact printed twice.
       //
-      // And no provider CONTROLS here either, which is the load-bearing half.
-      // `headerAction` renders as a SIBLING of the gate below, not a child, so
-      // anything mounted here escapes it: with a non-ready scope the runtime
-      // context is not re-provided, `useHostClient()` resolves to the ambient
-      // host, and "Refresh" re-probed and rewrote THAT host's provider list
-      // while the page named a different one. The gate only guards what it
-      // wraps, so the controls moved inside it.
-      headerAction={undefined}
+      // The global status DOES belong here: it reports a max over every
+      // provider and refreshes all of them, and inside the card it sat beside
+      // the selected provider's Enabled toggle and read as that provider's own.
+      //
+      // It renders only on a USABLE scope, which is the whole safety argument.
+      // `headerAction` is a sibling of the gate, so it is not gated - and the
+      // old bug was mounting these hooks here unconditionally: on `connecting`,
+      // `unreachable` or `vanished` there is no client, `useHostClient()` falls
+      // back to the ambient one, and Refresh re-probed and rewrote THAT host's
+      // provider list while the page named another.
+      //
+      // `isHostScopeUsable` is the repo's own name for this - "what may be
+      // MOUNTED", as its own comment puts it - and it is the same rule the
+      // body's controls already mount under, so the header cannot be safe by a
+      // different standard than the thing below it.
+      //
+      // The two usable states are correct for DIFFERENT reasons: `ready`
+      // re-provides its own client through `HostRuntimeContext`, which wraps
+      // this entire shell INCLUDING the header, while `following` needs no
+      // override precisely because the ambient client already IS the scoped
+      // host's. Gating on `ready` alone would hide the control in the ordinary
+      // no-explicit-pick case.
+      headerAction={
+        isHostScopeUsable(scope.status) ? <ProvidersGlobalStatus /> : undefined
+      }
     >
       <HostScopeGate
         scope={scope}
@@ -391,6 +409,44 @@ function ProvidersSettingsPanelInner({
  * a host the page was not showing. Being a child of the gate is what makes
  * them unable to do that.
  */
+/**
+ * "All providers · Checked …" plus Refresh, for the panel heading row.
+ *
+ * Named for its SCOPE because that is what was unclear: `checkedAt` is a max
+ * over every provider and Refresh re-probes all of them, which read as
+ * per-provider when it sat at the card's top-right.
+ *
+ * Mounted only under a ready scope - see `headerAction` above. Its hooks read
+ * `useHostClient()`, so mounting it any earlier would target the ambient host.
+ */
+function ProvidersGlobalStatus(): ReactNode {
+  // `subscribed: false`: the body's instance owns the subscription, and this
+  // shares its cache entry rather than opening a second one.
+  const query = useProvidersList({ enabled: true, subscribed: false });
+  const providers = query.data?.providers ?? [];
+  const checking = query.isFetching || hasPendingProviderProbe(providers);
+  const refreshProviders = useRefreshProviders();
+  return (
+    <div
+      className="flex items-center gap-2"
+      data-testid="providers-global-status"
+    >
+      <span className="text-ui-xs font-medium text-muted-foreground">
+        All providers
+      </span>
+      <ProviderLastChecked
+        checkedAt={latestProviderCheckedAt(providers)}
+        checking={checking}
+      />
+      <RefreshIconButton
+        onRefresh={refreshProviders}
+        label="Refresh all providers"
+        refreshing={checking}
+      />
+    </div>
+  );
+}
+
 function ProvidersScopedContent({
   hostId,
   isSelectedHostLocal,
@@ -399,42 +455,8 @@ function ProvidersScopedContent({
   readonly isSelectedHostLocal: boolean;
 }): ReactNode {
   const query = useProvidersList({ enabled: true, subscribed: true });
-  const providers = query.data?.providers ?? [];
-  const checkingProviders =
-    query.isFetching || hasPendingProviderProbe(providers);
-  const checkedAt = latestProviderCheckedAt(providers);
-  const refreshProviders = useRefreshProviders();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Card-level, and it has to SAY so. `checkedAt` is a max over EVERY
-          provider and Refresh re-probes all of them, but right-aligned at the
-          top of the card it sat inches from the selected provider's Enabled
-          toggle and read as that provider's own status. Left-aligned, named
-          "All providers", and separated by a hairline, it belongs to the card
-          rather than to whichever row happens to be beside it.
-
-          It stays INSIDE the gate rather than moving to the panel header:
-          `headerAction` renders in `<header>`, a sibling of this body, where
-          `useHostClient()` falls back to the ambient host - which is how
-          Refresh once re-probed and rewrote the provider list of a host the
-          page was not showing. */}
-      <div
-        className="flex items-center gap-2 border-b border-border/40 px-5 pt-3 pb-2"
-        data-testid="providers-global-status"
-      >
-        <span className="text-ui-xs font-medium text-muted-foreground">
-          All providers
-        </span>
-        <ProviderLastChecked
-          checkedAt={checkedAt}
-          checking={checkingProviders}
-        />
-        <RefreshIconButton
-          onRefresh={refreshProviders}
-          label="Refresh all providers"
-          refreshing={checkingProviders}
-        />
-      </div>
       <div className="min-h-0 flex-1">
         <ProvidersPanelBody
           query={query}

@@ -1421,6 +1421,24 @@ describe("ProviderModelProvidersTab layout", () => {
     expect(screen.getByText("No model providers")).toBeTruthy();
   });
 
+  it("pins the search controls so they survive scrolling", () => {
+    // The panel owns the only scroll context, so controls that scrolled away
+    // would leave ~180 rows with no way to narrow them without scrolling back
+    // up. jsdom has no layout engine, so this is structural.
+    renderTab({
+      result: { ok: true, providers: [entry({}), entry({ id: "openai" })] },
+      capabilities: FULL_CAPS,
+    });
+    const search = screen.getByPlaceholderText(/Search/);
+    const pinned = search.closest(".sticky");
+    expect(pinned).not.toBeNull();
+    // The fill is the pane's own recipe - `bg-background` under `bg-card/40` -
+    // rather than an approximation. A near-miss colour reads as a band
+    // floating over the pane, which is what the first attempt shipped.
+    expect(pinned?.className).toContain("bg-background");
+    expect(pinned?.querySelector(".bg-card\\/40")).not.toBeNull();
+  });
+
   it("keeps Add custom provider as the FIRST item, inside the list", () => {
     renderTab({
       result: {

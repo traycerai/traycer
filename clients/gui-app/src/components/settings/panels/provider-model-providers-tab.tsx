@@ -577,21 +577,28 @@ export function ProviderModelProvidersTab(props: {
       </p>
 
       {entries.length > 0 ? (
-        // NOT sticky, and the panel says why in its own words: the scroll box
-        // is `TabsContent`, whose pane is a translucent `bg-card/40`. Sticky
-        // inside it needs an opaque fill for rows to pass under, and there is
-        // no opaque colour to match - so the fill reads as a lighter band
-        // floating over the pane. The panel already hit this and pins its rail
-        // as a sibling OUTSIDE the scroll box instead; a first attempt here
-        // used `bg-background/95` + blur and produced exactly the band that
-        // comment predicts.
-        <ModelProviderListControls
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          filter={methodFilter}
-          onFilterChange={setMethodFilter}
-          resultCount={filtered.length}
-        />
+        // STICKY: the panel owns the only scroll context now, so a search box
+        // that scrolled away would leave ~180 rows with no way to narrow them
+        // without scrolling back up.
+        //
+        // The fill is the pane's own recipe, not an approximation of it. This
+        // pane is `bg-card/40` painted over the settings background, so a
+        // sticky child needs BOTH layers to look like the surface it covers -
+        // `bg-background` underneath and `bg-card/40` over it reproduces the
+        // composite exactly. A first attempt used `bg-background/95` plus a
+        // backdrop blur, which is a different colour from the pane and read as
+        // a lighter band floating on top of it.
+        <div className="sticky top-0 z-10 -mx-5 bg-background px-5">
+          <div className="bg-card/40 py-2">
+            <ModelProviderListControls
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              filter={methodFilter}
+              onFilterChange={setMethodFilter}
+              resultCount={filtered.length}
+            />
+          </div>
+        </div>
       ) : null}
 
       <ModelProvidersBody

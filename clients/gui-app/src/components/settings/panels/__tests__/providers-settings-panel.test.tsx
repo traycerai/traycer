@@ -15,6 +15,7 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
@@ -604,11 +605,13 @@ vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
 const hostScopeMocks: {
+  status: HostScopeStatus | undefined;
   client: null;
   setHostId: Mock<(hostId: string) => void>;
   hostId: string;
   host: HostScopeOption | undefined;
 } = vi.hoisted(() => ({
+  status: undefined,
   client: null,
   setHostId: vi.fn<(hostId: string) => void>(),
   hostId: "host-a",
@@ -631,6 +634,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
         ...(hostScopeMocks.host === undefined
           ? {}
           : { host: hostScopeMocks.host }),
+        // Same omit-don't-pass rule as `host`: an explicit undefined would
+        // clobber the fixture's derived status.
+        ...(hostScopeMocks.status === undefined
+          ? {}
+          : { status: hostScopeMocks.status }),
       }),
   };
 });
@@ -1173,6 +1181,9 @@ describe("<ProvidersSettingsPanel />", () => {
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
     hostScopeMocks.host = undefined;
+    // Reset alongside the rest: a test that pins an unusable status would
+    // otherwise leave every later one scoped to a host with no client.
+    hostScopeMocks.status = undefined;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -2064,16 +2075,10 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("keeps the global status INSIDE the gate, and says it is global", () => {
+  it("puts the global status on the heading row, and says it is global", () => {
     // `checkedAt` is a max over every provider and Refresh re-probes all of
-    // them, but right-aligned at the top of the card it read as the selected
-    // provider's own status - it sat inches from that provider's Enabled
-    // toggle.
-    //
-    // It cannot move to the panel header to fix that: `headerAction` renders
-    // as a SIBLING of the gate, where `useHostClient()` falls back to the
-    // ambient host, which is how Refresh once rewrote the provider list of a
-    // host the page was not showing. So the scope is made explicit in place.
+    // them; at the card's top-right it sat inches from the selected provider's
+    // Enabled toggle and read as that provider's own status.
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
@@ -2087,9 +2092,32 @@ describe("<ProvidersSettingsPanel />", () => {
         screen.getByRole("button", { name: "Refresh all providers" }),
       ),
     ).toBe(true);
-    // Inside the body card, not the panel header.
-    const header = document.querySelector("header");
-    expect(header?.contains(status)).toBe(false);
+    expect(document.querySelector("header")?.contains(status)).toBe(true);
+  });
+
+  it("mounts NO global control - and no RPC - until the scope is ready", () => {
+    // The real invariant, and the reason this control was kept out of the
+    // header for a round. `headerAction` is not gated, so it is only safe
+    // because `HostRuntimeContext.Provider` wraps the whole shell EXACTLY when
+    // the scope resolved a client. Mounted any earlier, `useHostClient()` falls
+    // back to the ambient host - which is how Refresh once re-probed and
+    // rewrote the provider list of a host the page was not showing.
+    //
+    // "Not in the header" was the wrong thing to pin: it forbids a safe
+    // implementation. What must hold is that nothing renders, and nothing is
+    // requested, while the scope is unresolved.
+    hostScopeMocks.status = "unreachable";
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByTestId("providers-global-status")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Refresh all providers" }),
+    ).toBeNull();
   });
 
   it("blocks disabling the last enabled provider", () => {

@@ -1027,20 +1027,26 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
          "leave the stored one alone", never "clear it", and the helper text says
          so in edit mode. An env REFERENCE is restored verbatim: it is not a secret,
          and blanking it would silently drop it on the next save.
-    - **The global "All providers" status is card-level, and stays inside the
-      gate.** `latestProviderCheckedAt` is a max over EVERY provider and Refresh
-      re-probes all of them, but right-aligned at the top of the card it sat
-      inches from the selected provider's Enabled toggle and read as that
-      provider's own status. It is now left-aligned, labelled **"All
-      providers"**, separated by a hairline, and its button reads "Refresh all
-      providers".
-      It does **not** move to the panel header, which is the obvious fix and the
-      wrong one: `headerAction` renders in `<header>`, a SIBLING of the body
-      card that holds `HostScopeGate`. Mounted there, `useHostClient()` falls
-      back to the ambient host — which is how Refresh once re-probed and rewrote
-      the provider list of a host the page was not showing. That bug is why the
-      controls live inside the gate at all, so the scope is made explicit in
-      place instead.
+    - **The global "All providers" status lives on the panel HEADING row**, and
+      renders only when `isHostScopeUsable(scope.status)`.
+      `latestProviderCheckedAt` is a max over every provider and Refresh
+      re-probes all of them; at the card's top-right it sat inches from the
+      selected provider's Enabled toggle and read as that provider's own.
+      The safety argument is the boundary, not the location. `headerAction` is a
+      SIBLING of the gate, so it is not gated — but `HostRuntimeContext.Provider`
+      wraps this entire shell, header included, whenever the scope resolved a
+      client, and `following` needs no override because the ambient client
+      already IS the scoped host's. The two usable states are therefore both
+      correct, for different reasons, and the three unusable ones
+      (`connecting` / `unreachable` / `vanished`) mount nothing at all.
+      The original bug was mounting these hooks in the header
+      **unconditionally**: with no client, `useHostClient()` fell back to the
+      ambient host and Refresh re-probed and rewrote the provider list of a host
+      the page was not showing. An earlier fix over-corrected by banning the
+      placement outright — and pinned "not in the header" as a test, which
+      forbids the safe implementation rather than the unsafe state. The test now
+      asserts the real invariant: no control and no request while the scope is
+      unusable.
     - **Structure: ONE scroll context, sticky search, Add as the first row.**
       The list no longer caps itself against the viewport or scrolls
       internally — that nested a second scrollbar inside the panel's own, so
