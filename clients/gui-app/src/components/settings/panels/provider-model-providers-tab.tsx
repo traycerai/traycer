@@ -328,8 +328,16 @@ function useCustomProviderForm(
             // only reachable for a row the host flagged `configDeclaredCustom`,
             // which is the same set of rows it will accept an update for.
             action: declaring ? "createCustom" : "updateCustom",
-            ...values,
-            modelIds: [...values.modelIds],
+            modelProviderId: values.modelProviderId,
+            name: values.name,
+            baseUrl: values.baseUrl,
+            models: values.models.map((model) => ({ ...model })),
+            headers: values.headers.map((header) => ({ ...header })),
+            // Null means "leave whatever is stored alone" - the read side never
+            // carries a key back, so an edit that types nothing must not be
+            // read as clearing the credential.
+            key: values.key,
+            env: [...values.env],
           },
         },
         {
@@ -623,6 +631,12 @@ export function ProviderModelProvidersTab(props: {
           }}
           providerLabel={providerLabel}
           takenIds={entries.map((entry) => entry.id)}
+          // A DISABLED declaration keeps its id in the catalog, and upstream
+          // lets you re-declare into it - that is their re-enable. Reporting it
+          // as taken would block the one flow that repairs such a row.
+          disabledIds={entries
+            .filter((entry) => entry.configDeclaredCustom && !entry.connected)
+            .map((entry) => entry.id)}
           initial={customForm.state.initial}
           isPending={customForm.isPending}
           submitError={customForm.error}

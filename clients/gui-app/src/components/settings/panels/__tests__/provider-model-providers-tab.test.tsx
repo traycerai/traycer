@@ -423,7 +423,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: true,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
             canDisconnect: true,
           }),
         ],
@@ -665,16 +670,19 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Add custom provider" }),
     );
-    fireEvent.change(screen.getByLabelText("Name"), {
+    fireEvent.change(screen.getByLabelText("Display name"), {
       target: { value: "My gateway" },
     });
     fireEvent.change(screen.getByLabelText("Base URL"), {
       target: { value: "https://api.example.test/v1" },
     });
-    fireEvent.change(screen.getByLabelText("Model ids"), {
+    fireEvent.change(screen.getAllByLabelText("ID")[0], {
       target: { value: "gpt-4o-mini" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getAllByLabelText("Name")[0], {
+      target: { value: "GPT-4o mini" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
       action: {
@@ -682,7 +690,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         modelProviderId: "my-gateway",
         name: "My gateway",
         baseUrl: "https://api.example.test/v1",
-        modelIds: ["gpt-4o-mini"],
+        models: [{ id: "gpt-4o-mini", name: "GPT-4o mini" }],
+        headers: [],
+        key: null,
+        env: [],
       },
     });
   });
@@ -701,7 +712,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: true,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
             canDisconnect: true,
           }),
         ],
@@ -715,124 +731,6 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
       screen.getByText(/declaration stays in OpenCode's config file/),
     ).toBeTruthy();
     expect(screen.queryByText(/Remove the stored/)).toBeNull();
-  });
-
-  it("edits a declared provider from the values the host reported", () => {
-    // `updateCustom` carries the WHOLE block, so a form opened with nothing to
-    // prefill would submit blanks over a working declaration - the user would
-    // "edit the name" and silently lose their base URL and model list.
-    renderTab({
-      result: {
-        ok: true,
-        providers: [
-          entry({
-            id: "my-gateway",
-            name: "My gateway",
-            connected: true,
-            source: "config",
-            configDeclaredCustom: true,
-            custom: {
-              baseUrl: "https://api.example.test/v1",
-              modelIds: ["a", "b"],
-            },
-            canDisconnect: true,
-          }),
-        ],
-      },
-      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
-    expect(screen.getByLabelText("Base URL").getAttribute("value")).toBe(
-      "https://api.example.test/v1",
-    );
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "EU gateway" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "updateCustom",
-        modelProviderId: "my-gateway",
-        name: "EU gateway",
-        baseUrl: "https://api.example.test/v1",
-        modelIds: ["a", "b"],
-      },
-    });
-  });
-
-  it("re-enables a disabled declaration from its own values, no form", () => {
-    // The wire has no enable verb on purpose - a second way to say "on" could
-    // disagree with disconnect about what "off" means - so this is
-    // `updateCustom` with exactly what the row already holds.
-    renderTab({
-      result: {
-        ok: true,
-        providers: [
-          entry({
-            id: "my-gateway",
-            name: "My gateway",
-            connected: false,
-            source: null,
-            configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
-          }),
-        ],
-      },
-      capabilities: { actions: ["connect", "updateCustom"] },
-    });
-    // Connect would demand a key for a provider whose credential is not the
-    // thing that was turned off.
-    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Re-enable My gateway" }),
-    );
-    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "updateCustom",
-        modelProviderId: "my-gateway",
-        name: "My gateway",
-        baseUrl: "https://api.example.test/v1",
-        modelIds: ["a"],
-      },
-    });
-  });
-
-  it("sends a hand-broken declaration to Edit rather than offering Re-enable", () => {
-    // `opencode.json` is hand-editable and the READ side reports what it finds,
-    // so a declared base URL can arrive malformed. One-click re-enable would
-    // send those broken values straight back and report a failure the user
-    // never had a chance to fix.
-    renderTab({
-      result: {
-        ok: true,
-        providers: [
-          entry({
-            id: "my-gateway",
-            name: "My gateway",
-            connected: false,
-            source: null,
-            configDeclaredCustom: true,
-            custom: { baseUrl: "api.example.test/v1", modelIds: ["a"] },
-          }),
-        ],
-      },
-      capabilities: { actions: ["connect", "updateCustom"] },
-    });
-    expect(
-      screen.queryByRole("button", { name: "Re-enable My gateway" }),
-    ).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
-    // The error is on the FIELD immediately - submit is disabled by that value,
-    // and waiting for the user to touch it first would show a dead button
-    // beside the one thing that is wrong and say nothing about it.
-    expect(
-      screen.getByText("Enter a full URL, including https://."),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
-    ).toBe(true);
   });
 
   it("edits a declared custom row from the values the host reported", () => {
@@ -849,7 +747,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             canDisconnect: true,
             custom: {
               baseUrl: "https://api.example.test/v1",
-              modelIds: ["a", "b"],
+              models: [
+                { id: "a", name: "a" },
+                { id: "b", name: "b" },
+              ],
+              headers: [],
+              env: [],
             },
           }),
         ],
@@ -858,12 +761,16 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
     // Prefilled from the row, not from blanks: `updateCustom` carries the whole
-    // block, so an empty form's Save would overwrite a working declaration.
-    expect(screen.getByLabelText("Model ids").textContent).toBe("a\nb");
-    fireEvent.change(screen.getByLabelText("Name"), {
+    // block, so an empty form's Submit would overwrite a working declaration.
+    expect(
+      screen
+        .getAllByLabelText("ID")
+        .map((input) => input.getAttribute("value")),
+    ).toEqual(["a", "b"]);
+    fireEvent.change(screen.getByLabelText("Display name"), {
       target: { value: "My gateway v2" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
       action: {
@@ -871,7 +778,13 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         modelProviderId: "my-gateway",
         name: "My gateway v2",
         baseUrl: "https://api.example.test/v1",
-        modelIds: ["a", "b"],
+        models: [
+          { id: "a", name: "a" },
+          { id: "b", name: "b" },
+        ],
+        headers: [],
+        key: null,
+        env: [],
       },
     });
   });
@@ -892,7 +805,9 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             configDeclaredCustom: true,
             custom: {
               baseUrl: "https://api.example.test/v1",
-              modelIds: ["a"],
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
             },
           }),
         ],
@@ -910,7 +825,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         modelProviderId: "my-gateway",
         name: "My gateway",
         baseUrl: "https://api.example.test/v1",
-        modelIds: ["a"],
+        models: [{ id: "a", name: "a" }],
+        headers: [],
+        key: null,
+        env: [],
       },
     });
   });
@@ -929,7 +847,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },
@@ -954,7 +877,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: true,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },
@@ -980,18 +908,25 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },
       capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
     });
     fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
-    // No error on the id it arrived with, and Save is live.
+    // No error on the id it arrived with, and Submit goes through.
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(
-      screen.queryByText("Use lowercase letters, numbers and dashes."),
+      screen.queryByText(
+        "Use lowercase letters, numbers, hyphens, or underscores",
+      ),
     ).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toMatchObject({
       action: { action: "updateCustom", modelProviderId: "my_gateway" },
     });
@@ -1008,7 +943,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },
@@ -1037,7 +977,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
           entry({
             id: "other-gateway",
@@ -1045,7 +990,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.other.test/v1", modelIds: ["b"] },
+            custom: {
+              baseUrl: "https://api.other.test/v1",
+              models: [{ id: "b", name: "b" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },
@@ -1084,7 +1034,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://a.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://a.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
           entry({
             id: "gateway-b",
@@ -1093,7 +1048,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             source: "config",
             configDeclaredCustom: true,
             canDisconnect: true,
-            custom: { baseUrl: "https://b.example.test/v1", modelIds: ["b"] },
+            custom: {
+              baseUrl: "https://b.example.test/v1",
+              models: [{ id: "b", name: "b" }],
+              headers: [],
+              env: [],
+            },
           }),
           entry({
             id: "openai",
@@ -1140,7 +1100,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             source: "config",
             configDeclaredCustom: true,
             canDisconnect: true,
-            custom: { baseUrl: "https://a.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://a.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
           entry({
             id: "gateway-b",
@@ -1148,7 +1113,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://b.example.test/v1", modelIds: ["b"] },
+            custom: {
+              baseUrl: "https://b.example.test/v1",
+              models: [{ id: "b", name: "b" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },
@@ -1188,7 +1158,12 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
             connected: false,
             source: "config",
             configDeclaredCustom: true,
-            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
           }),
         ],
       },

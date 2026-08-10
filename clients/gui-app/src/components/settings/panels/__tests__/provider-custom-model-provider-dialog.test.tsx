@@ -1,11 +1,18 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderCustomModelProviderDialog } from "@/components/settings/panels/provider-custom-model-provider-dialog";
 import type { CustomProviderValues } from "@/components/settings/panels/model-provider-custom-draft";
+
+const mocks = vi.hoisted(() => ({ openExternalLink: vi.fn() }));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({ mutate: mocks.openExternalLink }),
+}));
 
 function renderDialog(args: {
   readonly initial: CustomProviderValues | null;
   readonly takenIds: readonly string[];
+  readonly disabledIds: readonly string[];
   readonly onSubmit: (values: CustomProviderValues) => void;
   readonly submitError: string | null;
 }) {
@@ -15,6 +22,7 @@ function renderDialog(args: {
       onOpenChange={() => {}}
       providerLabel="OpenCode"
       takenIds={args.takenIds}
+      disabledIds={args.disabledIds}
       initial={args.initial}
       isPending={false}
       submitError={args.submitError}
@@ -27,193 +35,270 @@ function type(label: string, value: string): void {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+function typeNth(label: string, index: number, value: string): void {
+  fireEvent.change(screen.getAllByLabelText(label)[index], {
+    target: { value },
+  });
+}
+
+function fillValidForm(): void {
+  type("Provider ID", "myprovider");
+  type("Display name", "My AI Provider");
+  type("Base URL", "https://api.myprovider.com/v1");
+  typeNth("ID", 0, "model-id");
+  typeNth("Name", 0, "Display Name");
+}
+
+beforeEach(() => {
+  mocks.openExternalLink.mockReset();
+});
+
 afterEach(() => {
   cleanup();
 });
 
 describe("custom model provider dialog", () => {
-  it("sends the wire shape once every field is valid", () => {
+  it("shows upstream's fields, in upstream's words", () => {
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    expect(screen.getByText("Custom provider")).toBeTruthy();
+    expect(
+      screen.getByText(/Configure an OpenAI-compatible provider/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Lowercase letters, numbers, hyphens, or underscores"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Optional. Leave empty if you manage auth via headers."),
+    ).toBeTruthy();
+    expect(screen.getByText("Models")).toBeTruthy();
+    expect(screen.getByText("Headers (optional)")).toBeTruthy();
+    for (const placeholder of [
+      "myprovider",
+      "My AI Provider",
+      "https://api.myprovider.com/v1",
+      "model-id",
+      "Display Name",
+      "Header-Name",
+      "value",
+    ]) {
+      expect(screen.getByPlaceholderText(placeholder)).toBeTruthy();
+    }
+  });
+
+  it("hands the docs link to the shell", () => {
+    // The renderer has no browser to navigate; the shell owns external links.
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    fireEvent.click(screen.getByText("provider config docs"));
+    expect(mocks.openExternalLink).toHaveBeenCalledWith(
+      "https://opencode.ai/docs/providers/#custom-provider",
+    );
+  });
+
+  it("sends models, headers and the key in the wire's shape", () => {
     const onSubmit = vi.fn();
     renderDialog({
       initial: null,
       takenIds: [],
+      disabledIds: [],
       onSubmit,
       submitError: null,
     });
-    type("Name", "My gateway");
-    type("Base URL", "https://api.example.test/v1");
-    type("Model ids", "gpt-4o-mini\nllama-3.1-70b");
-    fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    fillValidForm();
+    type("API key", "sk-live-123");
+    typeNth("Header", 0, "X-Org");
+    typeNth("Value", 0, "acme");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(onSubmit).toHaveBeenCalledWith({
-      // The id came from the NAME - the common case never has to think about
-      // the second field.
-      modelProviderId: "my-gateway",
-      name: "My gateway",
-      baseUrl: "https://api.example.test/v1",
-      modelIds: ["gpt-4o-mini", "llama-3.1-70b"],
+      modelProviderId: "myprovider",
+      name: "My AI Provider",
+      baseUrl: "https://api.myprovider.com/v1",
+      models: [{ id: "model-id", name: "Display Name" }],
+      headers: [{ key: "X-Org", value: "acme" }],
+      key: "sk-live-123",
+      env: [],
     });
   });
 
-  it("stops deriving the id once the user has touched it", () => {
+  it("parses {env:VAR} into a reference rather than a secret", () => {
     const onSubmit = vi.fn();
     renderDialog({
       initial: null,
       takenIds: [],
+      disabledIds: [],
       onSubmit,
       submitError: null,
     });
-    type("Name", "My gateway");
-    type("Id", "eu-gw");
-    // Re-deriving here would silently overwrite what they typed on the next
-    // keystroke.
-    type("Name", "My gateway v2");
-    type("Base URL", "https://api.example.test/v1");
-    type("Model ids", "a");
-    fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+    fillValidForm();
+    type("API key", "{env:MY_KEY}");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
-      modelProviderId: "eu-gw",
-      name: "My gateway v2",
+      key: null,
+      env: ["MY_KEY"],
     });
   });
 
-  it("keeps submit dead until the draft would survive the wire", () => {
-    const onSubmit = vi.fn();
+  it("adds and removes model rows, keeping the last one", () => {
     renderDialog({
       initial: null,
       takenIds: [],
-      onSubmit,
-      submitError: null,
-    });
-    const submit = screen.getByRole("button", { name: "Add provider" });
-    expect(submit.hasAttribute("disabled")).toBe(true);
-    type("Name", "My gateway");
-    type("Base URL", "api.example.test/v1");
-    type("Model ids", "a");
-    // Still dead: `baseUrl` is `z.url()` on the wire, and a scheme-less host
-    // fails it.
-    expect(submit.hasAttribute("disabled")).toBe(true);
-    type("Base URL", "https://api.example.test/v1");
-    expect(submit.hasAttribute("disabled")).toBe(false);
-  });
-
-  it("explains a bad field where it was typed, not on submit", () => {
-    // The button is disabled while invalid, so an error that waited for a
-    // submit attempt would never arrive - the user would be left with a dead
-    // button and no reason.
-    renderDialog({
-      initial: null,
-      takenIds: [],
+      disabledIds: [],
       onSubmit: vi.fn(),
       submitError: null,
     });
+    // Upstream disables the trash on a single row: the section is required.
     expect(
-      screen.queryByText("Enter a full URL, including https://."),
-    ).toBeNull();
-    type("Base URL", "nope");
-    expect(
-      screen.getByText("Enter a full URL, including https://."),
-    ).toBeTruthy();
-  });
-
-  it("refuses an id that would shadow an existing provider", () => {
-    renderDialog({
-      initial: null,
-      takenIds: ["openai"],
-      onSubmit: vi.fn(),
-      submitError: null,
-    });
-    type("Name", "OpenAI");
-    expect(
-      screen.getByText("A provider with this id already exists."),
-    ).toBeTruthy();
-  });
-
-  it("edits an existing declaration without letting its key move", () => {
-    const onSubmit = vi.fn();
-    renderDialog({
-      initial: {
-        modelProviderId: "my-gateway",
-        name: "My gateway",
-        baseUrl: "https://api.example.test/v1",
-        modelIds: ["a", "b"],
-      },
-      // Its OWN id is in the catalog and must not read as taken.
-      takenIds: ["my-gateway", "openai"],
-      onSubmit,
-      submitError: null,
-    });
-    expect(screen.getByLabelText("Model ids").textContent).toBe("a\nb");
-    // A rename would be a delete and a create wearing one button: the id is the
-    // config key every stored model reference is built from.
-    expect(screen.getByLabelText("Id").hasAttribute("disabled")).toBe(true);
-    type("Name", "My gateway v2");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(onSubmit).toHaveBeenCalledWith({
-      modelProviderId: "my-gateway",
-      name: "My gateway v2",
-      baseUrl: "https://api.example.test/v1",
-      modelIds: ["a", "b"],
-    });
-  });
-
-  it("shows a hand-edited declaration's error without waiting to be touched", () => {
-    // The READ side of the wire is loose on purpose - `opencode.json` is
-    // hand-editable, so a malformed base URL arrives here. An edit therefore
-    // starts with every field counted as edited: otherwise submit is disabled
-    // BY that value while the field beside it says nothing, which is the dead
-    // button this form's rules exist to avoid.
-    renderDialog({
-      initial: {
-        modelProviderId: "my-gateway",
-        name: "My gateway",
-        baseUrl: "api.example.test/v1",
-        modelIds: ["a"],
-      },
-      takenIds: ["my-gateway"],
-      onSubmit: vi.fn(),
-      submitError: null,
-    });
-    expect(
-      screen.getByText("Enter a full URL, including https://."),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+      screen
+        .getByRole("button", { name: "Remove model 1" })
+        .hasAttribute("disabled"),
     ).toBe(true);
-    // And it is fixable in place, which is the whole reason the row still
-    // renders instead of failing its parse.
-    type("Base URL", "https://api.example.test/v1");
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    expect(screen.getAllByPlaceholderText("model-id")).toHaveLength(2);
     expect(
-      screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+      screen
+        .getByRole("button", { name: "Remove model 1" })
+        .hasAttribute("disabled"),
     ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Remove model 2" }));
+    expect(screen.getAllByPlaceholderText("model-id")).toHaveLength(1);
   });
 
-  it("refuses a prototype-pollution id before the host has to", () => {
-    // The host answers `__proto__` with `invalid_input`. It is refused here
-    // first so the message lands on the field rather than arriving as a
-    // form-level rejection of something the user cannot see the shape of. Its
-    // OWN message, not the slug complaint: this is a hazard that holds under
-    // both id policies, not a house style that applies to ids we mint.
+  it("stays live on a blank form and reports everything on the first attempt", () => {
+    // Upstream's shape, and the reason for it: a Submit disabled until valid is
+    // a dead button on a blank form whose reasons are exactly the errors a
+    // blank form has. Nothing is red until asked.
+    const onSubmit = vi.fn();
     renderDialog({
       initial: null,
       takenIds: [],
+      disabledIds: [],
+      onSubmit,
+      submitError: null,
+    });
+    const submit = screen.getByRole("button", { name: "Submit" });
+    expect(submit.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByText("Provider ID is required")).toBeNull();
+
+    fireEvent.click(submit);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText("Provider ID is required")).toBeTruthy();
+    expect(screen.getByText("Display name is required")).toBeTruthy();
+    expect(screen.getByText("Base URL is required")).toBeTruthy();
+    // Including the row lists - a model row needs both halves.
+    expect(screen.getAllByText("Required").length).toBeGreaterThanOrEqual(2);
+
+    fillValidForm();
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a model row missing its display name", () => {
+    // Upstream's rule, not ours: the config's model map carries a name per id.
+    const onSubmit = vi.fn();
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      disabledIds: [],
+      onSubmit,
+      submitError: null,
+    });
+    fillValidForm();
+    typeNth("Name", 0, "");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getAllByText("Required").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("refuses an id that already exists, unless it is disabled", () => {
+    const { unmount } = renderDialog({
+      initial: null,
+      takenIds: ["myprovider"],
+      disabledIds: [],
       onSubmit: vi.fn(),
       submitError: null,
     });
-    type("Id", "__proto__");
-    expect(screen.getByText("That id isn't allowed.")).toBeTruthy();
+    type("Provider ID", "myprovider");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(screen.getByText("That provider ID already exists")).toBeTruthy();
+    unmount();
+
+    // Re-declaring into a DISABLED id is upstream's re-enable.
+    renderDialog({
+      initial: null,
+      takenIds: ["myprovider"],
+      disabledIds: ["myprovider"],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    type("Provider ID", "myprovider");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(screen.queryByText("That provider ID already exists")).toBeNull();
+  });
+
+  it("opens an edit on the row's values, with the key field empty", () => {
+    const onSubmit = vi.fn();
+    renderDialog({
+      initial: {
+        modelProviderId: "myprovider",
+        name: "My AI Provider",
+        baseUrl: "https://api.myprovider.com/v1",
+        models: [{ id: "a", name: "A" }],
+        headers: [{ key: "X-Org", value: "acme" }],
+        key: null,
+        env: [],
+      },
+      takenIds: ["myprovider"],
+      disabledIds: [],
+      onSubmit,
+      submitError: null,
+    });
+    // A rename would be a delete and a create wearing one button.
+    expect(screen.getByLabelText("Provider ID").hasAttribute("disabled")).toBe(
+      true,
+    );
+    // The stored secret is never read back, so the field cannot show it - and
+    // the helper has to say that empty KEEPS it rather than clears it.
+    expect(screen.getByLabelText("API key").getAttribute("value")).toBe("");
+    expect(
+      screen.getByText(
+        "Optional. Leave empty to keep the saved key, or manage auth via headers.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      modelProviderId: "myprovider",
+      name: "My AI Provider",
+      baseUrl: "https://api.myprovider.com/v1",
+      models: [{ id: "a", name: "A" }],
+      headers: [{ key: "X-Org", value: "acme" }],
+      // Null, so the host leaves the stored credential alone.
+      key: null,
+      env: [],
+    });
   });
 
   it("keeps the form open and shows what the host rejected", () => {
     renderDialog({
       initial: null,
       takenIds: [],
+      disabledIds: [],
       onSubmit: vi.fn(),
       submitError: "That base URL isn't reachable.",
     });
     expect(screen.getByRole("alert").textContent).toBe(
       "That base URL isn't reachable.",
     );
-    // Everything typed is still on screen to fix in place.
     expect(screen.getByLabelText("Base URL")).toBeTruthy();
   });
 });

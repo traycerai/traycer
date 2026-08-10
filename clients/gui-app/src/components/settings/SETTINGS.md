@@ -913,82 +913,67 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       that loader is frequently fed by the auth store — `xai` signs in through
       OAuth and still reports `custom` — so pointing at a file would send the
       user where the credential is not.
-    - **"Add custom provider" sits ABOVE the search box**
-      (`provider-custom-model-provider-dialog.tsx` +
-      `model-provider-custom-draft.ts`), shown when the host advertises
-      `createCustom`. Above rather than as the list's first row because it is
-      not a provider the catalog can match: a search that filtered it away would
-      hide the one affordance whose purpose is "what you want isn't in this
-      list", exactly when the user is typing in that box. The form is name, id,
-      base URL and model ids — `npm` is NOT a field, because the host writes the
-      one constant (`@ai-sdk/openai-compatible`) that upstream's `T(id)` will
-      recognize, and any other value produces a block this tab could never edit
-      again. The id is DERIVED from the name until touched, then left alone;
-      re-deriving after an edit would overwrite what the user typed on the next
-      keystroke. Submit is disabled while the draft is invalid (the wire's
-      `baseUrl` is `z.url()` and `modelIds` is non-empty), so field errors
-      appear as soon as a field is EDITED rather than on a submit attempt that
-      can never happen — a dead button with no visible reason is the failure
-      that pairing those two rules avoids. A host rejection stays INLINE and
-      keeps the form open: everything typed is still there to fix in place.
-    - **Edit prefills from the entry's `custom` values, and re-enable needs no
-      form at all.** `updateCustom` carries the whole block, so a dialog opened
-      with nothing to prefill would submit blanks over a working declaration —
-      the user would "edit the name" and silently lose their base URL and model
-      list. A disabled declaration (`connected: false`,
-      `configDeclaredCustom: true`) re-enables through `updateCustom` with its
-      OWN values: there is no enable verb on the wire, deliberately, because a
-      second way to say "on" could disagree with disconnect about what "off"
-      means. Connect is suppressed on those rows — it would demand a key for a
-      provider whose credential is not what was turned off.
-      The READ side of the wire is looser than the write side: `opencode.json`
-      is hand-editable, so a declared base URL can arrive malformed. Two
-      consequences, both deliberate. One-click re-enable is offered only when
-      the values would survive the write side; a broken declaration gets Edit
-      alone, because sending those values back would report a failure the user
-      never had a chance to fix. And an EDIT starts with every field counted as
-      edited, so that malformed value explains itself immediately instead of
-      disabling Save while the field beside it says nothing.
-      A failed write — from the form or from a bare re-enable — lands the user
-      in the form for those values. A re-enable that the host refused otherwise
-      reports itself on a row with no way to act on it.
-      **Two id policies, not one.** The slug shape (lowercase, digits, dashes)
-      is a house style for an id we MINT, and it is imposed only when declaring.
-      An id that came off an existing row is not ours to judge: a hand-written
-      `my_gateway` is legal on the wire and legal to the host, and applying the
-      minting rule to it locked the row permanently — no re-enable, and an Edit
-      whose id field is disabled, so the very thing being complained about could
-      not be changed. `__proto__` is refused under BOTH policies, because it is
-      a hazard rather than a style: the host answers it with `invalid_input`,
-      and refusing it here puts the message on the field.
-    - **One CONFIG-FILE write at a time, and the boundary is what it touches —
-      not which component owns it.** One owner (`useConfigWriteOwner`) covers
-      every action that edits the provider's config file: Add, Edit, Re-enable,
-      **and a config-declared row's Disconnect**, which appends to
-      `disabled_providers` rather than removing a credential. Two of those in
-      the air at once contend on one file; the host's guarded writes prevent a
-      silent loss, but the loser fails on drift — an error the user did nothing
-      to cause. While one is in flight, all of them close, on every row.
-      **A plain row's Disconnect is deliberately NOT in the lock.** That one is
-      `auth.remove` through the server and touches no file, so locking it would
-      serialize two actions that never contend — and it can legitimately run
-      beside a config write, which is why the busy rows are a LIST: a single id
-      migrated the spinner from the first row to the second instead of showing
-      both.
-      Bare Re-enable is the reason the lock has to exist at all: it is a button
-      on a row with no form in front of it, so nothing else was gating it.
-      Completion is guarded by a per-write token rather than by "is something
-      pending", so a late rejection cannot open an error form over a write that
-      has already been superseded. The token is a monotonic counter:
-      `Date.now()` and `Math.random()` are not available in every environment
-      this runs in, and all the guard needs is "later than the one before".
-      The confirm dialog is not part of this. Its modal inertness ends when it
-      closes; the disabled state has to hold on its own.
+    - **The custom-provider dialog MIRRORS upstream's**, extracted field for
+      field from OpenCode desktop 1.18.2 (`CustomProviderForm` /
+      `validateCustomProvider`). An earlier pass mirrored their predicates and
+      invented the form around them; the user's verdict was that this is not
+      parity, and it was correct. Fields, in order: **Provider ID**
+      (`myprovider`, "Lowercase letters, numbers, hyphens, or underscores"),
+      **Display name** (`My AI Provider`), **Base URL**
+      (`https://api.myprovider.com/v1`), **API key** (optional, "Leave empty if
+      you manage auth via headers"), then **Models** — rows of `model-id` +
+      `Display Name` with a trash per row and "Add model" — then **Headers
+      (optional)** — `Header-Name` + `value`, same shape. Submit reads
+      **Submit**. The intro links their own
+      [provider config docs](https://opencode.ai/docs/providers/#custom-provider).
+      `npm` is not a field: the host writes the one constant `T(id)` recognizes.
+      Their rules, adopted verbatim including the loose edges — parity on a
+      validation rule means taking its edges too, or "same form, same values"
+      becomes a Traycer-only failure:
+      - id `^[a-z0-9][a-z0-9-_]*$` — **underscores are legal**; ours banned them
+      - base URL is a `^https?://` **prefix test**, not a URL parse
+      - every model row needs an id AND a display name; ids compare
+        case-sensitively (they are sent verbatim), header names
+        case-insensitively (HTTP says so, and two rows differing only in case
+        would collapse when written)
+      - a wholly empty header row is skipped, not flagged — the list always
+        carries one and the section is optional
+      - the exists-check is SKIPPED for an id in `disabled_providers`: upstream
+        re-enables a disabled custom provider by re-declaring it
+      - `{env:VAR}` in the key field is a REFERENCE, not a secret — it becomes
+        `env: ["VAR"]` and stores no credential
+        **Submit stays live and validates on click**, which is upstream's shape
+        and also the way out of the dead-button trap: a Submit disabled until
+        valid is dead on a blank form for exactly the errors a blank form has, and
+        nothing on screen says why. Nothing is red until asked.
+    - **TWO DELIBERATE DIVERGENCES from upstream, both documented here because
+      the extraction is the evidence for everything else on this surface.**
+      1. **Edit exists; theirs does not.** `DialogCustomProvider` always mounts
+         blank — upstream's only route back into a declaration is re-declaring
+         it while disabled. Ours opens the form on the row's current values with
+         the id locked, which is strictly more capable and is the only way to
+         repair a hand-broken declaration. The id stays locked because it is the
+         config key every stored model reference is built from; a rename would
+         be a delete and a create wearing one button.
+      2. **Write order is ours.** Upstream `auth.set`s the key and then writes
+         the config, so a failed config write leaves a stored credential behind.
+         The host does config first, key second — the same two operations
+         failing in the direction where nothing is left over.
+         **Edit opens with an EMPTY key field**, because the read side carries no
+         key — credentials are write-only on this surface. Empty therefore means
+         "leave the stored one alone", never "clear it", and the helper text says
+         so in edit mode. An env REFERENCE is restored verbatim: it is not a secret,
+         and blanking it would silently drop it on the next save.
+    - **"Add custom provider" sits ABOVE the search box**, shown when the host
+      advertises `createCustom`. Above rather than as the list's first row
+      because it is not a provider the catalog can match: a search that filtered
+      it away would hide the one affordance whose purpose is "what you want
+      isn't in this list", exactly when the user is typing in that box.
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a
-      credential it may not have, so the confirm dialog promises that the
-      declaration stays in the config file and can be turned back on.
+      credential it may not have, so the confirm promises that the declaration
+      stays in the config file and can be turned back on.
     - **ACCEPTED RESIDUAL: a `custom` row can have nothing to remove.** Upstream
       assigns `custom` from two different passes, and only one of them requires
       a stored credential: a plugin auth loader (guarded on an `auth.json` entry

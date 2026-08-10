@@ -1,80 +1,124 @@
 import { describe, expect, it } from "vitest";
 import {
   canReenableCustomProvider,
+  customProviderDraftFrom,
+  customProviderKeyOf,
   customProviderValues,
   customProviderValuesOf,
+  emptyCustomProviderDraft,
   hasCustomProviderDraftError,
-  parseCustomProviderModels,
   suggestCustomProviderId,
   validateCustomProviderDraft,
   type CustomProviderDraft,
 } from "@/components/settings/panels/model-provider-custom-draft";
 
+/**
+ * These assert UPSTREAM's rules, extracted from OpenCode desktop 1.18.2. Where
+ * one looks lax, the note says why: parity on a validation rule means adopting
+ * its edges too, and a stricter check would fail inputs their app accepts.
+ */
+
 /** Declaring a new provider: the minting rules apply. */
-const CREATE = { takenIds: [], existing: false };
+const CREATE = { takenIds: [], disabledIds: [], existing: false };
 /** A value that came off an existing row: only the hazard rule applies. */
-const EXISTING = { takenIds: [], existing: true };
+const EXISTING = { takenIds: [], disabledIds: [], existing: true };
 
 function draft(overrides: Partial<CustomProviderDraft>): CustomProviderDraft {
   return {
-    id: "my-gateway",
-    name: "My gateway",
-    baseUrl: "https://api.example.test/v1",
-    models: "gpt-4o-mini",
+    ...emptyCustomProviderDraft(),
+    providerId: "myprovider",
+    name: "My AI Provider",
+    baseUrl: "https://api.myprovider.com/v1",
+    models: [{ row: "m1", id: "model-id", name: "Display Name" }],
     ...overrides,
   };
 }
 
-describe("custom provider id suggestion", () => {
-  it("turns a typed name into a usable config key", () => {
+describe("provider id", () => {
+  it("allows underscores, which upstream's rule does", () => {
+    // Ours banned them, which refused ids the host accepts and condemned
+    // existing declarations that already used one.
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "my_provider" }), CREATE)
+        .providerId,
+    ).toBeNull();
+  });
+
+  it("still requires the first character to be alphanumeric", () => {
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "_leading" }), CREATE)
+        .providerId,
+    ).toBe("Use lowercase letters, numbers, hyphens, or underscores");
+  });
+
+  it("names the hazard as a hazard, on both paths", () => {
+    // The pattern would reject `__proto__` on the minting path anyway, but the
+    // hazard is checked FIRST so it reports itself rather than being filed as a
+    // style violation - the same message the user sees if it ever arrives on a
+    // row.
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "__proto__" }), CREATE)
+        .providerId,
+    ).toBe("That provider ID isn't allowed");
+  });
+
+  it("refuses __proto__ even when it arrived on a row", () => {
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "__proto__" }), EXISTING)
+        .providerId,
+    ).toBe("That provider ID isn't allowed");
+  });
+
+  it("does not judge an EXISTING id by the minting pattern", () => {
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "My.Gateway" }), EXISTING)
+        .providerId,
+    ).toBeNull();
+  });
+
+  it("treats a DISABLED id as available, because re-declaring re-enables it", () => {
+    // Upstream skips the exists-check for anything in `disabled_providers`;
+    // reporting it as taken would block the one flow that repairs the row.
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "mine" }), {
+        takenIds: ["mine"],
+        disabledIds: ["mine"],
+        existing: false,
+      }).providerId,
+    ).toBeNull();
+    expect(
+      validateCustomProviderDraft(draft({ providerId: "mine" }), {
+        takenIds: ["mine"],
+        disabledIds: [],
+        existing: false,
+      }).providerId,
+    ).toBe("That provider ID already exists");
+  });
+
+  it("proposes an id from the display name", () => {
+    // Ours; upstream makes you type it. Dashes because that is what the
+    // catalog's own ids look like - both separators are legal.
     expect(suggestCustomProviderId("  My Gateway (EU) ")).toBe("my-gateway-eu");
   });
-
-  it("never proposes a leading or trailing dash", () => {
-    // The id pattern rejects both, so proposing one would hand the user an
-    // error they did not type.
-    expect(suggestCustomProviderId("!!openai!!")).toBe("openai");
-  });
 });
 
-describe("custom provider model ids", () => {
-  it("accepts either separator and drops the noise", () => {
+describe("base URL", () => {
+  it("is a PREFIX test, not a URL parse", () => {
+    // `https://` alone satisfies upstream, and a parse would reject inputs
+    // their form accepts. Whether the endpoint answers is not knowable here.
     expect(
-      parseCustomProviderModels(" gpt-4o-mini,\n\n llama-3.1-70b , "),
-    ).toEqual(["gpt-4o-mini", "llama-3.1-70b"]);
-  });
-
-  it("keeps the user's order while collapsing duplicates", () => {
-    // Order is meaning here - the first entry is what a picker lands on - so
-    // this deliberately does not sort.
-    expect(parseCustomProviderModels("b\na\nb")).toEqual(["b", "a"]);
-  });
-});
-
-describe("custom provider draft validation", () => {
-  it("passes a draft the wire would accept", () => {
-    expect(
-      hasCustomProviderDraftError(
-        validateCustomProviderDraft(draft({}), CREATE),
-      ),
-    ).toBe(false);
-  });
-
-  it("rejects the paste people actually make", () => {
-    // A scheme-less host is what gets pasted, `z.url()` rejects it at the
-    // schema boundary, and catching it here turns a provider that silently
-    // never works into a message beside the field.
+      validateCustomProviderDraft(draft({ baseUrl: "https://" }), CREATE)
+        .baseUrl,
+    ).toBeNull();
     expect(
       validateCustomProviderDraft(
-        draft({ baseUrl: "api.example.test/v1" }),
+        draft({ baseUrl: "api.example.test" }),
         CREATE,
       ).baseUrl,
-    ).toBe("Enter a full URL, including https://.");
+    ).toBe("Must start with http:// or https://");
   });
 
-  it("allows http for a local gateway", () => {
-    // Refusing it would block the most common reason to declare a custom
-    // provider at all.
+  it("accepts http for a local gateway", () => {
     expect(
       validateCustomProviderDraft(
         draft({ baseUrl: "http://localhost:11434/v1" }),
@@ -82,76 +126,180 @@ describe("custom provider draft validation", () => {
       ).baseUrl,
     ).toBeNull();
   });
+});
 
-  it("requires at least one model id", () => {
-    // Upstream's own constraint, not tidiness: `T(id)` needs a non-empty model
-    // map, so a custom provider declared with none would not be recognized as
-    // custom by the predicate that decides whether the row is editable.
-    expect(
-      validateCustomProviderDraft(draft({ models: " \n " }), CREATE).models,
-    ).toBe("Enter at least one model id.");
-  });
-
-  it("refuses to shadow a provider that already exists", () => {
-    expect(
-      validateCustomProviderDraft(draft({ id: "openai" }), {
-        takenIds: ["openai"],
-        existing: false,
-      }).id,
-    ).toBe("A provider with this id already exists.");
-  });
-
-  it("reports every bad field at once", () => {
-    // Four short fields in one dialog: reporting them one at a time turns a
-    // single fix into four submit-and-read rounds.
+describe("model rows", () => {
+  it("requires an id AND a display name per row", () => {
     const errors = validateCustomProviderDraft(
-      { id: "Not An Id", name: "  ", baseUrl: "nope", models: "" },
+      draft({ models: [{ row: "m1", id: "", name: "" }] }),
       CREATE,
     );
-    expect(errors.id).not.toBeNull();
-    expect(errors.name).not.toBeNull();
-    expect(errors.baseUrl).not.toBeNull();
-    expect(errors.models).not.toBeNull();
+    expect(errors.models[0]).toEqual({ first: "Required", second: "Required" });
+  });
+
+  it("compares ids case-SENSITIVELY", () => {
+    // A model id is sent to the endpoint verbatim; `GPT-4o` is not `gpt-4o`.
+    const errors = validateCustomProviderDraft(
+      draft({
+        models: [
+          { row: "m1", id: "gpt-4o", name: "One" },
+          { row: "m2", id: "GPT-4o", name: "Two" },
+          { row: "m3", id: "gpt-4o", name: "Three" },
+        ],
+      }),
+      CREATE,
+    );
+    expect(errors.models[1].first).toBeNull();
+    expect(errors.models[2].first).toBe("Duplicate");
   });
 });
 
-describe("custom provider values", () => {
-  it("produces the wire shape, field for field", () => {
+describe("header rows", () => {
+  it("skips a wholly empty row instead of flagging it", () => {
+    // The list always carries a blank row and the section is optional, so
+    // complaining about the unused one would make every valid form invalid.
+    const errors = validateCustomProviderDraft(draft({}), CREATE);
+    expect(errors.headers[0]).toEqual({ first: null, second: null });
+    expect(hasCustomProviderDraftError(errors)).toBe(false);
+  });
+
+  it("requires the other half once either is typed", () => {
+    const errors = validateCustomProviderDraft(
+      draft({ headers: [{ row: "h1", key: "X-Key", value: "" }] }),
+      CREATE,
+    );
+    expect(errors.headers[0]).toEqual({ first: null, second: "Required" });
+  });
+
+  it("compares names case-INSENSITIVELY", () => {
+    // HTTP header names are, and two rows differing only in case would collapse
+    // silently when written.
+    const errors = validateCustomProviderDraft(
+      draft({
+        headers: [
+          { row: "h1", key: "X-Key", value: "a" },
+          { row: "h2", key: "x-key", value: "b" },
+        ],
+      }),
+      CREATE,
+    );
+    expect(errors.headers[1].first).toBe("Duplicate");
+  });
+});
+
+describe("the API key field", () => {
+  it("reads {env:VAR} as a REFERENCE, not a secret", () => {
+    // Upstream's syntax: the config block gets `env: ["VAR"]` and no credential
+    // is stored.
+    expect(customProviderKeyOf("{env:OPENAI_KEY}")).toEqual({
+      key: null,
+      env: ["OPENAI_KEY"],
+    });
+  });
+
+  it("reads anything else as the secret itself", () => {
+    expect(customProviderKeyOf(" sk-live-123 ")).toEqual({
+      key: "sk-live-123",
+      env: [],
+    });
+  });
+
+  it("reads empty as neither", () => {
+    expect(customProviderKeyOf("   ")).toEqual({ key: null, env: [] });
+  });
+});
+
+describe("values for the wire", () => {
+  it("carries models, headers and the credential in the wire's shape", () => {
     expect(
       customProviderValues(
-        draft({ id: " my-gateway ", models: "a\nb", name: " My gateway " }),
+        draft({
+          apiKey: "sk-live-123",
+          models: [{ row: "m1", id: " a ", name: " A " }],
+          headers: [
+            { row: "h1", key: " X-Key ", value: " v " },
+            { row: "h2", key: "", value: "" },
+          ],
+        }),
         CREATE,
       ),
     ).toEqual({
-      modelProviderId: "my-gateway",
-      name: "My gateway",
-      baseUrl: "https://api.example.test/v1",
-      modelIds: ["a", "b"],
+      modelProviderId: "myprovider",
+      name: "My AI Provider",
+      baseUrl: "https://api.myprovider.com/v1",
+      models: [{ id: "a", name: "A" }],
+      // The trailing blank row is not a header the endpoint should be sent.
+      headers: [{ key: "X-Key", value: "v" }],
+      key: "sk-live-123",
+      env: [],
     });
   });
 
   it("answers null rather than a half-built payload", () => {
-    expect(customProviderValues(draft({ models: "" }), CREATE)).toBeNull();
+    expect(
+      customProviderValues(
+        draft({ models: [{ row: "m1", id: "a", name: "" }] }),
+        CREATE,
+      ),
+    ).toBeNull();
   });
 });
 
-describe("declared values off an entry", () => {
-  it("carries what the host reported, unvalidated", () => {
-    // The READ side of the wire is looser than the write side on purpose:
-    // `opencode.json` is hand-editable. Refusing to carry a malformed value
-    // here would leave Edit - the only surface that can fix it - with nothing
-    // to open.
+describe("editing an existing declaration", () => {
+  const values = {
+    modelProviderId: "myprovider",
+    name: "My AI Provider",
+    baseUrl: "https://api.myprovider.com/v1",
+    models: [{ id: "a", name: "A" }],
+    headers: [{ key: "X-Key", value: "v" }],
+    key: null,
+    env: [],
+  };
+
+  it("opens with an EMPTY key field, because the stored one is never read back", () => {
+    // And empty must therefore mean "leave it alone" - not "clear it".
+    expect(customProviderDraftFrom(values).apiKey).toBe("");
+  });
+
+  it("restores an env REFERENCE verbatim, because it is not a secret", () => {
+    // Blanking it would silently drop the reference on the next save.
+    expect(
+      customProviderDraftFrom({ ...values, env: ["OPENAI_KEY"] }).apiKey,
+    ).toBe("{env:OPENAI_KEY}");
+  });
+
+  it("prefills rows from the row's own values", () => {
+    const prefilled = customProviderDraftFrom(values);
+    expect(prefilled.models.map((row) => [row.id, row.name])).toEqual([
+      ["a", "A"],
+    ]);
+    expect(prefilled.headers.map((row) => [row.key, row.value])).toEqual([
+      ["X-Key", "v"],
+    ]);
+  });
+
+  it("reads an entry's declared values off the wire", () => {
     expect(
       customProviderValuesOf({
-        id: "my-gateway",
-        name: "My gateway",
-        custom: { baseUrl: "api.example.test/v1", modelIds: ["a"] },
+        id: "myprovider",
+        name: "My AI Provider",
+        custom: {
+          // Deliberately malformed: the read side reports what it finds, so
+          // Edit can open on the row that needs fixing.
+          baseUrl: "api.myprovider.com/v1",
+          models: [{ id: "a", name: "A" }],
+          headers: [{ key: "X-Key", value: "v" }],
+          env: ["OPENAI_KEY"],
+        },
       }),
     ).toEqual({
-      modelProviderId: "my-gateway",
-      name: "My gateway",
-      baseUrl: "api.example.test/v1",
-      modelIds: ["a"],
+      modelProviderId: "myprovider",
+      name: "My AI Provider",
+      baseUrl: "api.myprovider.com/v1",
+      models: [{ id: "a", name: "A" }],
+      headers: [{ key: "X-Key", value: "v" }],
+      key: null,
+      env: ["OPENAI_KEY"],
     });
   });
 
@@ -164,85 +312,33 @@ describe("declared values off an entry", () => {
 
 describe("re-enable eligibility", () => {
   const values = {
-    modelProviderId: "my-gateway",
-    name: "My gateway",
-    baseUrl: "https://api.example.test/v1",
-    modelIds: ["a"],
+    modelProviderId: "myprovider",
+    name: "My AI Provider",
+    baseUrl: "https://api.myprovider.com/v1",
+    models: [{ id: "a", name: "A" }],
+    headers: [],
+    key: null,
+    env: [],
   };
 
   it("allows a declaration the write side would accept", () => {
     expect(canReenableCustomProvider(values)).toBe(true);
+    // Including a hand-written id we would never have minted.
+    expect(
+      canReenableCustomProvider({ ...values, modelProviderId: "my_provider" }),
+    ).toBe(true);
   });
 
   it("refuses one the write side would reject", () => {
     // Sending it back would report a failure the user never had a chance to
     // fix; that row gets Edit instead.
     expect(
-      canReenableCustomProvider({ ...values, baseUrl: "api.example.test/v1" }),
+      canReenableCustomProvider({ ...values, baseUrl: "api.example.test" }),
     ).toBe(false);
-    expect(canReenableCustomProvider({ ...values, modelIds: [] })).toBe(false);
-  });
-
-  it("allows an id we would never have MINTED but the host accepts", () => {
-    // A hand-written `my_gateway` is legal on the wire and legal to the host,
-    // which refuses only `__proto__`. Judging it by the slug rules locked the
-    // row permanently: no re-enable, and an Edit whose id field is disabled -
-    // so the very thing being complained about could not be changed.
+    expect(canReenableCustomProvider({ ...values, models: [] })).toBe(false);
+    // A model row missing its display name fails upstream's rule too.
     expect(
-      canReenableCustomProvider({ ...values, modelProviderId: "my_gateway" }),
-    ).toBe(true);
-    expect(
-      canReenableCustomProvider({ ...values, modelProviderId: "My.Gateway" }),
-    ).toBe(true);
-  });
-
-  it("still refuses the one id no path may send", () => {
-    expect(
-      canReenableCustomProvider({ ...values, modelProviderId: "__proto__" }),
+      canReenableCustomProvider({ ...values, models: [{ id: "a", name: "" }] }),
     ).toBe(false);
-  });
-});
-
-describe("id policy by scope", () => {
-  it("imposes the slug shape only on an id being MINTED", () => {
-    // Our house style for ids we propose; not a judgement we get to make about
-    // one the user already wrote into their own config file.
-    expect(
-      validateCustomProviderDraft(draft({ id: "my_gateway" }), CREATE).id,
-    ).toBe("Use lowercase letters, numbers and dashes.");
-    expect(
-      validateCustomProviderDraft(draft({ id: "my_gateway" }), EXISTING).id,
-    ).toBeNull();
-  });
-
-  it("refuses __proto__ under BOTH policies", () => {
-    // A hazard rather than a house style, so it holds however the id got here.
-    // The host answers it with `invalid_input`; this puts the message on the
-    // field.
-    // The hazard is checked FIRST, so both policies answer with it rather than
-    // one of them calling it a style violation.
-    expect(
-      validateCustomProviderDraft(draft({ id: "__proto__" }), CREATE).id,
-    ).toBe("That id isn't allowed.");
-    expect(
-      validateCustomProviderDraft(draft({ id: "__proto__" }), EXISTING).id,
-    ).toBe("That id isn't allowed.");
-  });
-
-  it("checks collisions only when minting", () => {
-    // An existing row keeps the id it already has; "taken" by itself is not a
-    // reason to refuse its own edit.
-    expect(
-      validateCustomProviderDraft(draft({ id: "openai" }), {
-        takenIds: ["openai"],
-        existing: true,
-      }).id,
-    ).toBeNull();
-  });
-
-  it("still requires an id at all", () => {
-    expect(validateCustomProviderDraft(draft({ id: "  " }), EXISTING).id).toBe(
-      "Enter an id.",
-    );
   });
 });
