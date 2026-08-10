@@ -76,8 +76,9 @@ export function toJsonSchemaFingerprint(
 }
 
 /**
- * Dotted paths of every object in `schema` that REJECTS unknown keys rather
- * than stripping them (`z.strictObject` / `.strict()`).
+ * The `io: "input"` rendering of `schema`, walked in lockstep with the
+ * fingerprint so every node - including each union arm individually - can be
+ * asked whether it REJECTS unknown keys rather than stripping them.
  *
  * This is load-bearing for additivity: "an added field just strips on
  * projection" is only true of a stripping object. A strict older schema
@@ -90,17 +91,12 @@ export function toJsonSchemaFingerprint(
  * `additionalProperties: false` for stripping AND strict objects alike.
  * The `io: "input"` rendering can: it describes what the schema ACCEPTS, so
  * only a genuinely strict object carries `additionalProperties: false`.
- * Paths use the same dotted form the additivity walk threads, so a violation
- * can be located without a second parallel tree.
+ * A parallel tree rather than a flattened path set: union arms share a path,
+ * so a path-keyed marker cannot say WHICH arm is strict. Walking the arms in
+ * lockstep keeps the answer per-arm.
  */
-export function collectStrictObjectPaths(schema: z.ZodType): Set<string> {
-  const strictPaths = new Set<string>();
-  collectStrictPaths(
-    z.toJSONSchema(schema, { unrepresentable: "any", io: "input" }),
-    [],
-    strictPaths,
-  );
-  return strictPaths;
+export function toUnknownKeyTree(schema: z.ZodType): unknown {
+  return z.toJSONSchema(schema, { unrepresentable: "any", io: "input" });
 }
 
 type UnknownKeySchemaNode = {
@@ -143,60 +139,33 @@ function rejectsUnknownKeys(node: unknown): boolean {
   return false;
 }
 
-function collectStrictPaths(
-  node: unknown,
-  path: readonly string[],
-  out: Set<string>,
-): void {
-  const shape = asSchemaNode(node);
-  if (shape === null) return;
-  if (shape.type === "object" && shape.properties !== undefined) {
-    if (rejectsUnknownKeys(shape)) out.add(dottedPath(path));
-    collectStrictPathsInProperties(shape.properties, path, out);
-    return;
-  }
-  const variants = Array.isArray(shape.anyOf)
-    ? shape.anyOf
-    : Array.isArray(shape.oneOf)
-      ? shape.oneOf
-      : null;
-  if (variants !== null) {
-    // Union arms share their parent's path, so the marker cannot distinguish
-    // them. Mark the path only when EVERY object arm refuses unknown keys:
-    // with a mixed union (one strict arm, one stripping arm) extending the
-    // stripping arm is legitimate, and collapsing the strict arm's marker
-    // onto the shared path would fail a valid registry. The cost is a known
-    // blind spot in the other direction - growth of the strict arm of a
-    // mixed union is not caught - which per-arm tracking would need to fix.
-    const objectArms = variants.filter(isObjectSchemaNode);
-    if (objectArms.length > 0 && objectArms.every(rejectsUnknownKeys)) {
-      out.add(dottedPath(path));
-    }
-    for (const variant of variants) {
-      const armShape = asSchemaNode(variant);
-      if (armShape === null) continue;
-      if (armShape.type === "object" && armShape.properties !== undefined) {
-        // Descend into the arm's properties without re-marking its own path.
-        collectStrictPathsInProperties(armShape.properties, path, out);
-        continue;
-      }
-      collectStrictPaths(variant, path, out);
-    }
-    return;
-  }
-  if (shape.items !== undefined) {
-    collectStrictPaths(shape.items, [...path, "items"], out);
-  }
+
+/** Input-tree counterpart of an object property, for lockstep descent. */
+function inputProperty(previousInput: unknown, field: string): unknown {
+  const shape = asSchemaNode(previousInput);
+  if (shape === null || shape.properties === undefined) return null;
+  return Object.hasOwn(shape.properties, field)
+    ? shape.properties[field]
+    : null;
 }
 
-function collectStrictPathsInProperties(
-  properties: Record<string, unknown>,
-  path: readonly string[],
-  out: Set<string>,
-): void {
-  for (const [key, value] of Object.entries(properties)) {
-    collectStrictPaths(value, [...path, key], out);
-  }
+/** Input-tree counterpart of array items. */
+function inputItems(previousInput: unknown): unknown {
+  const shape = asSchemaNode(previousInput);
+  return shape === null ? null : (shape.items ?? null);
+}
+
+/**
+ * Input-tree counterparts of a union's arms, positionally. Both renderings
+ * come from the same Zod schema, so variant order corresponds; when it does
+ * not line up the entry is `null` and that arm degrades to non-strict.
+ */
+function inputVariants(previousInput: unknown): readonly unknown[] {
+  const shape = asSchemaNode(previousInput);
+  if (shape === null) return [];
+  if (Array.isArray(shape.anyOf)) return shape.anyOf;
+  if (Array.isArray(shape.oneOf)) return shape.oneOf;
+  return [];
 }
 
 function convertJsonSchemaShape(
@@ -438,9 +407,9 @@ export function findAdditivityViolation(
   previous: JsonSchemaFingerprint,
   next: JsonSchemaFingerprint,
   mode: AdditivityMode,
-  previousStrictPaths: ReadonlySet<string>,
+  previousInput: unknown,
 ): AdditivityViolation | null {
-  return findNodeAdditivityViolation(previous, next, [], mode, previousStrictPaths);
+  return findNodeAdditivityViolation(previous, next, [], mode, previousInput);
 }
 
 /**
@@ -613,7 +582,7 @@ function findNodeAdditivityViolation(
   next: unknown,
   path: readonly string[],
   mode: AdditivityMode,
-  previousStrictPaths: ReadonlySet<string>,
+  previousInput: unknown,
 ): AdditivityViolation | null {
   const previousNode = classifySchemaNode(previous);
   const nextNode = classifySchemaNode(next);
@@ -631,7 +600,13 @@ function findNodeAdditivityViolation(
       }
       const oldFormRetained = nextNode.variants.some(
         (variant) =>
-          findNodeAdditivityViolation(previous, variant, path, mode, previousStrictPaths) === null,
+          findNodeAdditivityViolation(
+            previous,
+            variant,
+            path,
+            mode,
+            previousInput,
+          ) === null,
       );
       return oldFormRetained
         ? null
@@ -640,14 +615,15 @@ function findNodeAdditivityViolation(
     // Union collapse: only additive when every previous variant's payloads
     // still project onto the replacement schema.
     if (previousNode.kind === "anyOf") {
-      for (const variant of previousNode.variants) {
+      const previousInputArms = inputVariants(previousInput);
+      for (const [index, variant] of previousNode.variants.entries()) {
         if (
           findNodeAdditivityViolation(
             variant,
             next,
             path,
             mode,
-            previousStrictPaths,
+            previousInputArms[index] ?? null,
           ) !== null
         ) {
           return { kind: "union-variant", detail: snippet(variant) };
@@ -684,7 +660,7 @@ function findNodeAdditivityViolation(
         nextNode.properties[field],
         [...path, field],
         mode,
-        previousStrictPaths,
+        inputProperty(previousInput, field),
       );
       if (nested !== null) return nested;
     }
@@ -692,7 +668,7 @@ function findNodeAdditivityViolation(
     // A strict object rejects the whole payload instead, so growing one on a
     // minor breaks projection for every payload - not just those exercising
     // the new field.
-    if (previousStrictPaths.has(dottedPath(path))) {
+    if (rejectsUnknownKeys(previousInput)) {
       for (const field of Object.keys(nextNode.properties)) {
         if (!Object.hasOwn(previousNode.properties, field)) {
           return {
@@ -746,7 +722,12 @@ function findNodeAdditivityViolation(
     // the survival match runs strict too; when a variant has a lenient
     // successor whose only sin is value growth, surface that precise
     // violation instead of a misleading "dropped variant".
-    for (const previousVariant of previousNode.variants) {
+    const previousInputArms = inputVariants(previousInput);
+    for (const [index, previousVariant] of previousNode.variants.entries()) {
+      // Each arm carries its OWN unknown-key behaviour: a mixed union (one
+      // strict arm, one stripping arm) must reject growth of the strict arm
+      // while still allowing growth of the stripping one.
+      const previousArmInput = previousInputArms[index] ?? null;
       const survives = nextNode.variants.some(
         (nextVariant) =>
           findNodeAdditivityViolation(
@@ -754,7 +735,7 @@ function findNodeAdditivityViolation(
             nextVariant,
             path,
             mode,
-            previousStrictPaths,
+            previousArmInput,
           ) === null,
       );
       if (survives) continue;
@@ -766,7 +747,7 @@ function findNodeAdditivityViolation(
               nextVariant,
               path,
               "lenient",
-              previousStrictPaths,
+              previousArmInput,
             ) === null,
         );
         if (lenientMatch !== undefined) {
@@ -775,7 +756,7 @@ function findNodeAdditivityViolation(
             lenientMatch,
             path,
             mode,
-            previousStrictPaths,
+            previousArmInput,
           );
         }
       }
@@ -789,13 +770,13 @@ function findNodeAdditivityViolation(
         // previous [A], next [A, A'] where A' is A with an extra enum
         // value: A survives strictly, and A' must still be reported.
         const hasPredecessor = previousNode.variants.some(
-          (previousVariant) =>
+          (previousVariant, index) =>
             findNodeAdditivityViolation(
               previousVariant,
               nextVariant,
               path,
               mode,
-              previousStrictPaths,
+              previousInputArms[index] ?? null,
             ) === null,
         );
         if (!hasPredecessor) {
@@ -812,7 +793,7 @@ function findNodeAdditivityViolation(
       nextNode.items,
       [...path, "items"],
       mode,
-      previousStrictPaths,
+      inputItems(previousInput),
     );
     if (itemsViolation !== null) {
       return {
@@ -842,8 +823,6 @@ function findNodeAdditivityViolation(
 
   return null;
 }
-
-const EMPTY_STRICT_PATHS: ReadonlySet<string> = new Set<string>();
 
 export type BreakingChange =
   | {
@@ -890,7 +869,7 @@ export function findBreakingChange(
     previous,
     next,
     "lenient",
-    EMPTY_STRICT_PATHS,
+    null,
   );
   if (additivityViolation !== null) {
     if (additivityViolation.kind === "schema-kind") {

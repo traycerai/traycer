@@ -269,7 +269,7 @@ function assertSchemaCompatibility(
           previous,
           current,
           "lenient",
-          collectStrictObjectPaths(line.versions[previousMinor].contract.schema),
+          toUnknownKeyTree(line.versions[previousMinor].contract.schema),
         );
         if (violation !== null) {
           throw new Error(
@@ -313,7 +313,7 @@ export type {
   ObjectJsonSchema,
 } from "./json-schema-fingerprint";
 import {
-  collectStrictObjectPaths,
+  toUnknownKeyTree,
   describeAdditivityViolation,
   findAdditivityViolation,
   findBreakingChange,
