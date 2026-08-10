@@ -176,7 +176,22 @@ function RemoteFolderPickerBody(): ReactNode {
     if (upPath !== null) setPath(withTrailingSeparator(upPath));
   };
 
-  const addTarget = readAddTarget(rawInput, effectiveHome, data);
+  // The row the arrow keys are aiming at (Enter only DESCENDS, never picks).
+  const highlightedEntry =
+    upPath !== null && clampedIndex === 0
+      ? undefined
+      : filteredEntries.at(clampedIndex - (upPath !== null ? 1 : 0));
+
+  // Add commits the highlighted row only once the user MOVED the selection:
+  // arrows exist to aim at a folder, so resolving to the pristine field
+  // instead (the home / current directory) silently binds the WRONG
+  // workspace. Index 0 is the resting position (the ".." row, or the first
+  // entry when there is no up row) - an auto-highlight nobody aimed at must
+  // never override the typed field. With no aimed row the field stays the
+  // source of truth.
+  const aimedEntry = clampedIndex > 0 ? highlightedEntry : undefined;
+  const addTarget =
+    aimedEntry?.path ?? readAddTarget(rawInput, effectiveHome, data);
 
   const addCurrent = (): void => {
     if (addTarget === null) return;
@@ -192,8 +207,7 @@ function RemoteFolderPickerBody(): ReactNode {
       goUp();
       return;
     }
-    const entry = filteredEntries.at(clampedIndex - (upPath !== null ? 1 : 0));
-    if (entry !== undefined) enterEntry(entry);
+    if (highlightedEntry !== undefined) enterEntry(highlightedEntry);
   };
 
   const moveSelection = (delta: number): void => {
@@ -605,8 +619,9 @@ function pickerOptionId(index: number): string {
 /**
  * Keyboard model on the path field (the dialog auto-focuses it): arrows move
  * the row selection, Enter opens the selected row, cmd/ctrl+Enter adds the
- * current path. Backspace needs no handler - deleting characters past a `/`
- * IS up-navigation, because the field is the source of truth.
+ * highlighted row (or the current path when no row is highlighted). Backspace
+ * needs no handler - deleting characters past a `/` IS up-navigation, because
+ * the field is the source of truth.
  */
 function handlePickerFieldKeys(
   event: KeyboardEvent<HTMLInputElement>,
@@ -865,10 +880,12 @@ function filterEntries(
 }
 
 /**
- * What Add picks: exactly what the field shows (with `~` expanded and any
- * trailing `/` dropped), whether or not that folder was ever listed -
- * selecting a folder needs no read. An unedited field picks the home the
- * field displays; a field the user explicitly cleared picks nothing.
+ * What Add picks when NO row is highlighted: exactly what the field shows
+ * (with `~` expanded and any trailing `/` dropped), whether or not that
+ * folder was ever listed - selecting a folder needs no read. An unedited
+ * field picks the home the field displays; a field the user explicitly
+ * cleared picks nothing. (A highlighted row wins over this - arrows aim,
+ * Add commits: see `RemoteFolderPickerBody`.)
  */
 function readAddTarget(
   rawInput: string | null,

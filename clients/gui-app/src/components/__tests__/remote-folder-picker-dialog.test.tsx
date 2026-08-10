@@ -398,6 +398,47 @@ describe("<RemoteFolderPickerDialog />", () => {
     await expect(pick).resolves.toBe("/Users/tester/projects/deep");
   });
 
+  it("Add commits the highlighted row, not the pristine field's directory", async () => {
+    // The footgun this guards: field pristine at home, user arrows onto a
+    // folder and hits Add - Enter only descends, so without highlight-aware
+    // Add the picker silently binds the HOME directory as the workspace.
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    expect(pathInput().getAttribute("aria-activedescendant")).toBe(
+      "remote-folder-picker-option-1",
+    );
+    fireEvent.keyDown(pathInput(), { key: "Enter", metaKey: true });
+    await expect(pick).resolves.toBe("/Users/tester/code");
+  });
+
+  it("the Add button commits the highlighted row too", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
+    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
+    await expect(pick).resolves.toBe("/Users/tester/consulting");
+  });
+
+  it("pristine cmd+Enter with nothing highlighted still adds the shown directory", async () => {
+    // selectedIndex 0 is the ".." row - no folder is highlighted, so the
+    // pristine field (home) stays the Add target.
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.keyDown(pathInput(), { key: "Enter", metaKey: true });
+    await expect(pick).resolves.toBe("/Users/tester");
+  });
+
   it("a gated folder lists as a short no-access line and can still be added", async () => {
     render(<RemoteFolderPickerDialog />);
     const pick = useRemoteFolderPickerStore
