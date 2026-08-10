@@ -431,15 +431,20 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       unsubscribeFirst();
       const countAtUnsubscribe = firstCount;
 
-      let probeCount = 0;
-      const unsubscribeProbe = store.subscribe(() => {
-        probeCount += 1;
+      // The second mutation is a delete, not another rotate: its
+      // `present: false` payload cannot be satisfied by a notification the
+      // first (still in-flight) signIn write already queued, which the probe
+      // subscribing after unsubscribeFirst could otherwise observe and
+      // mistake for acknowledgement of this mutation.
+      const probeChanges: TokenStoreChange[] = [];
+      const unsubscribeProbe = store.subscribe((change) => {
+        probeChanges.push(change);
       });
 
-      await store.rotate({ userId: IDENTITY.id, token: "tok-1" });
+      await store.delete();
       await vi.waitFor(
         () => {
-          expect(probeCount).toBeGreaterThanOrEqual(1);
+          expect(probeChanges.some((c) => c.present === false)).toBe(true);
         },
         { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
       );
