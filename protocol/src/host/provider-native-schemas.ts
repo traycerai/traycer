@@ -1436,6 +1436,13 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
  * Failure vocabulary for this surface. Deliberately its OWN enums rather than
  * `providerNativeErrorCodeSchema`.
  *
+ * `config_unreadable` appears here AND on that shared enum, spelled the same
+ * because it means the same thing. That is a deliberate overlap rather than
+ * the leak the disjointness test otherwise guards: the shared enum rides
+ * released carriers and cannot be widened, so the two vocabularies could never
+ * have been merged - and giving one condition two names across them would only
+ * make consumers handle whichever they happened to meet first.
+ *
  * That enum describes editing provider CONFIG FILES - `duplicate_name`,
  * `external_drift`, `rollback_failed`, `no_change_detected`. None of it
  * describes an OAuth attempt, and this surface's settled semantics (attempts
@@ -1454,17 +1461,25 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
  * a second spelling of the same fact. A single wide enum would type-check both
  * mistakes and leave the impossibility to a comment.
  *
- * Listing failures - both are about REACHING the catalog, never about a
- * credential:
+ * Listing failures - all about REACHING the catalog, never about a credential:
  * - `capability_unavailable` — the surface is not offered here (not the
  *   `opencode` module, or the CLI is below the version gate). Nothing to
  *   retry. This is the list result's counterpart of the auth methods'
  *   `unsupported` arm.
  * - `server_unavailable` — the managed server could not be started or leased.
+ * - `config_unreadable` — the user's own OpenCode config could not be read or
+ *   parsed, so the host can establish neither the truth nor the absence of a
+ *   provider declaration and the catalog answer is unknowable. Deliberately
+ *   NOT `server_unavailable`: the server is fine, and telling a user to retry
+ *   a broken JSON file sends them away from the one thing they can fix. Also
+ *   not an empty catalog, which reads as "you have configured nothing" -
+ *   indistinguishable from the truth, and the reason a parse failure must
+ *   surface as itself rather than as silence.
  */
 export const modelProviderListErrorCodeSchema = z.enum([
   "capability_unavailable",
   "server_unavailable",
+  "config_unreadable",
 ]);
 export type ModelProviderListErrorCode = z.infer<
   typeof modelProviderListErrorCodeSchema
@@ -1490,13 +1505,23 @@ export type ModelProviderListErrorCode = z.infer<
  *   validation. Re-show the form with the detail.
  * - `provider_auth_failed` — the provider refused the credential, or the OAuth
  *   callback failed. Show the detail; retrying is the user's call.
+ * - `config_unreadable` — the user's own OpenCode config could not be read or
+ *   parsed. Not only a listing condition: `createCustom`, `updateCustom` and a
+ *   config-declared provider's `disconnect` all WRITE that file, and a
+ *   read-modify-write cannot start from a file it cannot read. Excluding it
+ *   here would force the write path to re-mislabel the exact condition the
+ *   read path stopped mislabeling - as `server_unavailable` (the server is
+ *   fine) or `invalid_input` (the form was fine). Its remediation is its own:
+ *   open the config file and fix the syntax.
  *
  * No `capability_unavailable`: the auth result carries an `unsupported` arm
  * for exactly that condition, and two ways to say one thing is how consumers
- * end up handling only one of them.
+ * end up handling only one of them. `config_unreadable` has no such arm, which
+ * is why it earns a code here and `capability_unavailable` does not.
  */
 export const modelProviderAuthErrorCodeSchema = z.enum([
   "server_unavailable",
+  "config_unreadable",
   "provider_not_found",
   "attempt_not_found",
   "attempt_superseded",

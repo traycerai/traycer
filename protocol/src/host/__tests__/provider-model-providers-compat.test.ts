@@ -1717,22 +1717,45 @@ describe("attempt lifecycle is encodable end to end", () => {
     }
   });
 
-  it("keeps the auth error vocabulary disjoint from the shared native one", () => {
+  // One condition is spelled the same in both vocabularies, on purpose. The
+  // shared enum rides RELEASED carriers and cannot be widened, so the two
+  // could never have been merged - and giving one condition two names across
+  // them would only make consumers handle whichever they met first.
+  //
+  // Named here rather than dropping the guard: an intentional overlap that has
+  // to be written down stays intentional, while a deleted test lets the next
+  // accidental one through silently.
+  const DELIBERATELY_SHARED_CODES: readonly string[] = ["config_unreadable"];
+
+  it("shares exactly the codes it means to with the native vocabulary", () => {
+    const ours = new Set<string>([
+      ...modelProviderListErrorCodeSchema.options,
+      ...modelProviderAuthErrorCodeSchema.options,
+    ]);
+    const overlap = providerNativeErrorCodeSchema.options.filter((code) =>
+      ours.has(code),
+    );
+    expect([...overlap].sort()).toEqual([...DELIBERATELY_SHARED_CODES].sort());
+  });
+
+  it("keeps every other code out of the shared native vocabulary", () => {
     // Not a style preference: `providerNativeErrorCodeSchema` rides RELEASED
-    // carriers, so it cannot be widened, and its members describe config-file
-    // edits. A model-provider code leaking into it (or vice versa) would mean
-    // one of the two enums grew where it must not.
+    // carriers, so it cannot be widened, and its other members describe
+    // config-file EDITS. A model-provider code leaking into it (or vice versa)
+    // would mean one of the two enums grew where it must not.
     const ours = [
       ...modelProviderListErrorCodeSchema.options,
       ...modelProviderAuthErrorCodeSchema.options,
     ];
     for (const code of ours) {
+      if (DELIBERATELY_SHARED_CODES.includes(code)) continue;
       expect(
         providerNativeErrorCodeSchema.safeParse(code).success,
         `${code} must not exist on the shared native enum`,
       ).toBe(false);
     }
     for (const code of providerNativeErrorCodeSchema.options) {
+      if (DELIBERATELY_SHARED_CODES.includes(code)) continue;
       expect(
         modelProviderListErrorCodeSchema.safeParse(code).success,
         `${code} must not exist on the list enum`,
@@ -1741,6 +1764,32 @@ describe("attempt lifecycle is encodable end to end", () => {
         modelProviderAuthErrorCodeSchema.safeParse(code).success,
         `${code} must not exist on the auth enum`,
       ).toBe(false);
+    }
+  });
+
+  it("reports a broken config as itself on both the list and the auth path", () => {
+    // The mislabel this closes: a config typo used to have to answer
+    // `server_unavailable`, which sends the user to retry a healthy server
+    // instead of to the file they can actually fix.
+    expect(
+      modelProvidersListResultSchema.safeParse({
+        ok: false,
+        code: "config_unreadable",
+        detail: "opencode.json: unexpected token at line 12",
+      }).success,
+    ).toBe(true);
+    // On the auth path too, because `createCustom` / `updateCustom` / a
+    // config-declared `disconnect` all WRITE that file, and a
+    // read-modify-write cannot start from a file it cannot read.
+    for (const response of [
+      providersModelProviderAuthResponseSchema,
+      providersAwaitModelProviderAuthResponseSchema,
+    ]) {
+      expect(
+        response.safeParse({
+          result: { kind: "error", code: "config_unreadable", detail: null },
+        }).success,
+      ).toBe(true);
     }
   });
 });
