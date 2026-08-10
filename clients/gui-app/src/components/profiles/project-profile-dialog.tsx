@@ -155,7 +155,11 @@ function ProjectProfileDialogBody(props: {
         </DialogDescription>
       </DialogHeader>
 
-      <div className="flex flex-col gap-4">
+      {/* min-w-0: this grid item of DialogContent must be allowed to shrink
+          below its min-content width (long folder paths are nowrap), otherwise
+          the whole grid track stretches past the dialog's fixed width and every
+          sibling overflows the panel to the right. */}
+      <div className="flex min-w-0 flex-col gap-4">
         <label className="flex flex-col gap-1.5">
           <span className="text-ui-sm font-medium">Name</span>
           <Input
