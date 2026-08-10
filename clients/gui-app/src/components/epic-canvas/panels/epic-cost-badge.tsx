@@ -12,6 +12,7 @@ import {
   FULL_RATE_QUALIFIER,
   servedByScopeNote,
 } from "@/lib/usage-analytics/cost-format";
+import { StatusRowChromeBoundary } from "@/components/epic-canvas/panels/status-row-chrome-boundary";
 import { cn } from "@/lib/utils";
 
 const EPIC_COST_BADGE_WINDOW_DAYS = 30;
@@ -27,9 +28,24 @@ const EPIC_COST_BADGE_WINDOW_DAYS = 30;
  *
  * App-wide host access (`useReactiveActiveHostId` / `useHostClient`), not
  * `useTabHostId` - this status row sits above the per-tile `TabHostProvider`
- * scope, same as its sibling `EpicConnectionPill`.
+ * scope.
+ *
+ * Host-backed, so this must only be mounted where the host runtime and the
+ * Epic session exist (the status row gates on `snapshotLoaded`, which
+ * implies a live session) - wrapped in `StatusRowChromeBoundary`, matching
+ * its sibling `EpicSweepAction`, since host hooks throw when the runtime is
+ * absent or incomplete and this decorative chrome must never be able to take
+ * the canvas down with it.
  */
 export function EpicCostBadge(props: { readonly epicId: string }): ReactNode {
+  return (
+    <StatusRowChromeBoundary label="cost badge">
+      <EpicCostBadgeBody epicId={props.epicId} />
+    </StatusRowChromeBoundary>
+  );
+}
+
+function EpicCostBadgeBody(props: { readonly epicId: string }): ReactNode {
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
   const supported = useUsageSummarySupported(hostId);
@@ -41,7 +57,12 @@ export function EpicCostBadge(props: { readonly epicId: string }): ReactNode {
       }),
     [props.epicId],
   );
-  const query = useUsageSummaryForClient(supported ? client : null, request);
+  // Real client unconditionally, gated through `enabled` - see the doc
+  // comment on `useUsageSummaryForClient` for why nulling the client instead
+  // (this component's original shape) is the wrong way to express this gate.
+  // `poll: true` gives this ambient, unsupervised badge a bounded self-heal
+  // interval instead of a one-shot fetch with no other trigger.
+  const query = useUsageSummaryForClient(client, request, supported, true);
 
   if (!supported || query.data === undefined) return null;
   const { summary, coverage, servedBy } = query.data;

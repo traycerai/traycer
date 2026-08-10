@@ -1,12 +1,5 @@
-import {
-  Component,
-  useMemo,
-  useState,
-  type ErrorInfo,
-  type ReactNode,
-} from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Paintbrush } from "lucide-react";
-import { appLogger } from "@/lib/logger";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -17,6 +10,7 @@ import {
   taskMergeRollupLabel,
 } from "@/lib/worktree/task-merge-rollup";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { StatusRowChromeBoundary } from "@/components/epic-canvas/panels/status-row-chrome-boundary";
 import { cn } from "@/lib/utils";
 
 const EMPTY_ENTRIES: readonly WorktreeHostEntryV12[] = [];
@@ -43,7 +37,7 @@ export function EpicSweepAction(props: {
   // sweep icon" instead - the same action stays reachable from History and
   // Settings ▸ Worktrees.
   return (
-    <StatusRowChromeBoundary>
+    <StatusRowChromeBoundary label="sweep affordance">
       <EpicSweepActionBody epicId={props.epicId} tabId={props.tabId} />
     </StatusRowChromeBoundary>
   );
@@ -117,41 +111,6 @@ function EpicSweepActionBody(props: {
       />
     </>
   );
-}
-
-interface StatusRowChromeBoundaryState {
-  readonly failed: boolean;
-}
-
-/**
- * Renders nothing when its child throws. Deliberately silent: the child is an
- * optional status-row affordance, so the honest fallback is its absence, not a
- * broken-widget placeholder in the Epic chrome. The throw is still logged once
- * so a real regression is visible in the log rather than swallowed.
- */
-class StatusRowChromeBoundary extends Component<
-  { readonly children: ReactNode },
-  StatusRowChromeBoundaryState
-> {
-  constructor(props: { readonly children: ReactNode }) {
-    super(props);
-    this.state = { failed: false };
-  }
-
-  static getDerivedStateFromError(): StatusRowChromeBoundaryState {
-    return { failed: true };
-  }
-
-  override componentDidCatch(error: Error, info: ErrorInfo): void {
-    appLogger.warn("[epic-status-row] sweep affordance failed to render", {
-      error: error.message,
-      componentStack: info.componentStack ?? null,
-    });
-  }
-
-  override render(): ReactNode {
-    return this.state.failed ? null : this.props.children;
-  }
 }
 
 /**

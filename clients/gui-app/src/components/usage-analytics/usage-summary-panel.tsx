@@ -58,7 +58,12 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     () => buildUsageSummaryRequest({ windowDays, epicId: null }),
     [windowDays],
   );
-  const query = useUsageSummaryForClient(props.client, request);
+  // Enabled unconditionally: this panel only mounts once its caller has
+  // already confirmed `host.usage.summary` is supported (see
+  // `UsageSettingsPanelBody`'s early return). No polling here - unlike the
+  // ambient epic cost badge, this is an actively-viewed screen with its own
+  // refetch triggers (window/metric change, manual Retry).
+  const query = useUsageSummaryForClient(props.client, request, true, false);
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-5">
