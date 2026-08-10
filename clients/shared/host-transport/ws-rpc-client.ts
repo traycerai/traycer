@@ -1,5 +1,4 @@
 import type {
-  MethodDegradeDeclaration,
   MethodVersionRegistry,
   SchemaVersion,
   SplitConnectionManifest,
@@ -47,6 +46,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import type { TimerHandle } from "./timer-handle";
 import { recordNegotiatedHostMethods } from "./negotiated-manifest-registry";
+import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
 
 /**
  * Minimal endpoint shape the transport layer needs to dial a host. The
@@ -500,134 +500,29 @@ async function executeUnavailableMethodDegrade<
   requestId: string,
   responseTimeoutMs: number,
 ): Promise<ResponseOfMethod<Registry, Method>> {
-  if (clientCanonical === undefined) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Client registry has no canonical manifest entry for method '${method}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
-  }
-
-  const degrade = methodRegistry.degrade;
-  if (degrade === undefined) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Host does not advertise method '${method}', and the client registry declares no degrade strategy`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
-  }
-
-  if (degrade.kind === "unsupported") {
-    throw unsupportedHostMethodError(method, requestId);
-  }
-
-  return executeFallbackMethodDegrade(
+  // Degrade POLICY is shared with the remote mux transport (see
+  // `unavailable-method-degrade.ts`); only the dispatch below is ws-specific.
+  return (await resolveUnavailableMethodDegrade({
     registry,
-    session,
     method,
-    degrade,
+    methodRegistry,
+    clientCanonical,
     clientManifest,
     hostManifest,
     params,
     requestId,
-    responseTimeoutMs,
-  );
-}
-
-async function executeFallbackMethodDegrade<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
->(
-  registry: Registry,
-  session: Session,
-  method: Method,
-  degrade: MethodDegradeDeclaration,
-  clientManifest: ConnectionManifest,
-  hostManifest: ConnectionManifest,
-  params: RequestOfMethod<Registry, Method>,
-  requestId: string,
-  responseTimeoutMs: number,
-): Promise<ResponseOfMethod<Registry, Method>> {
-  if (degrade.kind !== "fallback") {
-    throw unsupportedHostMethodError(method, requestId);
-  }
-
-  const targetMethod = degrade.to.method;
-  if (!hasRegistryMethod(registry, targetMethod)) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Fallback for method '${method}' targets unknown method '${targetMethod}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
-  }
-
-  const targetClientCanonical = {
-    major: degrade.to.major,
-    minor: degrade.to.minor,
-  };
-  const targetHostCanonical = hostManifest[targetMethod];
-  if (
-    clientManifest[targetMethod] === undefined ||
-    targetHostCanonical === undefined
-  ) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Fallback for method '${method}' targets unavailable floor method '${targetMethod}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
-  }
-
-  const fallbackParams = degrade.adaptRequest(params);
-  const fallbackResult = await executeAvailableMethodRequest<unknown, unknown>(
-    session,
-    registry[targetMethod] as MethodVersionRegistry,
-    targetMethod,
-    targetClientCanonical,
-    targetHostCanonical,
-    fallbackParams,
-    requestId,
-    responseTimeoutMs,
-  );
-  return degrade.adaptResponse(fallbackResult) as ResponseOfMethod<
-    Registry,
-    Method
-  >;
-}
-
-function unsupportedHostMethodError(
-  method: string,
-  requestId: string,
-): HostRpcError {
-  return new HostRpcError({
-    code: "E_HOST_UNSUPPORTED",
-    message: `This host does not support '${method}'. Upgrade the host to use this feature.`,
-    requestId,
-    method,
-    fatalDetails: {
-      code: "E_HOST_UNSUPPORTED",
-      reason: `This host does not support '${method}'. Upgrade the host to use this feature.`,
-      incompatibleMethods: null,
-      upgradeGuidance: {
-        clientShouldUpgrade: false,
-        hostShouldUpgrade: true,
-      },
-    },
-  });
-}
-
-function hasRegistryMethod<Registry extends VersionedRpcRegistry>(
-  registry: Registry,
-  method: string,
-): method is keyof Registry & string {
-  return Object.prototype.hasOwnProperty.call(registry, method);
+    execute: (input) =>
+      executeAvailableMethodRequest<unknown, unknown>(
+        session,
+        input.methodRegistry,
+        input.method,
+        input.clientCanonical,
+        input.hostCanonical,
+        input.params,
+        requestId,
+        responseTimeoutMs,
+      ),
+  })) as ResponseOfMethod<Registry, Method>;
 }
 
 interface PreparedRequest<Payload> {

@@ -25,6 +25,7 @@ const DEFAULT_STATE: HostRemovalState = { removedByUser: false };
 
 let store: JsonFileStore<HostRemovalState> | null = null;
 let cached: HostRemovalState | null = null;
+let loadInFlight: Promise<HostRemovalState> | null = null;
 
 function getStore(): JsonFileStore<HostRemovalState> {
   if (store === null) {
@@ -54,10 +55,29 @@ function parseRemovalState(value: unknown): HostRemovalState {
  * device. Reads the cached value after the first load; the cache is kept in
  * lockstep with `mark` / `clear` below so a synchronous-feeling read after a
  * mutation always reflects it.
+ *
+ * The initial load ADOPTS ONCE and never overwrites. A completed `mark` /
+ * `clear` installs the authoritative value directly, and a first read's disk
+ * load can still be in flight while that happens - its result is then a
+ * pre-mutation snapshot. The previous unconditional `cached = await load()`
+ * let that stale snapshot overwrite a confirmed mark, after which every
+ * gate in the auto-provision paths read removed=false from cache while disk
+ * said true - re-enabling exactly the silent host reinstall this sentinel
+ * exists to prevent, until the next process restart. Concurrent first reads
+ * also share one in-flight load, so the adoption decision happens once.
+ * (`JsonFileStore.load` is non-throwing by contract - it falls back - so the
+ * in-flight promise cannot stick around rejected.)
  */
 export async function isHostRemovedByUser(): Promise<boolean> {
   if (cached === null) {
-    cached = await getStore().load();
+    if (loadInFlight === null) {
+      loadInFlight = getStore().load();
+    }
+    const loaded = await loadInFlight;
+    loadInFlight = null;
+    if (cached === null) {
+      cached = loaded;
+    }
   }
   return cached.removedByUser;
 }
@@ -99,4 +119,5 @@ export async function clearHostRemovedByUser(): Promise<void> {
 export function __resetHostRemovalStateForTest(): void {
   store = null;
   cached = null;
+  loadInFlight = null;
 }
