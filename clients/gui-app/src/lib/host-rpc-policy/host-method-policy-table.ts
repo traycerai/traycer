@@ -333,6 +333,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.notifications.cloudFeed.markAllRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.notifications.cloudFeed.resolve": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

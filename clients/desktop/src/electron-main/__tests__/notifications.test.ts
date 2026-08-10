@@ -256,10 +256,38 @@ describe("showNativeNotification", () => {
       deliveryKey: "user-1:notification-1:10",
     };
 
-    showNativeNotification(options);
-    showNativeNotification(options);
+    expect(showNativeNotification(options)).toBe("presented");
+    expect(showNativeNotification(options)).toBe("duplicate");
 
     expect(FakeNotification.instances).toHaveLength(1);
     expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
+  });
+
+  it("reports a foreground-suppressed delivery as presented", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+
+    const outcome = showNativeNotification({
+      ...showOptions("host:chat:chat-1"),
+      onForegroundSuppressed: vi.fn(),
+    });
+
+    expect(outcome).toBe("presented");
+  });
+
+  it("reports undeliverable exactly once per key when notifications are unsupported", async () => {
+    // No banner, no relay, key burnt: the single `undeliverable` answer is
+    // what elects one renderer to own the fallback cue; every other window
+    // hears `duplicate` and stays silent.
+    const { showNativeNotification } = await loadNotifications();
+    FakeNotification.supported = false;
+    const options = {
+      ...showOptions("host:chat:chat-1"),
+      deliveryKey: "user-1:notification-1:10",
+    };
+
+    expect(showNativeNotification(options)).toBe("undeliverable");
+    expect(showNativeNotification(options)).toBe("duplicate");
+    expect(FakeNotification.instances).toHaveLength(0);
   });
 });
