@@ -26,7 +26,6 @@ import {
 } from "@/lib/usage-analytics/usage-stat-tiles";
 import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value";
 import { lastNCalendarDays } from "@/lib/usage-analytics/day-window";
-import { getViewerTimeZone } from "@/lib/usage-analytics/viewer-timezone";
 import { UsageWindowPicker } from "@/components/usage-analytics/usage-window-picker";
 import { UsageMetricToggle } from "@/components/usage-analytics/usage-metric-toggle";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
@@ -64,13 +63,6 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const [metric, setMetric] = useState<UsageMetric>("cost");
   const [breakdownGroupBy, setBreakdownGroupBy] =
     useState<UsageBreakdownGroupBy>("model");
-  // Captured once on mount, not read live during render - the x-axis's day
-  // list only needs to be stable for the life of this panel, and reading
-  // `Date.now()` directly in the render body is an impure render (flagged by
-  // the React Compiler purity lint); a lazy `useState` initializer runs
-  // exactly once, which this codebase already uses for the same reason
-  // (`useNowMs` in `host-settings-panel-hooks.ts`).
-  const [nowMs] = useState(() => Date.now());
 
   const request = useMemo(
     () => buildUsageSummaryRequest({ windowDays, epicId: null }),
@@ -82,7 +74,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   // ambient epic cost badge, this is an actively-viewed screen with its own
   // refetch triggers (window/metric change, manual Retry).
   const query = useUsageSummaryForClient(props.client, request, true, false);
-  const days = lastNCalendarDays(windowDays, getViewerTimeZone(), nowMs);
+  const days = useMemo(() => daysForResponse(query.data), [query.data]);
   const dateRangeLabel = formatDateRangeLabel(days);
 
   return (
@@ -107,6 +99,36 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         onBreakdownGroupByChange={setBreakdownGroupBy}
       />
     </div>
+  );
+}
+
+/**
+ * The chart's x-axis and the range label beside the window picker, both
+ * derived from the RESPONSE's own window rather than from a client clock.
+ *
+ * `endAtExclusive` is the first instant outside the window, so
+ * `endAtExclusive - 1` is the last one it includes - local midnight tomorrow
+ * minus a millisecond, i.e. "today so far" (see `resolveUsageSummaryWindow`
+ * in packages/common). Anchoring on a mount-time `Date.now()` instead was
+ * the earlier shape, and this panel outlives a local midnight easily: any
+ * later refetch - window switch, Retry, host reconnect, window refocus -
+ * would return buckets for the new day against an axis that still ended on
+ * the old one, dropping the newest bucket from the chart while it stayed in
+ * the totals, and leaving the range label a day behind.
+ *
+ * No usage response yet means no range to describe, so the axis is empty and
+ * the label renders nothing - the body is showing its loading or error state
+ * in that same pass anyway.
+ */
+function daysForResponse(
+  data: UsageSummaryResponse | undefined,
+): readonly string[] {
+  if (data === undefined) return [];
+  const { window } = data.summary;
+  return lastNCalendarDays(
+    window.windowDays,
+    window.timezone,
+    window.endAtExclusive - 1,
   );
 }
 
