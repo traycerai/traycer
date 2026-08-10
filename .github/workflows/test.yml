@@ -106,6 +106,30 @@ jobs:
         run: git fetch --depth=1 origin tag host-v1.1.5
       - name: Test
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false ${{ matrix.test_args }}
+      # Diagnostics for the gui-app shard flake: shards die with every visible
+      # test passing, a log truncated mid-write, and exit 1 with no vitest
+      # failure summary — the signature of the runner killing the process, not
+      # of a failing assertion. Nothing in this job recorded WHY, so every
+      # occurrence has been triaged by guesswork and cleared by a rerun.
+      #
+      # `dmesg` names an OOM kill and its victim; the memory/disk lines bound
+      # the alternative (a full tmpfs, an exhausted runner). `|| true`
+      # throughout: this step must never convert a diagnostic gap into a
+      # second failure, and `dmesg` is not always readable on hosted runners.
+      - name: Capture runner diagnostics on test failure
+        if: failure()
+        run: |
+          echo "::group::Kernel OOM / kill records"
+          (dmesg -T 2>/dev/null || dmesg 2>/dev/null || echo "dmesg unavailable") \
+            | grep -iE "killed process|out of memory|oom[-_]kill" | tail -40 || true
+          echo "::endgroup::"
+          echo "::group::Memory"
+          free -m 2>/dev/null || true
+          cat /proc/meminfo 2>/dev/null | head -5 || true
+          echo "::endgroup::"
+          echo "::group::Disk"
+          df -h 2>/dev/null | head -10 || true
+          echo "::endgroup::"
 
   # Windows job: the ONLY Windows execution of CLI code in PR CI. Until this
   # existed, `smoke:sea` ran solely inside the release workflows, so every
