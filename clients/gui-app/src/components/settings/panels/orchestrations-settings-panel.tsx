@@ -1135,10 +1135,24 @@ function RoleEditorForm(props: {
   useEffect(() => {
     if (!isEdit) return;
     if (existingMd.data === undefined) return;
-    setResponsibility(existingMd.data ?? "");
+    const raw = existingMd.data as unknown;
+    // Defensive: older CLI returned { content }, current returns plain string.
+    const text =
+      typeof raw === "string"
+        ? raw
+        : raw !== null &&
+            typeof raw === "object" &&
+            "content" in raw &&
+            typeof (raw as { content: unknown }).content === "string"
+          ? (raw as { content: string }).content
+          : "";
+    setResponsibility(text);
   }, [isEdit, existingMd.data]);
 
   const saveMutation = useRunnerOrchestrationRoleSaveMutation();
+
+  const responsibilityText =
+    typeof responsibility === "string" ? responsibility : "";
 
   const idValid =
     isEdit ||
@@ -1146,7 +1160,7 @@ function RoleEditorForm(props: {
   const canSave =
     idValid &&
     label.trim().length > 0 &&
-    responsibility.trim().length > 0 &&
+    responsibilityText.trim().length > 0 &&
     !saveMutation.isPending;
 
   const handleSave = (): void => {
@@ -1161,7 +1175,7 @@ function RoleEditorForm(props: {
           description: description.trim(),
           tier,
           isRoot,
-          responsibility,
+          responsibility: responsibilityText,
         },
       },
       {
@@ -1269,7 +1283,7 @@ function RoleEditorForm(props: {
           Responsibility (injected once at chat creation)
         </label>
         <textarea
-          value={responsibility}
+          value={responsibilityText}
           onChange={(e) => setResponsibility(e.target.value)}
           rows={8}
           placeholder={`# ${label || "Role"}\nYou are a critical analyst. Challenge premises, name risks, and demand evidence.\nBe direct. Prefer concrete findings over vague advice.`}

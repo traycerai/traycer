@@ -155,11 +155,24 @@ function orchestrationResponsibilityQueryOptions(
             name,
             roleId,
           ],
-    queryFn: () => {
+    queryFn: async () => {
       if (traycerCli === null) {
         throw new Error("traycerCli unavailable on this runner host");
       }
-      return traycerCli.orchestrationResponsibility({ name, roleId });
+      const raw: unknown = await traycerCli.orchestrationResponsibility({
+        name,
+        roleId,
+      });
+      if (typeof raw === "string") return raw;
+      if (raw === null || raw === undefined) return null;
+      if (
+        typeof raw === "object" &&
+        "content" in raw &&
+        typeof (raw as { content: unknown }).content === "string"
+      ) {
+        return (raw as { content: string }).content;
+      }
+      return null;
     },
     enabled: traycerCli !== null && name.length > 0 && roleId.length > 0,
   });

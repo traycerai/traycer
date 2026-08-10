@@ -169,8 +169,9 @@ export function buildOrchestrationResponsibilityCommand(opts: {
       };
     }
     if (ctx.runtime.json) {
+      // Plain string — GUI/bridge type as Promise<string | null>
       return {
-        data: { name, role: roleId, content },
+        data: content,
         human: null,
         exitCode: 0,
       };
