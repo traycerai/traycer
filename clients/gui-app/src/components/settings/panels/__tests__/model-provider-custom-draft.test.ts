@@ -10,6 +10,11 @@ import {
   type CustomProviderDraft,
 } from "@/components/settings/panels/model-provider-custom-draft";
 
+/** Declaring a new provider: the minting rules apply. */
+const CREATE = { takenIds: [], existing: false };
+/** A value that came off an existing row: only the hazard rule applies. */
+const EXISTING = { takenIds: [], existing: true };
+
 function draft(overrides: Partial<CustomProviderDraft>): CustomProviderDraft {
   return {
     id: "my-gateway",
@@ -49,7 +54,9 @@ describe("custom provider model ids", () => {
 describe("custom provider draft validation", () => {
   it("passes a draft the wire would accept", () => {
     expect(
-      hasCustomProviderDraftError(validateCustomProviderDraft(draft({}), [])),
+      hasCustomProviderDraftError(
+        validateCustomProviderDraft(draft({}), CREATE),
+      ),
     ).toBe(false);
   });
 
@@ -58,8 +65,10 @@ describe("custom provider draft validation", () => {
     // schema boundary, and catching it here turns a provider that silently
     // never works into a message beside the field.
     expect(
-      validateCustomProviderDraft(draft({ baseUrl: "api.example.test/v1" }), [])
-        .baseUrl,
+      validateCustomProviderDraft(
+        draft({ baseUrl: "api.example.test/v1" }),
+        CREATE,
+      ).baseUrl,
     ).toBe("Enter a full URL, including https://.");
   });
 
@@ -69,7 +78,7 @@ describe("custom provider draft validation", () => {
     expect(
       validateCustomProviderDraft(
         draft({ baseUrl: "http://localhost:11434/v1" }),
-        [],
+        CREATE,
       ).baseUrl,
     ).toBeNull();
   });
@@ -79,13 +88,16 @@ describe("custom provider draft validation", () => {
     // map, so a custom provider declared with none would not be recognized as
     // custom by the predicate that decides whether the row is editable.
     expect(
-      validateCustomProviderDraft(draft({ models: " \n " }), []).models,
+      validateCustomProviderDraft(draft({ models: " \n " }), CREATE).models,
     ).toBe("Enter at least one model id.");
   });
 
   it("refuses to shadow a provider that already exists", () => {
     expect(
-      validateCustomProviderDraft(draft({ id: "openai" }), ["openai"]).id,
+      validateCustomProviderDraft(draft({ id: "openai" }), {
+        takenIds: ["openai"],
+        existing: false,
+      }).id,
     ).toBe("A provider with this id already exists.");
   });
 
@@ -94,7 +106,7 @@ describe("custom provider draft validation", () => {
     // single fix into four submit-and-read rounds.
     const errors = validateCustomProviderDraft(
       { id: "Not An Id", name: "  ", baseUrl: "nope", models: "" },
-      [],
+      CREATE,
     );
     expect(errors.id).not.toBeNull();
     expect(errors.name).not.toBeNull();
@@ -108,7 +120,7 @@ describe("custom provider values", () => {
     expect(
       customProviderValues(
         draft({ id: " my-gateway ", models: "a\nb", name: " My gateway " }),
-        [],
+        CREATE,
       ),
     ).toEqual({
       modelProviderId: "my-gateway",
@@ -119,7 +131,7 @@ describe("custom provider values", () => {
   });
 
   it("answers null rather than a half-built payload", () => {
-    expect(customProviderValues(draft({ models: "" }), [])).toBeNull();
+    expect(customProviderValues(draft({ models: "" }), CREATE)).toBeNull();
   });
 });
 
@@ -169,5 +181,68 @@ describe("re-enable eligibility", () => {
       canReenableCustomProvider({ ...values, baseUrl: "api.example.test/v1" }),
     ).toBe(false);
     expect(canReenableCustomProvider({ ...values, modelIds: [] })).toBe(false);
+  });
+
+  it("allows an id we would never have MINTED but the host accepts", () => {
+    // A hand-written `my_gateway` is legal on the wire and legal to the host,
+    // which refuses only `__proto__`. Judging it by the slug rules locked the
+    // row permanently: no re-enable, and an Edit whose id field is disabled -
+    // so the very thing being complained about could not be changed.
+    expect(
+      canReenableCustomProvider({ ...values, modelProviderId: "my_gateway" }),
+    ).toBe(true);
+    expect(
+      canReenableCustomProvider({ ...values, modelProviderId: "My.Gateway" }),
+    ).toBe(true);
+  });
+
+  it("still refuses the one id no path may send", () => {
+    expect(
+      canReenableCustomProvider({ ...values, modelProviderId: "__proto__" }),
+    ).toBe(false);
+  });
+});
+
+describe("id policy by scope", () => {
+  it("imposes the slug shape only on an id being MINTED", () => {
+    // Our house style for ids we propose; not a judgement we get to make about
+    // one the user already wrote into their own config file.
+    expect(
+      validateCustomProviderDraft(draft({ id: "my_gateway" }), CREATE).id,
+    ).toBe("Use lowercase letters, numbers and dashes.");
+    expect(
+      validateCustomProviderDraft(draft({ id: "my_gateway" }), EXISTING).id,
+    ).toBeNull();
+  });
+
+  it("refuses __proto__ under BOTH policies", () => {
+    // A hazard rather than a house style, so it holds however the id got here.
+    // The host answers it with `invalid_input`; this puts the message on the
+    // field.
+    // The hazard is checked FIRST, so both policies answer with it rather than
+    // one of them calling it a style violation.
+    expect(
+      validateCustomProviderDraft(draft({ id: "__proto__" }), CREATE).id,
+    ).toBe("That id isn't allowed.");
+    expect(
+      validateCustomProviderDraft(draft({ id: "__proto__" }), EXISTING).id,
+    ).toBe("That id isn't allowed.");
+  });
+
+  it("checks collisions only when minting", () => {
+    // An existing row keeps the id it already has; "taken" by itself is not a
+    // reason to refuse its own edit.
+    expect(
+      validateCustomProviderDraft(draft({ id: "openai" }), {
+        takenIds: ["openai"],
+        existing: true,
+      }).id,
+    ).toBeNull();
+  });
+
+  it("still requires an id at all", () => {
+    expect(validateCustomProviderDraft(draft({ id: "  " }), EXISTING).id).toBe(
+      "Enter an id.",
+    );
   });
 });

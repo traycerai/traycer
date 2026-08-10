@@ -188,10 +188,11 @@ describe("custom model provider dialog", () => {
   });
 
   it("refuses a prototype-pollution id before the host has to", () => {
-    // The host answers `__proto__` with `invalid_input`. The id pattern rejects
-    // it here first - underscores are not in the character class at all - so
-    // the message lands on the field rather than arriving as a form-level
-    // rejection of something the user cannot see the shape of.
+    // The host answers `__proto__` with `invalid_input`. It is refused here
+    // first so the message lands on the field rather than arriving as a
+    // form-level rejection of something the user cannot see the shape of. Its
+    // OWN message, not the slug complaint: this is a hazard that holds under
+    // both id policies, not a house style that applies to ids we mint.
     renderDialog({
       initial: null,
       takenIds: [],
@@ -199,9 +200,7 @@ describe("custom model provider dialog", () => {
       submitError: null,
     });
     type("Id", "__proto__");
-    expect(
-      screen.getByText("Use lowercase letters, numbers and dashes."),
-    ).toBeTruthy();
+    expect(screen.getByText("That id isn't allowed.")).toBeTruthy();
   });
 
   it("keeps the form open and shows what the host rejected", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -84,11 +84,22 @@ export function ProviderCustomModelProviderDialog(props: {
   // Editing keeps the row's own id out of the taken list; the provider is
   // allowed to keep the id it already has.
   const initialId = props.initial?.modelProviderId ?? null;
-  const takenIds =
-    initialId === null
-      ? props.takenIds
-      : props.takenIds.filter((id) => id !== initialId);
-  const errors = validateCustomProviderDraft(draft, takenIds);
+  const propTakenIds = props.takenIds;
+  const takenIds = useMemo(
+    () =>
+      initialId === null
+        ? propTakenIds
+        : propTakenIds.filter((id) => id !== initialId),
+    [initialId, propTakenIds],
+  );
+  // An edit judges the id as an EXISTING one. The field is disabled anyway, so
+  // the only thing the minting rules could do here is condemn a declaration the
+  // user cannot change from this form - which is exactly the lock they caused.
+  const scope = useMemo(
+    () => ({ takenIds, existing: editing }),
+    [editing, takenIds],
+  );
+  const errors = validateCustomProviderDraft(draft, scope);
   const invalid = hasCustomProviderDraftError(errors);
 
   const handleNameChange = useCallback(
@@ -109,13 +120,13 @@ export function ProviderCustomModelProviderDialog(props: {
   );
 
   const handleSubmit = useCallback(() => {
-    const values = customProviderValues(draft, takenIds);
+    const values = customProviderValues(draft, scope);
     // Re-checked here even though the button is disabled: the form also submits
     // on Enter, and a browser that lets that through would otherwise send a
     // draft the wire is going to reject.
     if (values === null || props.isPending) return;
     props.onSubmit(values);
-  }, [draft, props, takenIds]);
+  }, [draft, props, scope]);
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>

@@ -1,9 +1,30 @@
 import type {
+  ModelProviderAuthResult,
   ModelProviderEntry,
   ModelProvidersListResult,
   ProviderModelProvidersCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+
+/**
+ * The callbacks the tab hands `mutate`, named so a test can fire one by hand.
+ *
+ * Typed on the mock rather than reached for through `mock.calls`, which is
+ * `any` - and firing a completion by hand is the only way to reach the
+ * late-arrival case at all.
+ */
+type AuthMutateOptions = {
+  readonly onSuccess: (data: {
+    readonly result: ModelProviderAuthResult;
+  }) => void;
+  readonly onSettled: () => void;
+};
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sortModelProviderEntries } from "@/components/settings/panels/model-provider-connect-model";
 import { ProviderModelProvidersTab } from "@/components/settings/panels/provider-model-providers-tab";
@@ -14,7 +35,7 @@ const hostMocks = vi.hoisted(() => ({
   listPending: false,
   listError: null as string | null,
   refetch: vi.fn(),
-  authMutate: vi.fn(),
+  authMutate: vi.fn<(payload: unknown, options: AuthMutateOptions) => void>(),
   authIsPending: false,
   awaitMutate: vi.fn(),
   cancelMutate: vi.fn(),
@@ -942,6 +963,153 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(
       screen.queryByRole("button", { name: "Edit My gateway" }),
     ).toBeNull();
+  });
+
+  it("round-trips a non-slug id through Edit and Re-enable", () => {
+    // `my_gateway` is hand-written, legal on the wire and legal to the host.
+    // The create-time slug rules used to be applied to it, which left the row
+    // with no re-enable AND an Edit whose id field is disabled - a permanent
+    // lock on the one row that needed fixing.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my_gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    // No error on the id it arrived with, and Save is live.
+    expect(
+      screen.queryByText("Use lowercase letters, numbers and dashes."),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(hostMocks.authMutate.mock.calls[0]?.[0]).toMatchObject({
+      action: { action: "updateCustom", modelProviderId: "my_gateway" },
+    });
+  });
+
+  it("takes ONE write from a double-clicked Re-enable", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    const button = screen.getByRole("button", { name: "Re-enable My gateway" });
+    // BOTH clicks inside one `act`, so React has not re-rendered between them
+    // and the button is still enabled for the second. Clicking twice with a
+    // render in between only proves the disabled attribute works; a real double
+    // click lands in one tick, and what has to stop it there is the guard.
+    act(() => {
+      fireEvent.click(button);
+      fireEvent.click(button);
+    });
+    expect(hostMocks.authMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes every custom entry point while a write is in flight", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+          }),
+          entry({
+            id: "other-gateway",
+            name: "Other gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.other.test/v1", modelIds: ["b"] },
+          }),
+        ],
+      },
+      capabilities: {
+        actions: ["connect", "disconnect", "createCustom", "updateCustom"],
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable My gateway" }),
+    );
+    // Not just the acting row: they all rewrite one config file.
+    for (const name of [
+      "Add custom provider",
+      "Edit My gateway",
+      "Edit Other gateway",
+      "Re-enable Other gateway",
+    ]) {
+      expect(
+        screen.getByRole("button", { name }).hasAttribute("disabled"),
+      ).toBe(true);
+    }
+  });
+
+  it("drops a completion that is no longer the current write", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://api.example.test/v1", modelIds: ["a"] },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable My gateway" }),
+    );
+    const first = hostMocks.authMutate.mock.calls[0][1];
+    // First write settles clean, so the surface is free again. Wrapped in
+    // `act` because these are the mutation's own callbacks fired by hand - the
+    // state they set has to be committed before the next click reads it.
+    act(() => {
+      first.onSuccess({ result: { kind: "done" } });
+      first.onSettled();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable My gateway" }),
+    );
+    expect(hostMocks.authMutate).toHaveBeenCalledTimes(2);
+    // ...and now the FIRST write reports a rejection, late. Applying it would
+    // open an error form over a write that has already been superseded.
+    act(() => {
+      first.onSuccess({
+        result: { kind: "error", code: "invalid_input", detail: "stale" },
+      });
+    });
+    expect(screen.queryByText("stale")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("hides every connect affordance when the host advertises no write action", () => {

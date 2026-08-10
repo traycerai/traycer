@@ -97,7 +97,11 @@ export function canReenableCustomProvider(
         baseUrl: values.baseUrl,
         models: values.modelIds.join("\n"),
       },
-      [],
+      // An EXISTING declaration, so its id is judged as one: a hand-written
+      // `my_gateway` is legal on the wire and legal to the host, and refusing
+      // to re-enable it would strand the row behind a rule that only ever
+      // governed ids we mint.
+      { takenIds: [], existing: true },
     ) !== null
   );
 }
@@ -145,12 +149,44 @@ export function parseCustomProviderModels(models: string): readonly string[] {
   return out;
 }
 
-function idError(id: string, takenIds: readonly string[]): string | null {
+/**
+ * The one id no surface may send, on any path.
+ *
+ * The host answers it with `invalid_input`, and it is refused here so the
+ * message lands on the field. Kept separate from the slug pattern because it is
+ * a different KIND of rule: the pattern is a house style for ids we mint, this
+ * is a hazard that holds however the id got here.
+ */
+const FORBIDDEN_PROVIDER_ID = "__proto__";
+
+/**
+ * Two id policies, because there are two questions.
+ *
+ * MINTING an id is a house-style decision, and the slug pattern is ours to
+ * impose: it is what every id in that config file already looks like, and we
+ * are the ones proposing it.
+ *
+ * An EXISTING id is not ours to judge. The user may have hand-written
+ * `my_gateway` into `opencode.json` - underscores are legal on the wire and
+ * legal to the host, which refuses only `__proto__` - and applying the minting
+ * pattern to it locked the row permanently: no re-enable (the values "fail
+ * validation"), and an Edit whose id field is disabled, so the thing being
+ * complained about could not even be changed. Judging a value by the rule that
+ * would have created it is the bug; these are separate rules now.
+ */
+function idError(
+  id: string,
+  args: { readonly takenIds: readonly string[]; readonly existing: boolean },
+): string | null {
   if (id.length === 0) return "Enter an id.";
+  if (id === FORBIDDEN_PROVIDER_ID) return "That id isn't allowed.";
+  if (args.existing) return null;
   if (!PROVIDER_ID_PATTERN.test(id)) {
     return "Use lowercase letters, numbers and dashes.";
   }
-  if (takenIds.includes(id)) return "A provider with this id already exists.";
+  if (args.takenIds.includes(id)) {
+    return "A provider with this id already exists.";
+  }
   return null;
 }
 
@@ -187,20 +223,30 @@ function baseUrlError(baseUrl: string): string | null {
  * dialog, and reporting them one at a time turns a single fix into four
  * submit-and-read rounds.
  *
- * `takenIds` are the ids already in the catalog. A collision is a real failure
- * and a confusing one to debug later - upstream would happily let the new block
- * shadow an existing provider, and the row that "did nothing" is the one the
- * user is not looking at.
+ * `scope.takenIds` are the ids already in the catalog. A collision is a real
+ * failure and a confusing one to debug later - upstream would happily let the
+ * new block shadow an existing provider, and the row that "did nothing" is the
+ * one the user is not looking at.
+ *
+ * `scope.existing` says the id came off a row rather than out of this form. It
+ * changes which id rule applies - see {@link idError} - and it is the caller's
+ * to state, because only the caller knows whether this draft is declaring a
+ * provider or editing one.
  */
+export type CustomProviderIdScope = {
+  readonly takenIds: readonly string[];
+  readonly existing: boolean;
+};
+
 export function validateCustomProviderDraft(
   draft: CustomProviderDraft,
-  takenIds: readonly string[],
+  scope: CustomProviderIdScope,
 ): CustomProviderDraftErrors {
   const id = draft.id.trim();
   const name = draft.name.trim();
   const modelIds = parseCustomProviderModels(draft.models);
   return {
-    id: idError(id, takenIds),
+    id: idError(id, scope),
     name: name.length === 0 ? "Enter a name." : null,
     baseUrl: baseUrlError(draft.baseUrl),
     models: modelsError(modelIds),
@@ -227,11 +273,9 @@ export function hasCustomProviderDraftError(
  */
 export function customProviderValues(
   draft: CustomProviderDraft,
-  takenIds: readonly string[],
+  scope: CustomProviderIdScope,
 ): CustomProviderValues | null {
-  if (
-    hasCustomProviderDraftError(validateCustomProviderDraft(draft, takenIds))
-  ) {
+  if (hasCustomProviderDraftError(validateCustomProviderDraft(draft, scope))) {
     return null;
   }
   return {

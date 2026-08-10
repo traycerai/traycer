@@ -952,9 +952,27 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       A failed write — from the form or from a bare re-enable — lands the user
       in the form for those values. A re-enable that the host refused otherwise
       reports itself on a row with no way to act on it.
-      `__proto__` never reaches the host: the id pattern has no underscores in
-      its character class, so it fails on the field. The host answers it with
-      `invalid_input` regardless.
+      **Two id policies, not one.** The slug shape (lowercase, digits, dashes)
+      is a house style for an id we MINT, and it is imposed only when declaring.
+      An id that came off an existing row is not ours to judge: a hand-written
+      `my_gateway` is legal on the wire and legal to the host, and applying the
+      minting rule to it locked the row permanently — no re-enable, and an Edit
+      whose id field is disabled, so the very thing being complained about could
+      not be changed. `__proto__` is refused under BOTH policies, because it is
+      a hazard rather than a style: the host answers it with `invalid_input`,
+      and refusing it here puts the message on the field.
+    - **One custom write at a time, across the whole surface.** These all
+      rewrite the same config file, so a second write started while the first is
+      in the air is a lost update whichever way it lands. Bare Re-enable is the
+      reason this needs saying: it is a button on a row with no form in front of
+      it, so nothing else was gating it. While a write is in flight every custom
+      entry point closes — Add, and Edit/Re-enable on EVERY row, not just the
+      acting one — and the acting row shows the spinner. Completion is guarded
+      by a per-write token rather than by "is something pending", so a late
+      rejection cannot open an error form over a write that has already been
+      superseded. The token is a monotonic counter: `Date.now()` and
+      `Math.random()` are not available in every environment this runs in, and
+      all the guard needs is "later than the one before".
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a

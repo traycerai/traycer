@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import type {
   ModelProviderAuthResult,
@@ -199,6 +199,14 @@ function useCustomProviderForm(providerId: ProviderId): {
   readonly state: { readonly initial: CustomProviderValues | null } | null;
   readonly error: string | null;
   readonly isPending: boolean;
+  /**
+   * The row a custom write is in flight for, or null.
+   *
+   * One write at a time, across the WHOLE surface rather than per row. These
+   * all rewrite the same config file, so a second one started while the first
+   * is in the air is a lost update whichever way it lands.
+   */
+  readonly activeModelProviderId: string | null;
   readonly open: (initial: CustomProviderValues | null) => void;
   readonly close: () => void;
   readonly submit: (values: CustomProviderValues) => void;
@@ -209,6 +217,18 @@ function useCustomProviderForm(providerId: ProviderId): {
     readonly initial: CustomProviderValues | null;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState<{
+    readonly token: number;
+    readonly modelProviderId: string;
+  } | null>(null);
+  // Mirrored in refs because the guard has to read the CURRENT value from
+  // inside a callback that closed over an older render, which is exactly the
+  // read a state variable cannot serve.
+  const activeRef = useRef<{
+    readonly token: number;
+    readonly modelProviderId: string;
+  } | null>(null);
+  const tokenRef = useRef(0);
   // Its OWN mutation instance rather than the tab's. They share a key and an
   // invalidation, and nothing else: a disconnect in flight has no business
   // spinning this form's submit button, or the other way round.
@@ -224,6 +244,19 @@ function useCustomProviderForm(providerId: ProviderId): {
 
   const send = useCallback(
     (values: CustomProviderValues, declaring: boolean) => {
+      // One write at a time. Bare re-enable is a button on a row with no form
+      // in front of it, so without this a second click - or a click on another
+      // row - launches a concurrent write against the same config file while
+      // the first is still in the air.
+      if (activeRef.current !== null) return;
+      // Identity for THIS write, so a completion can prove it is still the
+      // current one. A monotonic counter rather than a clock or a random id:
+      // those are unavailable in some of the environments this runs in, and all
+      // this needs is "later than the one before".
+      const token = tokenRef.current + 1;
+      tokenRef.current = token;
+      activeRef.current = { token, modelProviderId: values.modelProviderId };
+      setActive({ token, modelProviderId: values.modelProviderId });
       setError(null);
       auth.mutate(
         {
@@ -239,6 +272,12 @@ function useCustomProviderForm(providerId: ProviderId): {
         },
         {
           onSuccess: (data) => {
+            // Guarded by identity, not by "is something pending": a completion
+            // that is no longer the current write must not touch the surface.
+            // The concrete case is a late REJECTION opening an error form over
+            // whatever the user did next, reporting a failure for a write that
+            // has already been superseded.
+            if (tokenRef.current !== token) return;
             const failure = customSubmitError(data.result);
             setError(failure);
             // A failure lands the user in the form for THESE values, whether or
@@ -246,6 +285,11 @@ function useCustomProviderForm(providerId: ProviderId): {
             // otherwise reports itself on a row with no way to act on it, and
             // the form is the surface that can.
             setState(failure === null ? null : { initial: values });
+          },
+          onSettled: () => {
+            if (tokenRef.current !== token) return;
+            activeRef.current = null;
+            setActive(null);
           },
         },
       );
@@ -270,6 +314,7 @@ function useCustomProviderForm(providerId: ProviderId): {
     state,
     error,
     isPending: auth.isPending,
+    activeModelProviderId: active?.modelProviderId ?? null,
     open,
     close,
     submit,
@@ -405,6 +450,10 @@ export function ProviderModelProvidersTab(props: {
           size="sm"
           variant="ghost"
           className="w-full justify-start gap-2 px-0 text-muted-foreground hover:text-foreground"
+          // Closed while a custom write is in flight: declaring a provider
+          // through this button would open a form whose Save the guard drops,
+          // and an older completion would land on the newer dialog's state.
+          disabled={customForm.activeModelProviderId !== null}
           onClick={() => {
             customForm.open(null);
           }}
@@ -457,7 +506,12 @@ export function ProviderModelProvidersTab(props: {
           capabilities.actions.includes("oauth")
         }
         rowError={rowError}
-        busyModelProviderId={disconnectPending ? disconnectTarget.id : null}
+        busyModelProviderId={
+          disconnectPending
+            ? disconnectTarget.id
+            : customForm.activeModelProviderId
+        }
+        customWriteInFlight={customForm.activeModelProviderId !== null}
         onConnect={(entry) => {
           setRowError(null);
           setConnectTargetId(entry.id);
@@ -537,6 +591,8 @@ function ModelProvidersBody(props: {
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
   readonly canUpdateCustom: boolean;
+  /** A custom write is in flight somewhere on this surface. */
+  readonly customWriteInFlight: boolean;
   readonly onEditCustom: (values: CustomProviderValues) => void;
   readonly onReenableCustom: (values: CustomProviderValues) => void;
   readonly rowError: {
@@ -660,6 +716,7 @@ function ModelProvidersBody(props: {
           canDisconnect={props.canDisconnect}
           connectable={props.connectable}
           canUpdateCustom={props.canUpdateCustom}
+          customWriteInFlight={props.customWriteInFlight}
           busy={props.busyModelProviderId === entry.id}
           rowError={
             props.rowError !== null &&
@@ -715,6 +772,7 @@ function ModelProviderRow(props: {
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
   readonly canUpdateCustom: boolean;
+  readonly customWriteInFlight: boolean;
   readonly busy: boolean;
   readonly rowError: string | null;
   readonly onConnect: () => void;
@@ -724,6 +782,11 @@ function ModelProviderRow(props: {
 }): ReactNode {
   const { entry } = props;
   const custom = customRowActions(entry, props.canUpdateCustom);
+  // Every custom entry point closes while ANY custom write is in flight, not
+  // just the acting row's. They all rewrite one config file, and a completion
+  // that lands after the user opened a different row's form would apply its
+  // result to state that has moved on.
+  const customBusy = props.busy || props.customWriteInFlight;
   // The affordance is gated on `canDisconnect` ALONE. `hasStoredCredential`
   // answers a different question ("does Traycer hold a credential for this?")
   // and a later host may answer the two differently - reading either one for
@@ -783,7 +846,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={props.busy}
+              disabled={customBusy}
               onClick={() => {
                 props.onEditCustom(custom.values);
               }}
@@ -797,7 +860,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={props.busy}
+              disabled={customBusy}
               onClick={() => {
                 props.onReenableCustom(custom.values);
               }}
