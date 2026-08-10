@@ -1,0 +1,218 @@
+import type { ReactNode } from "react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import type {
+  UsageChartColumn,
+  UsageMetric,
+} from "@/lib/usage-analytics/usage-chart-data";
+import type { UsageSeriesScale } from "@/lib/usage-analytics/usage-series-scale";
+import {
+  formatDayLabel,
+  formatMetricValue,
+  niceCeil,
+} from "@/lib/usage-analytics/format-metric-value";
+
+const MAX_X_AXIS_LABELS = 9;
+const Y_AXIS_TICK_FRACTIONS = [1, 0.5, 0] as const;
+
+export interface UsageDailyChartProps {
+  readonly columns: readonly UsageChartColumn[];
+  readonly scale: UsageSeriesScale;
+  readonly metric: UsageMetric;
+}
+
+/**
+ * Per-day stacked bar chart, one bar per calendar day, segmented by harness.
+ * Mark specs and spacing follow the dataviz skill: 2px surface gaps between
+ * stacked segments, 4px rounded top cap on the outer segment only, no bar
+ * over 24px thick. The three/one WARN-band contrast slots in the palette
+ * (`usage-analytics-chart.css`) get their relief from the tooltip (hover
+ * AND keyboard focus, via the shared `Tooltip` primitive) plus the
+ * breakdown table beneath the chart - every value stays reachable without
+ * landing exactly on a segment.
+ */
+export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
+  const { columns, scale, metric } = props;
+  const maxTotal = niceCeil(
+    Math.max(0, ...columns.map((column) => column.total)),
+  );
+  const tickEvery = Math.max(1, Math.ceil(columns.length / MAX_X_AXIS_LABELS));
+
+  return (
+    <div
+      className="usage-chart-root flex w-full flex-col gap-2"
+      data-testid="usage-daily-chart"
+    >
+      <div className="flex h-[clamp(11rem,26vh,16rem)] w-full gap-3">
+        <YAxis maxValue={maxTotal} metric={metric} />
+        <div className="flex min-w-0 flex-1 items-stretch gap-px border-l border-b border-border/60 pl-1">
+          {columns.map((column) => (
+            <DayColumn
+              key={column.day}
+              column={column}
+              scale={scale}
+              metric={metric}
+              maxValue={maxTotal}
+            />
+          ))}
+        </div>
+      </div>
+      <XAxis days={columns.map((column) => column.day)} tickEvery={tickEvery} />
+      {scale.order.length >= 2 ? <UsageChartLegend scale={scale} /> : null}
+    </div>
+  );
+}
+
+function YAxis(props: {
+  readonly maxValue: number;
+  readonly metric: UsageMetric;
+}): ReactNode {
+  return (
+    <div
+      className="flex w-12 shrink-0 flex-col justify-between py-0.5 text-right text-ui-xs text-muted-foreground"
+      aria-hidden
+    >
+      {Y_AXIS_TICK_FRACTIONS.map((fraction) => (
+        <span key={fraction} className="tabular-nums">
+          {formatMetricValue(props.maxValue * fraction, props.metric)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function XAxis(props: {
+  readonly days: readonly string[];
+  readonly tickEvery: number;
+}): ReactNode {
+  return (
+    <div className="flex w-full gap-px pl-[3.25rem]">
+      {props.days.map((day, index) => (
+        <span
+          key={day}
+          className="min-w-0 flex-1 truncate text-center text-ui-xs text-muted-foreground"
+        >
+          {index % props.tickEvery === 0 ? formatDayLabel(day) : ""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function DayColumn(props: {
+  readonly column: UsageChartColumn;
+  readonly scale: UsageSeriesScale;
+  readonly metric: UsageMetric;
+  readonly maxValue: number;
+}): ReactNode {
+  const { column, scale, metric, maxValue } = props;
+  // Stacking order: `scale.order` is bottom-up (matches the legend/table
+  // order), but the DOM renders top-to-bottom inside a `flex-col
+  // justify-end` column, so the LAST non-zero segment lands at the bottom
+  // (the baseline, square) and the FIRST lands at the top (the outer edge,
+  // rounded) - reversing here keeps that one rule in one place instead of
+  // recomputing "which end is this" per segment.
+  const nonZeroSegments = [...column.segments]
+    .filter((segment) => segment.value > 0)
+    .reverse();
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          data-testid="usage-daily-chart-column"
+          data-day={column.day}
+          className="group flex min-w-0 flex-1 flex-col justify-end rounded-t-[4px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {nonZeroSegments.length === 0 ? (
+            <span className="block h-px w-full bg-border/60" />
+          ) : (
+            nonZeroSegments.map((segment, index) => (
+              <span
+                key={segment.seriesKey}
+                className={cn(
+                  "block w-full transition-opacity group-hover:opacity-80",
+                  index === 0 && "rounded-t-[4px]",
+                )}
+                style={{
+                  height: `${String(maxValue > 0 ? (segment.value / maxValue) * 100 : 0)}%`,
+                  backgroundColor: scale.colorVar(segment.seriesKey),
+                  marginBottom:
+                    index === nonZeroSegments.length - 1 ? 0 : "2px",
+                }}
+              />
+            ))
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        <DayTooltipBody column={column} scale={scale} metric={metric} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function DayTooltipBody(props: {
+  readonly column: UsageChartColumn;
+  readonly scale: UsageSeriesScale;
+  readonly metric: UsageMetric;
+}): ReactNode {
+  const { column, scale, metric } = props;
+  const nonZero = column.segments.filter((segment) => segment.value > 0);
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="font-medium">{formatDayLabel(column.day)}</p>
+      {nonZero.length === 0 ? (
+        <p className="text-muted-foreground">No usage</p>
+      ) : (
+        <ul className="flex flex-col gap-0.5">
+          {nonZero.map((segment) => (
+            <li
+              key={segment.seriesKey}
+              className="flex items-center justify-between gap-3"
+            >
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: scale.colorVar(segment.seriesKey) }}
+                />
+                {scale.labelFor(segment.seriesKey)}
+              </span>
+              <span className="tabular-nums font-medium">
+                {formatMetricValue(segment.value, metric)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function UsageChartLegend(props: {
+  readonly scale: UsageSeriesScale;
+}): ReactNode {
+  return (
+    <ul
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-[3.25rem] text-ui-xs text-muted-foreground"
+      data-testid="usage-daily-chart-legend"
+    >
+      {props.scale.order.map((seriesKey) => (
+        <li key={seriesKey} className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: props.scale.colorVar(seriesKey) }}
+          />
+          {props.scale.labelFor(seriesKey)}
+        </li>
+      ))}
+    </ul>
+  );
+}

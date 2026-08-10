@@ -31,7 +31,8 @@ SettingsLayout
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
         ├── HostSettingsPanel
-        └── DiagnosticsSettingsPanel
+        ├── DiagnosticsSettingsPanel
+        └── UsageSettingsPanel
 ```
 
 Settings is also presented as a **modal** via `settings-modal-content.tsx`,
@@ -1279,6 +1280,28 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     silently going blank. A has-bridge-but-zero-logs response similarly gets
     an explicit "No log files found." message in the Recent logs card rather
     than rendering empty.
+- `Usage` (`usage-settings-panel.tsx`, appended LAST in `settings-sections.ts`
+  rather than slotted beside its RPC-backed siblings, so it never renumbers
+  an existing section's leader-digit shortcut - it is simply the digit-less
+  12th entry, the same way Diagnostics is the 11th). Window picker
+  (7/30/90 days) + cost/token toggle + per-day chart (harness breakdown,
+  custom SVG/CSS per the `dataviz` skill - gui-app has no chart dependency)
+  - harness/model breakdown table, all reading `host.usage.summary` through
+    `UsageSummaryPanel` (`components/usage-analytics/`), placement-agnostic and
+    reused unmodified for the epic-canvas cost badge
+    (`epic-canvas/panels/epic-cost-badge.tsx`). `host.usage.summary` is an
+    OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol registry),
+    so this section stays in the static list either way and instead swaps its
+    BODY for a capability notice (same anatomy as `HostScopeGate`'s internal
+    notices - an idle host-capability gap, not an error) on a host that
+    predates the capability. Every dollar figure carries the "if billed at full
+    API rate" qualifier (pricing-provenance artifact); a total with incomplete
+    cost coverage renders as "priced subtotal + N unpriced turns", never a bare
+    number; `servedBy: "local"` states the this-machine-only scope; a cloud-
+    unavailable read renders a retryable error card rather than silently
+    falling back to local-looking data (the host resolver's cloud-unavailable
+    path is a plain `RPC_ERROR` on this transport, so `isTransientHostRpcFailure`
+    cannot classify it - the card offers Retry unconditionally instead).
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking

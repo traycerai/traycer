@@ -1029,6 +1029,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bounded read over settled facts (Usage page + epic cost badge); nothing
+  // here changes between polls the way a progress bar would, and both call
+  // sites already control their own refetch (window/metric change, manual
+  // retry) rather than needing a background cadence.
+  "host.usage.summary": { ...LATEST_SCHEDULING, poll: null },
 } satisfies HostMethodPolicyTable;
 
 const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;

@@ -6,6 +6,7 @@ import {
   Boxes,
   GitBranch,
   Keyboard,
+  LineChart,
   Palette,
   Server,
   ShieldCheck,
@@ -24,7 +25,8 @@ export type SettingsSectionId =
   | "worktrees"
   | "host"
   | "devices"
-  | "diagnostics";
+  | "diagnostics"
+  | "usage";
 
 /**
  * What a section BELONGS to — the organising idea of the whole surface.
@@ -181,6 +183,17 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Activity,
     group: "host",
     requiresLocalHost: true,
+  },
+  // Appended last, not slotted alongside its RPC-backed siblings above, so
+  // adding it never renumbers an existing section's leader-digit shortcut -
+  // it simply becomes the (digit-less) 12th entry, same as Diagnostics did
+  // as the 11th.
+  {
+    id: "usage",
+    label: "Usage",
+    icon: LineChart,
+    group: "host",
+    requiresLocalHost: false,
   },
 ];
 

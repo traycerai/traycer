@@ -63,6 +63,7 @@ export type AnalyticsSettingsSection =
   | "notifications"
   | "providers"
   | "shell"
+  | "usage"
   | "worktrees";
 
 export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
