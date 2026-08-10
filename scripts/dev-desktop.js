@@ -37,7 +37,11 @@
 //   - On Ctrl-C, runs `traycer host uninstall --all` so this run's dev
 //     install + service are gone. `~/.traycer/` user data is preserved (no
 //     --purge); any production host/CLI state in the prod slot, and any other
-//     run's dev-runs/<slot>, are never touched.
+//     run's dev-runs/<slot>, are never touched. Passing `--keep-host`
+//     (or TRAYCER_DEV_DESKTOP_KEEP_HOST=1) instead skips both the install
+//     step (when the slot's host is already alive) and this teardown
+//     uninstall, so repeat launches start near-instantly at the cost of
+//     pinning the currently-installed host release.
 
 "use strict";
 
@@ -377,6 +381,24 @@ function parseReleaseArg(argv) {
   return null;
 }
 
+// `--keep-host` (or TRAYCER_DEV_DESKTOP_KEEP_HOST=1): keep this run's dev
+// host installed + running across launches. Boot skips `host install` when
+// the slot's host is already alive, and Ctrl-C teardown skips
+// `host uninstall --all` - trading a stale-host risk for a much faster
+// cold start. Run once WITHOUT the flag to refresh the host release.
+function parseKeepHostArg(argv) {
+  const tail = Array.isArray(argv) ? argv.slice(2) : [];
+  return tail.includes("--keep-host");
+}
+
+// Pure decision so tests can pin the reuse matrix without spawning
+// processes: reuse only when the operator asked for it AND the recorded
+// host pid is still alive. A dead/absent pid falls back to the normal
+// install path (which also re-asserts the slot is not otherwise active).
+function shouldReuseRunningHost(keepHost, pidMetadata, pidAlive) {
+  return keepHost === true && pidMetadata !== null && pidAlive === true;
+}
+
 // Build the argv the orchestrator hands the CLI. The CLI runs from source
 // (`config.environment === "dev"`), so every command targets the dev slot
 // automatically — there is no flag to pass. `--allow-self-invocation` lets the
@@ -630,6 +652,9 @@ function runConcurrentStack(options) {
 
 async function main() {
   const release = parseReleaseArg(process.argv);
+  const keepHost =
+    parseKeepHostArg(process.argv) ||
+    process.env.TRAYCER_DEV_DESKTOP_KEEP_HOST === "1";
 
   // Resolve this run's slot once and set it ambiently: the CLI path helpers
   // dynamically imported below (`cliInstallHomeDir`/`hostLogPath`) read
@@ -651,7 +676,22 @@ async function main() {
   const hostLog = hostLogPath(config.environment);
   const hostHome = path.dirname(hostLog);
 
-  assertSlotNotActive(slot, hostHome);
+  // With --keep-host, a still-running host from a previous launch is reused
+  // as-is: no same-slot assertion (the "conflict" is exactly the host we
+  // want) and no reinstall below.
+  const existingHostPid = readHostPidMetadata(hostHome);
+  const reuseHost = shouldReuseRunningHost(
+    keepHost,
+    existingHostPid,
+    existingHostPid !== null && isProcessAlive(existingHostPid.pid),
+  );
+  if (!reuseHost) {
+    assertSlotNotActive(slot, hostHome);
+  } else {
+    log(
+      `keep-host: reusing running host (pid ${existingHostPid.pid}); skipping install - run without --keep-host to refresh the release`,
+    );
+  }
 
   const port = await findAvailablePort(preferredPortForSlot(slot));
   log(`renderer port: ${port}`);
@@ -664,45 +704,54 @@ async function main() {
 
   const slotEnv = buildDevDesktopSlotEnv(slot);
 
-  // Prefer a locally-cached (or freshly downloaded + cached) archive so
-  // re-runs don't re-download the same release; fall back to the plain
-  // registry install when the cache can't be resolved.
-  const cachedArchive = await resolveCachedHostArchive(release);
-  const args =
-    cachedArchive !== null
-      ? buildHostInstallFromArgs(cachedArchive)
-      : buildHostInstallArgs({ release });
-  log(
-    cachedArchive !== null
-      ? `installing host from cache: bun ${args.join(" ")}`
-      : release
-        ? `installing host release ${release}: bun ${args.join(" ")}`
-        : `installing latest host release: bun ${args.join(" ")}`,
-  );
-  const status = runCli(args, slotEnv);
-  if (status !== 0) {
-    console.error(
-      [
-        ``,
-        `[dev-desktop] traycer host install failed (exit ${status}).`,
-        ``,
-        `If it failed verifying the host signature, the downloaded release is`,
-        `not signed by the trust root committed in`,
-        `clients/traycer-cli/src/config.ts (host signing key id`,
-        `847ef539119a1961). Confirm the published host release is signed with`,
-        `the current key.`,
-        ``,
-      ].join("\n"),
+  if (!reuseHost) {
+    // Prefer a locally-cached (or freshly downloaded + cached) archive so
+    // re-runs don't re-download the same release; fall back to the plain
+    // registry install when the cache can't be resolved.
+    const cachedArchive = await resolveCachedHostArchive(release);
+    const args =
+      cachedArchive !== null
+        ? buildHostInstallFromArgs(cachedArchive)
+        : buildHostInstallArgs({ release });
+    log(
+      cachedArchive !== null
+        ? `installing host from cache: bun ${args.join(" ")}`
+        : release
+          ? `installing host release ${release}: bun ${args.join(" ")}`
+          : `installing latest host release: bun ${args.join(" ")}`,
     );
-    process.exit(1);
-    return;
+    const status = runCli(args, slotEnv);
+    if (status !== 0) {
+      console.error(
+        [
+          ``,
+          `[dev-desktop] traycer host install failed (exit ${status}).`,
+          ``,
+          `If it failed verifying the host signature, the downloaded release is`,
+          `not signed by the trust root committed in`,
+          `clients/traycer-cli/src/config.ts (host signing key id`,
+          `847ef539119a1961). Confirm the published host release is signed with`,
+          `the current key.`,
+          ``,
+        ].join("\n"),
+      );
+      process.exit(1);
+      return;
+    }
+    log("dev host installed + service registered via CLI");
   }
-  log("dev host installed + service registered via CLI");
 
   runConcurrentStack({
     entries: buildDevDesktopEntries(hostLog, slot, port),
     cwd: REPO_ROOT,
     onTeardown: async () => {
+      if (keepHost) {
+        // Leave the host installed + the service running so the next
+        // launch attaches instantly. ~/.traycer/ user data untouched either
+        // way; the production slot was never touched.
+        log("keep-host: leaving dev host alive for the next launch");
+        return;
+      }
       // Deregister the dev host + service. Leaves ~/.traycer/ user data
       // (credentials, config) intact; the production slot was never touched.
       const code = runCli(buildHostUninstallArgs(), slotEnv);
@@ -732,6 +781,8 @@ module.exports = {
   buildDevDesktopSlotEnv,
   createTeardown,
   parseReleaseArg,
+  parseKeepHostArg,
+  shouldReuseRunningHost,
   parseSlotArg,
   resolveDevDesktopSlot,
   preferredPortForSlot,

@@ -252,3 +252,23 @@ describe("dev-desktop same-slot live guard", () => {
     }
   });
 });
+
+describe("dev-desktop --keep-host", () => {
+  it("parseKeepHostArg is true only when the flag is present in argv", () => {
+    expect(devDesktop.parseKeepHostArg(["bun", "dev-desktop.js", "--keep-host"])).toBe(true);
+    expect(devDesktop.parseKeepHostArg(["bun", "dev-desktop.js"])).toBe(false);
+    expect(devDesktop.parseKeepHostArg(["bun", "dev-desktop.js", "--slot", "thanos"])).toBe(false);
+    expect(devDesktop.parseKeepHostArg(undefined)).toBe(false);
+  });
+
+  it("shouldReuseRunningHost requires the flag AND a live recorded pid", () => {
+    const meta = { pid: 1234 };
+    expect(devDesktop.shouldReuseRunningHost(true, meta, true)).toBe(true);
+    // No flag: always install fresh, even with a live host on record.
+    expect(devDesktop.shouldReuseRunningHost(false, meta, true)).toBe(false);
+    // No pid metadata on disk: nothing to reuse.
+    expect(devDesktop.shouldReuseRunningHost(true, null, false)).toBe(false);
+    // Recorded pid already dead: stale pid.json must fall back to install.
+    expect(devDesktop.shouldReuseRunningHost(true, meta, false)).toBe(false);
+  });
+});

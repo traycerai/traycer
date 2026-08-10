@@ -104,6 +104,13 @@ export default defineConfig((): UserConfig => {
       host: "127.0.0.1",
       port,
       strictPort: true,
+      // Pre-transform the renderer entry graph at server start, while the
+      // Electron shell is still booting - cold `make dev-desktop` launches
+      // otherwise pay the full module-graph transform on first request
+      // (measured: ~23s navigation on cold cache vs ~1.4s warm).
+      warmup: {
+        clientFiles: ["./main.tsx"],
+      },
       // `make dev-desktop ARGS=--no-watch` sets this so the renderer
       // freezes alongside the host watcher: no HMR socket and no file
       // watcher, so UI edits never reload the Electron window until a
