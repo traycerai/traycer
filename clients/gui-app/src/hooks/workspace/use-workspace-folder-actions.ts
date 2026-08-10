@@ -27,6 +27,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface MutationContext {
@@ -234,7 +235,10 @@ export function useWorkspaceFolderActionsForClient(
     }
 
     return {
-      folders: response.folders,
+      folders: preferPickedPathOverAncestorRewrite(
+        folderPaths,
+        response.folders,
+      ),
       repoIdentifiers: response.repoIdentifiers,
       hostId: dispatchHostId,
     };
@@ -259,6 +263,43 @@ export function preparedWorkspaceFolderToWorkspaceFolderInfo(
     repoIdentifier: folder.repoIdentifier,
     hostId,
   };
+}
+
+/**
+ * Host `prepareFolders` can resolve a picked folder UP to an ancestor (its
+ * git-root walk). When that ancestor is itself a repo — e.g. a machine whose
+ * HOME directory is a git checkout — every picked folder that is not inside
+ * its own repository collapses to the ancestor, silently binding the
+ * profile/workspace to a far broader directory than the user chose (home).
+ *
+ * The picker already gave the user an explicit path; prefer it whenever the
+ * prepared path is a STRICT ANCESTOR of the pick. Repo metadata describes
+ * the ancestor's repository, not the picked folder, so it is dropped.
+ */
+export function preferPickedPathOverAncestorRewrite(
+  pickedPaths: readonly string[],
+  prepared: readonly PreparedWorkspaceFolder[],
+): readonly PreparedWorkspaceFolder[] {
+  return prepared.map((folder) => {
+    const rewritten = folder.workspacePath;
+    const picked = pickedPaths.find(
+      (candidate) =>
+        candidate !== rewritten && isStrictPathAncestor(rewritten, candidate),
+    );
+    if (picked === undefined) return folder;
+    return {
+      ...folder,
+      workspacePath: picked,
+      workspaceName: workspaceFolderName(picked),
+      repoIdentifier: null,
+      repoUrl: null,
+    };
+  });
+}
+
+function isStrictPathAncestor(ancestor: string, path: string): boolean {
+  const prefix = ancestor.endsWith("/") ? ancestor : `${ancestor}/`;
+  return path.startsWith(prefix);
 }
 
 function hostStillBound(

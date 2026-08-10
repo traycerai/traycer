@@ -14,8 +14,12 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
+import {
+  preferPickedPathOverAncestorRewrite,
+  useWorkspaceFolderActionsForClient,
+} from "@/hooks/workspace/use-workspace-folder-actions";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
 const prepareMutateAsync = vi.fn();
@@ -168,5 +172,112 @@ describe("pickAndPrepareFolders shell routing for a remote host", () => {
     const outcome = await result.current.pickAndPrepareFolders();
     expect(outcome).toBeNull();
     expect(prepareMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps the picked folder when the host rewrites it to an ancestor (home-as-git-repo)", async () => {
+    canPickNatively = false;
+    const requestPick = vi
+      .fn()
+      .mockResolvedValue("/Users/x/Documents/Workspaces/Server");
+    useRemoteFolderPickerStore.setState({ requestPick });
+    // The host walked the pick up to its git root: HOME.
+    prepareMutateAsync.mockResolvedValue({
+      folders: [
+        {
+          workspacePath: "/Users/x",
+          workspaceName: "x",
+          repoIdentifier: null,
+          repoUrl: null,
+        },
+      ],
+      repoIdentifiers: [],
+    });
+    const { result } = renderHook(
+      () => useWorkspaceFolderActionsForClient(makeBoundClient()),
+      { wrapper: makeWrapper() },
+    );
+    const outcome = await result.current.pickAndPrepareFolders();
+    expect(outcome?.folders).toEqual([
+      {
+        workspacePath: "/Users/x/Documents/Workspaces/Server",
+        workspaceName: "Server",
+        repoIdentifier: null,
+        repoUrl: null,
+      },
+    ]);
+  });
+
+  it("keeps the host path when it matches the pick (no rewrite)", async () => {
+    canPickNatively = false;
+    const requestPick = vi.fn().mockResolvedValue("/Users/x/code/app");
+    useRemoteFolderPickerStore.setState({ requestPick });
+    prepareMutateAsync.mockResolvedValue({
+      folders: [
+        {
+          workspacePath: "/Users/x/code/app",
+          workspaceName: "app",
+          repoIdentifier: null,
+          repoUrl: null,
+        },
+      ],
+      repoIdentifiers: [],
+    });
+    const { result } = renderHook(
+      () => useWorkspaceFolderActionsForClient(makeBoundClient()),
+      { wrapper: makeWrapper() },
+    );
+    const outcome = await result.current.pickAndPrepareFolders();
+    expect(outcome?.folders[0]?.workspacePath).toBe("/Users/x/code/app");
+  });
+});
+
+describe("preferPickedPathOverAncestorRewrite", () => {
+  const prepared = (
+    workspacePath: string,
+    workspaceName: string,
+  ): PreparedWorkspaceFolder => ({
+    workspacePath,
+    workspaceName,
+    repoIdentifier: null,
+    repoUrl: null,
+  });
+
+  it("replaces a strict-ancestor rewrite and drops ancestor repo metadata", () => {
+    const withRepo: PreparedWorkspaceFolder = {
+      ...prepared("/Users/x", "x"),
+      repoIdentifier: { owner: "x", repo: "home" },
+      repoUrl: "https://example.invalid/x/home",
+    };
+    const result = preferPickedPathOverAncestorRewrite(
+      ["/Users/x/Documents/Workspaces/Buzz"],
+      [withRepo],
+    );
+    expect(result[0]?.workspacePath).toBe("/Users/x/Documents/Workspaces/Buzz");
+    expect(result[0]?.workspaceName).toBe("Buzz");
+    expect(result[0]?.repoIdentifier).toBe(null);
+    expect(result[0]?.repoUrl).toBe(null);
+  });
+
+  it("leaves same-path and non-ancestor results untouched", () => {
+    expect(
+      preferPickedPathOverAncestorRewrite(
+        ["/Users/x/code/app"],
+        [prepared("/Users/x/code/app", "app")],
+      )[0],
+    ).toEqual(prepared("/Users/x/code/app", "app"));
+    // A DESCENDANT rewrite is not the git-root walk - keep the host value.
+    expect(
+      preferPickedPathOverAncestorRewrite(
+        ["/Users/x/code"],
+        [prepared("/Users/x/code/app", "app")],
+      )[0]?.workspacePath,
+    ).toBe("/Users/x/code/app");
+    // Sibling prefix that is not a path ancestor ("app2" vs "app/") must not match.
+    expect(
+      preferPickedPathOverAncestorRewrite(
+        ["/Users/x/app2"],
+        [prepared("/Users/x/app", "app")],
+      )[0]?.workspacePath,
+    ).toBe("/Users/x/app");
   });
 });
