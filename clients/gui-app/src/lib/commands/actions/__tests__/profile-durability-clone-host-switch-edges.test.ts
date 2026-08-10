@@ -23,6 +23,7 @@ import {
   mapProfileIdAcrossHosts,
   resolveClonedChatSettings,
 } from "@/lib/commands/actions/resolve-cloned-chat-settings";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * D-series cross-host clone edges (durability audit): "target host with
@@ -481,5 +482,62 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
 
     expect(createChat).toHaveBeenCalledTimes(1);
     expect(onHistoryUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("reports include_history: true for a fork that succeeds without a retry", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const createChat: CreateChatCommand = (_request, callbacks) => {
+      callbacks.onSuccess({ chatId: "cloned-chat" });
+    };
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(track).toHaveBeenCalledWith(
+      AnalyticsEvent.ChatForked,
+      expect.objectContaining({ include_history: true }),
+    );
+    track.mockRestore();
+  });
+
+  it("reports include_history: false for the settings-only retry that followed a checkpoint-unavailable refusal", async () => {
+    // The flag must reflect what the REQUEST that actually succeeded sent,
+    // not the flow's original intent - the retry carries no `forkSource`, so
+    // no history came along, and `include_history: true` here would be a
+    // known-false analytics value on the exact path ticket 34B1 built.
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const createChat: CreateChatCommand = (request, callbacks) => {
+      if (request.forkSource !== null && request.forkSource !== undefined) {
+        callbacks.onError(checkpointUnavailableError());
+        return;
+      }
+      callbacks.onSuccess({ chatId: "cloned-chat" });
+    };
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(track).toHaveBeenCalledWith(
+      AnalyticsEvent.ChatForked,
+      expect.objectContaining({ include_history: false }),
+    );
+    track.mockRestore();
   });
 });
