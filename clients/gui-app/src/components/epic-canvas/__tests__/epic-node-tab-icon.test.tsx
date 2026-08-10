@@ -111,10 +111,11 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
       </NotificationIndicatorsProvider>,
     );
 
+    const completedIndicator = screen.getByRole("status", {
+      name: "Task completed",
+    });
     expect(
-      screen
-        .getByTestId(`terminal-tab-done-${COMPLETED_TUI_AGENT_NODE.id}`)
-        .getAttribute("class"),
+      completedIndicator.querySelector("svg")?.getAttribute("class"),
     ).toContain("lucide-message-square-check");
   });
 });
