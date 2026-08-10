@@ -78,7 +78,9 @@ function UsageTurnRowItem(props: { readonly row: UsageTurnRow }): ReactNode {
   );
 }
 
-function OutcomeBadge(props: { readonly outcome: UsageTurnOutcome }): ReactNode {
+function OutcomeBadge(props: {
+  readonly outcome: UsageTurnOutcome;
+}): ReactNode {
   switch (props.outcome) {
     case "completed":
       return <Badge variant="secondary">Completed</Badge>;

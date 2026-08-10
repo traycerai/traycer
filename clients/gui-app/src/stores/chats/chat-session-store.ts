@@ -347,10 +347,10 @@ export interface ChatSessionState {
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
-   * The Monitors and shells this chat created, whatever state they are in - not
-   * a subset of {@link backgroundItems}, since a Monitor outlives the turn that
-   * started it. Carried whole by every snapshot and every
-   * `managedCommandsChanged` frame, so keeping it current is one assignment.
+   * The shells this chat created, whatever state they are in - not a subset
+   * of {@link backgroundItems}, since a shell outlives the turn that started
+   * it. Carried whole by every snapshot and every `managedCommandsChanged`
+   * frame, so keeping it current is one assignment.
    *
    * Always an array, never `undefined`: a host too old to send the field has no
    * managed-command subsystem, so it owns no commands and `[]` is the truth

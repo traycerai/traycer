@@ -902,6 +902,34 @@ export interface ITokenStore {
   ): Promise<CredentialsMigrationOutcome>;
 }
 
+/**
+ * What the shell's delivery decision actually did with a `show` request.
+ *
+ * - `presented`: an alert surface exists somewhere - an OS banner was shown,
+ *   the display was relayed to the focused window, or the focused sender
+ *   already owns its own in-app surfaces.
+ * - `duplicate`: this delivery key was already handled app-wide; another
+ *   window's request won.
+ * - `undeliverable`: the platform cannot present notifications and no window
+ *   is focused, so NOTHING was shown or relayed and the key is burnt. The
+ *   caller is the sole owner of any fallback cue. This is a resolved outcome,
+ *   not a rejection, deliberately: rejection semantics are load-bearing for
+ *   retry loops (see `drainPendingNotifications`), and an unsupported
+ *   platform must not retry forever.
+ */
+export type NotificationShowOutcome =
+  "presented" | "duplicate" | "undeliverable";
+
+/**
+ * Which feed produced the notification being shown - delivery provenance,
+ * carried SEPARATELY from the activation payload on purpose. The payload is
+ * click routing and degrades to `null` for unrecognized/cross-kind rows, so
+ * anything derived from it loses provenance exactly on the rows that need it
+ * most; the foreground relay's receive-side gates key redundancy decisions
+ * off this field instead.
+ */
+export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
+
 export interface INotificationHost {
   show(
     title: string,
@@ -909,8 +937,9 @@ export interface INotificationHost {
     payload: unknown,
     replaceKey: string | null,
     deliveryKey: string | null,
+    feedSource: NotificationFeedSource | null,
     foregroundAppLocal: NotificationForegroundAppLocal | null,
-  ): Promise<void>;
+  ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,
@@ -935,6 +964,7 @@ export interface NotificationForegroundDisplay {
   readonly payload: unknown;
   readonly replaceKey: string | null;
   readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
@@ -975,6 +1005,13 @@ export interface IHostPicker {
 }
 
 export interface IWorkspaceFoldersHost {
+  /**
+   * Whether THIS shell can open a native OS folder dialog (desktop shells).
+   * Shells without one (mobile/browser) install a no-op pickFolders and set
+   * this false - gui-app then routes remote-host folder adds through the
+   * RPC-backed remote folder picker instead.
+   */
+  readonly canPickNatively: boolean;
   pickFolders(): Promise<readonly string[]>;
 }
 

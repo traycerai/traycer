@@ -89,6 +89,7 @@ export class CommGraphCloudSubscriptionManager {
   private snapshot: CommGraphSnapshot = {
     events: [],
     hosts: [],
+    initialHistoryCaughtUp: false,
     lastArrival: null,
   };
 
@@ -542,6 +543,7 @@ export class CommGraphCloudSubscriptionManager {
           ? { highestId: this.historyBoundary }
           : null,
       })),
+      initialHistoryCaughtUp: this.historyCaughtUp,
       lastArrival: this.lastArrival,
     };
     for (const listener of Array.from(this.listeners)) listener();

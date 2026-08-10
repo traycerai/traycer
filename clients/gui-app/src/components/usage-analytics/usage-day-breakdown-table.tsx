@@ -49,7 +49,10 @@ export function UsageDayBreakdownTable(
       </thead>
       <tbody>
         {props.rows.map((row) => (
-          <tr key={row.day} className="border-b border-border/40 last:border-b-0">
+          <tr
+            key={row.day}
+            className="border-b border-border/40 last:border-b-0"
+          >
             <td className="py-1.5 pr-3 text-foreground">
               {formatDayLabel(row.day)}
             </td>

@@ -12,7 +12,7 @@ import type {
   WorktreeBindingSelectorRowV12,
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
@@ -95,7 +95,10 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { toast } from "sonner";
-import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
+import {
+  buildDefaultBranchByPath,
+  EMPTY_DEFAULT_BRANCH,
+} from "@/lib/worktree/default-branch-name";
 import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -997,7 +1000,7 @@ function readCachedDefaultWorktreeIntent(
   workspace: LandingDraftWorkspaceSnapshot,
 ): WorktreeIntent | null {
   const response = queryClient.getQueryData<{
-    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV13>;
+    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
   }>(
     hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
       hostId,
@@ -1044,14 +1047,16 @@ function readCachedDefaultWorktreeIntent(
         isPrimary: summary.workspacePath === primaryPath,
         isGitRepo: true,
         currentBranch,
-        defaultNewBranchName: defaultBranchByPath[summary.workspacePath] ?? "",
+        defaultNewBranchName: (
+          defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
+        ).name,
       }),
     ),
   };
 }
 
 function branchForCachedSummary(
-  summary: WorktreeWorkspaceSummaryV13,
+  summary: WorktreeWorkspaceSummaryV14,
 ): string | null {
   const mainEntry = summary.worktrees.find((worktree) => worktree.isMain);
   return mainEntry?.branch ?? summary.mainBranch ?? null;

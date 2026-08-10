@@ -138,12 +138,43 @@ export interface SessionOpenPayload {
   readonly resume: null;
 }
 
+/**
+ * The manifests each side advertises at session open - the same
+ * floor/optional split the local ws OPEN frame carries, with the same
+ * semantics:
+ *
+ * - `rpc` is the RELEASED FLOOR - the frozen method set both sides must
+ *   serve. It is the ONLY surface the session-level compatibility check
+ *   runs over; a floor mismatch is fatal to the session.
+ * - `optionalRpc` holds every non-floor method. It is merged with `rpc` for
+ *   version selection, dispatch, and UI capability gating, and is NEVER
+ *   compat-checked: a peer missing an optional method degrades (the feature
+ *   hides or the call fails typed), it does not kill the session. Without
+ *   this split, any version skew between client and host would fatal the
+ *   whole remote session - exactly what keeping methods off the floor is
+ *   meant to prevent.
+ * - `stream` stays a single merged map: stream methods are checked
+ *   per-subscription at open (a missing method fails that one stream, not
+ *   the session), so a session-level floor for them adds nothing.
+ *
+ * `optionalRpc` is deliberately REQUIRED, not `.default({})`. Tolerating its
+ * absence would only move the failure: a pre-split peer sends its floor and
+ * optional methods MERGED in `rpc`, so the floor check would then compare a
+ * merged set against a floor set and fatal the session anyway - with a
+ * confusing compat error instead of an honest "malformed frame". The mux is
+ * unreleased, so no such peer exists; when it ships, a future frame-shape
+ * change gets the same treatment this split did - evolve the shape while it
+ * is still pre-release, or version the frame. See
+ * `remote-session.test.ts` > "RemoteSession openAck without optionalRpc",
+ * which pins the rejection.
+ */
 export interface SessionManifests {
   readonly rpc: ConnectionManifest;
+  readonly optionalRpc: ConnectionManifest;
   readonly stream: ConnectionManifest;
 }
 
-/** Host ack of `open`: its own combined manifest + additive capabilities. */
+/** Host ack of `open`: its own split manifests + additive capabilities. */
 export interface SessionOpenAckPayload {
   readonly manifest: SessionManifests;
   readonly capabilities: readonly string[];
@@ -210,6 +241,7 @@ export interface CredentialUpdatePayload {
 
 const sessionManifestsSchema: z.ZodType<SessionManifests> = z.object({
   rpc: connectionManifestSchema,
+  optionalRpc: connectionManifestSchema,
   stream: connectionManifestSchema,
 });
 

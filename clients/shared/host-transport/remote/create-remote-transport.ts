@@ -1,6 +1,9 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type {
+  BearerSourceProvider,
+  OpenFrameBearerSource,
+} from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
@@ -62,8 +65,9 @@ export interface RemoteHostTransport<
    * A per-caller view onto the shared `(hostId, userId)` session. Every
    * method delegates to the same live connection as every other consumer's
    * view; `close()` releases only THIS caller's reference (Architecture §4 /
-   * S1) - the underlying connection tears down once every consumer has
-   * released, not on any single caller's `close()`.
+   * S1) - the underlying connection tears down only after every consumer has
+   * released AND the cache's keep-warm linger has expired, never on any
+   * single caller's `close()`.
    */
   readonly session: IRemoteSession<RpcRegistry, StreamRegistry>;
   readonly messenger: RemoteHostMessenger<RpcRegistry, StreamRegistry>;
@@ -83,12 +87,42 @@ export function createRemoteHostTransport<
     return null;
   }
 
+  const bearerSource = options.bearer();
+  if (bearerSource === null || !canProvideBearer(bearerSource)) {
+    // No usable auth context at build time - the same "unconnectable"
+    // degradation as a malformed public key, NOT a cacheable state. Two
+    // shapes, one verdict:
+    //
+    //  - a NULL source: the bearer thunk is a live read, so a session built
+    //    now could later dial once a context appears - while keyed under an
+    //    epoch label divorced from that context.
+    //  - a RELEASED source (non-null, but its lease has been retired, so
+    //    `getBearerToken()` throws): a stale factory invocation running after
+    //    its context was aborted. Its source object still labels the RETIRED
+    //    epoch, so letting it into the cache would either re-adopt an entry
+    //    supersession already condemned or - worse - present the stale epoch
+    //    as newest on a miss and supersede the CURRENT context's live entry,
+    //    while the session it builds can never mint a grant.
+    //
+    // Callers hitting either are in a teardown/transition gap (a sign-out or
+    // context handoff landing between capture and build) and will rebuild
+    // once a live context exists.
+    return null;
+  }
+
   const session = acquireRemoteSession(
     {
       hostId: options.hostId,
       userId: options.userId,
       hostPublicKey: options.hostPublicKey,
       relayAttachUrl: options.relayAttachUrl,
+      // Part of the identity, not a per-consumer option: on a cache hit the
+      // factory below never runs, so `auth` would otherwise be silently
+      // inherited from whichever consumer happened to build the session first.
+      authRecovery: options.auth === null ? "terminal" : "revalidate",
+      // Same reasoning applied to WHICH auth context wired those closures, not
+      // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
+      authEpoch: authEpochFor(bearerSource),
     },
     () => {
       const grantProvider = createAttachGrantProvider({
@@ -119,6 +153,50 @@ export function createRemoteHostTransport<
 }
 
 /** Reads the current user bearer string from the shared bearer source. */
+/**
+ * Stable per-auth-context label for the session cache key.
+ *
+ * Identity is taken from the bearer SOURCE OBJECT rather than the token it
+ * currently holds, because the two change on different events: a same-user
+ * refresh rotates the token inside the existing lease (so the object, and
+ * therefore this label, is unchanged and the connection keeps being shared),
+ * while a real context transition - sign-out/sign-in, a rebuilt host runtime -
+ * hands over a different lease and so a different label.
+ *
+ * A `WeakMap` both keeps the label stable for repeat acquires by the same
+ * context and lets a retired lease be collected; the counter only ever needs
+ * to be distinct, never meaningful. A `null` source never reaches here -
+ * `createRemoteHostTransport` refuses to build (let alone cache) a session
+ * with no auth context - so every label names a real lease.
+ */
+const authEpochLabels = new WeakMap<OpenFrameBearerSource, string>();
+let nextAuthEpoch = 0;
+
+function authEpochFor(source: OpenFrameBearerSource): string {
+  const existing = authEpochLabels.get(source);
+  if (existing !== undefined) {
+    return existing;
+  }
+  nextAuthEpoch += 1;
+  const label = `lease-${nextAuthEpoch}`;
+  authEpochLabels.set(source, label);
+  return label;
+}
+
+/**
+ * Whether the source can provide a bearer RIGHT NOW - the same read the mint
+ * path performs per attach (`deriveBearerToken`), probed once at build time.
+ * A released credential lease keeps its object identity (and so its epoch
+ * label) but throws on read; an empty token cannot authorize a mint either.
+ */
+function canProvideBearer(source: OpenFrameBearerSource): boolean {
+  try {
+    return source.getBearerToken().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function deriveBearerToken(bearer: BearerSourceProvider): string | null {
   const source = bearer();
   if (source === null) {

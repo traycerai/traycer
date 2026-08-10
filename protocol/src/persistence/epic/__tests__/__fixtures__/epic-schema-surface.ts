@@ -4416,12 +4416,12 @@ export const epicSchemaSurfaceBaseline = {
                                               commandId: {
                                                 type: "string",
                                               },
-                                              kind: {
-                                                type: "string",
-                                                enum: ["monitor", "shell"],
+                                              monitoring: {
+                                                default: false,
+                                                type: "boolean",
                                               },
                                             },
-                                            required: ["commandId", "kind"],
+                                            required: ["commandId"],
                                           },
                                           {
                                             type: "null",
@@ -5375,6 +5375,28 @@ export const epicSchemaSurfaceBaseline = {
                 },
               ],
             },
+            pinnedUserProviderHandle: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            lastDeliveredRolesDigest: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
           },
           required: [
             "parentId",
@@ -5967,6 +5989,28 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -6119,6 +6163,28 @@ export const epicSchemaSurfaceBaseline = {
                   ],
                 },
                 pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
                   default: null,
                   anyOf: [
                     {
@@ -6298,6 +6364,28 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -6450,6 +6538,28 @@ export const epicSchemaSurfaceBaseline = {
                   ],
                 },
                 pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
                   default: null,
                   anyOf: [
                     {
@@ -11269,12 +11379,15 @@ export const epicSchemaSurfaceBaseline = {
                                               commandId: {
                                                 type: "string",
                                               },
-                                              kind: {
-                                                type: "string",
-                                                enum: ["monitor", "shell"],
+                                              monitoring: {
+                                                default: false,
+                                                type: "boolean",
                                               },
                                             },
-                                            required: ["commandId", "kind"],
+                                            required: [
+                                              "commandId",
+                                              "monitoring",
+                                            ],
                                             additionalProperties: false,
                                           },
                                           {
@@ -12214,6 +12327,28 @@ export const epicSchemaSurfaceBaseline = {
                 },
               ],
             },
+            pinnedUserProviderHandle: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            lastDeliveredRolesDigest: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
           },
           required: [
             "parentId",
@@ -12230,6 +12365,8 @@ export const epicSchemaSurfaceBaseline = {
             "messages",
             "events",
             "archivedAt",
+            "pinnedUserProviderHandle",
+            "lastDeliveredRolesDigest",
           ],
           additionalProperties: false,
         },
@@ -12820,6 +12957,28 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12844,6 +13003,8 @@ export const epicSchemaSurfaceBaseline = {
                 "profileId",
                 "archivedAt",
                 "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12990,6 +13151,28 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -13022,6 +13205,8 @@ export const epicSchemaSurfaceBaseline = {
                 "profileId",
                 "archivedAt",
                 "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -13168,6 +13353,28 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -13192,6 +13399,8 @@ export const epicSchemaSurfaceBaseline = {
                 "profileId",
                 "archivedAt",
                 "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -13338,6 +13547,28 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -13370,6 +13601,8 @@ export const epicSchemaSurfaceBaseline = {
                 "profileId",
                 "archivedAt",
                 "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,

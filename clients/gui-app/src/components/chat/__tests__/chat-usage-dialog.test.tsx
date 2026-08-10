@@ -146,9 +146,11 @@ describe("<ChatUsageDialog />", () => {
   it("opens on a store target and renders the chat's headline + title", async () => {
     renderWithClient();
     act(() => {
-      useChatUsageDialogStore
-        .getState()
-        .open({ hostId: mockLocalHostEntry.hostId, chatId: "chat-1", chatTitle: "Fix the flaky test" });
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
     });
 
     expect(await screen.findByText("Usage — Fix the flaky test")).toBeTruthy();
@@ -160,9 +162,11 @@ describe("<ChatUsageDialog />", () => {
     const user = userEvent.setup();
     renderWithClient();
     act(() => {
-      useChatUsageDialogStore
-        .getState()
-        .open({ hostId: mockLocalHostEntry.hostId, chatId: "chat-1", chatTitle: "Fix the flaky test" });
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
     });
     await screen.findByTestId("usage-cost-figure");
 
@@ -179,9 +183,11 @@ describe("<ChatUsageDialog />", () => {
     const user = userEvent.setup();
     renderWithClient();
     act(() => {
-      useChatUsageDialogStore
-        .getState()
-        .open({ hostId: mockLocalHostEntry.hostId, chatId: "chat-1", chatTitle: "Fix the flaky test" });
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
     });
     await screen.findByTestId("usage-cost-figure");
 

@@ -2513,6 +2513,11 @@ function archiveBlockedReason(
  * anyway; matching it here is what keeps the affordance honest instead of
  * offering an action that will only come back as a toast.
  *
+ * "Busy" here means everything the host counts, which includes a chat owning a
+ * running shell - not just an in-flight turn. Narrowing this read to exclude
+ * shells is what once left Archive offered on a chat the host would bounce, so
+ * it must stay whatever {@link chatActivityIndicator} reports.
+ *
  * That "the host refuses it anyway" backstop holds only for an agent on the
  * host this RPC goes to. `AgentActivityTracker` is host-LOCAL, while this
  * predicate unions every host's awareness entry, so for a row running on

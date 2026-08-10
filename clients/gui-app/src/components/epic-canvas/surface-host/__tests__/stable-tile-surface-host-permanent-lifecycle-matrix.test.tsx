@@ -453,6 +453,8 @@ function emitChatSnapshot(
         createdAt: 0,
         updatedAt: 0,
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
         isTitleEditedByUser: false,
         settings: CHAT_RUN_SETTINGS,
         activeSessionChain: null,

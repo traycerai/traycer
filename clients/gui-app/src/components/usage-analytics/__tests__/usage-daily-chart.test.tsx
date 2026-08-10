@@ -45,7 +45,9 @@ describe("<UsageDailyChart /> legend filter", () => {
 
   it("renders a pressed chip per series by default", () => {
     render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
-    const claudeChip = screen.getByTestId("usage-daily-chart-legend-chip-claude");
+    const claudeChip = screen.getByTestId(
+      "usage-daily-chart-legend-chip-claude",
+    );
     const codexChip = screen.getByTestId("usage-daily-chart-legend-chip-codex");
     expect(claudeChip.getAttribute("aria-pressed")).toBe("true");
     expect(codexChip.getAttribute("aria-pressed")).toBe("true");

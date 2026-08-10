@@ -192,7 +192,7 @@ export function useManagedCommandStopAll(
         throw representative;
       }
       throw new Error(
-        `Couldn't stop ${rejections.length} of ${outcomes.length} monitors and shells.`,
+        `Couldn't stop ${rejections.length} of ${outcomes.length} shells.`,
       );
     },
     onError: (error) => {

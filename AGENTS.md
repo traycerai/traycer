@@ -27,9 +27,10 @@ are **not** here — the CLI provisions a signed host from GitHub Releases; see
 bun install
 bun run build
 bun run compile                 # never tsc directly
-bun run test && bun run lint && bun run format
+bun run lint && bun run format
+make test-affected              # optional targeted run; CI owns the test gate
 bunx nx run @traycer-clients/traycer-cli:build   # single package
-pre-commit run --all-files      # explicit full-repo / CI-style validation
+pre-commit run --all-files      # explicit full-repo static validation
 
 make dev-desktop                # signed host from Releases + HMR desktop
 make dev-desktop VERSION=1.2.3  # pin host release

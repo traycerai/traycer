@@ -21,12 +21,13 @@ export interface UsageHarnessSplitProps {
 export function UsageHarnessSplit(props: UsageHarnessSplitProps): ReactNode {
   if (props.rows.length === 0) return null;
   return (
-    <ul
-      className="flex flex-col gap-2"
-      data-testid="usage-harness-split"
-    >
+    <ul className="flex flex-col gap-2" data-testid="usage-harness-split">
       {props.rows.map((row) => (
-        <UsageHarnessSplitItem key={row.harnessId} row={row} scale={props.scale} />
+        <UsageHarnessSplitItem
+          key={row.harnessId}
+          row={row}
+          scale={props.scale}
+        />
       ))}
     </ul>
   );

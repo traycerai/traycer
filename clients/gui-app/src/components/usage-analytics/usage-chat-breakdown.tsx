@@ -29,7 +29,9 @@ export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
       </p>
     );
   }
-  const sorted = [...props.rows].sort((a, b) => b.knownCostUsd - a.knownCostUsd);
+  const sorted = [...props.rows].sort(
+    (a, b) => b.knownCostUsd - a.knownCostUsd,
+  );
   return (
     <ul className="flex flex-col gap-1.5" data-testid="usage-chat-breakdown">
       {sorted.map((row) => (
@@ -39,7 +41,9 @@ export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
   );
 }
 
-function UsageChatBreakdownRow(props: { readonly row: UsageChatBucket }): ReactNode {
+function UsageChatBreakdownRow(props: {
+  readonly row: UsageChatBucket;
+}): ReactNode {
   const { row } = props;
   const node = useEpicTreeNode(row.chatId);
   const title = node?.title ?? row.chatId;

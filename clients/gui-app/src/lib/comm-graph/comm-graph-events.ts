@@ -134,6 +134,8 @@ export interface CommGraphSnapshot {
    */
   readonly events: ReadonlyArray<CommGraphEvent>;
   readonly hosts: ReadonlyArray<CommGraphHostState>;
+  /** Every initial history source has accounted for its bounded backlog. */
+  readonly initialHistoryCaughtUp: boolean;
   /**
    * The newest row seen above its OWN host's snapshot boundary, or `null` while
    * every host is still only handing over history.
@@ -154,6 +156,7 @@ export interface CommGraphSnapshot {
 export const EMPTY_COMM_GRAPH_SNAPSHOT: CommGraphSnapshot = {
   events: [],
   hosts: [],
+  initialHistoryCaughtUp: false,
   lastArrival: null,
 };
 

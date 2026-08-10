@@ -9,6 +9,8 @@ import type {
   IHostPicker,
   IHostManagement,
   INotificationHost,
+  NotificationFeedSource,
+  NotificationShowOutcome,
   NotificationForegroundDisplay,
   NotificationForegroundAppLocal,
   IRunnerHost,
@@ -137,6 +139,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly payload: unknown;
     readonly replaceKey: string | null;
     readonly deliveryKey: string | null;
+    readonly feedSource: NotificationFeedSource | null;
     readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
@@ -170,6 +173,8 @@ export class MockRunnerHost implements IRunnerHost {
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
+    // The mock stands in for a desktop-style shell with a native dialog.
+    canPickNatively: true,
     pickFolders: async (): Promise<readonly string[]> => [
       ...this.workspaceFolderPickerPaths,
     ],
@@ -545,16 +550,25 @@ export class MockRunnerHost implements IRunnerHost {
       payload: unknown,
       replaceKey: string | null,
       deliveryKey: string | null,
+      feedSource: NotificationFeedSource | null,
       foregroundAppLocal: NotificationForegroundAppLocal | null,
-    ): Promise<void> => {
+    ): Promise<NotificationShowOutcome> => {
       this.notificationsSent.push({
         title,
         body,
         payload,
         replaceKey,
         deliveryKey,
+        feedSource,
         foregroundAppLocal,
       });
+      // Recording the request is not presenting it: this shell has no native
+      // notification capability (see the class doc - notifications are a
+      // no-op on web preview), so nothing is shown or relayed and the caller
+      // owns the fallback cue. Claiming `presented` here would suppress that
+      // cue and leave a blurred dev/preview window with an unseen toast and
+      // nothing else.
+      return "undeliverable";
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
       this.notificationClickHandlers.add(handler);

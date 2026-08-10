@@ -8,8 +8,7 @@
 
 ## Checklist
 
-- [ ] `bun run build`, `bun run lint`, and `bun run test` pass
-- [ ] Code is formatted (`bun run format`)
-- [ ] Pre-commit hooks pass (`pre-commit run --all-files`)
+- [ ] Pre-commit static checks pass (`pre-commit run --all-files` for an explicit full-repo run)
+- [ ] Separate CI test checks pass
 - [ ] Tests added/updated where it makes sense
 - [ ] Commits are signed off (`git commit -s`) per the [DCO](../CONTRIBUTING.md#developer-certificate-of-origin-dco)

@@ -130,12 +130,16 @@ describe("buildUsageStatTiles", () => {
 
   it("reports no multiple when there is nothing known to divide", () => {
     expect(
-      buildUsageStatTiles(totals({ knownCostUsd: 0, knownCacheSavingsUsd: 0 }), [])
-        .cacheSavings.multipleOfRawCost,
+      buildUsageStatTiles(
+        totals({ knownCostUsd: 0, knownCacheSavingsUsd: 0 }),
+        [],
+      ).cacheSavings.multipleOfRawCost,
     ).toBeNull();
     expect(
-      buildUsageStatTiles(totals({ knownCostUsd: 0, knownCacheSavingsUsd: 3 }), [])
-        .cacheSavings.multipleOfRawCost,
+      buildUsageStatTiles(
+        totals({ knownCostUsd: 0, knownCacheSavingsUsd: 3 }),
+        [],
+      ).cacheSavings.multipleOfRawCost,
     ).toBeNull();
   });
 });

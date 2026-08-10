@@ -22,6 +22,7 @@ export interface CommGraphThreadPanelProps {
   readonly edge: CommGraphAggregatedEdge;
   readonly epicId: string;
   readonly agentNames: ReadonlyMap<string, string>;
+  readonly initialHistoryCaughtUp: boolean;
   readonly canOpenAgentForEvent: (event: CommGraphEvent) => boolean;
   readonly canJump: (event: CommGraphEvent) => boolean;
   readonly onJump: (event: CommGraphEvent) => void;
@@ -45,6 +46,7 @@ export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
     canJumpToSender,
     edge,
     epicId,
+    initialHistoryCaughtUp,
     onClose,
     onJump,
     onJumpToCreated,
@@ -64,6 +66,7 @@ export function CommGraphThreadPanel(props: CommGraphThreadPanelProps) {
       }
       actions={null}
       events={edge.events}
+      initialHistoryCaughtUp={initialHistoryCaughtUp}
       epicId={epicId}
       agentNames={agentNames}
       emptyLabel="No messages on this pair yet."

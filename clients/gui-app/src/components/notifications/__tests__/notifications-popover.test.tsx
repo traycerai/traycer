@@ -985,6 +985,9 @@ describe("NotificationsPopover", () => {
       expect.arrayContaining([
         "hover:bg-muted/70",
         "has-[:focus-visible]:bg-muted/70",
+        "py-2.5",
+        "pl-6",
+        "pr-4",
       ]),
     );
     // Unread rows prepend an absolute rail span; the glyph holder is the
@@ -1263,6 +1266,9 @@ describe("NotificationsPopover", () => {
     // Desktop-pass subordination: micro/muted sentence case, not overline caps.
     for (const separator of separators) {
       expect(separator.className).toContain("text-micro");
+      expect(separator.className).toContain("sticky");
+      expect(separator.className).toContain("top-5");
+      expect(separator.className).toContain("bg-popover");
       expect(separator.className).not.toContain("uppercase");
       expect(separator.className).not.toContain("font-semibold");
       expect(separator.className).not.toContain("text-overline");
@@ -1271,6 +1277,9 @@ describe("NotificationsPopover", () => {
     expect(recentHeader.className).toContain("text-overline");
     expect(recentHeader.className).toContain("uppercase");
     expect(recentHeader.className).toContain("font-semibold");
+    expect(recentHeader.className).toContain("sticky");
+    expect(recentHeader.className).toContain("top-0");
+    expect(recentHeader.className).toContain("bg-popover");
   });
 
   it("renders failed host outcomes and stalled rows as failure severity", async () => {

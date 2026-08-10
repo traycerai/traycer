@@ -585,6 +585,7 @@ function panelElement(input: {
         items={input.items}
         epicId="epic-1"
         chatId="chat-1"
+        viewTabId="tab-1"
         canAct
         readOnly={false}
         pendingStopTaskIds={new Set()}

@@ -11,8 +11,20 @@
  * failing the handshake.
  *
  * So the client records each `openAck`'s merged method names here, keyed by
- * host id, and UI layers read it through a subscription. Three properties make
- * this safe to consult from render:
+ * host id, and UI layers read it through a subscription. BOTH transports must
+ * publish - this registry is the one place "does host X have method Y" is
+ * answered, and a transport that skips it makes every optional-method gate
+ * fail closed forever for its hosts (the exact defect that shipped when the
+ * remote transport initially didn't publish):
+ *
+ * - `WsRpcClient` (local): records on every unary ack - per-call re-handshake
+ *   is the refresh cadence.
+ * - `RemoteSession` (remote mux): records at each session-open ack - the
+ *   re-attach after a socket drop is the refresh cadence, since the session
+ *   is long-lived. The host advertises its MERGED (floor + optional) rpc
+ *   manifest on both paths.
+ *
+ * Three properties make this safe to consult from render:
  *
  * - **Fail-closed.** A host with no recorded handshake reads `null` ("not yet
  *   known"), never `false`. Callers hide an optional affordance until a

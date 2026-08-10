@@ -374,6 +374,8 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         messages: [...input.messages],
         events: [],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: {
         role: input.access,
@@ -424,6 +426,8 @@ function emitSnapshotWithWorktree(
         messages: [],
         events: [...events],
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -3704,6 +3708,8 @@ describe("createChatSessionStore", () => {
           ],
           events: [],
           archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
         },
         access: {
           role: "owner",
@@ -3869,6 +3875,8 @@ describe("createChatSessionStore", () => {
           ],
           events: [],
           archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
         },
         access: {
           role: "owner",
@@ -5894,7 +5902,7 @@ describe("the chat's managed commands", () => {
   function monitor(over: Partial<ManagedCommand>): ManagedCommand {
     return {
       id: "cmd-1",
-      kind: "monitor",
+      monitoring: true,
       description: "deploy watcher",
       status: { state: "running", pid: 4410, startedAtMs: 10 },
       chatId: CHAT_ID,

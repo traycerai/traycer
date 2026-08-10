@@ -65,7 +65,12 @@ export function ChatUsageDialog(): ReactNode {
       }),
     [target],
   );
-  const query = useUsageSummaryForClient(client, request, target !== null, false);
+  const query = useUsageSummaryForClient(
+    client,
+    request,
+    target !== null,
+    false,
+  );
 
   return (
     <Dialog

@@ -239,6 +239,19 @@ export type VersionEntry<
 > = {
   readonly contract: Contract;
   readonly upgradeFromPreviousVersion: Upgrade;
+  /**
+   * Declares that this minor's RESPONSE value growth (new enum values,
+   * new union variants, widened forms relative to the previous minor)
+   * is emission-gated: the host consults the negotiated version and
+   * never emits the new values to older peers (the chat-frame-projection
+   * pattern). Without this, the registry validator rejects response-side
+   * value growth on a minor - an old peer's schema REFUSES such values,
+   * and for state-controlled response data that refusal poisons every
+   * old peer with no opt-out. Declaring it is a reviewed claim about the
+   * EMITTER, which the validator cannot check; structural additivity is
+   * still enforced regardless.
+   */
+  readonly responseGrowthProjectionGated?: true;
 };
 
 export type AnyVersionEntry = VersionEntry<
@@ -514,6 +527,8 @@ type ValidateVersionEntry<
                 >
               : never
           : never;
+        /** See `VersionEntry.responseGrowthProjectionGated`. */
+        readonly responseGrowthProjectionGated?: true;
       }
     : never
   : never;
