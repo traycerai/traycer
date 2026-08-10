@@ -67,7 +67,10 @@ import type {
   ChatMessageEditing,
   ChatMessageUserActions,
 } from "./chat-message";
-import { stripOrchestrationPrelude } from "@/lib/chat/orchestration-prelude";
+import {
+  stripOrchestrationPrelude,
+  stripOrchestrationPreludeFromDoc,
+} from "@/lib/chat/orchestration-prelude";
 import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
@@ -339,14 +342,22 @@ function UserMessageDisplayView({
     setExpanded((prev) => !prev);
   }, []);
 
-  // v1: strip only the string path. Injected preludes are plain paragraphs
-  // prepended into the composer JsonContent at create; when the message still
-  // carries string content (or structured is null), this hides the markers.
-  // Structured docs are left intact so rich formatting is not destroyed.
+  // v1: hide the injected prelude on both display paths. String bodies go
+  // through displayContent; stored messages usually carry the prelude as
+  // whole-line paragraphs in structuredContent (rendered by
+  // ComposerContentRenderer), stripped here presentation-only. The editing
+  // surface keeps the stored doc untouched.
+  const displayStructuredContent = useMemo(
+    () =>
+      message.structuredContent === null
+        ? null
+        : stripOrchestrationPreludeFromDoc(message.structuredContent),
+    [message.structuredContent],
+  );
   const body =
-    message.structuredContent !== null ? (
+    displayStructuredContent !== null ? (
       <ComposerContentRenderer
-        content={message.structuredContent}
+        content={displayStructuredContent}
         variant={undefined}
         className={undefined}
         testId={undefined}
@@ -377,10 +388,10 @@ function UserMessageDisplayView({
   const findUnitId = chatFindMessageContentUnitId(message.id);
   const copyText = useMemo(
     () =>
-      message.structuredContent === null
+      displayStructuredContent === null
         ? displayContent
-        : composerClipboardPlainText(message.structuredContent),
-    [displayContent, message.structuredContent],
+        : composerClipboardPlainText(displayStructuredContent),
+    [displayContent, displayStructuredContent],
   );
 
   return (
@@ -427,7 +438,7 @@ function UserMessageDisplayView({
           confirmingDelete={confirmingDelete}
           actions={actions}
           copyText={copyText}
-          structuredContent={message.structuredContent}
+          structuredContent={displayStructuredContent}
         />
       </div>
       {tombstonedProfileLabel !== null && tombstoneIdentity !== null ? (

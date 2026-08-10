@@ -312,6 +312,65 @@ describe("<UserMessageBody /> agent messages", () => {
     });
   });
 
+  it("hides the injected prelude from the structured-path bubble", async () => {
+    const para = (text: string): JsonContent =>
+      text.length === 0
+        ? { type: "paragraph" }
+        : { type: "paragraph", content: [{ type: "text", text }] };
+    const structuredDoc: JsonContent = {
+      type: "doc",
+      content: [
+        para("<!-- traycer-orchestration-prelude -->"),
+        para("structured role text"),
+        para("<!-- /traycer-orchestration-prelude -->"),
+        para(""),
+        para("real structured question"),
+      ],
+    };
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage(""),
+          structuredContent: structuredDoc,
+        }}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("real structured question")).toBeTruthy();
+    });
+    expect(screen.queryByText("structured role text")).toBeNull();
+    expect(
+      screen.queryByText(/traycer-orchestration-prelude/),
+    ).toBeNull();
+  });
+
+  it("fail-open: prelude-only structured doc still renders (never empty)", async () => {
+    const para = (text: string): JsonContent => ({
+      type: "paragraph",
+      content: [{ type: "text", text }],
+    });
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage(""),
+          structuredContent: {
+            type: "doc",
+            content: [
+              para("<!-- traycer-orchestration-prelude -->"),
+              para("structured only role text"),
+              para("<!-- /traycer-orchestration-prelude -->"),
+            ],
+          },
+        }}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("structured only role text")).toBeTruthy();
+    });
+  });
+
   it("reveals the action chip for keyboard focus", () => {
     render(
       <UserMessageBody
