@@ -1390,18 +1390,36 @@ describe("ProviderModelProvidersTab resume", () => {
 });
 
 describe("ProviderModelProvidersTab layout", () => {
-  it("sizes the catalog fluidly, capped against the viewport", () => {
-    // jsdom has no layout engine, so the mechanism is asserted structurally:
-    // full width, a viewport-relative cap, and no fixed px/rem layout box.
+  it("keeps ONE scroll context - the panel's", () => {
+    // jsdom has no layout engine, so this is structural: the list must not cap
+    // itself or scroll internally. It used to do both, which nested a second
+    // scrollbar inside the panel's own - two tracks for one list, the outer
+    // moving the tab while the inner moved the rows.
     renderTab({
       result: { ok: true, providers: [entry({})] },
       capabilities: FULL_CAPS,
     });
     const list = screen.getByTestId("model-provider-list");
     expect(list.className).toContain("w-full");
-    expect(list.className).toContain("max-h-[60vh]");
+    expect(list.className).not.toContain("overflow-y-auto");
+    expect(list.className).not.toMatch(/max-h-/);
     // No fixed layout box in EITHER unit: a rem cap freezes with the text size
-    // instead of following the window, which the px-only assertion missed.
+    // instead of following the window, which a px-only assertion would miss.
     expect(list.className).not.toMatch(/-\[[^\]]*\d(?:px|rem)/);
+  });
+
+  it("keeps Add custom provider as the FIRST item, inside the list", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [entry({}), entry({ id: "openai", name: "OpenAI" })],
+      },
+      capabilities: { actions: ["connect", "createCustom"] },
+    });
+    const list = screen.getByTestId("model-provider-list");
+    const add = screen.getByRole("button", { name: "Add custom provider" });
+    // Inside, so it scrolls with the content rather than pinning above it.
+    expect(list.contains(add)).toBe(true);
+    expect(list.firstElementChild?.contains(add)).toBe(true);
   });
 });

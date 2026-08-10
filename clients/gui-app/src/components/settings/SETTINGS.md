@@ -1027,11 +1027,22 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
          "leave the stored one alone", never "clear it", and the helper text says
          so in edit mode. An env REFERENCE is restored verbatim: it is not a secret,
          and blanking it would silently drop it on the next save.
-    - **"Add custom provider" sits ABOVE the search box**, shown when the host
-      advertises `createCustom`. Above rather than as the list's first row
-      because it is not a provider the catalog can match: a search that filtered
-      it away would hide the one affordance whose purpose is "what you want
-      isn't in this list", exactly when the user is typing in that box.
+    - **Structure: ONE scroll context, sticky search, Add as the first row.**
+      The list no longer caps itself against the viewport or scrolls
+      internally — that nested a second scrollbar inside the panel's own, so
+      one list had two tracks and the outer one moved the tab while the inner
+      moved the rows. The panel scrolls; the list just gets long.
+      The search controls are **sticky** under the tab header, because they are
+      now the only way to narrow a catalog that runs its full length.
+      **"Add custom provider" is the list's FIRST item** and scrolls with the
+      content. It stays rendered whatever the search or filter says — including
+      when they match nothing, which is why every empty state renders INSIDE the
+      list shell rather than instead of it. It is an affordance, not a result:
+      a query that hid it would remove the one row whose purpose is "what you
+      want isn't in this list", exactly when someone is typing. (It sat above
+      the search box for one round, for that same reason; the user's live pass
+      overruled the placement, and the always-first-row form keeps the property
+      without pinning it.)
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a

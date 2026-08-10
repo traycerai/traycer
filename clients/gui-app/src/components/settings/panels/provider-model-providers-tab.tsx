@@ -576,37 +576,20 @@ export function ProviderModelProvidersTab(props: {
         the same sign-ins.
       </p>
 
-      {canCreateCustom ? (
-        // ABOVE the search box, not inside the results. It is not a provider
-        // the catalog can match, so a search that filters it away would hide
-        // the one row whose whole purpose is "what you want isn't in this
-        // list" - which is exactly when the user is searching.
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="w-full justify-start gap-2 px-0 text-muted-foreground hover:text-foreground"
-          // Closed while a custom write is in flight: declaring a provider
-          // through this button would open a form whose Save the guard drops,
-          // and an older completion would land on the newer dialog's state.
-          disabled={configWrite.activeModelProviderId !== null}
-          onClick={() => {
-            customForm.open(null);
-          }}
-        >
-          <Plus className="size-3.5" />
-          Add custom provider
-        </Button>
-      ) : null}
-
       {entries.length > 0 ? (
-        <ModelProviderListControls
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          filter={methodFilter}
-          onFilterChange={setMethodFilter}
-          resultCount={filtered.length}
-        />
+        // STICKY, because the panel is the only scroll context now: the list
+        // runs its full length inside it, and a search box that scrolled away
+        // would leave a long catalog with no way to narrow it without
+        // scrolling back up.
+        <div className="sticky top-0 z-10 -mx-1 bg-background/95 px-1 py-1 backdrop-blur">
+          <ModelProviderListControls
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            filter={methodFilter}
+            onFilterChange={setMethodFilter}
+            resultCount={filtered.length}
+          />
+        </div>
       ) : null}
 
       <ModelProvidersBody
@@ -641,6 +624,10 @@ export function ProviderModelProvidersTab(props: {
             : null
         }
         canDisconnect={canDisconnect}
+        canCreateCustom={canCreateCustom}
+        onAddCustom={() => {
+          customForm.open(null);
+        }}
         canUpdateCustom={capabilities.actions.includes("updateCustom")}
         onEditCustom={customForm.open}
         onReenableCustom={customForm.reenable}
@@ -733,6 +720,8 @@ function ModelProvidersBody(props: {
   readonly filterEmptyDescription: string | null;
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
+  readonly canCreateCustom: boolean;
+  readonly onAddCustom: () => void;
   readonly canUpdateCustom: boolean;
   /** A config-file write is in flight somewhere on this surface. */
   readonly configWriteInFlight: boolean;
@@ -811,83 +800,148 @@ function ModelProvidersBody(props: {
     );
   }
   if (props.entries.length === 0 && props.searchActive) {
+    // Inside the shell, not instead of it: "Add custom provider" is exactly the
+    // affordance a fruitless search wants, so the one branch that would have
+    // hidden it is the one where it matters most.
     return (
-      <ProviderListSearchEmptyState
-        query={props.searchQuery}
-        resourceLabel="providers"
-      />
+      <ModelProviderListShell
+        canCreateCustom={props.canCreateCustom}
+        configWriteInFlight={props.configWriteInFlight}
+        onAddCustom={props.onAddCustom}
+        refreshing={props.refreshing}
+      >
+        <li className="w-full py-2">
+          <ProviderListSearchEmptyState
+            query={props.searchQuery}
+            resourceLabel="providers"
+          />
+        </li>
+      </ModelProviderListShell>
     );
   }
   // A filter with no query needs its own line: the search empty state quotes a
   // query, and quoting an empty one would read as a bug rather than a filter.
   if (props.entries.length === 0 && props.filterEmptyDescription !== null) {
     return (
-      <EmptyState
-        title="No matching providers"
-        description={props.filterEmptyDescription}
-        actionLabel={null}
-        onAction={null}
-      />
+      <ModelProviderListShell
+        canCreateCustom={props.canCreateCustom}
+        configWriteInFlight={props.configWriteInFlight}
+        onAddCustom={props.onAddCustom}
+        refreshing={props.refreshing}
+      >
+        <li className="w-full py-2">
+          <EmptyState
+            title="No matching providers"
+            description={props.filterEmptyDescription}
+            actionLabel={null}
+            onAction={null}
+          />
+        </li>
+      </ModelProviderListShell>
     );
   }
   return (
+    <ModelProviderListShell
+      canCreateCustom={props.canCreateCustom}
+      configWriteInFlight={props.configWriteInFlight}
+      onAddCustom={props.onAddCustom}
+      refreshing={props.refreshing}
+    >
+      {props.entries.map((entry) => (
+        <ModelProviderRow
+          key={entry.id}
+          entry={entry}
+          providerLabel={props.providerLabel}
+          canDisconnect={props.canDisconnect}
+          connectable={props.connectable}
+          canUpdateCustom={props.canUpdateCustom}
+          configWriteInFlight={props.configWriteInFlight}
+          busy={props.busyModelProviderIds.includes(entry.id)}
+          rowError={
+            props.rowError !== null &&
+            props.rowError.modelProviderId === entry.id
+              ? props.rowError.message
+              : null
+          }
+          onConnect={() => {
+            props.onConnect(entry);
+          }}
+          onEditCustom={props.onEditCustom}
+          onReenableCustom={props.onReenableCustom}
+          onDisconnect={() => {
+            props.onDisconnect(entry);
+          }}
+        />
+      ))}
+    </ModelProviderListShell>
+  );
+}
+
+/**
+ * The list itself: the refreshing line, "Add custom provider" as the first
+ * item, then whatever rows or empty state the body handed over.
+ *
+ * ONE scroll context. This used to cap itself against the viewport and scroll
+ * internally, which nested a second scrollbar inside the panel's own - two
+ * tracks for one list, the outer moving the tab while the inner moved the rows.
+ * The panel scrolls; this just gets long.
+ *
+ * A SHELL rather than a branch inside the rows path, because every empty state
+ * needs it too: "Add custom provider" is exactly the affordance a fruitless
+ * search wants, and returning an empty state INSTEAD of the list is what used
+ * to take it away at that moment.
+ *
+ * Not virtualized. These rows are one line of text plus a button - no images,
+ * no per-row queries - so ~180 of them cost one cheap render pass; the panel
+ * that does virtualize (Worktrees) does it for thousands of rows that each
+ * drive their own enrichment fetch. A virtualizer would also make this list
+ * untestable under jsdom, which reports every element as zero-height.
+ */
+function ModelProviderListShell(props: {
+  readonly canCreateCustom: boolean;
+  readonly configWriteInFlight: boolean;
+  readonly onAddCustom: () => void;
+  readonly refreshing: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
     <>
       <RefreshingNotice refreshing={props.refreshing} />
-      {/*
-       * The catalog is ~180 rows, so it gets its own bounded scroll region
-       * rather than extending the tab's: a page whose scrollbar spans the whole
-       * catalog buries every other control on the tab. Capped against the
-       * VIEWPORT alone - no px/rem branch - so the cap scales with the window
-       * rather than freezing at one text size.
-       *
-       * Not virtualized. These rows are one line of text plus a button - no
-       * images, no per-row queries - so 180 of them cost one cheap render pass;
-       * the panel that does virtualize (Worktrees) does it for thousands of
-       * rows that each drive their own enrichment fetch. A virtualizer would
-       * also make this list untestable under jsdom, which reports every element
-       * as zero-height and would leave the viewport empty.
-       */}
       <ul
-        // One list, hairline-separated - not a card per provider. At ~180 rows a
-        // border around each one turns the surface into a wall of boxes with the
-        // provider names as the smallest thing in it; the separators carry the
-        // same grouping for a fraction of the ink.
         className={cn(
-          "flex max-h-[60vh] w-full flex-col divide-y divide-border/40 overflow-y-auto",
-          // Dimmed, not replaced. A skeleton would throw away rows that are still
-          // mostly right; this says "being re-checked" while keeping them
+          "flex w-full flex-col divide-y divide-border/40",
+          // Dimmed, not replaced. A skeleton would throw away rows that are
+          // still mostly right; this says "being re-checked" while keeping them
           // readable, and the banner above names what is happening.
           props.refreshing && "opacity-60",
         )}
         aria-busy={props.refreshing}
         data-testid="model-provider-list"
       >
-        {props.entries.map((entry) => (
-          <ModelProviderRow
-            key={entry.id}
-            entry={entry}
-            providerLabel={props.providerLabel}
-            canDisconnect={props.canDisconnect}
-            connectable={props.connectable}
-            canUpdateCustom={props.canUpdateCustom}
-            configWriteInFlight={props.configWriteInFlight}
-            busy={props.busyModelProviderIds.includes(entry.id)}
-            rowError={
-              props.rowError !== null &&
-              props.rowError.modelProviderId === entry.id
-                ? props.rowError.message
-                : null
-            }
-            onConnect={() => {
-              props.onConnect(entry);
-            }}
-            onEditCustom={props.onEditCustom}
-            onReenableCustom={props.onReenableCustom}
-            onDisconnect={() => {
-              props.onDisconnect(entry);
-            }}
-          />
-        ))}
+        {props.canCreateCustom ? (
+          // The list's FIRST item, scrolling with the content. It stays
+          // rendered whatever the search says, because it is an affordance
+          // rather than a result - a query that hid it would remove the one row
+          // whose purpose is "what you want isn't in this list", exactly when
+          // someone is typing.
+          <li className="w-full">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="w-full justify-start gap-2 px-0 text-muted-foreground hover:text-foreground"
+              // Closed while a config write is in flight: declaring through
+              // this would open a form whose Save the guard drops, and an older
+              // completion would land on the newer dialog's state.
+              disabled={props.configWriteInFlight}
+              onClick={props.onAddCustom}
+            >
+              <Plus className="size-3.5" />
+              Add custom provider
+            </Button>
+          </li>
+        ) : null}
+        {props.children}
       </ul>
     </>
   );
