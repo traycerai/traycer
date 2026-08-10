@@ -918,6 +918,40 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       that loader is frequently fed by the auth store — `xai` signs in through
       OAuth and still reports `custom` — so pointing at a file would send the
       user where the credential is not.
+    - **Rows carry the provider's BRAND MARK**, from `@lobehub/icons` via a
+      hand-owned `models.dev id → component` map
+      (`home/pickers/model-provider-icons.tsx`, beside the harness map that uses
+      the same package). Monochrome variants, so rows tint with the surrounding
+      text; sizing follows the row (`size-4`).
+      **Coverage is the popular head, and the tail falls back on purpose.** The
+      fallback is a NEUTRAL glyph, never a real brand's mark: upstream fetches
+      `models.dev/logos/{id}.svg` at build time, that endpoint answers 200 for
+      any id with a generic sparkles body, and the result is that 14 of their 98
+      sprite entries are the fallback wearing a named provider's identity — and
+      the fallback happens to be Synthetic's real logo, so an unknown provider
+      renders as that company. A user-declared custom provider gets the same
+      neutral mark, for the same reason: it has no brand, and borrowing one puts
+      a real company's logo on someone's private gateway.
+      A missing entry here cannot render blank the way upstream's `llmgateway`
+      does (declared in the generated name list, absent from the generated
+      sprite, so the guard passes and the `<use>` resolves to nothing) — the map
+      holds imported components, so a bad one is a compile error rather than an
+      invisible icon.
+    - **A post-mutation refetch SAYS it is refreshing.** The host rotates its
+      managed server on every write, so the next list pays a cold
+      `opencode serve` boot — **measured ~3.7s, against ~0.24s warm**. For that
+      whole window the rows on screen are the pre-mutation answer. The list
+      keeps them (they are mostly right, and a skeleton would discard more than
+      it protects) but dims them, sets `aria-busy`, and shows a "Refreshing
+      providers" line. Without it a stale row reads as final, which is exactly
+      what the user reported twice — "still needs manual refresh", then "it
+      takes a little time to auto refresh".
+      **No optimistic flip.** Disconnect does not reliably mean disconnected:
+      an env variable or a config block underneath can keep the row connected,
+      and the host decides that across five ordered passes. Guessing the outcome
+      client-side would show a state the refetch contradicts seconds later — a
+      visible flip-flop, and a re-run of the "client re-derives host truth"
+      mistake this surface removed once already.
     - **The custom-provider dialog MIRRORS upstream's**, extracted field for
       field from OpenCode desktop 1.18.2 (`CustomProviderForm` /
       `validateCustomProvider`). An earlier pass mirrored their predicates and

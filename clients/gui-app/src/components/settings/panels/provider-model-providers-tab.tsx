@@ -8,6 +8,7 @@ import type {
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { ModelProviderMark } from "@/components/home/pickers/model-provider-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -173,6 +174,36 @@ function busyRowIds(args: {
     ids.push(args.configWritingId);
   }
   return ids;
+}
+
+/**
+ * Whether a row can offer Connect at all.
+ *
+ * Either verb does it - the dialog decides which arms it can actually present,
+ * and shows the unavailable ones with a reason rather than hiding them.
+ */
+function isConnectable(
+  capabilities: ProviderModelProvidersCapabilities,
+): boolean {
+  return (
+    capabilities.actions.includes("connect") ||
+    capabilities.actions.includes("oauth")
+  );
+}
+
+/**
+ * The declared custom rows that are currently OFF.
+ *
+ * A disabled declaration keeps its id in the catalog, and upstream lets you
+ * re-declare into it - that is their re-enable. Reporting it as taken would
+ * block the one flow that repairs such a row.
+ */
+function disabledCustomIds(
+  entries: readonly ModelProviderEntry[],
+): readonly string[] {
+  return entries
+    .filter((entry) => entry.configDeclaredCustom && !entry.connected)
+    .map((entry) => entry.id);
 }
 
 /**
@@ -519,11 +550,16 @@ export function ProviderModelProvidersTab(props: {
   }, [auth, configWrite, disconnectTarget, providerId]);
 
   const canDisconnect = capabilities.actions.includes("disconnect");
+  const connectable = isConnectable(capabilities);
   const canCreateCustom = capabilities.actions.includes("createCustom");
   // Hoisted out of JSX: `eslint --fix` (react/jsx-no-leaked-render) rewrites a
   // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
   const disconnectPending = auth.isPending && disconnectTarget !== null;
+  // Hoisted out of JSX for the same reason `disconnectPending` is: `eslint
+  // --fix` rewrites a logical `&&` in an attribute into `cond ? value : null`,
+  // which makes it `boolean | null` and fails the prop.
+  const listRefreshing = listQuery.isFetching && !listQuery.isPending;
   const busyModelProviderIds = busyRowIds({
     disconnectingId: disconnectPending ? disconnectTarget.id : null,
     configWritingId: configWrite.activeModelProviderId,
@@ -575,6 +611,13 @@ export function ProviderModelProvidersTab(props: {
 
       <ModelProvidersBody
         listPending={listQuery.isPending}
+        // A refetch AFTER a mutation is not instant and cannot be made so: the
+        // host rotates its managed server on every write, so the next list pays
+        // a cold `opencode serve` boot - measured at ~3.7s against ~0.24s warm.
+        // The rows on screen are the PRE-mutation answer for that whole window,
+        // and with nothing saying so they read as the final state. The user
+        // reported exactly that, twice, before anyone measured it.
+        refreshing={listRefreshing}
         // Redacted like every other host string this tab renders. A transport
         // error message is host-authored text on a credential surface, and the
         // one place it was passed through raw is the one place nobody thought
@@ -601,10 +644,7 @@ export function ProviderModelProvidersTab(props: {
         canUpdateCustom={capabilities.actions.includes("updateCustom")}
         onEditCustom={customForm.open}
         onReenableCustom={customForm.reenable}
-        connectable={
-          capabilities.actions.includes("connect") ||
-          capabilities.actions.includes("oauth")
-        }
+        connectable={connectable}
         rowError={rowError}
         // BOTH can be true at once: a plain disconnect does not take the config
         // lock, so it can legitimately run beside a config write on another row.
@@ -648,12 +688,7 @@ export function ProviderModelProvidersTab(props: {
           }}
           providerLabel={providerLabel}
           takenIds={entries.map((entry) => entry.id)}
-          // A DISABLED declaration keeps its id in the catalog, and upstream
-          // lets you re-declare into it - that is their re-enable. Reporting it
-          // as taken would block the one flow that repairs such a row.
-          disabledIds={entries
-            .filter((entry) => entry.configDeclaredCustom && !entry.connected)
-            .map((entry) => entry.id)}
+          disabledIds={disabledCustomIds(entries)}
           initial={customForm.state.initial}
           isPending={customForm.isPending}
           submitError={customForm.error}
@@ -683,6 +718,8 @@ export function ProviderModelProvidersTab(props: {
 
 function ModelProvidersBody(props: {
   readonly listPending: boolean;
+  /** A refetch is in flight over data already on screen. */
+  readonly refreshing: boolean;
   readonly listError: string | null;
   readonly result: ModelProvidersListResult | undefined;
   readonly packPreparing: ProviderPackPreparing | null;
@@ -794,53 +831,65 @@ function ModelProvidersBody(props: {
     );
   }
   return (
-    // The catalog is ~180 rows, so it gets its own bounded scroll region rather
-    // than extending the tab's: a page whose scrollbar spans the whole catalog
-    // buries every other control on the tab. Capped against the VIEWPORT
-    // alone - no px/rem branch - so the cap scales with the window rather than
-    // freezing at one text size.
-    //
-    // Not virtualized. These rows are one line of text plus a button - no
-    // images, no per-row queries - so 180 of them cost one cheap render pass;
-    // the panel that does virtualize (Worktrees) does it for thousands of rows
-    // that each drive their own enrichment fetch. A virtualizer would also make
-    // this list untestable under jsdom, which reports every element as
-    // zero-height and would leave the viewport empty.
-    <ul
-      // One list, hairline-separated - not a card per provider. At ~180 rows a
-      // border around each one turns the surface into a wall of boxes with the
-      // provider names as the smallest thing in it; the separators carry the
-      // same grouping for a fraction of the ink.
-      className="flex max-h-[60vh] w-full flex-col divide-y divide-border/40 overflow-y-auto"
-      data-testid="model-provider-list"
-    >
-      {props.entries.map((entry) => (
-        <ModelProviderRow
-          key={entry.id}
-          entry={entry}
-          providerLabel={props.providerLabel}
-          canDisconnect={props.canDisconnect}
-          connectable={props.connectable}
-          canUpdateCustom={props.canUpdateCustom}
-          configWriteInFlight={props.configWriteInFlight}
-          busy={props.busyModelProviderIds.includes(entry.id)}
-          rowError={
-            props.rowError !== null &&
-            props.rowError.modelProviderId === entry.id
-              ? props.rowError.message
-              : null
-          }
-          onConnect={() => {
-            props.onConnect(entry);
-          }}
-          onEditCustom={props.onEditCustom}
-          onReenableCustom={props.onReenableCustom}
-          onDisconnect={() => {
-            props.onDisconnect(entry);
-          }}
-        />
-      ))}
-    </ul>
+    <>
+      <RefreshingNotice refreshing={props.refreshing} />
+      {/*
+       * The catalog is ~180 rows, so it gets its own bounded scroll region
+       * rather than extending the tab's: a page whose scrollbar spans the whole
+       * catalog buries every other control on the tab. Capped against the
+       * VIEWPORT alone - no px/rem branch - so the cap scales with the window
+       * rather than freezing at one text size.
+       *
+       * Not virtualized. These rows are one line of text plus a button - no
+       * images, no per-row queries - so 180 of them cost one cheap render pass;
+       * the panel that does virtualize (Worktrees) does it for thousands of
+       * rows that each drive their own enrichment fetch. A virtualizer would
+       * also make this list untestable under jsdom, which reports every element
+       * as zero-height and would leave the viewport empty.
+       */}
+      <ul
+        // One list, hairline-separated - not a card per provider. At ~180 rows a
+        // border around each one turns the surface into a wall of boxes with the
+        // provider names as the smallest thing in it; the separators carry the
+        // same grouping for a fraction of the ink.
+        className={cn(
+          "flex max-h-[60vh] w-full flex-col divide-y divide-border/40 overflow-y-auto",
+          // Dimmed, not replaced. A skeleton would throw away rows that are still
+          // mostly right; this says "being re-checked" while keeping them
+          // readable, and the banner above names what is happening.
+          props.refreshing && "opacity-60",
+        )}
+        aria-busy={props.refreshing}
+        data-testid="model-provider-list"
+      >
+        {props.entries.map((entry) => (
+          <ModelProviderRow
+            key={entry.id}
+            entry={entry}
+            providerLabel={props.providerLabel}
+            canDisconnect={props.canDisconnect}
+            connectable={props.connectable}
+            canUpdateCustom={props.canUpdateCustom}
+            configWriteInFlight={props.configWriteInFlight}
+            busy={props.busyModelProviderIds.includes(entry.id)}
+            rowError={
+              props.rowError !== null &&
+              props.rowError.modelProviderId === entry.id
+                ? props.rowError.message
+                : null
+            }
+            onConnect={() => {
+              props.onConnect(entry);
+            }}
+            onEditCustom={props.onEditCustom}
+            onReenableCustom={props.onReenableCustom}
+            onDisconnect={() => {
+              props.onDisconnect(entry);
+            }}
+          />
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -870,6 +919,26 @@ function customRowActions(
     values,
     reenable: !entry.connected && canReenableCustomProvider(values),
   };
+}
+
+/**
+ * Says a refetch is happening, because the alternative is a row that looks
+ * settled and is not. The host rotates its managed server on every write, so
+ * this window is a cold `opencode serve` boot - measured ~3.7s against ~0.24s
+ * warm - and a user who reads a stale row as final concludes the button did
+ * nothing. Which is what happened, twice.
+ */
+function RefreshingNotice(props: { readonly refreshing: boolean }): ReactNode {
+  if (!props.refreshing) return null;
+  return (
+    <div
+      className="flex items-center gap-2 py-1 text-ui-xs text-muted-foreground"
+      role="status"
+    >
+      <MutedAgentSpinner />
+      Refreshing providers
+    </div>
+  );
 }
 
 function ModelProviderRow(props: {
@@ -913,6 +982,13 @@ function ModelProviderRow(props: {
     <li className="w-full">
       <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 py-1.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* A user-declared provider has no brand, so it takes the generic
+           * mark the same way an id we have no logo for does. */}
+          <ModelProviderMark
+            id={entry.id}
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground"
+          />
           {entry.connected ? (
             <span
               aria-hidden

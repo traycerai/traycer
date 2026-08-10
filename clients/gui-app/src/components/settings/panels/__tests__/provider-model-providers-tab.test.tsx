@@ -33,6 +33,7 @@ import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provid
 const hostMocks = vi.hoisted(() => ({
   listResult: null as ModelProvidersListResult | null,
   listPending: false,
+  listFetching: false,
   listError: null as string | null,
   refetch: vi.fn(),
   authMutate: vi.fn<(payload: unknown, options: AuthMutateOptions) => void>(),
@@ -63,6 +64,7 @@ vi.mock("@/hooks/providers/use-providers-model-providers-list-query", () => ({
         ? undefined
         : { result: hostMocks.listResult },
     isPending: hostMocks.listPending,
+    isFetching: hostMocks.listFetching,
     isError: hostMocks.listError !== null,
     error:
       hostMocks.listError === null ? null : { message: hostMocks.listError },
@@ -138,6 +140,7 @@ function renderTab(args: {
 beforeEach(() => {
   hostMocks.listResult = null;
   hostMocks.listPending = false;
+  hostMocks.listFetching = false;
   hostMocks.listError = null;
   hostMocks.authIsPending = false;
   hostMocks.refetch.mockReset();
@@ -173,6 +176,36 @@ describe("sortModelProviderEntries", () => {
 });
 
 describe("ProviderModelProvidersTab list states", () => {
+  it("SAYS it is refreshing rather than letting stale rows look final", () => {
+    // Measured: the host rotates its managed server on every write, so the
+    // refetch after a mutation pays a cold `opencode serve` boot - ~3.7s
+    // against ~0.24s warm. For that whole window the rows are the pre-mutation
+    // answer, and the user read them as final twice before anyone timed it.
+    hostMocks.listFetching = true;
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+    });
+    // Queried by text: the search controls also publish a polite live region,
+    // so `getByRole("status")` is ambiguous here and asserting on the wrong one
+    // would pass for the wrong reason.
+    expect(screen.getByText("Refreshing providers")).toBeTruthy();
+    // The rows stay on screen - they are mostly right, and a skeleton would
+    // throw away more than it protects.
+    expect(screen.getByText("Anthropic")).toBeTruthy();
+    expect(
+      screen.getByTestId("model-provider-list").getAttribute("aria-busy"),
+    ).toBe("true");
+  });
+
+  it("does not claim to be refreshing when it is not", () => {
+    renderTab({
+      result: { ok: true, providers: [entry({})] },
+      capabilities: FULL_CAPS,
+    });
+    expect(screen.queryByText("Refreshing providers")).toBeNull();
+  });
+
   it("renders the catalog with the provider id beside the name", () => {
     renderTab({
       result: {

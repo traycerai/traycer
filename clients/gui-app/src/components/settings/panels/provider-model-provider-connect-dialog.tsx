@@ -9,6 +9,7 @@ import type {
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { ModelProviderMark } from "@/components/home/pickers/model-provider-icons";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -601,7 +602,16 @@ export function ProviderModelProviderConnectDialog(props: {
         data-testid="model-provider-connect-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Connect {entry.name}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {/* The provider's own mark, so the dialog and the row it came from
+             * name the same thing the same way. */}
+            <ModelProviderMark
+              id={entry.id}
+              aria-hidden
+              className="size-4 shrink-0"
+            />
+            Connect {entry.name}
+          </DialogTitle>
           <DialogDescription>
             {providerLabel} will use this credential for {entry.name} models.
           </DialogDescription>

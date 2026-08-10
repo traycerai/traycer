@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GenericModelProviderIcon } from "@/components/home/pickers/model-provider-icons";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { cn } from "@/lib/utils";
 import {
@@ -142,7 +143,11 @@ export function ProviderCustomModelProviderDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {/* Always the generic mark: a provider the user declared has no
+             * brand of its own, and borrowing one would put a real company's
+             * logo on someone's private gateway. */}
+            <GenericModelProviderIcon aria-hidden className="size-4 shrink-0" />
             {editing ? "Edit custom provider" : "Custom provider"}
           </DialogTitle>
           <DialogDescription>
