@@ -11,13 +11,15 @@ import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestrati
 import { useOrchestrationEpicOverridesStore } from "@/stores/orchestration/orchestration-epic-overrides-store";
 
 export interface OrchestrationBindingPopoverProps {
-  readonly epicId: string;
+  /** null = edit the GLOBAL default binding (used on the new-chat composer). */
+  readonly epicId: string | null;
   readonly onClose: () => void;
 }
 
 /**
- * Per-epic orchestration binding editor. Writes setEpicOverride immediately;
- * "Reset to global" clears the override.
+ * Orchestration binding editor. epicId non-null → per-epic override.
+ * epicId null → writes the global default store directly (new-chat composer:
+ * the auto-selected default you can change or turn off before creating).
  */
 export function OrchestrationBindingPopover(
   props: OrchestrationBindingPopoverProps,
@@ -32,8 +34,11 @@ export function OrchestrationBindingPopover(
     (s) => s.overridesByEpicId,
   );
   const globalBinding = useOrchestrationBindingStore((s) => s.binding);
+  const setGlobalBinding = useOrchestrationBindingStore((s) => s.setBinding);
   const binding = effectiveOrchestrationBinding(props.epicId);
-  const hasOverride = Object.hasOwn(overridesByEpicId, props.epicId);
+  const isGlobal = props.epicId === null;
+  const hasOverride =
+    !isGlobal && Object.hasOwn(overridesByEpicId, props.epicId);
 
   const listQuery = useRunnerOrchestrationListQuery();
   const groupsQuery = useRunnerOrchestrationGroupsQuery();
@@ -47,6 +52,10 @@ export function OrchestrationBindingPopover(
   );
 
   const write = (next: OrchestrationBinding): void => {
+    if (props.epicId === null) {
+      setGlobalBinding(next);
+      return;
+    }
     setEpicOverride(props.epicId, next);
   };
 
@@ -58,7 +67,9 @@ export function OrchestrationBindingPopover(
       aria-label="Orchestration binding"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-ui-sm font-medium">Orchestration</span>
+        <span className="text-ui-sm font-medium">
+          {isGlobal ? "Orchestration (default for new chats)" : "Orchestration"}
+        </span>
         <button
           type="button"
           className="text-ui-xs text-muted-foreground hover:text-foreground"
@@ -68,6 +79,11 @@ export function OrchestrationBindingPopover(
           Close
         </button>
       </div>
+      {isGlobal ? (
+        <p className="mb-2 text-ui-xs text-muted-foreground">
+          New chats start with this role. Turn off for a blank agent.
+        </p>
+      ) : null}
 
       <label className="mb-2 flex items-center gap-2 text-ui-xs">
         <input
@@ -163,21 +179,24 @@ export function OrchestrationBindingPopover(
         </select>
       </label>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="w-full"
-        disabled={!hasOverride}
-        onClick={() => {
-          clearEpicOverride(props.epicId);
-          // Reflect global immediately in the UI via store subscription.
-          void globalBinding;
-        }}
-        data-testid="orchestration-binding-reset"
-      >
-        Reset to global
-      </Button>
+      {isGlobal ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-full"
+          disabled={!hasOverride}
+          onClick={() => {
+            if (props.epicId === null) return;
+            clearEpicOverride(props.epicId);
+            // Reflect global immediately in the UI via store subscription.
+            void globalBinding;
+          }}
+          data-testid="orchestration-binding-reset"
+        >
+          Reset to global
+        </Button>
+      )}
     </div>
   );
 }

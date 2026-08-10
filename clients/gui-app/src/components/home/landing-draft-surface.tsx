@@ -6,6 +6,7 @@ import { LandingComposer } from "@/components/home/composer/landing-composer";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import { OrchestrationBindingChip } from "@/components/orchestration/orchestration-binding-chip";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
 import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
@@ -109,5 +110,11 @@ function renderLandingWorkspaceControls(
   surface: { readonly kind: "home"; readonly draftId: string | null },
   disabled: boolean,
 ) {
-  return <HostWorkspaceSelector surface={surface} disabled={disabled} />;
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <HostWorkspaceSelector surface={surface} disabled={disabled} />
+      {/* New-chat orchestration default: auto-selected role, change/remove here. */}
+      <OrchestrationBindingChip epicId={null} />
+    </div>
+  );
 }

@@ -6,13 +6,14 @@ import { useOrchestrationEpicOverridesStore } from "@/stores/orchestration/orche
 import { OrchestrationBindingPopover } from "./orchestration-binding-popover";
 
 export interface OrchestrationBindingChipProps {
-  /** Target epic for overrides. null = display-only global (no popover write). */
+  /** Target epic for overrides. null = new-chat composer (edits global default). */
   readonly epicId: string | null;
 }
 
 /**
  * Compact create-time orchestration binding chip.
- * Opens the per-epic popover when epicId is non-null.
+ * epicId non-null → per-epic override popover.
+ * epicId null (new-chat composer) → edits the global default binding.
  */
 export function OrchestrationBindingChip(
   props: OrchestrationBindingChipProps,
@@ -46,8 +47,13 @@ export function OrchestrationBindingChip(
       )}
       data-testid="orchestration-binding-chip"
       aria-label="Orchestration binding"
+      title={
+        binding.enabled
+          ? "New chat starts as this role — click to change or turn off"
+          : "Orchestration off — new chats start blank"
+      }
       onClick={() => {
-        if (props.epicId !== null) setOpen((v) => !v);
+        setOpen((v) => !v);
       }}
     >
       <span className="truncate">{label}</span>
@@ -60,10 +66,6 @@ export function OrchestrationBindingChip(
       ) : null}
     </button>
   );
-
-  if (props.epicId === null) {
-    return chip;
-  }
 
   return (
     <div className="relative inline-flex">
