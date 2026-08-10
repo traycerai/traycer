@@ -7,8 +7,8 @@ import { DEV_DESKTOP_SLOT_ENV } from "../host/dev-desktop-slot";
 
 describe("dev desktop runtime helpers", () => {
   it("keeps no-slot app identity unchanged", () => {
-    expect(resolveDesktopRuntimeIdentity("Thanos Dev", "dev", {})).toEqual({
-      appName: "Thanos Dev",
+    expect(resolveDesktopRuntimeIdentity("Thanos Traycer Dev", "dev", {})).toEqual({
+      appName: "Thanos Traycer Dev",
       userDataDirName: null,
       slot: null,
     });
@@ -16,53 +16,53 @@ describe("dev desktop runtime helpers", () => {
 
   it("uses the worktree name in the dev display identity while preserving the full slot for isolation", () => {
     expect(
-      resolveDesktopRuntimeIdentity("Thanos Dev", "dev", {
+      resolveDesktopRuntimeIdentity("Thanos Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "traycer-spry-panda-a2acaa5e",
-        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Thanos Dev — spry-panda",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Thanos Traycer Dev — spry-panda",
       }),
     ).toEqual({
-      appName: "Thanos Dev — spry-panda",
-      userDataDirName: "Thanos Dev-traycer-spry-panda-a2acaa5e",
+      appName: "Thanos Traycer Dev — spry-panda",
+      userDataDirName: "Thanos Traycer Dev-traycer-spry-panda-a2acaa5e",
       slot: "traycer-spry-panda-a2acaa5e",
     });
   });
 
   it("uses the threaded display name for a worktree without the traycer prefix", () => {
     expect(
-      resolveDesktopRuntimeIdentity("Thanos Dev", "dev", {
+      resolveDesktopRuntimeIdentity("Thanos Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "fix-macos-ctrl-chord-passthrough-e1d873c7",
         [DEV_DESKTOP_DISPLAY_NAME_ENV]:
-          "Thanos Dev — fix-macos-ctrl-chord-passthrough",
+          "Thanos Traycer Dev — fix-macos-ctrl-chord-passthrough",
       }),
     ).toEqual({
-      appName: "Thanos Dev — fix-macos-ctrl-chord-passthrough",
-      userDataDirName: "Thanos Dev-fix-macos-ctrl-chord-passthrough-e1d873c7",
+      appName: "Thanos Traycer Dev — fix-macos-ctrl-chord-passthrough",
+      userDataDirName: "Thanos Traycer Dev-fix-macos-ctrl-chord-passthrough-e1d873c7",
       slot: "fix-macos-ctrl-chord-passthrough-e1d873c7",
     });
   });
 
   it("uses the threaded full display name for a slot with no worktree segment", () => {
     expect(
-      resolveDesktopRuntimeIdentity("Thanos Dev", "dev", {
+      resolveDesktopRuntimeIdentity("Thanos Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "traycer-85cb2355",
-        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Thanos Dev — traycer-85cb2355",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Thanos Traycer Dev — traycer-85cb2355",
       }),
     ).toEqual({
-      appName: "Thanos Dev — traycer-85cb2355",
-      userDataDirName: "Thanos Dev-traycer-85cb2355",
+      appName: "Thanos Traycer Dev — traycer-85cb2355",
+      userDataDirName: "Thanos Traycer Dev-traycer-85cb2355",
       slot: "traycer-85cb2355",
     });
   });
 
   it("keeps an explicitly requested slot intact in the dev display identity", () => {
     expect(
-      resolveDesktopRuntimeIdentity("Thanos Dev", "dev", {
+      resolveDesktopRuntimeIdentity("Thanos Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "Worktree Slot",
-        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Thanos Dev — worktree-slot",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Thanos Traycer Dev — worktree-slot",
       }),
     ).toEqual({
-      appName: "Thanos Dev — worktree-slot",
-      userDataDirName: "Thanos Dev-worktree-slot",
+      appName: "Thanos Traycer Dev — worktree-slot",
+      userDataDirName: "Thanos Traycer Dev-worktree-slot",
       slot: "worktree-slot",
     });
   });

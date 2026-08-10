@@ -12,7 +12,7 @@ describe("resolveDevDesktopDisplayName", () => {
       devDesktopDisplayName.resolveDevDesktopDisplayName({
         DEV_DESKTOP_SLOT: "traycer-spry-panda-a2acaa5e",
       }),
-    ).toBe("Thanos Dev — spry-panda");
+    ).toBe("Thanos Traycer Dev — spry-panda");
   });
 
   it("strips the generated hash without requiring a traycer prefix", () => {
@@ -20,7 +20,7 @@ describe("resolveDevDesktopDisplayName", () => {
       devDesktopDisplayName.resolveDevDesktopDisplayName({
         DEV_DESKTOP_SLOT: "fix-macos-ctrl-chord-passthrough-e1d873c7",
       }),
-    ).toBe("Thanos Dev — fix-macos-ctrl-chord-passthrough");
+    ).toBe("Thanos Traycer Dev — fix-macos-ctrl-chord-passthrough");
   });
 
   it("keeps the current Electron naming when no slot is active", () => {

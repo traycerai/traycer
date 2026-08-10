@@ -300,8 +300,8 @@ describe("DesktopTrayController menu structure", () => {
     const template = latestMenuTemplate();
     const labels = template.map((entry) => entry.label);
     expect(labels).toContain("No recent epics");
-    expect(labels).toContain("Open Thanos");
-    expect(labels).toContain("Quit Thanos");
+    expect(labels).toContain("Open Thanos Traycer");
+    expect(labels).toContain("Quit Thanos Traycer");
 
     const placeholder = template.find(
       (entry) => entry.label === "No recent epics",
@@ -324,10 +324,12 @@ describe("DesktopTrayController menu structure", () => {
     expect(statusRow).toBeUndefined();
 
     const tray = mostRecentTray();
-    expect(tray.toolTips[tray.toolTips.length - 1]).toBe("Thanos (attention)");
+    expect(tray.toolTips[tray.toolTips.length - 1]).toBe(
+      "Thanos Traycer (attention)",
+    );
   });
 
-  it("renders epic rows under separators alongside Open Thanos and Quit Thanos", () => {
+  it("renders epic rows under separators alongside Open Thanos Traycer and Quit Thanos Traycer", () => {
     const controller = new DesktopTrayController(makeWindow(), trayImage(), {
       onEpicSelected: null,
       onCommand: null,
@@ -341,10 +343,10 @@ describe("DesktopTrayController menu structure", () => {
     const template = latestMenuTemplate();
     const labels = template.map((entry) => entry.label ?? `<${entry.type}>`);
 
-    expect(labels[0]).toBe("Open Thanos");
+    expect(labels[0]).toBe("Open Thanos Traycer");
     expect(labels).toContain("First Epic");
     expect(labels).toContain("Second Epic");
-    expect(labels[labels.length - 1]).toBe("Quit Thanos");
+    expect(labels[labels.length - 1]).toBe("Quit Thanos Traycer");
 
     // Recency reads as native `sublabel` metadata beneath the epic title.
     expect(
@@ -410,10 +412,10 @@ describe("DesktopTrayController menu structure", () => {
 
     const firstTemplate = latestMenuTemplate();
     const openRow = firstTemplate.find(
-      (entry) => entry.label === "Open Thanos",
+      (entry) => entry.label === "Open Thanos Traycer",
     );
     if (openRow?.click === undefined) {
-      throw new Error("expected Open Thanos row to have a click handler");
+      throw new Error("expected Open Thanos Traycer row to have a click handler");
     }
 
     openRow.click();
@@ -429,7 +431,7 @@ describe("DesktopTrayController menu structure", () => {
     }
     epicRow.click();
 
-    // Two Open Thanos clicks (one per MRU window) plus the epic click landing
+    // Two Open Thanos Traycer clicks (one per MRU window) plus the epic click landing
     // on the current MRU window (windowB), which also forwards the epicId.
     expect(windowA.calls).toEqual({ show: 1, focus: 1 });
     expect(windowB.calls).toEqual({ show: 2, focus: 2 });
@@ -475,7 +477,7 @@ describe("DesktopTrayController menu structure", () => {
 
     const template = latestMenuTemplate();
     const labels = template.map((entry) => entry.label ?? `<${entry.type}>`);
-    expect(labels[0]).toBe("Open Thanos");
+    expect(labels[0]).toBe("Open Thanos Traycer");
     // Identity shows as `Name (email)` and sits directly above Sign Out.
     expect(labels).toContain("Ada Lovelace (ada@example.com)");
     const identityIndex = labels.indexOf("Ada Lovelace (ada@example.com)");
@@ -484,7 +486,7 @@ describe("DesktopTrayController menu structure", () => {
     expect(labels.some((l) => l.startsWith("Host"))).toBe(false);
     expect(labels).toContain("Open Logs");
     expect(labels).toContain("No recent epics");
-    expect(labels[labels.length - 1]).toBe("Quit Thanos");
+    expect(labels[labels.length - 1]).toBe("Quit Thanos Traycer");
 
     template.find((entry) => entry.label === "Open Logs")?.click?.();
     template.find((entry) => entry.label === "Check for Updates")?.click?.();
@@ -646,33 +648,33 @@ describe("DesktopTrayController menu structure", () => {
     expect(commands[0]?.hostUpdateVersion).not.toBe("1.6.0-rc.1");
   });
 
-  // Decision 9: the "Open Thanos" item is display-only for the summon
+  // Decision 9: the "Open Thanos Traycer" item is display-only for the summon
   // chord - `registerAccelerator: false` means the OS never binds it from
   // the menu, only the global-shortcuts registry does. Deleting either the
   // `accelerator` assignment or the `registerAccelerator: false` line from
   // `rebuildMenu()` must fail this test, not just checking the method exists.
-  it("shows the live summon accelerator on Open Thanos as display-only, and none when disabled", () => {
+  it("shows the live summon accelerator on Open Thanos Traycer as display-only, and none when disabled", () => {
     const controller = new DesktopTrayController(makeWindow(), trayImage(), {
       onEpicSelected: null,
       onCommand: null,
     });
 
     const beforeSet = latestMenuTemplate().find(
-      (entry) => entry.label === "Open Thanos",
+      (entry) => entry.label === "Open Thanos Traycer",
     );
     expect(beforeSet?.accelerator).toBeUndefined();
     expect(beforeSet?.registerAccelerator).toBe(false);
 
     controller.setSummonAccelerator("CommandOrControl+Shift+Space");
     const withAccelerator = latestMenuTemplate().find(
-      (entry) => entry.label === "Open Thanos",
+      (entry) => entry.label === "Open Thanos Traycer",
     );
     expect(withAccelerator?.accelerator).toBe("CommandOrControl+Shift+Space");
     expect(withAccelerator?.registerAccelerator).toBe(false);
 
     controller.setSummonAccelerator(null);
     const afterDisable = latestMenuTemplate().find(
-      (entry) => entry.label === "Open Thanos",
+      (entry) => entry.label === "Open Thanos Traycer",
     );
     expect(afterDisable?.accelerator).toBeUndefined();
     expect(afterDisable?.registerAccelerator).toBe(false);
@@ -695,7 +697,7 @@ describe("DesktopTrayController menu structure", () => {
     expect(mockMenuState.lastBuiltMenu).not.toBeNull();
     const templateAfterChange = latestMenuTemplate();
     expect(
-      templateAfterChange.find((entry) => entry.label === "Open Thanos")
+      templateAfterChange.find((entry) => entry.label === "Open Thanos Traycer")
         ?.accelerator,
     ).toBe("CommandOrControl+Alt+X");
     expect(templateAfterFirstSet).not.toBe(templateAfterChange);

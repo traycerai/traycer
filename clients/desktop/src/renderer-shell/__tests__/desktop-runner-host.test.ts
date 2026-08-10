@@ -286,7 +286,7 @@ function buildFakeBridge(
     },
     support: {
       getSnapshot: async () => ({
-        appName: "Thanos",
+        appName: "Thanos Traycer",
         appVersion: "0.0.0",
         platform: "darwin",
         arch: "arm64",

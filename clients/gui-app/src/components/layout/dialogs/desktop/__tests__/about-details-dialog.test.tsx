@@ -58,7 +58,7 @@ describe("<AboutDetailsDialog />", () => {
         title: "Couldn't load desktop details",
         message: null,
         code: null,
-        source: "About Traycer",
+        source: "About Thanos Traycer",
       },
     });
   });
@@ -84,7 +84,7 @@ describe("<AboutDetailsDialog />", () => {
       title: "Couldn't load desktop details",
       message: null,
       code: null,
-      source: "About Traycer",
+      source: "About Thanos Traycer",
     });
   });
 });

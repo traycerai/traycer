@@ -171,7 +171,7 @@ export class DesktopTrayController {
   private onEpicSelected: ((epicId: string) => void) | null;
   private onCommand:
     ((command: MenuCommandId, hostUpdateVersion: string | null) => void) | null;
-  // Display-only - `registerAccelerator: false` on the "Open Thanos" item's
+  // Display-only - `registerAccelerator: false` on the "Open Thanos Traycer" item's
   // `accelerator` below means the OS never binds this key combo from the
   // menu; the real registration lives solely in the global-shortcuts
   // registry (`electron-main/app/shortcuts.ts`). `null` when the summon
@@ -188,7 +188,7 @@ export class DesktopTrayController {
     this.onEpicSelected = options.onEpicSelected;
     this.onCommand = options.onCommand;
     this.tray = new Tray(image, TRAY_GUID);
-    this.tray.setToolTip("Thanos");
+    this.tray.setToolTip("Thanos Traycer");
     this.tray.on("click", () => this.showMainWindow());
     this.rebuildMenu();
   }
@@ -216,7 +216,7 @@ export class DesktopTrayController {
 
   setIndicator(state: DesktopTrayIndicatorState): void {
     this.indicator = state;
-    this.tray.setToolTip(`Thanos (${state})`);
+    this.tray.setToolTip(`Thanos Traycer (${state})`);
   }
 
   setPresentation(presentation: DesktopTrayPresentation): void {
@@ -308,7 +308,7 @@ export class DesktopTrayController {
         : [];
     const menu = Menu.buildFromTemplate([
       {
-        label: "Open Thanos",
+        label: "Open Thanos Traycer",
         // Display-only: `registerAccelerator: false` means the OS never
         // binds this from the menu - the global-shortcuts registry owns the
         // real registration. `undefined` (not `null`) is what Electron's
@@ -348,7 +348,7 @@ export class DesktopTrayController {
       },
       { type: "separator" },
       {
-        label: "Quit Thanos",
+        label: "Quit Thanos Traycer",
         click: () => {
           log.info("[tray] quitting from tray menu");
           app.quit();

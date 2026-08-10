@@ -1,99 +1,63 @@
+# Thanos Traycer
+
+**Thanos Traycer** is a fork of [Traycer](https://github.com/traycerai/traycer).
+
+It keeps the original Traycer base — desktop shell, host lifecycle, CLI, BYOA
+agent integrations, and agent-to-agent communication — and adds local product
+layers for multi-project work and team templates.
+
+## What this fork adds
+
+- **Multi Profile** — isolate projects/workspaces so tabs, drafts, and context
+  stay on the active profile (no cross-project leakage).
+- **Orchestrations** — agent team templates with roles, responsibilities, model
+  tiers (`premium` / `executor` / `economic`), model groups, and optional
+  create-time inject of role context into new chats.
+- **Local single-user posture** — optional kill of official auto-update feed so
+  a personal build is not overwritten by upstream packaging defaults.
+
+## Upstream
+
+Upstream project: [traycerai/traycer](https://github.com/traycerai/traycer)  
+This fork: **[gavasques/traycer](https://github.com/gavasques/traycer)** (local product name: **Thanos Traycer**).
+
+Sync policy here: merge `upstream/main` carefully — **never** `gh repo sync`
+(force-overwrites custom history).
+
+---
+
+<details>
+<summary>Upstream Traycer README (reference)</summary>
+
 <img alt="Traycer" src="https://assets.traycer.ai/traycer-readme-banner.png" />
 
-<div align="center">
+Traycer is an open-source AI orchestration app for advanced agent orchestration.
+Bring your existing provider subscriptions and run multiple agents in parallel
+without losing context, using shared memory across all models and providers.
 
-[Download](https://traycer.ai/download) · [Docs](https://docs.traycer.ai) · [Releases](https://github.com/traycerai/traycer/releases/latest) · [Contributing](CONTRIBUTING.md)
+### Upstream features (still in the base)
 
-<br />
+- **Bring Your Own Agent (BYOA)**
+- **Unified Context** across providers
+- **Agent-to-Agent Communication**
+- **Collaboration** boards / sharing (upstream; this fork may hide or bypass
+  parts for single-user use)
+- **Cross-Device Sync** (upstream cloud)
 
-[![MIT License](https://img.shields.io/badge/License-MIT-555555.svg?labelColor=333333&color=666666)](./LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/traycerai/traycer/total?labelColor=333333&color=666666)](https://github.com/traycerai/traycer/releases)
-[![GitHub Stars](https://img.shields.io/github/stars/traycerai/traycer?labelColor=333333&color=666666&logo=github)](https://github.com/traycerai/traycer)
-[![Last Commit](https://img.shields.io/github/last-commit/traycerai/traycer?labelColor=333333&color=666666)](https://github.com/traycerai/traycer/commits/main)
-[![Commit Activity](https://img.shields.io/github/commit-activity/m/traycerai/traycer?labelColor=333333&color=666666)](https://github.com/traycerai/traycer/graphs/commit-activity)
+Docs: https://docs.traycer.ai  
+Upstream releases: https://github.com/traycerai/traycer/releases
 
-[![Discord](https://img.shields.io/badge/Discord-Join-%235462eb?labelColor=%235462eb&logo=discord&logoColor=%23f5f5f5)](https://traycer.ai/discord)
-[![Follow @TraycerAI on X](https://img.shields.io/twitter/follow/TraycerAI?logo=X&color=%23f5f5f5)](https://twitter.com/intent/follow?screen_name=traycerai)
+</details>
 
-</div>
+## Development
 
-Traycer is an open-source AI orchestration app for advanced agent orchestration. Bring your existing provider subscriptions and run multiple agents in parallel without losing context, using shared memory across all models and providers.
+See [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) and root `AGENTS.md`.
 
-Switch models instantly within the same agent, orchestrate agent-to-agent communication, and collaborate in real time.
-
-[![Traycer Demo Video](https://github.com/user-attachments/assets/a5efda0c-16f2-453b-9f8d-50d09df25aa4)](https://youtu.be/doh2yz3ZFvU)
-
-## Features
-
-- **Bring Your Own Agent (BYOA):** Connect your existing coding agents without paying twice, or use Traycer's own inference subscription.
-- **Unified Context:** Instantly switch to another model within the same agent. The context window is seamlessly shared across all providers.
-- **Agent-to-Agent Communication:** Create automated loops where agents talk among themselves to debate architecture or peer-review code. Every agent can be referenced; reading a transcript and delivering a message are narrower and depend on user, Host, and runtime - see the [capability matrix](https://docs.traycer.ai/concepts/agent-to-agent).
-- **Collaboration:** Invite team members to collaborate using shareable boards, real-time editing, and ticket assignment features directly in the workspace.
-- **Cross-Device Sync:** Maintain the same agent state on any device, any OS.
-
-## Installation
-
-| Platform              | Install                                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| macOS (Apple Silicon) | [Download .dmg (arm64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)    |
-| macOS (Intel)         | [Download .dmg (x64)](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-x64.dmg)        |
-| Linux (AppImage)      | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage) |
-| Linux (Debian/Ubuntu) | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)            |
-| Linux (Fedora/RHEL)   | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)           |
-| Windows (x64)         | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)            |
-
-See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
-
-## Coding Agents and Subscriptions
-
-An **agent** is the durable session you create in a Task; you work with it through a **Chat** or **Terminal** interface. A **coding agent** is the underlying provider that powers it. Traycer connects seamlessly with the subscriptions you already own, rather than locking you into an isolated ecosystem. Supported coding agents currently include:
-
-| Coding agent                                          | Status                        |
-| :---------------------------------------------------- | :---------------------------- |
-| [Claude Code](https://claude.com/product/claude-code) | Fully supported               |
-| [Codex](https://openai.com/codex)                     | Fully supported               |
-| [Cursor](https://cursor.com/)                         | Fully supported               |
-| [OpenCode](https://opencode.ai)                       | Fully supported               |
-| [Traycer](https://traycer.ai)                         | Native inference subscription |
-
-See [Coding Agents](https://docs.traycer.ai/agents-and-models/coding-agents) for setup commands and provider-specific configurations.
-
-## Collaboration Features
-
-Traycer is built for teams. The integrated collaboration features allow multiple developers to jump into the same shared workspace. You can assign tickets to specific agents, use shareable boards to visualize your development progress, and co-edit code alongside your AI loops.
-
-See our [Sharing docs](https://docs.traycer.ai/panels/sharing) for details on team management and sharing configurations.
-
-## Privacy
-
-Your code is processed in-memory and never stored or used for training. Prompts and conversations follow **Privacy Mode** (default on for Team plans, opt-in for individuals); with it off, prompts may be logged to help improve our Services.
-
-Agent requests for the CLI providers you configure go directly to that provider; Traycer's own inference is served by Traycer. Crash reporting (Sentry) and analytics (PostHog) may be enabled in release builds.
-
-See our full [Privacy Policy](https://traycer.ai/legal/privacy-policy) for details.
-
-## Documentation
-
-For setup, configuration, agent integrations, and provider-specific behavior, head over to our [**docs**](https://docs.traycer.ai).
-
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started and our [Code of Conduct](CODE_OF_CONDUCT.md). Commits must be signed off under the [Developer Certificate of Origin (DCO)](CONTRIBUTING.md#developer-certificate-of-origin-dco). You can also [open an issue](https://github.com/traycerai/traycer/issues) for bugs and feature requests.
-
-> **Security:** Please don't report security vulnerabilities through public GitHub issues. Report them privately via the email **support@traycer.ai**. See the [Security Policy](SECURITY.md) for details.
-
-<a href="https://github.com/traycerai/traycer/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=traycerai/traycer" />
-</a>
-
-## Community
-
-Join the Traycer community to get help, share feedback, and connect with other users:
-
-- **[Discord](https://traycer.ai/discord)** — Chat with the team and community
-- **[X / Twitter](https://x.com/traycerai)** — Follow for updates and announcements
-- **[YouTube](https://www.youtube.com/@TraycerAI)** — Subscribe for walkthroughs and other Traycer videos.
+```bash
+# Desktop (Thanos slot, keep host warm)
+make dev-desktop ARGS="--slot thanos --keep-host"
+```
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Same as upstream (MIT) — see [LICENSE](./LICENSE).

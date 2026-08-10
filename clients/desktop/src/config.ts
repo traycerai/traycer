@@ -71,7 +71,7 @@ const bakedConfig = {
   // script stamps the shipped values for a packaged build. Keeping each slot's
   // identity distinct is what lets separate builds coexist without stealing one
   // another's lock/state.
-  appName: "Thanos Dev",
+  appName: "Thanos Traycer Dev",
   protocolScheme: "traycer-dev",
   appId: "ai.traycer.desktop",
 };

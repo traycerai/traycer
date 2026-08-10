@@ -59,7 +59,7 @@ function prepareMacDevBundle(
     "icon.icns",
   );
   const outputRoot = path.resolve(workspaceRoot, "dist", "dev-macos");
-  const devAppPath = path.join(outputRoot, "Thanos.app");
+  const devAppPath = path.join(outputRoot, "Thanos Traycer.app");
   const devExecutablePath = path.join(
     devAppPath,
     "Contents",
@@ -67,7 +67,7 @@ function prepareMacDevBundle(
     "Electron",
   );
   const metadataPath = path.join(outputRoot, "bundle-state.json");
-  const bundleDisplayName = devDesktopDisplayName ?? "Thanos";
+  const bundleDisplayName = devDesktopDisplayName ?? "Thanos Traycer";
   const nextState = createDevBundleState({
     devBundleId,
     bundleDisplayName,

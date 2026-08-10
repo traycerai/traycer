@@ -13,7 +13,7 @@ function resolveDevDesktopIdentity(env) {
   }
   const worktreeLabel = displayNameForSlot(slot);
   return {
-    displayName: `Thanos Dev — ${worktreeLabel}`,
+    displayName: `Thanos Traycer Dev — ${worktreeLabel}`,
     worktreeLabel,
   };
 }

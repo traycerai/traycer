@@ -1,9 +1,9 @@
 {
   "name": "@traycer-clients/desktop",
-  "productName": "Thanos",
+  "productName": "Thanos Traycer",
   "desktopName": "traycer-desktop.desktop",
   "version": "0.0.0",
-  "description": "Traycer standalone desktop shell (Electron) hosting the gui-app renderer; host lifecycle is delegated to the Traycer CLI.",
+  "description": "Thanos Traycer — fork of Traycer with Multi Profile, Orchestrations, and local single-user enhancements. Keeps the original Traycer base, host, CLI, and agent integrations.",
   "homepage": "https://traycer.ai",
   "private": true,
   "main": "dist/main/index.js",
@@ -65,7 +65,7 @@
   },
   "build": {
     "appId": "ai.traycer.desktop",
-    "productName": "Thanos",
+    "productName": "Thanos Traycer",
     "artifactName": "traycer-desktop-${arch}.${ext}",
     "asar": true,
     "electronFuses": {
@@ -132,7 +132,7 @@
     ],
     "protocols": [
       {
-        "name": "Thanos",
+        "name": "Thanos Traycer",
         "schemes": [
           "traycer"
         ]
@@ -152,7 +152,7 @@
       "entitlements": "resources/bundle/entitlements.mac.plist",
       "entitlementsInherit": "resources/bundle/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Traycer uses the microphone for voice dictation in the composer."
+        "NSMicrophoneUsageDescription": "Thanos Traycer uses the microphone for voice dictation in the composer."
       },
       "target": [
         {

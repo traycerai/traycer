@@ -19,7 +19,7 @@ export function AuthLandingPage() {
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
           <BrandMark className="h-auto w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
           <h1 className="mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
-            Welcome to Traycer
+            Welcome to Thanos Traycer
           </h1>
           <div className={cn(SIGN_IN_COLOR_VARS, SIGN_IN_LANE_CLASS)}>
             <SignInButton layout="hero" />
