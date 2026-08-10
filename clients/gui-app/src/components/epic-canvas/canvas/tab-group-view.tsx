@@ -13,6 +13,8 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
+import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
+import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import {
   PaneActivationFocusIntentContext,
   registerHostedPaneActivationClaim,
@@ -472,6 +474,15 @@ interface ActiveTabBodyProps {
   readonly globallyActive: boolean;
 }
 
+// Mirrors `ChatSessionAccessError`'s code on the host
+// (`traycer-host/src/domain/chat/chat-session-manager.ts`) - deliberately
+// the SAME code for "this chat does not exist" and "you are not its owner"
+// (an enumeration-oracle guard: a non-owner probing chat ids must not be
+// able to tell the two apart). Matching on it here does not weaken that -
+// both causes get the identical substitution below, exactly as the wire
+// already refuses to distinguish them.
+const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
+
 /**
  * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
  * whose bound host is unreachable renders what a fresh click on its row
@@ -483,6 +494,22 @@ interface ActiveTabBodyProps {
  * read through the dead bound host would just be the same dial with extra
  * steps - so it needs a resolvable active host that differs from the bound
  * one, and an owner user id derivable from the projection.
+ *
+ * ## Extended for a REACHABLE owner with a confirmed-absent chat (ticket 35)
+ *
+ * The bound host can be perfectly reachable and still have nothing to serve
+ * for this specific chat - a leased "machine" identity that never adopted
+ * this chat's rows, or any other case where `chat.subscribe` genuinely
+ * terminates `CHAT_NOT_VISIBLE`. There is deliberately NO separate
+ * pre-check RPC for this (an existence probe distinct from the wire's own
+ * collapsed signal would reopen the enumeration oracle noted above) - the
+ * only source of truth is `chat.subscribe`'s own terminate, already
+ * surfaced as `fatalClose` on the session store `chat-tile.tsx` creates via
+ * `useChatSessionHandle`. `useExistingChatSessionFatalClose` peeks that
+ * SAME session from here without acquiring a second one, so this is a
+ * two-phase decision (render live first, substitute once the terminate
+ * lands) rather than the reachability arm's upfront one - `chat-tile.tsx`
+ * must attempt the open before this can possibly fire.
  */
 function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
@@ -493,20 +520,32 @@ function usePublishedChatFallbackRef(args: {
 }): {
   readonly fallbackRef: EpicCanvasTileRef | null;
   readonly ownerHostLabel: string;
+  readonly reason: ChatDeadTileBannerReason;
 } {
   const { activeTab, epicId, liveArtifact, activeHostId } = args;
   const isChat = activeTab.type === "chat";
   const reachability = useHostReachability(
     isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
+  const fatalClose = useExistingChatSessionFatalClose(epicId, activeTab.id);
+  const confirmedAbsent =
+    isChat &&
+    fatalClose !== null &&
+    fatalClose.code === CHAT_SESSION_NOT_VISIBLE_CODE;
   const ownerUserId =
     isChat && liveArtifact !== null && "userId" in liveArtifact
       ? liveArtifact.userId
       : null;
+  // Same cross-host gate for both causes: a same-host confirmed-absent chat
+  // is a genuine local error (nothing to substitute IN from), not a
+  // cross-host reachability story - it keeps the tile's own generic
+  // `ChatTileError`, unchanged.
   const substitute =
     isChat &&
-    reachability.status === "unreachable" &&
-    activeHostId !== activeTab.hostId;
+    activeHostId !== activeTab.hostId &&
+    (reachability.status === "unreachable" || confirmedAbsent);
+  const reason: ChatDeadTileBannerReason =
+    reachability.status === "unreachable" ? "host-offline" : "chat-not-visible";
   const fallbackRef = useMemo(
     () =>
       substitute && ownerUserId !== null && activeHostId !== null
@@ -529,7 +568,7 @@ function usePublishedChatFallbackRef(args: {
       epicId,
     ],
   );
-  return { fallbackRef, ownerHostLabel: reachability.hostLabel };
+  return { fallbackRef, ownerHostLabel: reachability.hostLabel, reason };
 }
 
 function ActiveTabBody(props: ActiveTabBodyProps) {
@@ -546,13 +585,16 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
   // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
   const activeHostIdForRecordGate = useReactiveActiveHostId();
-  const { fallbackRef: publishedFallbackRef, ownerHostLabel } =
-    usePublishedChatFallbackRef({
-      activeTab,
-      epicId,
-      liveArtifact,
-      activeHostId: activeHostIdForRecordGate,
-    });
+  const {
+    fallbackRef: publishedFallbackRef,
+    ownerHostLabel,
+    reason: deadTileBannerReason,
+  } = usePublishedChatFallbackRef({
+    activeTab,
+    epicId,
+    liveArtifact,
+    activeHostId: activeHostIdForRecordGate,
+  });
   // Per-tab membership selectors: each tab only re-renders when its own
   // entry flips, not when any other tab is marked/unmarked.
   const isSelfDeleted = useEpicCanvasStore((s) =>
@@ -666,6 +708,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           chatId={activeTab.id}
           sourceHostId={activeTab.hostId}
           hostLabel={ownerHostLabel}
+          reason={deadTileBannerReason}
           testId={`chat-dead-tile-${activeTab.id}`}
         />
         <EpicNodeTile

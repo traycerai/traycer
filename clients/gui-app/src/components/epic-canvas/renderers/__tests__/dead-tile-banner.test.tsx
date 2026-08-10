@@ -71,10 +71,11 @@ describe("<TerminalDeadTileBanner />", () => {
 });
 
 describe("<ChatDeadTileBanner />", () => {
-  it("says continuing creates a new Agent and leaves the original bound", () => {
+  it("says continuing creates a new Agent and leaves the original bound (host-offline)", () => {
     render(
       <ChatDeadTileBanner
         hostLabel="mac-mini"
+        reason="host-offline"
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead"
@@ -87,7 +88,31 @@ describe("<ChatDeadTileBanner />", () => {
     // user is told two Agents now exist.
     expect(text).toContain("creates a new agent on the active host");
     expect(text).toContain("this one stays bound to");
+    expect(text).toContain("is offline");
     // "thread" is outside the approved vocabulary.
     expect(text).not.toContain("Continue this thread");
+  });
+
+  // ticket 35: a reachable host can still have nothing to serve for this
+  // chat (`chat.subscribe` terminated CHAT_NOT_VISIBLE) - "is offline" would
+  // be false here, so this variant must say something else while keeping
+  // the same Clone offer and two-Agents disclosure.
+  it("does NOT claim the host is offline when the chat itself is confirmed absent", () => {
+    render(
+      <ChatDeadTileBanner
+        hostLabel="mac-mini"
+        reason="chat-not-visible"
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-absent"
+        className={undefined}
+      />,
+    );
+
+    const text = screen.getByTestId("chat-dead-absent").textContent;
+    expect(text).toContain("creates a new agent on the active host");
+    expect(text).toContain("this one stays bound to");
+    expect(text).not.toContain("is offline");
+    expect(text).toContain("history isn't available");
   });
 });

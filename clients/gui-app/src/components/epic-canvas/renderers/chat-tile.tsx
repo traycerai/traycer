@@ -109,7 +109,11 @@ import {
   promoteQueuedMessageToFront,
 } from "@/lib/chats/compact-conversation";
 import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
-import { ChatDeadTileBanner, ChatHostStartingBanner } from "./dead-tile-banner";
+import {
+  ChatDeadTileBanner,
+  ChatHostStartingBanner,
+  type ChatDeadTileBannerReason,
+} from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
@@ -325,6 +329,7 @@ export function ChatTile(props: ChatTileProps) {
           chatId={node.id}
           sourceHostId={tabHostId}
           hostLabel={reachability.hostLabel}
+          reason="host-offline"
           testId={`chat-dead-tile-${node.id}`}
         />
       );
@@ -381,6 +386,7 @@ interface ChatDeadTileBannerContainerProps {
   readonly chatId: string;
   readonly sourceHostId: string;
   readonly hostLabel: string;
+  readonly reason: ChatDeadTileBannerReason;
   readonly testId: string;
 }
 
@@ -398,6 +404,7 @@ export function ChatDeadTileBannerContainer(
   return (
     <ChatDeadTileBanner
       hostLabel={props.hostLabel}
+      reason={props.reason}
       onClone={offer.clone}
       cloning={offer.cloning}
       className={undefined}

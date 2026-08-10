@@ -69,6 +69,9 @@ interface TestState {
   /** Value the `useReactiveActiveHostId` mock returns; null matches the
    * provider-less default the older fixtures render under. */
   activeHostId: string | null;
+  /** Per-chat `fatalClose.code` the `useExistingChatSessionFatalClose` mock
+   * answers; unlisted chat ids answer `null` (no fatal close observed). */
+  readonly fatalCloseCodeByChatId: Map<string, string>;
 }
 
 const testState = vi.hoisted((): TestState => ({
@@ -81,6 +84,7 @@ const testState = vi.hoisted((): TestState => ({
   stableTileSurfaceHostEnabled: false,
   unreachableHostIds: new Set(),
   activeHostId: null,
+  fatalCloseCodeByChatId: new Map(),
 }));
 
 vi.mock(
@@ -148,6 +152,17 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   useExistingChatSessionHandle: () => null,
+  useExistingChatSessionFatalClose: (_epicId: string, chatId: string) => {
+    const code = testState.fatalCloseCodeByChatId.get(chatId);
+    return code === undefined
+      ? null
+      : {
+          code,
+          reason: code,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        };
+  },
 }));
 
 // ActiveTabBody's published-copy fallback reads reachability + the active host
@@ -171,9 +186,10 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 // render-focused suite deliberately does not provide (the EpicNodeTile mock
 // used to sever that edge). Stub just the banner container at the same seam.
 vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
-  ChatDeadTileBannerContainer: (props: { readonly testId: string }) => (
-    <div data-testid={props.testId} />
-  ),
+  ChatDeadTileBannerContainer: (props: {
+    readonly testId: string;
+    readonly reason: string;
+  }) => <div data-testid={props.testId} data-reason={props.reason} />,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
@@ -1166,6 +1182,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     testState.unmounts.clear();
     testState.missingArtifactIds.clear();
     testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
     testState.activeHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1326,5 +1343,120 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     });
     expect(getTileSurfaceMembership().has(CHAT.instanceId)).toBe(true);
     expect(isChatRemoteDeleted(CHAT.instanceId)).toBe(false);
+  });
+});
+
+// chat-sync-v2 ticket 35's view arm: a REACHABLE host can still have
+// nothing to serve for a specific chat (`chat.subscribe` terminates
+// `CHAT_NOT_VISIBLE` - a leased identity that never adopted this chat's
+// rows, among other causes). Same substitution shape as the unreachable
+// arm above, reusing the SAME banner + published-copy ladder - extended
+// gate, not a parallel path.
+describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat on a reachable host", () => {
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.activeHostId = null;
+    testState.stableTileSurfaceHostEnabled = false;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
+
+  it("substitutes the published copy + dead-tile banner (chat-not-visible reason) for a cross-host confirmed-absent chat", async () => {
+    // Host is NOT in unreachableHostIds - reachable, but this chat's own
+    // session already terminated CHAT_NOT_VISIBLE (chat-tile.tsx would
+    // have attempted the open first; this test starts from that landed
+    // state, the same way `useExistingChatSessionFatalClose` observes it).
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_NOT_VISIBLE");
+    testState.activeHostId = "host-B";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    const banner = container.querySelector(
+      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    expect(banner?.getAttribute("data-reason")).toBe("chat-not-visible");
+    // The live chat body must NOT render alongside the copy.
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("keeps the live (generic-error) surface for a SAME-HOST confirmed-absent chat", async () => {
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_NOT_VISIBLE");
+    testState.activeHostId = CHAT.hostId;
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+
+  it("does NOT substitute for an unrelated fatal close (e.g. CHAT_INVALID) - only CHAT_NOT_VISIBLE triggers this arm", async () => {
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_INVALID");
+    testState.activeHostId = "host-B";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+
+  it("flips to the live surface once the confirmed-absent signal clears (e.g. a fresh subscribe attempt)", async () => {
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_NOT_VISIBLE");
+    testState.activeHostId = "host-B";
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+
+    testState.fatalCloseCodeByChatId.delete(CHAT.id);
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
   });
 });
