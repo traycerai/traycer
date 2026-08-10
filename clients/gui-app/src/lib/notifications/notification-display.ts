@@ -277,24 +277,26 @@ async function displayNotificationRowsAwaitNative(
     renderNotificationToast(content, target);
     throw error;
   }
-  renderNotificationToast(content, target);
+  const renderChimed = renderNotificationToast(content, target);
   const outcome = await nativeDisplay;
   // `undeliverable`: the platform cannot present notifications and no window
   // was focused, so nothing was shown or relayed and the burnt delivery key
   // makes it unretryable - this window (the ledger's single winner; every
   // other window heard `duplicate`) owns the only audible cue there will be.
-  // Re-checking focus keeps the fallback single-voiced against a mid-flight
-  // focus flip: a window focused by now already owns its rendered toast, and
-  // its focus-gated chime if it had one.
-  if (outcome === "undeliverable" && !isDocumentFocused()) {
+  // The single-voice guard is the RECORDED fact that the render-time chime
+  // ran, never a second focus read: focus can flip while the outcome is
+  // pending, and a re-read would double-chime on focused-then-blurred and
+  // stay silent on blurred-then-focused.
+  if (outcome === "undeliverable" && !renderChimed) {
     target.playChime();
   }
 }
 
+/** Renders the in-app toast and returns whether the focus-gated chime ran. */
 function renderNotificationToast(
   content: NotificationToastContent,
   target: NotificationDisplayTarget,
-): void {
+): boolean {
   const isActionable = content.row.payload !== null;
   const toastTitle = isActionable
     ? createElement(
@@ -334,8 +336,9 @@ function renderNotificationToast(
   // process picks banner or relay) and leaves the renderer only this one,
   // which is never the sole delivery: an unseen toast is harmless, while a
   // chime from a window nobody is looking at is not.
-  if (!isDocumentFocused()) return;
+  if (!isDocumentFocused()) return false;
   target.playChime();
+  return true;
 }
 
 /**

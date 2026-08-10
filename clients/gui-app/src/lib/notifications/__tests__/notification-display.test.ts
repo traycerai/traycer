@@ -418,6 +418,63 @@ describe("notification display", () => {
     expect(playChime).not.toHaveBeenCalled();
   });
 
+  it("chimes once when focus is lost while an undeliverable outcome is pending", async () => {
+    // Focused at render (chime played), blurred by the time the shell answers
+    // `undeliverable`: the guard is the recorded render-time chime, not a
+    // second focus read - a re-read would see "blurred" and double-chime.
+    const hasFocus = vi.spyOn(document, "hasFocus");
+    hasFocus.mockReturnValueOnce(true);
+    hasFocus.mockReturnValue(false);
+    const playChime = vi.fn();
+
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      {
+        showNotification: vi.fn(() =>
+          Promise.resolve<NotificationShowOutcome>("undeliverable"),
+        ),
+        playChime,
+        onToastClick: vi.fn(),
+      },
+      "origin-host-1",
+    );
+
+    await vi.waitFor(() => {
+      expect(playChime).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("chimes once when focus arrives while an undeliverable outcome is pending", async () => {
+    // Blurred at render (no chime), focused by the time the shell answers
+    // `undeliverable`: nothing has voiced this occurrence yet, so the
+    // fallback must still play - a focus re-read would see "focused",
+    // assume the render chimed, and leave the arrival silent.
+    const hasFocus = vi.spyOn(document, "hasFocus");
+    hasFocus.mockReturnValueOnce(false);
+    hasFocus.mockReturnValue(true);
+    const playChime = vi.fn();
+
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      {
+        showNotification: vi.fn(() =>
+          Promise.resolve<NotificationShowOutcome>("undeliverable"),
+        ),
+        playChime,
+        onToastClick: vi.fn(),
+      },
+      "origin-host-1",
+    );
+
+    await vi.waitFor(() => {
+      expect(playChime).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(playChime).toHaveBeenCalledOnce();
+  });
+
   it("does not double-chime when focus lands before an undeliverable outcome", async () => {
     // Focused at render time -> the focus-gated chime already played. If the
     // main process still answered `undeliverable` (it read focus moments
