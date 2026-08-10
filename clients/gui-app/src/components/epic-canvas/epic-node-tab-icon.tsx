@@ -64,6 +64,7 @@ export function EpicNodeTabIcon(props: {
       <TerminalNodeTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        statusPresentation="spinner"
         defaultIcon={
           <StaticEpicNodeIcon type="terminal" className={props.className} />
         }
@@ -75,6 +76,7 @@ export function EpicNodeTabIcon(props: {
       <TerminalNodeTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        statusPresentation="message"
         defaultIcon={
           <TuiAgentTabIcon
             nodeId={props.node.id}
@@ -102,6 +104,7 @@ export function EpicNodeTabIcon(props: {
 function TerminalNodeTabIcon(props: {
   readonly nodeId: string;
   readonly epicId: string;
+  readonly statusPresentation: "message" | "spinner";
   readonly defaultIcon: ReactNode;
 }) {
   const indicatorState = useSurfaceNotificationIndicatorState({
@@ -119,7 +122,7 @@ function TerminalNodeTabIcon(props: {
       runningTitle=""
       backgroundRunningTitle={undefined}
       defaultIcon={props.defaultIcon}
-      statusPresentation="spinner"
+      statusPresentation={props.statusPresentation}
     />
   );
 }

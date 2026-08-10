@@ -8,7 +8,10 @@ import {
   emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicArtifactRef,
+  EpicTerminalRef,
+} from "@/stores/epics/canvas/types";
 
 const TERMINAL_NODE: EpicTerminalRef = {
   id: "terminal-1",
@@ -20,7 +23,16 @@ const TERMINAL_NODE: EpicTerminalRef = {
   cwd: "/repo",
 };
 
-describe("<EpicNodeTabIcon /> terminal indicator", () => {
+const TUI_AGENT_NODE: EpicArtifactRef = {
+  id: "tui-agent-1",
+  instanceId: "tui-agent-instance-1",
+  type: "terminal-agent",
+  name: "Enable Claude Model Versions",
+  hostId: "host-1",
+  pendingTuiHarnessId: "claude",
+};
+
+describe("<EpicNodeTabIcon /> terminal indicators", () => {
   afterEach(() => {
     cleanup();
     __resetAppLocalNotificationsStoreForTests();
@@ -63,6 +75,38 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     expect(
       screen.queryByRole("status", { name: "Task needs attention" }),
     ).toBeNull();
+  });
+
+  it("shows the message-style done icon for a completed TUI agent", () => {
+    render(
+      <NotificationIndicatorsProvider
+        indicators={{
+          epics: {},
+          chats: {
+            [TUI_AGENT_NODE.id]: {
+              pendingApproval: false,
+              pendingInterview: false,
+              unreadFailure: false,
+              unreadDone: true,
+            },
+          },
+        }}
+      >
+        <EpicNodeTabIcon
+          node={TUI_AGENT_NODE}
+          epicId="epic-1"
+          variant="live"
+          className="size-3.5 shrink-0"
+          defaultIcon={undefined}
+        />
+      </NotificationIndicatorsProvider>,
+    );
+
+    expect(
+      screen
+        .getByTestId(`terminal-tab-done-${TUI_AGENT_NODE.id}`)
+        .getAttribute("class"),
+    ).toContain("lucide-message-square-check");
   });
 });
 
