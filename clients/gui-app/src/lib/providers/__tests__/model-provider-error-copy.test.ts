@@ -80,3 +80,35 @@ describe("modelProviderAuthErrorDisposition", () => {
     }
   });
 });
+
+describe("config_unreadable", () => {
+  it("points at the FILE on both arms, because that is where the fix is", () => {
+    // The one code that is neither our fault nor the host's: the user's own
+    // `opencode.json` did not parse.
+    expect(modelProviderListErrorMessage("config_unreadable", null)).toContain(
+      "config file",
+    );
+    expect(modelProviderAuthErrorMessage("config_unreadable", null)).toContain(
+      "config file",
+    );
+  });
+
+  it("is REPORTED, not restarted or re-prompted", () => {
+    // No attempt was lost, so `restart` would invent one; and nothing the user
+    // types in the dialog fixes a file the parser choked on, so `reprompt`
+    // would ask for input that cannot help.
+    expect(modelProviderAuthErrorDisposition("config_unreadable")).toBe(
+      "report",
+    );
+  });
+
+  it("prefers the host's detail, which names where the file broke", () => {
+    // Redacted host-side, and far more useful than our generic sentence.
+    expect(
+      modelProviderAuthErrorMessage(
+        "config_unreadable",
+        "opencode.json: unexpected token at line 12",
+      ),
+    ).toContain("line 12");
+  });
+});

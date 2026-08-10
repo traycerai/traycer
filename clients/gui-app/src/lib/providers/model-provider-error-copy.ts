@@ -8,6 +8,12 @@ const LIST_ERROR_COPY: Readonly<Record<ModelProviderListErrorCode, string>> = {
     "Model providers aren't available for this provider on this host.",
   server_unavailable:
     "The provider's local server couldn't be started, so its catalog is unavailable.",
+  // The user's OWN file, so the copy points at it rather than at us or the
+  // host. Nothing here is retryable: re-reading unparseable JSON returns the
+  // same answer, and the `detail` the host attaches names the file and the
+  // syntax problem.
+  config_unreadable:
+    "Your OpenCode config file couldn't be read, so its providers are missing from this list. Fix the file and refresh.",
 };
 
 const AUTH_ERROR_COPY: Readonly<Record<ModelProviderAuthErrorCode, string>> = {
@@ -21,6 +27,8 @@ const AUTH_ERROR_COPY: Readonly<Record<ModelProviderAuthErrorCode, string>> = {
   code_rejected: "That code wasn't accepted. Check it and paste it again.",
   invalid_input: "Those details were rejected. Check them and try again.",
   provider_auth_failed: "The provider refused the sign-in.",
+  config_unreadable:
+    "Your OpenCode config file couldn't be read, so this change wasn't written. Fix the file and try again.",
 };
 
 /**
@@ -74,10 +82,15 @@ export function modelProviderAuthErrorDisposition(
       return "restart";
     case "code_rejected":
       return "reprompt";
+    // `config_unreadable` is `report` deliberately, and none of the other three
+    // fit: no attempt was lost, so `restart` would invent one, and nothing the
+    // user can type here fixes a file the parser choked on, so `reprompt` would
+    // ask for input that cannot help. The next move is in an editor.
     case "server_unavailable":
     case "provider_not_found":
     case "invalid_input":
     case "provider_auth_failed":
+    case "config_unreadable":
       return "report";
   }
 }
