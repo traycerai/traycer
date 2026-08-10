@@ -13,7 +13,7 @@ describe("UsageMetricToggle", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<UsageMetricToggle metric="cost" onChange={onChange} />);
-    await user.click(screen.getByTestId("usage-metric-tokens"));
+    await user.click(screen.getByRole("tab", { name: "Tokens" }));
     expect(onChange).toHaveBeenCalledWith("tokens");
   });
 });

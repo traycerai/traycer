@@ -25,7 +25,7 @@ describe("UsageErrorCard", () => {
         onRetry={onRetry}
       />,
     );
-    fireEvent.click(screen.getByTestId("usage-error-retry"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
 

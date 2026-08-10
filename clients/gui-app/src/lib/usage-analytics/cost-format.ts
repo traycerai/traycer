@@ -13,11 +13,24 @@ export type UsageServedBy = UsageSummaryResponse["servedBy"];
  */
 const FOOTNOTE_BASE = "* if billed at full API rate";
 
+const USD_FORMAT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
+
+/**
+ * Standard 2-decimal USD, with one carve-out: a REAL but sub-half-cent
+ * amount reads "<$0.01" rather than rounding down to "$0.01"'s neighbour
+ * "$0.00", which a reader takes as free. A short or heavily cached turn
+ * lands there routinely, and this helper prices every dashboard, epic,
+ * chat and turn figure, so the rounding would otherwise show real billable
+ * usage as costing nothing. `0` itself still formats as "$0.00" - that one
+ * IS a measured zero. Same shape the chat cost row already uses for its own
+ * finer-grained threshold ("<$0.0001").
+ */
 export function formatUsd(amountUsd: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(amountUsd);
+  if (amountUsd > 0 && amountUsd < 0.005) return "<$0.01";
+  return USD_FORMAT.format(amountUsd);
 }
 
 export interface UsageCostHeadline {

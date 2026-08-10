@@ -62,7 +62,6 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const { epicId, client, open, onOpenChange } = props;
   const [windowValue, setWindowValue] =
     useState<EpicUsageWindow>(DEFAULT_WINDOW);
-  const [nowMs] = useState(() => Date.now());
   const request = useMemo(
     () =>
       buildUsageSummaryRequest({
@@ -98,11 +97,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
         </div>
         <EpicUsageWindowPicker value={windowValue} onChange={setWindowValue} />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <EpicUsageDialogBody
-            query={query}
-            nowMs={nowMs}
-            isEpicWindow={windowValue === "epic"}
-          />
+          <EpicUsageDialogBody query={query} />
         </div>
         <DialogFooter className="-mx-4 -mb-4 mt-0 border-t bg-muted/50 px-4 py-3">
           <Button
@@ -125,10 +120,8 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
 
 function EpicUsageDialogBody(props: {
   readonly query: UsageSummaryQueryResult;
-  readonly nowMs: number;
-  readonly isEpicWindow: boolean;
 }): ReactNode {
-  const { query, nowMs, isEpicWindow } = props;
+  const { query } = props;
 
   if (query.isLoading) {
     return (
@@ -161,7 +154,7 @@ function EpicUsageDialogBody(props: {
   }
 
   const { summary, coverage, servedBy } = query.data;
-  const days = daysForSummaryWindow(summary, nowMs, isEpicWindow);
+  const days = daysForSummaryWindow(summary);
   const scale = buildUsageSeriesScaleForBuckets(summary.buckets);
   const columns = buildUsageChartColumns(days, summary.buckets, scale, "cost");
 
@@ -187,29 +180,29 @@ function EpicUsageDialogBody(props: {
 }
 
 /**
- * The trend chart's x-axis. Fixed windows use the viewer's last N calendar
- * days ending "now" (the same anchor `UsageSummaryPanel` uses). `window:
- * "epic"` instead spans the epic's own fact bounds - `resolveUsage
- * SummaryEpicWindowBounds` (packages/common) stamps `window.windowDays` as
- * the RESOLVED calendar-day width of that span and `window.endAtExclusive`
- * as its own end (host time, not the viewer's `nowMs`), so anchoring there
- * instead of `nowMs` is what keeps the trend chart's last column truthful
- * for a long-lived epic rather than reading as "today" when the epic's last
- * fact was days ago.
+ * The trend chart's x-axis, anchored on the RESPONSE's own window rather
+ * than on any client clock - one rule for both window kinds.
+ *
+ * `endAtExclusive` is the first instant OUTSIDE the window, so
+ * `endAtExclusive - 1` is the last instant it includes, which is the day
+ * the axis must end on. Both bounds resolvers in `packages/common` agree on
+ * that reading: a fixed window ends at local midnight tomorrow (so
+ * `- 1` lands on "today so far"), and `resolveUsageSummaryEpicWindowBounds`
+ * stamps `nowMs + 1` (so `- 1` lands on the host's now).
+ *
+ * Anchoring on a client `Date.now()` sampled at mount was the earlier
+ * shape, and this dialog is mounted for as long as its `EpicShell` lives
+ * while staying closed - so opening it after a local midnight built columns
+ * ending on the previous day and dropped the newest buckets the query had
+ * just returned.
  */
 function daysForSummaryWindow(
   summary: UsageSummaryResponse["summary"],
-  nowMs: number,
-  isEpicWindow: boolean,
 ): readonly string[] {
   if (summary.totals.factCount === 0) return [];
-  const tz = summary.window.timezone;
-  if (isEpicWindow) {
-    return lastNCalendarDays(
-      summary.window.windowDays,
-      tz,
-      summary.window.endAtExclusive,
-    );
-  }
-  return lastNCalendarDays(summary.window.windowDays, tz, nowMs);
+  return lastNCalendarDays(
+    summary.window.windowDays,
+    summary.window.timezone,
+    summary.window.endAtExclusive - 1,
+  );
 }

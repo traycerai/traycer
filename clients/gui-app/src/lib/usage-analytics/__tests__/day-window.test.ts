@@ -30,15 +30,57 @@ describe("lastNCalendarDays", () => {
     expect(samoa).toEqual(["2026-08-08"]);
   });
 
-  it("never returns more entries than requested, even across a DST boundary", () => {
-    // 2026-03-08 is a US DST spring-forward date - a naive 24h-stride walk
-    // risks a duplicate/skewed day here; deduping keeps the count honest.
+  it("covers every local date across a spring-forward boundary", () => {
+    // 2026-03-08 is the US spring-forward date (a 23h local day). A 24h
+    // stride can step straight over a date here, dropping a column whose
+    // usage still counts toward the totals.
     const days = lastNCalendarDays(
       10,
       "America/New_York",
       Date.parse("2026-03-10T12:00:00Z"),
     );
-    expect(days.length).toBeLessThanOrEqual(10);
-    expect(new Set(days).size).toBe(days.length);
+    expect(days).toEqual([
+      "2026-03-01",
+      "2026-03-02",
+      "2026-03-03",
+      "2026-03-04",
+      "2026-03-05",
+      "2026-03-06",
+      "2026-03-07",
+      "2026-03-08",
+      "2026-03-09",
+      "2026-03-10",
+    ]);
+  });
+
+  it("covers every local date across a fall-back boundary", () => {
+    // 2026-11-01 is the US fall-back date (a 25h local day). A 24h stride
+    // maps two samples onto the same date here, so the axis used to come
+    // back one column SHORT - silently dropping its oldest day.
+    const days = lastNCalendarDays(
+      10,
+      "America/New_York",
+      Date.parse("2026-11-05T04:30:00Z"),
+    );
+    expect(days).toEqual([
+      "2026-10-26",
+      "2026-10-27",
+      "2026-10-28",
+      "2026-10-29",
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01",
+      "2026-11-02",
+      "2026-11-03",
+      "2026-11-04",
+    ]);
+  });
+
+  it("degrades to UTC rather than throwing on a zone the runtime does not know", () => {
+    // The response's `timezone` is only length-checked on the wire; an
+    // unknown name must not take the chart's whole render down.
+    expect(lastNCalendarDays(1, "Not/AZone", FIXED_NOW_MS)).toEqual([
+      "2026-08-09",
+    ]);
   });
 });

@@ -162,8 +162,12 @@ function ChatUsageDialogContent(props: {
   }
 
   const { summary, coverage, servedBy } = query.data;
-  const hasUsage = summary.totals.factCount > 0;
+  // Gate on the array the drilldown actually renders, not on `factCount`:
+  // `turnRows` is nullable on the wire, so a host that answers with facts
+  // but no per-turn rows would otherwise offer a "Show 0 turns" toggle onto
+  // an empty body.
   const turnRows = summary.turnRows ?? [];
+  const hasTurnRows = turnRows.length > 0;
 
   return (
     <div className="flex flex-col gap-3">
@@ -173,7 +177,7 @@ function ChatUsageDialogContent(props: {
         servedBy={servedBy}
         size="default"
       />
-      {hasUsage ? (
+      {hasTurnRows ? (
         <Collapsible open={drilldownOpen} onOpenChange={onDrilldownOpenChange}>
           <CollapsibleTrigger asChild>
             <Button

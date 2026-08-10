@@ -13,10 +13,17 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
 
+type UsageSummaryRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "host.usage.summary"
+>;
 type UsageSummaryResponse = ResponseOfMethod<
   HostRpcRegistry,
   "host.usage.summary"
@@ -53,8 +60,11 @@ function usageSummaryResponse(): UsageSummaryResponse {
       window: {
         timezone: "UTC",
         windowDays: 30,
-        startAtInclusive: 0,
-        endAtExclusive: 1,
+        // A real 30-day window whose last included day is the bucket's own
+        // `2026-08-09` - `endAtExclusive` is the first instant OUTSIDE it,
+        // which is what the chart's x-axis is anchored on.
+        startAtInclusive: Date.parse("2026-07-11T00:00:00Z"),
+        endAtExclusive: Date.parse("2026-08-10T00:00:00Z"),
       },
       epicId: "epic-1",
       chatId: null,
@@ -128,7 +138,9 @@ function usageSummaryResponse(): UsageSummaryResponse {
   };
 }
 
-function renderDialog(handler: () => UsageSummaryResponse): {
+function renderDialog(
+  handler: (request: UsageSummaryRequest) => UsageSummaryResponse,
+): {
   readonly onOpenChange: Mock<(open: boolean) => void>;
 } {
   const client = new HostClient<HostRpcRegistry>({
@@ -192,15 +204,25 @@ describe("<EpicUsageDialog />", () => {
 
   it("switching to 'Entire epic' issues a new request with window: epic", async () => {
     const user = userEvent.setup();
-    const handler = vi.fn(usageSummaryResponse);
+    const handler = vi.fn(
+      (_request: UsageSummaryRequest): UsageSummaryResponse =>
+        usageSummaryResponse(),
+    );
     renderDialog(handler);
     await screen.findByTestId("usage-cost-figure");
+    // The default window must NOT already be scoping to the epic lifetime,
+    // or the assertion below would pass on a repeat of the first request.
+    expect(handler.mock.calls.at(0)?.at(0)?.window).toBeUndefined();
     handler.mockClear();
 
     await user.click(screen.getByTestId("epic-usage-window-epic"));
 
     await waitFor(() => {
       expect(handler).toHaveBeenCalled();
+    });
+    expect(handler.mock.calls.at(-1)?.at(0)).toMatchObject({
+      window: "epic",
+      epicId: "epic-1",
     });
   });
 

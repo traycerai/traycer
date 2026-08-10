@@ -10,7 +10,7 @@ describe("EpicUsageWindowPicker", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<EpicUsageWindowPicker value={30} onChange={onChange} />);
-    await user.click(screen.getByTestId("epic-usage-window-7"));
+    await user.click(screen.getByRole("tab", { name: "7 days" }));
     expect(onChange).toHaveBeenCalledWith(7);
   });
 
@@ -18,7 +18,7 @@ describe("EpicUsageWindowPicker", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<EpicUsageWindowPicker value={30} onChange={onChange} />);
-    await user.click(screen.getByTestId("epic-usage-window-epic"));
+    await user.click(screen.getByRole("tab", { name: "Entire epic" }));
     expect(onChange).toHaveBeenCalledWith("epic");
   });
 });

@@ -56,20 +56,26 @@ function UsageTurnRowItem(props: { readonly row: UsageTurnRow }): ReactNode {
   const { row } = props;
   const tokens = sumTokenTotals(row.tokens);
   return (
+    // `flex-wrap` plus `min-w-*` (not fixed `w-*`) on the value columns:
+    // this row lives in a `w-[min(92vw,32rem)]` dialog, so on a narrow
+    // window the columns' fixed widths used to add up past the content box
+    // and push values out of sight. Now they keep their aligned widths
+    // while there is room, and the trailing ones wrap onto a second line
+    // instead of overflowing.
     <li
-      className="flex items-center gap-2 rounded-md border border-border/40 px-2 py-1.5 text-ui-xs"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border/40 px-2 py-1.5 text-ui-xs"
       data-testid={`usage-turn-drilldown-row-${row.factId}`}
     >
-      <span className="w-32 shrink-0 truncate text-muted-foreground">
+      <span className="w-32 min-w-0 shrink truncate text-muted-foreground">
         {formatTurnTimestamp(row.occurredAt)}
       </span>
       <span className="min-w-0 flex-1 truncate text-foreground">
         {row.model}
       </span>
-      <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+      <span className="min-w-16 shrink-0 text-right tabular-nums text-muted-foreground">
         {tokens.toLocaleString()}
       </span>
-      <span className="w-14 shrink-0 text-right tabular-nums font-medium text-foreground">
+      <span className="min-w-14 shrink-0 text-right tabular-nums font-medium text-foreground">
         {/* `costUsd: null` means unpriced, not free - an em dash rather than $0.00. */}
         {row.costUsd === null ? "—" : formatUsd(row.costUsd)}
       </span>

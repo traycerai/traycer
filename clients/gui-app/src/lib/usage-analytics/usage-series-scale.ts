@@ -50,11 +50,19 @@ export function buildUsageSeriesScale(
   };
 }
 
-/** Harness ids in first-appearance order across the buckets, by earliest `day`. */
+/**
+ * Harness ids in first-appearance order across the buckets, by earliest
+ * `day`. `harnessId` breaks a same-day tie so the order - and therefore
+ * every harness's color slot - is a function of the DATA rather than of the
+ * order the host happened to return two buckets for one day in.
+ */
 export function harnessIdsByFirstAppearance(
   buckets: ReadonlyArray<{ readonly day: string; readonly harnessId: string }>,
 ): readonly string[] {
-  const sorted = [...buckets].sort((a, b) => a.day.localeCompare(b.day));
+  const sorted = [...buckets].sort(
+    (a, b) =>
+      a.day.localeCompare(b.day) || a.harnessId.localeCompare(b.harnessId),
+  );
   const seen = new Set<string>();
   const order: string[] = [];
   for (const bucket of sorted) {

@@ -13,17 +13,17 @@ describe("UsageWindowPicker", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<UsageWindowPicker windowDays={7} onChange={onChange} />);
-    await user.click(screen.getByTestId("usage-window-30"));
+    await user.click(screen.getByRole("tab", { name: "30 days" }));
     expect(onChange).toHaveBeenCalledWith(30);
   });
 
   it("marks the current window as the active tab", () => {
     render(<UsageWindowPicker windowDays={90} onChange={() => undefined} />);
     expect(
-      screen.getByTestId("usage-window-90").getAttribute("data-state"),
+      screen.getByRole("tab", { name: "90 days" }).getAttribute("data-state"),
     ).toBe("active");
     expect(
-      screen.getByTestId("usage-window-7").getAttribute("data-state"),
+      screen.getByRole("tab", { name: "7 days" }).getAttribute("data-state"),
     ).toBe("inactive");
   });
 });

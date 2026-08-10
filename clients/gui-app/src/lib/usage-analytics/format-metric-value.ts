@@ -51,15 +51,23 @@ export function formatDayLabel(day: string): string {
  * `Date`, which would re-interpret the calendar date in the browser's local
  * zone). `days` is assumed non-empty and oldest-first, matching
  * `lastNCalendarDays`'s contract; an empty list renders nothing.
+ *
+ * Both endpoints carry their own year when they differ - a 30- or 90-day
+ * window routinely straddles New Year, and reading the year off the last
+ * day alone stamped the WRONG one on the first ("Dec 31 – Jan 1, 2026").
  */
 export function formatDateRangeLabel(days: readonly string[]): string {
   const first = days.at(0);
   const last = days.at(-1);
   if (first === undefined || last === undefined) return "";
-  const year = last.split("-").at(0) ?? "";
+  const firstYear = first.split("-").at(0) ?? "";
+  const lastYear = last.split("-").at(0) ?? "";
   const from = formatDayLabel(first);
   const to = formatDayLabel(last);
-  return year.length === 0 ? `${from} – ${to}` : `${from} – ${to}, ${year}`;
+  if (firstYear.length === 0 || lastYear.length === 0) return `${from} – ${to}`;
+  return firstYear === lastYear
+    ? `${from} – ${to}, ${lastYear}`
+    : `${from}, ${firstYear} – ${to}, ${lastYear}`;
 }
 
 const NICE_STEPS = [1, 2, 5, 10] as const;

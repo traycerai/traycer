@@ -158,4 +158,15 @@ describe("formatUsd", () => {
   it("formats a fractional amount to two decimals", () => {
     expect(formatUsd(12.3)).toBe("$12.30");
   });
+
+  it("marks a real sub-half-cent amount rather than rounding it to $0.00", () => {
+    // A short or heavily cached turn lands here, and "$0.00" reads as free.
+    expect(formatUsd(0.004)).toBe("<$0.01");
+    expect(formatUsd(0.0000001)).toBe("<$0.01");
+  });
+
+  it("still rounds normally from half a cent up", () => {
+    expect(formatUsd(0.005)).toBe("$0.01");
+    expect(formatUsd(0.014)).toBe("$0.01");
+  });
 });

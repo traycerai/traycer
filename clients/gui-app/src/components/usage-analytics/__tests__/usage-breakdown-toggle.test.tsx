@@ -12,7 +12,7 @@ describe("UsageBreakdownToggle", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<UsageBreakdownToggle groupBy="model" onChange={onChange} />);
-    await user.click(screen.getByTestId("usage-breakdown-groupby-day"));
+    await user.click(screen.getByRole("tab", { name: "Day" }));
     expect(onChange).toHaveBeenCalledWith("day");
   });
 });

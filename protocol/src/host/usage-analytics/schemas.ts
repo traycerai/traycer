@@ -37,8 +37,17 @@ export const usageSummaryTokenTotalsSchema = z.object({
   outputTokens: nonNegativeIntSchema,
 });
 
+/**
+ * The aggregator's grouping key: a local calendar day in the request's
+ * timezone, `YYYY-MM-DD` (what `en-CA` numeric formatting emits). Shaped
+ * rather than merely length-bounded because this key is parsed, sorted and
+ * decremented as a calendar date on the client - a `"2026-1-1"` would pass
+ * a length check and then mis-sort and mis-label.
+ */
+const usageDayKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 export const usageSummaryBucketSchema = z.object({
-  day: z.string().min(1).max(10),
+  day: usageDayKeySchema,
   harnessId: z.string().min(1).max(64),
   model: z.string().min(1).max(255),
   factCount: nonNegativeIntSchema,
@@ -142,8 +151,15 @@ export const usageSummarySchema = z.object({
   distinctChatCount: nonNegativeIntSchema,
   outcomeBreakdown: usageSummaryOutcomeBreakdownSchema,
   usageCompletenessBreakdown: usageSummaryCompletenessBreakdownSchema,
-  /** Chat-scoped per-turn drill-down rows - populated only when the request carried a `chatId` filter (chat-scope-only by design). */
-  turnRows: z.array(usageTurnRowSchema).nullable(),
+  /**
+   * Chat-scoped per-turn drill-down rows - populated only when the request
+   * carried a `chatId` filter (chat-scope-only by design). The cap is part
+   * of the contract, not just host-side policy: `turnRowsTruncated` is how
+   * an over-cap window is meant to be reported, so an uncapped array is a
+   * host bug the wire should catch rather than an unbounded list for the
+   * drill-down to render.
+   */
+  turnRows: z.array(usageTurnRowSchema).max(USAGE_TURN_ROWS_MAX).nullable(),
   /** `true` when `turnRows` was capped and older turns were omitted. Always `false` when `turnRows` is `null`. */
   turnRowsTruncated: z.boolean(),
 });

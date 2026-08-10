@@ -57,7 +57,10 @@ function UsageChatBreakdownRow(props: {
       <span className="shrink-0 tabular-nums text-ui-xs text-muted-foreground">
         {tokens.toLocaleString()}
       </span>
-      <span className="w-16 shrink-0 text-right tabular-nums font-medium text-foreground">
+      {/* `min-w-16`, not `w-16`: the column still aligns at the common
+          case's width, but a wider figure ("$1,234.56") grows instead of
+          overflowing its box. */}
+      <span className="min-w-16 shrink-0 text-right tabular-nums font-medium text-foreground">
         {formatUsd(row.knownCostUsd)}
       </span>
     </li>

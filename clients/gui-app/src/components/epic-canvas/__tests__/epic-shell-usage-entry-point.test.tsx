@@ -276,7 +276,7 @@ function renderShell(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionProvider epicId={EPIC_ID} tabId={TAB_ID}>
           <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
         </EpicSessionProvider>
       </TooltipProvider>

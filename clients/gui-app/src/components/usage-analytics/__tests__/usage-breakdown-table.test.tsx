@@ -24,10 +24,12 @@ describe("UsageBreakdownTable", () => {
         rows={[row({ harnessId: "claude", costUsd: 1.23, tokens: 1000 })]}
       />,
     );
-    expect(screen.getByText("claude")).not.toBeNull();
-    expect(screen.getByText("claude-sonnet-5")).not.toBeNull();
-    expect(screen.getByText("$1.23")).not.toBeNull();
-    expect(screen.getByText("1,000")).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "claude" })).not.toBeNull();
+    expect(
+      screen.getByRole("cell", { name: "claude-sonnet-5" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "$1.23" })).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "1,000" })).not.toBeNull();
   });
 
   it("fixup-01: never renders a provenance badge or column, regardless of the row's provenance", () => {

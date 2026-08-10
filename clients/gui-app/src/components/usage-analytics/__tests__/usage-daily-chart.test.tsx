@@ -45,29 +45,27 @@ describe("<UsageDailyChart /> legend filter", () => {
 
   it("renders a pressed chip per series by default", () => {
     render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
-    const claudeChip = screen.getByTestId(
-      "usage-daily-chart-legend-chip-claude",
-    );
-    const codexChip = screen.getByTestId("usage-daily-chart-legend-chip-codex");
+    const claudeChip = screen.getByRole("button", { name: "claude" });
+    const codexChip = screen.getByRole("button", { name: "codex" });
     expect(claudeChip.getAttribute("aria-pressed")).toBe("true");
     expect(codexChip.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("toggles a series off on click without disturbing the other chip", () => {
     render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
-    const codexChip = screen.getByTestId("usage-daily-chart-legend-chip-codex");
+    const codexChip = screen.getByRole("button", { name: "codex" });
     fireEvent.click(codexChip);
     expect(codexChip.getAttribute("aria-pressed")).toBe("false");
     expect(
       screen
-        .getByTestId("usage-daily-chart-legend-chip-claude")
+        .getByRole("button", { name: "claude" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
   });
 
   it("toggles a hidden series back on when clicked again", () => {
     render(<UsageDailyChart columns={columns} scale={scale} metric="cost" />);
-    const codexChip = screen.getByTestId("usage-daily-chart-legend-chip-codex");
+    const codexChip = screen.getByRole("button", { name: "codex" });
     fireEvent.click(codexChip);
     fireEvent.click(codexChip);
     expect(codexChip.getAttribute("aria-pressed")).toBe("true");

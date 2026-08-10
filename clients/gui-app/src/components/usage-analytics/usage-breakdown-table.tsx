@@ -52,7 +52,10 @@ export function UsageBreakdownTable(
       <tbody>
         {props.rows.map((row) => (
           <tr
-            key={`${row.harnessId} ${row.model}`}
+            // Structural, not space-joined: a model name may itself contain
+            // a space, and `["a b", "c"]` must not key the same as
+            // `["a", "b c"]` or React can reuse the wrong row on an update.
+            key={JSON.stringify([row.harnessId, row.model])}
             className="border-b border-border/40 last:border-b-0"
           >
             <td className="py-1.5 pr-3 text-foreground">{row.harnessId}</td>

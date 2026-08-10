@@ -46,13 +46,19 @@ describe("UsageChatBreakdown", () => {
         ]}
       />,
     );
-    expect(screen.getByText("Fix the flaky test")).not.toBeNull();
-    expect(screen.getByText("Subagent: verify the fix")).not.toBeNull();
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Fix the flaky test"),
+      expect.stringContaining("Subagent: verify the fix"),
+    ]);
   });
 
   it("falls back to the raw chatId when the chat is not in the open tree (e.g. swept)", () => {
     render(<UsageChatBreakdown rows={[bucket({ chatId: "chat-unknown" })]} />);
-    expect(screen.getByText("chat-unknown")).not.toBeNull();
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("chat-unknown"),
+    ]);
   });
 
   it("sorts rows by cost descending", () => {
@@ -64,10 +70,11 @@ describe("UsageChatBreakdown", () => {
         ]}
       />,
     );
-    const rows = screen.getAllByTestId(/usage-chat-breakdown-row-/);
-    expect(rows[0]?.getAttribute("data-testid")).toBe(
-      "usage-chat-breakdown-row-chat-1",
-    );
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Fix the flaky test"),
+      expect.stringContaining("Subagent: verify the fix"),
+    ]);
   });
 
   it("shows an explicit empty state rather than a bare empty list", () => {

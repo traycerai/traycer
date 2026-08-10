@@ -150,6 +150,11 @@ function DayColumn(props: {
       <TooltipTrigger asChild>
         <button
           type="button"
+          // The bars inside are decorative, so without this the control has
+          // no accessible name at all - and a tooltip wired up as a
+          // DESCRIPTION is announced inconsistently on a control that has
+          // none.
+          aria-label={formatDayLabel(column.day)}
           data-testid="usage-daily-chart-column"
           data-day={column.day}
           className="group flex min-w-0 flex-1 flex-col justify-end rounded-t-[4px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
