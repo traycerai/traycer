@@ -230,6 +230,7 @@ function baseCloneArgs(
     })),
     onProfileFallbackToAmbient: vi.fn(),
     onHistoryUnavailable: vi.fn(),
+    onCloneFailed: vi.fn(),
     navigateNestedFocus: null,
     ...overrides,
   };
@@ -396,6 +397,23 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     });
   }
 
+  /**
+   * The failure mode every released host produces for `boundary: "latest"`
+   * today: the transport's same-major minor-downgrade cannot represent the
+   * request against `epic.createChat@1.0` (no `assistantMessageId` to put in
+   * the older schema's required field) and refuses BEFORE a frame is sent -
+   * see `classifyHostRequestFailure`.
+   */
+  function downgradeUnsupportedError(): HostRpcError {
+    return new HostRpcError({
+      code: "DOWNGRADE_UNSUPPORTED",
+      message: "epic.createChat request does not fit host version 1.0",
+      requestId: "req-fork-downgrade",
+      method: "epic.createChat",
+      fatalDetails: null,
+    });
+  }
+
   it("sends a latest-checkpoint forkSource on the first attempt", async () => {
     const createChat = vi.fn<CreateChatCommand>();
 
@@ -453,7 +471,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     expect(onHistoryUnavailable).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry, and does not call onHistoryUnavailable, for an unrelated createChat failure", async () => {
+  it("does not retry, and does not call onHistoryUnavailable, for an unrelated createChat failure - only onCloneFailed", async () => {
     const createChat = vi.fn<CreateChatCommand>((_request, callbacks) => {
       callbacks.onError(
         new HostRpcError({
@@ -466,8 +484,121 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
       );
     });
     const onHistoryUnavailable = vi.fn();
+    const onCloneFailed = vi.fn();
 
     cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        onHistoryUnavailable,
+        onCloneFailed,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    expect(onHistoryUnavailable).not.toHaveBeenCalled();
+    expect(onCloneFailed).toHaveBeenCalledTimes(1);
+  });
+
+  // The blocker the cold review found: every released host is
+  // `epic.createChat@1.0`-only, so the FIRST attempt against a real host
+  // never even reaches the server - the client-side downgrade fails before
+  // a frame is sent. Pre-B1 behavior always landed settings-only; this must
+  // still be true post-B1.
+  it("retries settings-only exactly once when the target host cannot receive a latest-checkpoint fork (DOWNGRADE_UNSUPPORTED)", async () => {
+    const calls: unknown[] = [];
+    const createChat: CreateChatCommand = (request, callbacks) => {
+      calls.push(request.forkSource);
+      if (request.forkSource !== null && request.forkSource !== undefined) {
+        callbacks.onError(downgradeUnsupportedError());
+        return;
+      }
+      callbacks.onSuccess({ chatId: "cloned-chat" });
+    };
+    const onHistoryUnavailable = vi.fn();
+    const onCloneFailed = vi.fn();
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        onHistoryUnavailable,
+        onCloneFailed,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(calls).toEqual([
+      { boundary: "latest", sourceChatId: "source-chat-1" },
+      null,
+    ]);
+    expect(onHistoryUnavailable).toHaveBeenCalledTimes(1);
+    expect(onHistoryUnavailable).toHaveBeenCalledWith("host-too-old");
+    expect(onCloneFailed).not.toHaveBeenCalled();
+  });
+
+  it("calls onCloneFailed, not onHistoryUnavailable, when the settings-only retry itself fails", async () => {
+    const createChat: CreateChatCommand = (request, callbacks) => {
+      if (request.forkSource !== null && request.forkSource !== undefined) {
+        callbacks.onError(checkpointUnavailableError());
+        return;
+      }
+      // The retry (no forkSource) fails too, for an unrelated reason.
+      callbacks.onError(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "host unreachable",
+          requestId: "req-fork-retry-fails",
+          method: "epic.createChat",
+          fatalDetails: null,
+        }),
+      );
+    };
+    const onHistoryUnavailable = vi.fn();
+    const onCloneFailed = vi.fn();
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: TARGET_DIRECTORY,
+        createChat,
+        onHistoryUnavailable,
+        onCloneFailed,
+        sourceSettings: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onHistoryUnavailable).toHaveBeenCalledTimes(1);
+    expect(onCloneFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancelling before the checkpoint-unavailable error arrives suppresses the toast and the retry", async () => {
+    const deferred: { current: (() => void) | null } = { current: null };
+    const createChat: CreateChatCommand = (request, callbacks) => {
+      if (request.forkSource !== null && request.forkSource !== undefined) {
+        // Deferred, not called synchronously - lets the test cancel BEFORE
+        // the error arrives, the exact race the guard exists for.
+        deferred.current = () =>
+          callbacks.onError(checkpointUnavailableError());
+        return;
+      }
+      callbacks.onSuccess({ chatId: "cloned-chat" });
+    };
+    const onHistoryUnavailable = vi.fn();
+
+    const cancel = cloneChatOnHostSwitch(
       baseCloneArgs({
         directory: TARGET_DIRECTORY,
         createChat,
@@ -478,9 +609,10 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
 
     await Promise.resolve();
     await Promise.resolve();
-    await Promise.resolve();
 
-    expect(createChat).toHaveBeenCalledTimes(1);
+    cancel();
+    deferred.current?.();
+
     expect(onHistoryUnavailable).not.toHaveBeenCalled();
   });
 

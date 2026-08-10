@@ -1981,11 +1981,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           "Continuing on the Terminal account - your profile isn't available on this host.",
         );
       },
-      onHistoryUnavailable: () => {
+      onHistoryUnavailable: (reason) => {
         toast(
-          "This agent hasn't replied yet, so its history can't be carried - continuing with settings only.",
+          reason === "no-checkpoint"
+            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
+            : "This device can't send this agent's history to that host version - continuing with settings only.",
         );
       },
+      // No local "in flight" state to clear here - the confirm dialog
+      // already closes unconditionally below, before the async result is
+      // known. `useEpicCreateChat`'s own `onError` still toasts a terminal
+      // failure.
+      onCloneFailed: () => undefined,
       navigateNestedFocus,
       createChat: (request, callbacks) => {
         createChat.mutate(request, {

@@ -1,6 +1,9 @@
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  classifyHostRequestFailure,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
@@ -15,6 +18,21 @@ import {
 import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned-chat-settings";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+/**
+ * Which of the two client-visible ways a latest-checkpoint fork request can
+ * fail this flow recovers from, if any - see the module doc below for what
+ * each one means and why both retry identically.
+ */
+function classifyRecoverableForkFailure(
+  error: HostRpcError,
+): "no-checkpoint" | "host-too-old" | null {
+  if (error.code === "E_FORK_CHECKPOINT_UNAVAILABLE") return "no-checkpoint";
+  if (classifyHostRequestFailure(error).kind === "downgrade-unsupported") {
+    return "host-too-old";
+  }
+  return null;
+}
 
 /**
  * Clone-not-migrate flow for switching a chat tab's bound host: chat tabs
@@ -34,12 +52,22 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  *
  * A source with no assistant turn yet has no checkpoint to fork through; the
  * host answers that as a typed `E_FORK_CHECKPOINT_UNAVAILABLE` refusal
- * rather than failing the whole create. This flow retries EXACTLY once,
- * without `forkSource`, so the clone still lands - settings-only, same as
- * before ticket 34B1 - with a toast explaining why history did not come
- * along. The retry is structurally single-shot: a request with no
- * `forkSource` cannot produce this refusal, so the retry's own error
- * handler has nothing left to retry on (see `openWithForkSource` below).
+ * rather than failing the whole create. There is a SECOND, client-side-only
+ * way the same request cannot be served: `epic.createChat@1.1`'s
+ * `boundary: "latest"` variant has no `assistantMessageId` at all, so a
+ * target host still on `@1.0` (every released host as of ticket 34B1) can
+ * never receive it - the transport's same-major minor-downgrade re-parses
+ * the canonical request against the host's older schema before a frame is
+ * even sent, that re-parse has nothing to put in the required
+ * `assistantMessageId` field, and the request fails client-side as
+ * `DOWNGRADE_UNSUPPORTED` (see `classifyHostRequestFailure`). Both cases
+ * mean the SAME thing to this flow - "this attempt cannot carry history" -
+ * and get the SAME recovery: retry EXACTLY once, without `forkSource`, so
+ * the clone still lands - settings-only, same as before ticket 34B1 - with
+ * a toast explaining why history did not come along. The retry is
+ * structurally single-shot: a request with no `forkSource` cannot produce
+ * either failure, so the retry's own error handler has nothing left to
+ * retry on (see `openWithForkSource` below).
  */
 export interface CloneChatOnHostSwitchArgs {
   readonly epicId: string;
@@ -63,10 +91,21 @@ export interface CloneChatOnHostSwitchArgs {
    *  logged in there, or no matching `accountUuid`) - the clone still
    *  proceeds, landing on the ambient login instead of failing silently. */
   readonly onProfileFallbackToAmbient: () => void;
-  /** Fired when the source has no assistant checkpoint yet, right before the
-   *  settings-only retry fires - the clone still proceeds, just without
-   *  history. */
-  readonly onHistoryUnavailable: () => void;
+  /** Fired right before the settings-only retry fires - the clone still
+   *  proceeds, just without history. Two distinct causes, since the right
+   *  copy differs: `"no-checkpoint"` names the SOURCE (it has not replied
+   *  yet); `"host-too-old"` names the TARGET (it predates
+   *  `epic.createChat@1.1` and cannot receive a checkpoint-less fork
+   *  request at all - every released host today). */
+  readonly onHistoryUnavailable: (
+    reason: "no-checkpoint" | "host-too-old",
+  ) => void;
+  /** Fired when the create call fails for a reason this flow does NOT
+   *  recover from - including the settings-only retry itself failing - so
+   *  the caller can clear any in-flight ("cloning…") UI state. Never fired
+   *  for a recoverable failure, since those retry instead of ending the
+   *  flow. */
+  readonly onCloneFailed: () => void;
   readonly navigateNestedFocus: NavigateNestedFocus | null;
 }
 
@@ -95,12 +134,26 @@ export function cloneChatOnHostSwitch(
       onCreateError:
         forkSource === null
           ? // No `forkSource` on this attempt ⇒ no checkpoint to be
-            // unavailable ⇒ nothing left for this handler to retry on.
-            // Structurally single-shot, not merely by convention.
-            () => undefined
+            // unavailable and no minor to be downgrade-unsupported on ⇒
+            // nothing left for this handler to retry on. Structurally
+            // single-shot, not merely by convention - whatever failed here
+            // is terminal.
+            () => {
+              if (cancelled) return;
+              args.onCloneFailed();
+            }
           : (error: HostRpcError) => {
-              if (error.code !== "E_FORK_CHECKPOINT_UNAVAILABLE") return;
-              args.onHistoryUnavailable();
+              // Checked BEFORE the toast, not just before the retry: a
+              // cancel that lands while this attempt's error is still in
+              // flight must produce neither, not just skip the (harmless)
+              // retry - the caller already told this flow to stop.
+              if (cancelled) return;
+              const recoverable = classifyRecoverableForkFailure(error);
+              if (recoverable === null) {
+                args.onCloneFailed();
+                return;
+              }
+              args.onHistoryUnavailable(recoverable);
               openWithForkSource(settings, null);
             },
       openWhenProjected: (intent) => {

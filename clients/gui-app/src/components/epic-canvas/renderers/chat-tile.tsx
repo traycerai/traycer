@@ -462,10 +462,15 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
           "Continuing on the Terminal account - your profile isn't available on this host.",
         );
       },
-      onHistoryUnavailable: () => {
+      onHistoryUnavailable: (reason) => {
         toast(
-          "This agent hasn't replied yet, so its history can't be carried - continuing with settings only.",
+          reason === "no-checkpoint"
+            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
+            : "This device can't send this agent's history to that host version - continuing with settings only.",
         );
+      },
+      onCloneFailed: () => {
+        setCloning(false);
       },
       navigateNestedFocus,
       createChat: (request, callbacks) => {

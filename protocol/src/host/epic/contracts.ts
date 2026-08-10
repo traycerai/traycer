@@ -349,7 +349,18 @@ export const epicCreateChatUpgradeV10ToV11 = defineUpgradePath<
     forkSource:
       request.forkSource === null || request.forkSource === undefined
         ? request.forkSource
-        : { boundary: "assistantMessage" as const, ...request.forkSource },
+        : // Named fields, not `{boundary, ...request.forkSource}`: a spread
+          // AFTER the tag is only safe because a v1.0 request's `forkSource`
+          // never carries its own `boundary` key today, a fact that requires
+          // reading `unary-schemas.ts` to know - constructed explicitly here
+          // so it stays correct even if that stops being true.
+          {
+            boundary: "assistantMessage" as const,
+            sourceChatId: request.forkSource.sourceChatId,
+            assistantMessageId: request.forkSource.assistantMessageId,
+            interviewBlockId: request.forkSource.interviewBlockId,
+            carriedInterviews: request.forkSource.carriedInterviews,
+          },
   }),
   upgradeResponse: (response) => response,
 });
