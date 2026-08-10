@@ -626,10 +626,27 @@ describe("strict objects reject growth", () => {
     ).not.toBeNull();
   });
 
-  it("treats a constraining catchall as refusing unknown keys", () => {
+  it("allows an addition that SATISFIES a typed catchall", () => {
+    // The old schema already accepts `b` through its string catchall, so
+    // projection is feasible and forcing a major would be wrong.
     const previousSchema = z.object({ a: z.string() }).catchall(z.string());
     const next = fingerprint(
       z.object({ a: z.string(), b: z.string() }).catchall(z.string()),
+    );
+    expect(
+      findAdditivityViolation(
+        fingerprint(previousSchema),
+        next,
+        "lenient",
+        toUnknownKeyTree(previousSchema),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects an addition that VIOLATES a typed catchall", () => {
+    const previousSchema = z.object({ a: z.string() }).catchall(z.string());
+    const next = fingerprint(
+      z.object({ a: z.string(), b: z.number() }).catchall(z.string()),
     );
     const violation = findAdditivityViolation(
       fingerprint(previousSchema),

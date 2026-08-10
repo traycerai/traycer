@@ -113,11 +113,6 @@ function asSchemaNode(node: unknown): UnknownKeySchemaNode | null {
   return node as UnknownKeySchemaNode;
 }
 
-function isObjectSchemaNode(node: unknown): boolean {
-  const shape = asSchemaNode(node);
-  return shape !== null && shape.type === "object" && shape.properties !== undefined;
-}
-
 /**
  * Whether an object refuses to silently accept a key it does not declare -
  * either by rejecting outright (`additionalProperties: false`, i.e.
@@ -127,16 +122,27 @@ function isObjectSchemaNode(node: unknown): boolean {
  * (`.catchall(z.unknown())` -> `additionalProperties: {}`) accepts anything,
  * so it strips-equivalent and growth stays safe.
  */
-function rejectsUnknownKeys(node: unknown): boolean {
+type UnknownKeyPolicy =
+  /** Unknown keys are dropped (plain `z.object`) or accepted unconstrained. */
+  | { readonly kind: "strip" }
+  /** Unknown keys are rejected outright (`z.strictObject` / `.strict()`). */
+  | { readonly kind: "reject" }
+  /** Unknown keys are VALIDATED against a catchall schema. */
+  | { readonly kind: "validate"; readonly schema: unknown };
+
+function unknownKeyPolicy(node: unknown): UnknownKeyPolicy {
   const shape = asSchemaNode(node);
-  if (shape === null) return false;
+  if (shape === null) return { kind: "strip" };
   const additional = shape.additionalProperties;
-  if (additional === false) return true;
+  if (additional === false) return { kind: "reject" };
   if (typeof additional === "object" && additional !== null) {
-    // An empty schema (`{}`) constrains nothing; anything else does.
-    return Object.keys(additional as Record<string, unknown>).length > 0;
+    // An empty schema (`{}`, from `.catchall(z.unknown())`) constrains
+    // nothing, so unknown keys sail through; anything else validates them.
+    return Object.keys(additional as Record<string, unknown>).length > 0
+      ? { kind: "validate", schema: additional }
+      : { kind: "strip" };
   }
-  return false;
+  return { kind: "strip" };
 }
 
 
@@ -668,9 +674,29 @@ function findNodeAdditivityViolation(
     // A strict object rejects the whole payload instead, so growing one on a
     // minor breaks projection for every payload - not just those exercising
     // the new field.
-    if (rejectsUnknownKeys(previousInput)) {
+    const policy = unknownKeyPolicy(previousInput);
+    if (policy.kind !== "strip") {
       for (const field of Object.keys(nextNode.properties)) {
-        if (!Object.hasOwn(previousNode.properties, field)) {
+        if (Object.hasOwn(previousNode.properties, field)) continue;
+        if (policy.kind === "reject") {
+          return {
+            kind: "strict-object-growth",
+            detail: dottedPath([...path, field]),
+          };
+        }
+        // A typed catchall already ACCEPTS unknown keys that satisfy it, so
+        // an addition whose own schema fits the catchall still projects -
+        // rejecting it outright would force safe evolution into a major.
+        // Compare the added key against the catchall (input-rendered, the
+        // shape the old peer accepts) and only reject a genuine mismatch.
+        const mismatch = findNodeAdditivityViolation(
+          policy.schema,
+          nextNode.properties[field],
+          [...path, field],
+          mode,
+          policy.schema,
+        );
+        if (mismatch !== null) {
           return {
             kind: "strict-object-growth",
             detail: dottedPath([...path, field]),
