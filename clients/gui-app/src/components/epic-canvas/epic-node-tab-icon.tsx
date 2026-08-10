@@ -114,6 +114,7 @@ function EpicNodeTabIconContent(props: {
         epicId={props.epicId}
         running={false}
         runningTitle=""
+        statusPresentation="spinner"
         defaultIcon={
           <StaticEpicNodeIcon type="terminal" className={props.className} />
         }
@@ -125,6 +126,7 @@ function EpicNodeTabIconContent(props: {
       <TuiAgentLiveTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        statusPresentation="message"
         pendingTuiHarnessId={props.node.pendingTuiHarnessId}
         className={props.className}
       />
@@ -149,6 +151,7 @@ function TerminalNodeTabIcon(props: {
   readonly epicId: string;
   readonly running: IndicatorRunningKind;
   readonly runningTitle: string;
+  readonly statusPresentation: "message" | "spinner";
   readonly defaultIcon: ReactNode;
 }) {
   const indicatorState = useSurfaceNotificationIndicatorState({
@@ -165,7 +168,7 @@ function TerminalNodeTabIcon(props: {
       style={undefined}
       runningTitle={props.runningTitle}
       defaultIcon={props.defaultIcon}
-      statusPresentation="spinner"
+      statusPresentation={props.statusPresentation}
     />
   );
 }
@@ -187,6 +190,7 @@ function TerminalNodeTabIcon(props: {
 function TuiAgentLiveTabIcon(props: {
   readonly nodeId: string;
   readonly epicId: string;
+  readonly statusPresentation: "message" | "spinner";
   readonly pendingTuiHarnessId: EpicArtifactRef["pendingTuiHarnessId"];
   readonly className: string;
 }) {
@@ -199,6 +203,7 @@ function TuiAgentLiveTabIcon(props: {
       epicId={props.epicId}
       running={isActive ? "turn" : false}
       runningTitle="Agent in progress"
+      statusPresentation={props.statusPresentation}
       defaultIcon={
         <TuiAgentTabIcon
           nodeId={props.nodeId}
