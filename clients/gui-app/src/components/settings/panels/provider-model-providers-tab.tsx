@@ -790,13 +790,25 @@ function ModelProvidersBody(props: {
     );
   }
   if (props.unfilteredCount === 0) {
+    // A SUCCESSFUL empty catalog, and the sharpest case for the shell: the only
+    // action that could put anything in it is the one this branch used to
+    // replace. Declaring a provider is precisely what an empty list is for.
     return (
-      <EmptyState
-        title="No model providers"
-        description={`${props.providerLabel} reported no upstream providers on this host.`}
-        actionLabel={null}
-        onAction={null}
-      />
+      <ModelProviderListShell
+        canCreateCustom={props.canCreateCustom}
+        configWriteInFlight={props.configWriteInFlight}
+        onAddCustom={props.onAddCustom}
+        refreshing={props.refreshing}
+      >
+        <li className="w-full py-2">
+          <EmptyState
+            title="No model providers"
+            description={`${props.providerLabel} reported no upstream providers on this host.`}
+            actionLabel={null}
+            onAction={null}
+          />
+        </li>
+      </ModelProviderListShell>
     );
   }
   if (props.entries.length === 0 && props.searchActive) {
@@ -886,10 +898,17 @@ function ModelProvidersBody(props: {
  * tracks for one list, the outer moving the tab while the inner moved the rows.
  * The panel scrolls; this just gets long.
  *
- * A SHELL rather than a branch inside the rows path, because every empty state
- * needs it too: "Add custom provider" is exactly the affordance a fruitless
- * search wants, and returning an empty state INSTEAD of the list is what used
- * to take it away at that moment.
+ * INVARIANT: **the Add affordance must survive every list state where creation
+ * is possible.** This hazard has now arrived three different ways - the button
+ * sitting above the search where a query could not reach it, an empty state
+ * returned INSTEAD of the list, and a successful zero-provider catalog taking
+ * the same early exit - and each time the loss was worst in the state that
+ * needed it most: a fruitless search, and an empty catalog, are exactly when a
+ * user wants to declare their own provider. A shell that owns every non-error
+ * branch is what makes the property structural instead of remembered.
+ *
+ * Loading and failure stay standalone: nothing can be created against a
+ * catalog that has not answered or could not be read.
  *
  * Not virtualized. These rows are one line of text plus a button - no images,
  * no per-row queries - so ~180 of them cost one cheap render pass; the panel

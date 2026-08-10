@@ -1408,6 +1408,19 @@ describe("ProviderModelProvidersTab layout", () => {
     expect(list.className).not.toMatch(/-\[[^\]]*\d(?:px|rem)/);
   });
 
+  it("keeps Add reachable for a SUCCESSFUL but empty catalog", () => {
+    // The sharpest case: the only action that could populate an empty catalog
+    // is the one the empty state used to replace.
+    renderTab({
+      result: { ok: true, providers: [] },
+      capabilities: { actions: ["createCustom"] },
+    });
+    expect(
+      screen.getByRole("button", { name: "Add custom provider" }),
+    ).toBeTruthy();
+    expect(screen.getByText("No model providers")).toBeTruthy();
+  });
+
   it("keeps Add custom provider as the FIRST item, inside the list", () => {
     renderTab({
       result: {
