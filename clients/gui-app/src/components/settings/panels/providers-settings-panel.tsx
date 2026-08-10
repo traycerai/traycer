@@ -406,14 +406,32 @@ function ProvidersScopedContent({
   const refreshProviders = useRefreshProviders();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-end gap-2 px-5 pb-2">
+      {/* Card-level, and it has to SAY so. `checkedAt` is a max over EVERY
+          provider and Refresh re-probes all of them, but right-aligned at the
+          top of the card it sat inches from the selected provider's Enabled
+          toggle and read as that provider's own status. Left-aligned, named
+          "All providers", and separated by a hairline, it belongs to the card
+          rather than to whichever row happens to be beside it.
+
+          It stays INSIDE the gate rather than moving to the panel header:
+          `headerAction` renders in `<header>`, a sibling of this body, where
+          `useHostClient()` falls back to the ambient host - which is how
+          Refresh once re-probed and rewrote the provider list of a host the
+          page was not showing. */}
+      <div
+        className="flex items-center gap-2 border-b border-border/40 px-5 pt-3 pb-2"
+        data-testid="providers-global-status"
+      >
+        <span className="text-ui-xs font-medium text-muted-foreground">
+          All providers
+        </span>
         <ProviderLastChecked
           checkedAt={checkedAt}
           checking={checkingProviders}
         />
         <RefreshIconButton
           onRefresh={refreshProviders}
-          label="Refresh providers"
+          label="Refresh all providers"
           refreshing={checkingProviders}
         />
       </div>

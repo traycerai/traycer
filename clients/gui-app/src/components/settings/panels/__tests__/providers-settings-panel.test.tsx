@@ -2060,8 +2060,36 @@ describe("<ProvidersSettingsPanel />", () => {
     // The controls the header DOES own still render - so this test fails if
     // the fix that moved them inside the gate ever drops them entirely.
     expect(
-      screen.getByRole("button", { name: "Refresh providers" }),
+      screen.getByRole("button", { name: "Refresh all providers" }),
     ).toBeDefined();
+  });
+
+  it("keeps the global status INSIDE the gate, and says it is global", () => {
+    // `checkedAt` is a max over every provider and Refresh re-probes all of
+    // them, but right-aligned at the top of the card it read as the selected
+    // provider's own status - it sat inches from that provider's Enabled
+    // toggle.
+    //
+    // It cannot move to the panel header to fix that: `headerAction` renders
+    // as a SIBLING of the gate, where `useHostClient()` falls back to the
+    // ambient host, which is how Refresh once rewrote the provider list of a
+    // host the page was not showing. So the scope is made explicit in place.
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const status = screen.getByTestId("providers-global-status");
+    expect(status.textContent).toContain("All providers");
+    expect(
+      status.contains(
+        screen.getByRole("button", { name: "Refresh all providers" }),
+      ),
+    ).toBe(true);
+    // Inside the body card, not the panel header.
+    const header = document.querySelector("header");
+    expect(header?.contains(status)).toBe(false);
   });
 
   it("blocks disabling the last enabled provider", () => {

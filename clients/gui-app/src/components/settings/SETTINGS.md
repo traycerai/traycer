@@ -1027,6 +1027,20 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
          "leave the stored one alone", never "clear it", and the helper text says
          so in edit mode. An env REFERENCE is restored verbatim: it is not a secret,
          and blanking it would silently drop it on the next save.
+    - **The global "All providers" status is card-level, and stays inside the
+      gate.** `latestProviderCheckedAt` is a max over EVERY provider and Refresh
+      re-probes all of them, but right-aligned at the top of the card it sat
+      inches from the selected provider's Enabled toggle and read as that
+      provider's own status. It is now left-aligned, labelled **"All
+      providers"**, separated by a hairline, and its button reads "Refresh all
+      providers".
+      It does **not** move to the panel header, which is the obvious fix and the
+      wrong one: `headerAction` renders in `<header>`, a SIBLING of the body
+      card that holds `HostScopeGate`. Mounted there, `useHostClient()` falls
+      back to the ambient host — which is how Refresh once re-probed and rewrote
+      the provider list of a host the page was not showing. That bug is why the
+      controls live inside the gate at all, so the scope is made explicit in
+      place instead.
     - **Structure: ONE scroll context, sticky search, Add as the first row.**
       The list no longer caps itself against the viewport or scrolls
       internally — that nested a second scrollbar inside the panel's own, so
