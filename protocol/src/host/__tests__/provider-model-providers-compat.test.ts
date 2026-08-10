@@ -1045,9 +1045,11 @@ describe("providers.modelProviderAuth actions", () => {
     expect(parsed.key).toBeNull();
   });
 
-  it("takes the same shape for create and update", () => {
-    // Upstream's dialog is one form either way, so the two arms are built from
-    // one shared shape; this pins that they cannot drift apart.
+  it("takes the same declarable fields for create and update", () => {
+    // Upstream's dialog is one form either way, so the block's own fields come
+    // from one shared shape; this pins that they cannot drift apart. The id is
+    // the one field the arms differ on - see the naming/addressing split
+    // below.
     const fields = {
       modelProviderId: "my-endpoint",
       name: "My Endpoint",
@@ -1142,7 +1144,10 @@ describe("providers.modelProviderAuth actions", () => {
     ).toBe(true);
   });
 
-  it("constrains a NEW provider id but not an existing one", () => {
+  it("constrains a NEW provider id but never an existing one", () => {
+    // The rule is about NAMING, so it binds exactly where a name is chosen.
+    // Everywhere else the id is a fact already on disk - and a rule applied
+    // there does not prevent a bad name, it strands a real provider.
     const base = {
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
@@ -1169,13 +1174,79 @@ describe("providers.modelProviderAuth actions", () => {
         id,
       ).toBe(false);
     }
-    // ...and NOT on the verbs that address a provider that already exists. The
-    // catalog carries `wafer.ai`; enforcing a creation rule there would make a
-    // real provider unaddressable to punish a name Traycer never chose.
+  });
+
+  it("lets updateCustom address a block the naming rule would reject", () => {
+    // The regression: the naming rule reached `updateCustom` through the
+    // shared shape, so `wafer.ai` could be neither created NOR updated - and
+    // update is the one verb that could have renamed it. `My.Gateway` is the
+    // hand-written `opencode.json` case; the catalog's `wafer.ai` is the case
+    // nobody chose at all.
+    const base = {
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+    };
+    for (const id of ["wafer.ai", "My.Gateway", "-leading", "has space"]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "updateCustom",
+          modelProviderId: id,
+          ...base,
+        }).success,
+        `update ${id}`,
+      ).toBe(true);
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "createCustom",
+          modelProviderId: id,
+          ...base,
+        }).success,
+        `create ${id}`,
+      ).toBe(false);
+    }
+    // Still non-empty - an id is the one thing update cannot do without.
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "updateCustom",
+        modelProviderId: "",
+        ...base,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps every id-addressing verb free of the naming rule", () => {
+    // The same leak in its other possible homes. `connect`/`startOauth`/
+    // `submitCode`/`disconnect` all address providers that already exist.
     expect(
       modelProviderAuthActionSchema.safeParse({
         action: "disconnect",
         modelProviderId: "wafer.ai",
+      }).success,
+    ).toBe(true);
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "connect",
+        modelProviderId: "wafer.ai",
+        methodIndex: null,
+        key: "sk-secret",
+        inputs: {},
+      }).success,
+    ).toBe(true);
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "startOauth",
+        modelProviderId: "wafer.ai",
+        methodIndex: 0,
+        inputs: {},
+      }).success,
+    ).toBe(true);
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "submitCode",
+        modelProviderId: "wafer.ai",
+        attemptId: "attempt-1",
+        code: "abc123",
       }).success,
     ).toBe(true);
   });
@@ -1927,18 +1998,18 @@ describe("the v7.0 freeze goes all the way down", () => {
     // above fired to force it (in CI, on the merge preview - the tripwire
     // proving itself in the wild).
     //
-    // `config_unreadable` was added to the LIVE native error enum on main
-    // (#1050) after this branch cut. The reflex answer - frozen copy predates
-    // it, so project it away on the v8→v7 bridge - is wrong here: NO released
-    // tag ships `providers.list@7.0`. `host-v1.1.11` and every earlier
-    // host/cli/desktop tag top out below it, so v7.0 is unreleased and #1050
-    // grew it legitimately, exactly as the registry fields grew v6.0 before
-    // `cli-v1.1.9` shipped it.
+    // `config_unreadable` reached the LIVE native error enum after this line
+    // was cut. The reflex answer - frozen copy predates it, so project it away
+    // on the v8→v7 bridge - is wrong here: NO released tag ships
+    // `providers.list@7.0`. Every non-RC host/cli/desktop tag tops out below
+    // it, so v7.0 is unreleased and growing it in place was legitimate,
+    // exactly as the registry fields grew v6.0 before `cli-v1.1.9` shipped
+    // it.
     //
     // Versions protect peers in the FIELD. There is no peer that negotiated
     // v7.0 and cannot read this code - the release that first ships v7.0 ships
     // it too. So the bridge needs no projection, and the frozen snapshot is
-    // "v7.0 as of the moment v8.0 opened", which includes #1050.
+    // "v7.0 as of the moment v8.0 opened", which includes this member.
     //
     // This stops being true the day a release ships v7.0. After that, a code
     // added to the live enum needs a real projection decision, and the

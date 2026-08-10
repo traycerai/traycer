@@ -1761,9 +1761,9 @@ export const providersListDowngradeV8ToV6 = defineDowngradePath<
   // Filtered, not passed straight through. The frozen v6.0 id enum rejects
   // any post-v6.0 provider, and `z.array` fails WHOLE on one bad element - so
   // handing it the raw list makes a single unsupported provider throw the
-  // entire `providers.list` response for that peer. `huggingface` made this
-  // reachable the moment #1011 landed; every other hop on this method already
-  // filtered, and this one was the outlier.
+  // entire `providers.list` response for that peer. Reachable as soon as any
+  // provider exists above the v6.0 id set, which `huggingface` is; every other
+  // hop on this method already filtered, and this one was the outlier.
   downgradeResponse: (response) => ({
     ok: true,
     value: providersListResponseSchemaV60.parse({
