@@ -154,7 +154,7 @@ describe("<UsageSettingsPanel />", () => {
     renderPanel(makeUsageSummaryResponse());
 
     const costFigure = await screen.findByTestId("usage-cost-figure");
-    expect(within(costFigure).getByText("$4.50")).toBeTruthy();
+    expect(within(costFigure).getByText("$4.50*")).toBeTruthy();
     expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("usage-breakdown-table")).toBeTruthy();
@@ -164,12 +164,12 @@ describe("<UsageSettingsPanel />", () => {
     ).toBeTruthy();
     expect(screen.queryByTestId("usage-unsupported-notice")).toBeNull();
 
-    // Ticket 11 dashboard build-out: per-harness split, stat tiles, and the
-    // cost-quality panel all render off the same summary.
+    // Ticket 11 dashboard build-out: per-harness split and stat tiles render
+    // off the same summary. Fixup-01: no standing cost-quality panel.
     expect(screen.getByTestId("usage-harness-split")).toBeTruthy();
     expect(screen.getByTestId("usage-harness-split-row-claude")).toBeTruthy();
     expect(screen.getByTestId("usage-stat-tiles")).toBeTruthy();
-    expect(screen.getByTestId("usage-cost-quality-panel")).toBeTruthy();
+    expect(screen.queryByTestId("usage-cost-quality-panel")).toBeNull();
     expect(screen.getByTestId("usage-date-range-label")).toBeTruthy();
   });
 

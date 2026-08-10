@@ -38,7 +38,6 @@ import {
 } from "@/components/usage-analytics/usage-breakdown-toggle";
 import { UsageHarnessSplit } from "@/components/usage-analytics/usage-harness-split";
 import { UsageStatTiles } from "@/components/usage-analytics/usage-stat-tiles";
-import { UsageCostQualityPanel } from "@/components/usage-analytics/usage-cost-quality-panel";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 
@@ -184,10 +183,6 @@ function UsageSummaryPanelBody(props: {
         )}
       </div>
       <UsageDailyChart columns={columns} scale={scale} metric={metric} />
-      <UsageCostQualityPanel
-        totals={summary.totals}
-        cacheSavings={statTiles.cacheSavings}
-      />
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-ui-sm font-medium text-foreground">

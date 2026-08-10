@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
-  describeCostCoverage,
-  FULL_RATE_QUALIFIER,
+  describeCostHeadline,
   servedByScopeNote,
+  usageCostTooltip,
   type UsageCostCoverage,
   type UsageServedBy,
   type UsageSummaryTotals,
@@ -17,38 +18,61 @@ export interface UsageCostFigureProps {
 }
 
 /**
- * The one place every honesty element for a cost total is composed:
- * - the "at full API rate" qualifier, on every figure, always
- * - a priced-subtotal note whenever coverage is incomplete (never a bare
- *   number that looks complete but isn't)
- * - the local-plane scope note when `servedBy: "local"`
+ * The one place every honesty element for a cost total is composed - at
+ * t3code's density (user ruling 2026-08-10, fixup-01): the headline carries
+ * its own asterisk, a five-word footnote sits below it ("* if billed at
+ * full API rate"), and a "· N turns not counted" suffix is the ONE thing
+ * allowed to claim extra standing pixels, only while unpriced turns exist.
+ * Everything else - the estimate-at-list-prices explanation, the
+ * subscription-bills-separately note, the exact-vs-estimate split with
+ * amounts, the not-counted detail - lives in a tooltip on the figure
+ * itself, never as standing text. Still the single owner of this
+ * presentation so the rule can't fragment across surfaces.
  */
 export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
   const { totals, coverage, servedBy, size } = props;
-  const { headline, coverageNote } = describeCostCoverage(totals, coverage);
+  const { amount, footnote } = describeCostHeadline(totals, coverage);
+  const tooltip =
+    totals.factCount === 0 ? null : usageCostTooltip(totals, coverage);
   const scopeNote = servedByScopeNote(servedBy);
   const compact = size === "compact";
+  const amountClassName = cn(
+    "font-semibold tabular-nums text-foreground",
+    compact ? "text-ui-sm" : "text-title-md",
+  );
 
   return (
     <div className="flex flex-col gap-0.5" data-testid="usage-cost-figure">
-      <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-        <span
-          className={cn(
-            "font-semibold tabular-nums text-foreground",
-            compact ? "text-ui-sm" : "text-title-md",
-          )}
+      {tooltip === null ? (
+        <span className={amountClassName}>{amount}</span>
+      ) : (
+        <TooltipWrapper
+          label={tooltip}
+          side="bottom"
+          sideOffset={undefined}
+          align="start"
         >
-          {headline}
-        </span>
-        {coverageNote === null ? null : (
-          <span className="text-ui-xs text-muted-foreground">
-            {coverageNote}
-          </span>
-        )}
-      </div>
-      {totals.factCount === 0 ? null : (
-        <p className="text-ui-xs text-muted-foreground/80">
-          {FULL_RATE_QUALIFIER} — subscription plans bill separately.
+          {/* A real button, not `tabIndex` on a span
+              (jsx-a11y/no-noninteractive-tabindex) - the only way a
+              keyboard/AT user can reach this tooltip's explanation without a
+              mouse. No `onClick`: focus alone is its job. */}
+          <button
+            type="button"
+            className={cn(
+              amountClassName,
+              "cursor-default rounded-sm bg-transparent text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            )}
+          >
+            {amount}
+          </button>
+        </TooltipWrapper>
+      )}
+      {footnote === null ? null : (
+        <p
+          className="text-ui-xs text-muted-foreground/80"
+          data-testid="usage-cost-footnote"
+        >
+          {footnote}
         </p>
       )}
       {scopeNote === null ? null : (

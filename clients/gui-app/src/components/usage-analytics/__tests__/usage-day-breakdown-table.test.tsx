@@ -24,9 +24,10 @@ describe("UsageDayBreakdownTable", () => {
     expect(screen.getByText("1,000")).not.toBeNull();
   });
 
-  it("labels the weakest-provenance row honestly as Unpriced", () => {
+  it("fixup-01: never renders a provenance badge or column, regardless of the row's provenance", () => {
     render(<UsageDayBreakdownTable rows={[row({ provenance: "unpriced" })]} />);
-    expect(screen.getByText("Unpriced")).not.toBeNull();
+    expect(screen.queryByText("Unpriced")).toBeNull();
+    expect(screen.queryByText("Provenance")).toBeNull();
   });
 
   it("shows an explicit empty state rather than a bare empty table", () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 
@@ -42,70 +43,112 @@ function coverage(overrides: Partial<Coverage>): Coverage {
   };
 }
 
-describe("UsageCostFigure", () => {
-  it("every dollar figure carries the full-API-rate qualifier", () => {
-    render(
+function renderFigure(props: {
+  readonly totals: Totals;
+  readonly coverage: Coverage;
+  readonly servedBy: UsageSummaryResponse["servedBy"];
+}): void {
+  render(
+    <TooltipProvider>
       <UsageCostFigure
-        totals={totals({ knownCostUsd: 10 })}
-        coverage={coverage({})}
-        servedBy="cloud"
+        totals={props.totals}
+        coverage={props.coverage}
+        servedBy={props.servedBy}
         size="default"
-      />,
+      />
+    </TooltipProvider>,
+  );
+}
+
+describe("UsageCostFigure", () => {
+  it("fixup-01: every priced figure carries its own asterisk and the exact five-word footnote", () => {
+    renderFigure({
+      totals: totals({ knownCostUsd: 10 }),
+      coverage: coverage({}),
+      servedBy: "cloud",
+    });
+    expect(screen.getByText("$10.00*")).not.toBeNull();
+    expect(screen.getByTestId("usage-cost-footnote").textContent).toBe(
+      "* if billed at full API rate",
     );
-    expect(screen.getByText("$10.00")).not.toBeNull();
-    expect(screen.getByText(/if billed at full API rate/i)).not.toBeNull();
   });
 
-  it("never shows a bare number when cost coverage is incomplete", () => {
-    render(
-      <UsageCostFigure
-        totals={totals({ factCount: 4, knownCostUsd: 10 })}
-        coverage={coverage({ pricedFactCount: 1, unpricedFactCount: 3 })}
-        servedBy="cloud"
-        size="default"
-      />,
+  it("appends the '· N turns not counted' suffix ONLY while unpriced turns exist - no other standing coverage text", () => {
+    renderFigure({
+      totals: totals({ factCount: 4, knownCostUsd: 10 }),
+      coverage: coverage({ pricedFactCount: 1, unpricedFactCount: 3 }),
+      servedBy: "cloud",
+    });
+    expect(screen.getByText("$10.00*")).not.toBeNull();
+    expect(screen.getByTestId("usage-cost-footnote").textContent).toBe(
+      "* if billed at full API rate · 3 turns not counted",
     );
-    expect(screen.getByText("$10.00 priced subtotal")).not.toBeNull();
-    expect(screen.getByText("+ 3 unpriced turns")).not.toBeNull();
-    // The exact figure never appears on its own, unqualified.
-    expect(screen.queryByText("$10.00")).toBeNull();
+    // The old "priced subtotal" / "+ N unpriced turns" standing phrasing is gone.
+    expect(screen.queryByText(/priced subtotal/i)).toBeNull();
+  });
+
+  it("carries the full explanation in a tooltip on the figure, not as standing text", () => {
+    renderFigure({
+      totals: totals({
+        knownCostUsd: 10,
+        provenanceSplit: {
+          providerReported: { costUsd: 7, factCount: 2, tokenCount: 50 },
+          modelPriced: { costUsd: 3, factCount: 1, tokenCount: 20 },
+          unpriced: { costUsd: 0, factCount: 1, tokenCount: 5 },
+        },
+      }),
+      coverage: coverage({ unpricedFactCount: 1 }),
+      servedBy: "cloud",
+    });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.focus(screen.getByText("$10.00*"));
+
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip.textContent).toMatch(/estimate based on public list prices/i);
+    expect(tooltip.textContent).toContain("$7.00");
+    expect(tooltip.textContent).toContain("$3.00");
+    expect(tooltip.textContent).toMatch(/1 turn had no pricing available/i);
+    expect(tooltip.textContent).not.toMatch(/provenance|modeled|unpriced/i);
   });
 
   it("states the this-machine-only scope for servedBy: local", () => {
-    render(
-      <UsageCostFigure
-        totals={totals({})}
-        coverage={coverage({})}
-        servedBy="local"
-        size="default"
-      />,
-    );
+    renderFigure({
+      totals: totals({}),
+      coverage: coverage({}),
+      servedBy: "local",
+    });
     expect(
       screen.getByTestId("usage-served-by-local-note").textContent,
     ).toMatch(/this machine/i);
   });
 
   it("omits the local-scope note when servedBy is cloud", () => {
-    render(
-      <UsageCostFigure
-        totals={totals({})}
-        coverage={coverage({})}
-        servedBy="cloud"
-        size="default"
-      />,
-    );
+    renderFigure({
+      totals: totals({}),
+      coverage: coverage({}),
+      servedBy: "cloud",
+    });
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
   });
 
-  it("renders the no-usage sentence, not a bare $0.00, for an empty window", () => {
-    render(
-      <UsageCostFigure
-        totals={totals({ factCount: 0, knownCostUsd: 0 })}
-        coverage={coverage({ pricedFactCount: 0 })}
-        servedBy="cloud"
-        size="default"
-      />,
-    );
+  it("renders the no-usage sentence, not a bare $0.00 or asterisk, for an empty window", () => {
+    renderFigure({
+      totals: totals({ factCount: 0, knownCostUsd: 0 }),
+      coverage: coverage({ pricedFactCount: 0 }),
+      servedBy: "cloud",
+    });
     expect(screen.getByText("No usage in this window")).not.toBeNull();
+    expect(screen.queryByTestId("usage-cost-footnote")).toBeNull();
+  });
+
+  it("has no cost-quality panel and no provenance chip anywhere on the figure", () => {
+    renderFigure({
+      totals: totals({}),
+      coverage: coverage({}),
+      servedBy: "cloud",
+    });
+    expect(screen.queryByTestId("usage-cost-quality-panel")).toBeNull();
+    expect(screen.queryByText(/provenance/i)).toBeNull();
   });
 });

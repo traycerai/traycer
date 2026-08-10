@@ -5,13 +5,13 @@ export type UsageCostCoverage = UsageSummaryResponse["coverage"];
 export type UsageServedBy = UsageSummaryResponse["servedBy"];
 
 /**
- * The one qualifier string every dollar figure in this surface carries - the
- * pricing-provenance artifact's binding product framing: a derived dollar
- * amount is "cost if billed at full API rate", never money actually spent
- * (subscription plans bill separately). Centralized so no render site can
+ * The exact standing footnote every priced headline carries - the
+ * pricing-provenance artifact's binding product framing (amended
+ * 2026-08-10, fixup-01): asterisk on the figure, this five-word footnote
+ * below it, matching t3code's density. Centralized so no render site can
  * drift from the exact wording.
  */
-export const FULL_RATE_QUALIFIER = "if billed at full API rate";
+const FOOTNOTE_BASE = "* if billed at full API rate";
 
 export function formatUsd(amountUsd: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -20,40 +20,69 @@ export function formatUsd(amountUsd: number): string {
   }).format(amountUsd);
 }
 
-export interface CostCoverageText {
-  /** The dollar figure itself, or a no-usage sentence when there is nothing to price. */
-  readonly headline: string;
+export interface UsageCostHeadline {
+  /** The dollar figure with its trailing asterisk, or a no-usage sentence when there is nothing to price. */
+  readonly amount: string;
   /**
-   * Non-null exactly when the total is a PARTIAL sum over nullable
-   * `costUsd` - never a bare, misleadingly-complete number. Render this
-   * alongside the headline, never dropped.
+   * `null` only when there is no usage at all (no asterisk to explain).
+   * Otherwise always the five-word base text, plus the one standing
+   * exception - "· N turns not counted" - while unpriced turns exist.
    */
-  readonly coverageNote: string | null;
+  readonly footnote: string | null;
 }
 
 /**
- * Renders a cost total honestly: a `SUM` over nullable `costUsd` can never
- * silently pose as a complete total (pricing-provenance artifact). When any
- * fact in the window is unpriced, the headline states it is a subtotal and
- * the note carries the excluded count - never a bare number that looks
- * complete but isn't.
+ * The headline + footnote pairing (fixup-01): a bare, unqualified dollar
+ * figure never appears - every priced total carries its asterisk, and the
+ * footnote is the ONLY place coverage gaps get standing pixels, via the one
+ * allowed suffix. Everything else that used to live here (the "priced
+ * subtotal" phrasing, the provenance split) has moved into
+ * {@link usageCostTooltip}.
  */
-export function describeCostCoverage(
+export function describeCostHeadline(
   totals: UsageSummaryTotals,
   coverage: UsageCostCoverage,
-): CostCoverageText {
+): UsageCostHeadline {
   if (totals.factCount === 0) {
-    return { headline: "No usage in this window", coverageNote: null };
+    return { amount: "No usage in this window", footnote: null };
   }
-  const amount = formatUsd(totals.knownCostUsd);
+  const amount = `${formatUsd(totals.knownCostUsd)}*`;
   if (coverage.unpricedFactCount === 0) {
-    return { headline: amount, coverageNote: null };
+    return { amount, footnote: FOOTNOTE_BASE };
   }
   const turnWord = coverage.unpricedFactCount === 1 ? "turn" : "turns";
   return {
-    headline: `${amount} priced subtotal`,
-    coverageNote: `+ ${coverage.unpricedFactCount} unpriced ${turnWord}`,
+    amount,
+    footnote: `${FOOTNOTE_BASE} · ${coverage.unpricedFactCount} ${turnWord} not counted`,
   };
+}
+
+/**
+ * Plain-English tooltip content for the figure/asterisk - everything the
+ * old standing text used to say, now on-demand: the estimate-at-list-prices
+ * framing, that a subscription bills separately, the exact-vs-estimate
+ * split with amounts, and the not-counted detail. The words "provenance",
+ * "modeled", and "unpriced" never appear here (fixup-01, user ruling) - call
+ * only when `totals.factCount > 0` (nothing to explain about an empty
+ * window).
+ */
+export function usageCostTooltip(
+  totals: UsageSummaryTotals,
+  coverage: UsageCostCoverage,
+): string {
+  const { providerReported, modelPriced } = totals.provenanceSplit;
+  const sentences = [
+    "This is an estimate based on public list prices — your subscription plan bills separately.",
+    `${formatUsd(providerReported.costUsd)} is from exact pricing, ${formatUsd(modelPriced.costUsd)} is estimated from public rates.`,
+  ];
+  if (coverage.unpricedFactCount > 0) {
+    const turnWord = coverage.unpricedFactCount === 1 ? "turn" : "turns";
+    const verb = coverage.unpricedFactCount === 1 ? "isn't" : "aren't";
+    sentences.push(
+      `${coverage.unpricedFactCount} ${turnWord} had no pricing available and ${verb} included.`,
+    );
+  }
+  return sentences.join(" ");
 }
 
 /**

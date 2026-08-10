@@ -169,7 +169,7 @@ describe("<EpicUsageDialog />", () => {
   it("renders the headline and the by-chat breakdown once open", async () => {
     renderDialog(usageSummaryResponse);
     const costFigure = await screen.findByTestId("usage-cost-figure");
-    expect(within(costFigure).getByText("$2.50")).toBeTruthy();
+    expect(within(costFigure).getByText("$2.50*")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByTestId("usage-chat-breakdown")).toBeTruthy();
     });

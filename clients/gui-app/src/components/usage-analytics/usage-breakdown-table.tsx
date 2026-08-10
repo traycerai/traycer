@@ -1,10 +1,6 @@
 import type { ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
-import type {
-  UsageBreakdownRow,
-  UsageCostProvenance,
-} from "@/lib/usage-analytics/usage-breakdown";
+import type { UsageBreakdownRow } from "@/lib/usage-analytics/usage-breakdown";
 
 export interface UsageBreakdownTableProps {
   readonly rows: readonly UsageBreakdownRow[];
@@ -48,11 +44,8 @@ export function UsageBreakdownTable(
           <th scope="col" className="py-1.5 pr-3 text-right font-medium">
             Tokens
           </th>
-          <th scope="col" className="py-1.5 pr-3 text-right font-medium">
-            Cost
-          </th>
           <th scope="col" className="py-1.5 text-right font-medium">
-            Provenance
+            Cost
           </th>
         </tr>
       </thead>
@@ -70,28 +63,12 @@ export function UsageBreakdownTable(
             <td className="py-1.5 pr-3 text-right tabular-nums text-foreground">
               {row.tokens.toLocaleString()}
             </td>
-            <td className="py-1.5 pr-3 text-right tabular-nums font-medium text-foreground">
+            <td className="py-1.5 text-right tabular-nums font-medium text-foreground">
               {formatUsd(row.costUsd)}
-            </td>
-            <td className="py-1.5 text-right">
-              <ProvenanceBadge provenance={row.provenance} />
             </td>
           </tr>
         ))}
       </tbody>
     </table>
   );
-}
-
-function ProvenanceBadge(props: {
-  readonly provenance: UsageCostProvenance;
-}): ReactNode {
-  switch (props.provenance) {
-    case "providerReported":
-      return <Badge variant="secondary">Provider-reported</Badge>;
-    case "modelPriced":
-      return <Badge variant="outline">Modeled rate</Badge>;
-    case "unpriced":
-      return <Badge variant="ghost">Unpriced</Badge>;
-  }
 }

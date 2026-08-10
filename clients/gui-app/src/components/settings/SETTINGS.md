@@ -1290,15 +1290,21 @@ error` scale, `info` labelled "Info (default)") - all default Info and
   registry), so this section stays in the static list either way and instead
   swaps its BODY for a capability notice (same anatomy as `HostScopeGate`'s
   internal notices - an idle host-capability gap, not an error) on a host
-  that predates the capability. Every dollar figure carries the "if billed at
-  full API rate" qualifier (pricing-provenance artifact); a total with
-  incomplete cost coverage renders as "priced subtotal + N unpriced turns",
-  never a bare number; `servedBy: "local"` states the this-machine-only
-  scope; a cloud-unavailable read renders a retryable error card rather than
-  silently falling back to local-looking data (the host resolver's
-  cloud-unavailable path is a plain `RPC_ERROR` on this transport, so
-  `isTransientHostRpcFailure` cannot classify it - the card offers Retry
-  unconditionally instead).
+  that predates the capability. Every priced figure carries its own asterisk
+  plus a five-word footnote below it, "* if billed at full API rate"
+  (`describeCostHeadline` in `cost-format.ts`) - the ONE standing exception is
+  a "· N turns not counted" suffix while unpriced turns exist. Everything
+  else - the estimate-at-list-prices framing, that a subscription bills
+  separately, the exact-vs-estimate split with amounts, the not-counted
+  detail - lives in a tooltip on the figure (`usageCostTooltip`), never as
+  standing text (fixup-01, user ruling 2026-08-10: match t3code's density;
+  the words "provenance"/"modeled"/"unpriced" never appear in UI - the wire
+  still carries the full split for the tooltip). `servedBy: "local"` states
+  the this-machine-only scope; a cloud-unavailable read renders a retryable
+  error card rather than silently falling back to local-looking data (the
+  host resolver's cloud-unavailable path is a plain `RPC_ERROR` on this
+  transport, so `isTransientHostRpcFailure` cannot classify it - the card
+  offers Retry unconditionally instead).
   - **Ticket 11 dashboard build-out (t3code shape).** Window picker
     (7/30/90 days) + a date-range label beside it + cost/token toggle;
     per-harness cost split under the headline (share bar, % of cost, token
@@ -1310,15 +1316,16 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     5-tile stat row (processed tokens, cached input, uncached input, output,
     cache savings - `usage-stat-tiles.ts` owns every "absent, not zero"
     computation, e.g. reasoning tokens/cache-savings multiple render only
-    when the known sum is actually positive); a cost-quality panel (% of
-    cost by provenance rung + the known cache-savings figure); and a
-    Model/Day toggle on the harness/model breakdown table
-    (`buildUsageDayBreakdownRows` folds the same buckets by day instead).
-    A window-wide note ("Excludes N turns with no usage reported") appears
-    under the stat tiles whenever `usageCompletenessBreakdown.absent > 0` -
-    those turns still contribute silent zeros to every token sum, which
-    would otherwise misread as "no caching happened" rather than "nothing
-    was reported".
+    when the known sum is actually positive); and a Model/Day toggle on the
+    harness/model breakdown table (`buildUsageDayBreakdownRows` folds the
+    same buckets by day instead). A window-wide note ("Excludes N turns with
+    no usage reported") appears under the stat tiles whenever
+    `usageCompletenessBreakdown.absent > 0` - those turns still contribute
+    silent zeros to every token sum, which would otherwise misread as "no
+    caching happened" rather than "nothing was reported". Fixup-01 (below)
+    removed the standing cost-quality panel and the breakdown tables'
+    Provenance column entirely - neither is a "layout" element this bullet
+    still describes.
   - **Ticket 12 removed the ambient epic-canvas cost badge** (this panel's
     former `UsageSummaryPanel` reuse target,
     `epic-canvas/panels/epic-cost-badge.tsx`) per the user ruling that no
@@ -1327,6 +1334,15 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     `EpicUsageDialog` (headline, small trend chart, by-chat/agent breakdown,
     window options including "entire epic") on click - see that panel's own
     doc comments, not this file, since it is not a Settings surface.
+  - **Fixup-01 (tickets 11/12) rewrote cost presentation to t3code's density**
+    (user ruling 2026-08-10, three rounds, final - superseded the ticket 11
+    "priced subtotal + N unpriced turns" phrasing and deleted ticket 11's
+    cost-quality panel and both breakdown tables' Provenance column, plus
+    ticket 12's equivalents in the scoped dialogs). `UsageCostFigure`
+    (`components/usage-analytics/usage-cost-figure.tsx`) stays the single
+    owner of the presentation across the dashboard AND both ticket-12 scoped
+    dialogs (epic + chat) - see that file's own doc comment for the current
+    rule, not this one, so the rule can't fragment across two descriptions.
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking

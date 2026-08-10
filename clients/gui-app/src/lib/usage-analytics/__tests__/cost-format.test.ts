@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  describeCostCoverage,
+  describeCostHeadline,
   formatUsd,
   servedByScopeNote,
+  usageCostTooltip,
   type UsageCostCoverage,
   type UsageSummaryTotals,
 } from "@/lib/usage-analytics/cost-format";
@@ -41,42 +42,99 @@ function coverage(overrides: Partial<UsageCostCoverage>): UsageCostCoverage {
   };
 }
 
-describe("describeCostCoverage", () => {
-  it("reports a bare number when the window has no usage at all", () => {
-    const result = describeCostCoverage(
+describe("describeCostHeadline", () => {
+  it("reports the no-usage sentence, with no footnote, for an empty window", () => {
+    const result = describeCostHeadline(
       totals({ factCount: 0 }),
       coverage({ pricedFactCount: 0 }),
     );
     expect(result).toEqual({
-      headline: "No usage in this window",
-      coverageNote: null,
+      amount: "No usage in this window",
+      footnote: null,
     });
   });
 
-  it("reports a clean dollar figure when every fact is priced", () => {
-    const result = describeCostCoverage(
+  it("appends the asterisk to every priced figure, with the exact five-word footnote", () => {
+    const result = describeCostHeadline(
       totals({ factCount: 5, knownCostUsd: 12.34 }),
       coverage({ pricedFactCount: 5, unpricedFactCount: 0 }),
     );
-    expect(result.headline).toBe("$12.34");
-    expect(result.coverageNote).toBeNull();
+    expect(result.amount).toBe("$12.34*");
+    expect(result.footnote).toBe("* if billed at full API rate");
   });
 
-  it("NEVER renders a bare number when coverage is incomplete - always the priced-subtotal + unpriced-turns phrasing", () => {
-    const result = describeCostCoverage(
+  it("appends '· N turns not counted' ONLY while unpriced turns exist - the one standing exception", () => {
+    const result = describeCostHeadline(
       totals({ factCount: 5, knownCostUsd: 12.34 }),
       coverage({ pricedFactCount: 2, unpricedFactCount: 3 }),
     );
-    expect(result.headline).toBe("$12.34 priced subtotal");
-    expect(result.coverageNote).toBe("+ 3 unpriced turns");
+    expect(result.amount).toBe("$12.34*");
+    expect(result.footnote).toBe(
+      "* if billed at full API rate · 3 turns not counted",
+    );
   });
 
   it("uses singular 'turn' for exactly one unpriced fact", () => {
-    const result = describeCostCoverage(
+    const result = describeCostHeadline(
       totals({ factCount: 2, knownCostUsd: 1 }),
       coverage({ pricedFactCount: 1, unpricedFactCount: 1 }),
     );
-    expect(result.coverageNote).toBe("+ 1 unpriced turn");
+    expect(result.footnote).toBe(
+      "* if billed at full API rate · 1 turn not counted",
+    );
+  });
+});
+
+describe("usageCostTooltip", () => {
+  it("never uses the banned words provenance/modeled/unpriced", () => {
+    const tooltip = usageCostTooltip(
+      totals({
+        factCount: 5,
+        knownCostUsd: 12.34,
+        provenanceSplit: {
+          providerReported: { costUsd: 10, factCount: 3, tokenCount: 100 },
+          modelPriced: { costUsd: 2.34, factCount: 1, tokenCount: 20 },
+          unpriced: { costUsd: 0, factCount: 1, tokenCount: 5 },
+        },
+      }),
+      coverage({ pricedFactCount: 4, unpricedFactCount: 1 }),
+    );
+    expect(tooltip.toLowerCase()).not.toMatch(/provenance|modeled|unpriced/);
+  });
+
+  it("states the estimate-at-list-prices framing and that subscriptions bill separately", () => {
+    const tooltip = usageCostTooltip(totals({}), coverage({}));
+    expect(tooltip).toMatch(/estimate based on public list prices/i);
+    expect(tooltip).toMatch(/subscription plan bills separately/i);
+  });
+
+  it("carries the exact-vs-estimate split with amounts", () => {
+    const tooltip = usageCostTooltip(
+      totals({
+        provenanceSplit: {
+          providerReported: { costUsd: 10, factCount: 3, tokenCount: 100 },
+          modelPriced: { costUsd: 2.5, factCount: 1, tokenCount: 20 },
+          unpriced: { costUsd: 0, factCount: 0, tokenCount: 0 },
+        },
+      }),
+      coverage({}),
+    );
+    expect(tooltip).toContain("$10.00");
+    expect(tooltip).toContain("$2.50");
+  });
+
+  it("carries the not-counted detail only while unpriced turns exist", () => {
+    const withUnpriced = usageCostTooltip(
+      totals({}),
+      coverage({ unpricedFactCount: 2 }),
+    );
+    expect(withUnpriced).toMatch(/2 turns had no pricing available/i);
+
+    const withoutUnpriced = usageCostTooltip(
+      totals({}),
+      coverage({ unpricedFactCount: 0 }),
+    );
+    expect(withoutUnpriced).not.toMatch(/had no pricing available/i);
   });
 });
 
