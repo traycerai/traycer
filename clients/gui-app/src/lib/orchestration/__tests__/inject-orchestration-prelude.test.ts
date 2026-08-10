@@ -1,30 +1,125 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { prependPlainTextToComposerDoc } from "@/lib/orchestration/inject-orchestration-prelude";
+import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
+import type { OrchestrationBinding } from "@/stores/orchestration/orchestration-binding-store";
+import {
+  maybeInjectOrchestrationPreludeAtCreate,
+  type OrchestrationInjectionFailure,
+} from "../inject-orchestration-prelude";
 
-describe("prependPlainTextToComposerDoc", () => {
-  it("prepends one paragraph per line ahead of the user doc", () => {
-    const user: JsonContent = {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: "hello user" }],
-        },
-      ],
-    };
-    const out = prependPlainTextToComposerDoc(user, "line1\n\nline3");
-    expect(out.type).toBe("doc");
-    expect(out.content).toHaveLength(4);
-    expect(out.content?.[0]).toEqual({
-      type: "paragraph",
-      content: [{ type: "text", text: "line1" }],
+const DOC: JsonContent = {
+  type: "doc",
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+  ],
+};
+
+const ENABLED: OrchestrationBinding = {
+  enabled: true,
+  orchestrationName: "dev-team-full",
+  roleId: "orchestrator",
+  modelGroup: null,
+};
+
+function makeCli(
+  impl: ITraycerCli["orchestrationPrelude"],
+): ITraycerCli {
+  return { orchestrationPrelude: impl } as ITraycerCli;
+}
+
+describe("maybeInjectOrchestrationPreludeAtCreate", () => {
+  it("cli-unavailable invokes onFailure once", async () => {
+    const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
+    const result = await maybeInjectOrchestrationPreludeAtCreate(
+      DOC,
+      null,
+      ENABLED,
+      onFailure,
+    );
+    expect(result).toBe(DOC);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith({
+      kind: "cli-unavailable",
+      orchestrationName: "dev-team-full",
+      roleId: "orchestrator",
     });
-    expect(out.content?.[1]).toEqual({ type: "paragraph" });
-    expect(out.content?.[2]).toEqual({
-      type: "paragraph",
-      content: [{ type: "text", text: "line3" }],
+  });
+
+  it("empty-prelude invokes onFailure once", async () => {
+    const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
+    const cli = makeCli(async () => null);
+    const result = await maybeInjectOrchestrationPreludeAtCreate(
+      DOC,
+      cli,
+      ENABLED,
+      onFailure,
+    );
+    expect(result).toBe(DOC);
+    expect(onFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "empty-prelude" }),
+    );
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("prelude-error invokes onFailure once", async () => {
+    const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
+    const cli = makeCli(async () => {
+      throw new Error("boom");
     });
-    expect(out.content?.[3]).toEqual(user.content?.[0]);
+    const result = await maybeInjectOrchestrationPreludeAtCreate(
+      DOC,
+      cli,
+      ENABLED,
+      onFailure,
+    );
+    expect(result).toBe(DOC);
+    expect(onFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "prelude-error" }),
+    );
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("success path does not invoke onFailure", async () => {
+    const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
+    const cli = makeCli(async () => ({
+      text: "<!-- traycer-orchestration-prelude -->\nx\n<!-- /traycer-orchestration-prelude -->",
+      orchestration: "dev-team-full",
+      roleId: "orchestrator",
+      roleLabel: "Orchestrator",
+      modelGroup: "default",
+      tier: "default",
+    }));
+    const result = await maybeInjectOrchestrationPreludeAtCreate(
+      DOC,
+      cli,
+      ENABLED,
+      onFailure,
+    );
+    expect(result).not.toBe(DOC);
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("disabled binding does not invoke onFailure", async () => {
+    const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
+    const result = await maybeInjectOrchestrationPreludeAtCreate(
+      DOC,
+      null,
+      { ...ENABLED, enabled: false },
+      onFailure,
+    );
+    expect(result).toBe(DOC);
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("incomplete binding does not invoke onFailure", async () => {
+    const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
+    const result = await maybeInjectOrchestrationPreludeAtCreate(
+      DOC,
+      null,
+      { ...ENABLED, orchestrationName: "" },
+      onFailure,
+    );
+    expect(result).toBe(DOC);
+    expect(onFailure).not.toHaveBeenCalled();
   });
 });

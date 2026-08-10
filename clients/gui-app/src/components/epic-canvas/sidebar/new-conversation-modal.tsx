@@ -133,6 +133,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { toast } from "sonner";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
 import {
@@ -763,6 +764,11 @@ export function NewConversationModalBody(props: {
       userContent,
       runnerHost.traycerCli,
       effectiveOrchestrationBinding(epicId),
+      () => {
+        toast.warning(
+          "Orchestration context unavailable — chat created without it.",
+        );
+      },
     );
     const chatId = uuidv4();
     const messageId = uuidv4();

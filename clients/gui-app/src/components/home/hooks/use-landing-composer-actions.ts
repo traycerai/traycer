@@ -303,6 +303,11 @@ export function useLandingComposerActions(): LandingComposerActions {
         submittedUserContent,
         runnerHost?.traycerCli ?? null,
         effectiveOrchestrationBinding(null),
+        () => {
+          toast.warning(
+            "Orchestration context unavailable — chat created without it.",
+          );
+        },
       );
       const profile = useAuthStore.getState().profile;
 

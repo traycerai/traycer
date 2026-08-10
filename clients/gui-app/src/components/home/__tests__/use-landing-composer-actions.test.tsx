@@ -63,12 +63,14 @@ vi.mock("@/lib/orchestration/inject-orchestration-prelude", async (importActual)
         roleId: string;
         modelGroup: string | null;
       } | null,
+      onFailure: ((reason: unknown) => void) | null,
     ) => {
       landingMocks.injectCalls.push({ bindingOverride });
       return actual.maybeInjectOrchestrationPreludeAtCreate(
         content,
         traycerCli as never,
         bindingOverride,
+        onFailure,
       );
     },
   };
@@ -99,6 +101,7 @@ vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
