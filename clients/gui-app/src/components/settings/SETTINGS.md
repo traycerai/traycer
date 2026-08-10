@@ -961,18 +961,29 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       not be changed. `__proto__` is refused under BOTH policies, because it is
       a hazard rather than a style: the host answers it with `invalid_input`,
       and refusing it here puts the message on the field.
-    - **One custom write at a time, across the whole surface.** These all
-      rewrite the same config file, so a second write started while the first is
-      in the air is a lost update whichever way it lands. Bare Re-enable is the
-      reason this needs saying: it is a button on a row with no form in front of
-      it, so nothing else was gating it. While a write is in flight every custom
-      entry point closes — Add, and Edit/Re-enable on EVERY row, not just the
-      acting one — and the acting row shows the spinner. Completion is guarded
-      by a per-write token rather than by "is something pending", so a late
-      rejection cannot open an error form over a write that has already been
-      superseded. The token is a monotonic counter: `Date.now()` and
-      `Math.random()` are not available in every environment this runs in, and
-      all the guard needs is "later than the one before".
+    - **One CONFIG-FILE write at a time, and the boundary is what it touches —
+      not which component owns it.** One owner (`useConfigWriteOwner`) covers
+      every action that edits the provider's config file: Add, Edit, Re-enable,
+      **and a config-declared row's Disconnect**, which appends to
+      `disabled_providers` rather than removing a credential. Two of those in
+      the air at once contend on one file; the host's guarded writes prevent a
+      silent loss, but the loser fails on drift — an error the user did nothing
+      to cause. While one is in flight, all of them close, on every row.
+      **A plain row's Disconnect is deliberately NOT in the lock.** That one is
+      `auth.remove` through the server and touches no file, so locking it would
+      serialize two actions that never contend — and it can legitimately run
+      beside a config write, which is why the busy rows are a LIST: a single id
+      migrated the spinner from the first row to the second instead of showing
+      both.
+      Bare Re-enable is the reason the lock has to exist at all: it is a button
+      on a row with no form in front of it, so nothing else was gating it.
+      Completion is guarded by a per-write token rather than by "is something
+      pending", so a late rejection cannot open an error form over a write that
+      has already been superseded. The token is a monotonic counter:
+      `Date.now()` and `Math.random()` are not available in every environment
+      this runs in, and all the guard needs is "later than the one before".
+      The confirm dialog is not part of this. Its modal inertness ends when it
+      closes; the disabled state has to hold on its own.
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a

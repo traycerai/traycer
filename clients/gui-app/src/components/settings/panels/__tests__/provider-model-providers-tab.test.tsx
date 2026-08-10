@@ -1069,6 +1069,114 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     }
   });
 
+  it("closes a DECLARED row's Disconnect while another row is being written", () => {
+    // Both writes edit one config file: re-enable rewrites the block and clears
+    // its disable entry, a declared row's disconnect appends one. Guarded writes
+    // stop a silent loss, but the loser fails on drift - an error the user did
+    // nothing to cause.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "gateway-a",
+            name: "Gateway A",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://a.example.test/v1", modelIds: ["a"] },
+          }),
+          entry({
+            id: "gateway-b",
+            name: "Gateway B",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: { baseUrl: "https://b.example.test/v1", modelIds: ["b"] },
+          }),
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: "api",
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: {
+        actions: ["connect", "disconnect", "createCustom", "updateCustom"],
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Re-enable Gateway A" }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Disconnect Gateway B" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    // A PLAIN disconnect is `auth.remove` through the server - no config file,
+    // nothing to contend with, so locking it would serialize two actions that
+    // never collide.
+    expect(
+      screen
+        .getByRole("button", { name: "Disconnect OpenAI" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("closes the other config writes while a DECLARED Disconnect is in flight", () => {
+    // The inverse direction: the lock is one owner, not a flag the form paths
+    // happen to set.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "gateway-a",
+            name: "Gateway A",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: { baseUrl: "https://a.example.test/v1", modelIds: ["a"] },
+          }),
+          entry({
+            id: "gateway-b",
+            name: "Gateway B",
+            connected: false,
+            source: "config",
+            configDeclaredCustom: true,
+            custom: { baseUrl: "https://b.example.test/v1", modelIds: ["b"] },
+          }),
+        ],
+      },
+      capabilities: {
+        actions: ["connect", "disconnect", "createCustom", "updateCustom"],
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Disconnect Gateway A" }),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    // Queried off the DOM rather than by role: the open confirm dialog puts the
+    // rest of the page behind `aria-hidden`, so it is not in the accessibility
+    // tree at all. That inertness is Radix's and it ends when the dialog closes
+    // - the disabled state asserted here is OURS, and it has to hold on its own
+    // rather than leaning on a modal that is about to go away.
+    for (const label of ["Re-enable Gateway B", "Edit Gateway B"]) {
+      const button = document.querySelector(`button[aria-label="${label}"]`);
+      expect(button?.hasAttribute("disabled")).toBe(true);
+    }
+    expect(
+      screen
+        .getByText("Add custom provider")
+        .closest("button")
+        ?.hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
   it("drops a completion that is no longer the current write", () => {
     renderTab({
       result: {

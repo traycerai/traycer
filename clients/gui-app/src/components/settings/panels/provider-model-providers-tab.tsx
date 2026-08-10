@@ -155,6 +155,26 @@ function disconnectDescription(
   return `Remove the stored ${entry.name} credential from ${providerLabel}? If an environment variable or config file also provides it, ${entry.name} keeps working from that source.`;
 }
 
+/**
+ * Every row that should be showing a spinner.
+ *
+ * A LIST, not one id: a plain disconnect does not take the config lock, so it
+ * can legitimately be in flight beside a config write on another row. A single
+ * id migrated the spinner from the first row to the second instead of showing
+ * both.
+ */
+function busyRowIds(args: {
+  readonly disconnectingId: string | null;
+  readonly configWritingId: string | null;
+}): readonly string[] {
+  const ids: string[] = [];
+  if (args.disconnectingId !== null) ids.push(args.disconnectingId);
+  if (args.configWritingId !== null && !ids.includes(args.configWritingId)) {
+    ids.push(args.configWritingId);
+  }
+  return ids;
+}
+
 /** The catalog a list result carries, sorted, or nothing at all. */
 function entriesOf(
   result: ModelProvidersListResult | undefined,
@@ -187,6 +207,72 @@ function attemptForTarget(args: {
 }
 
 /**
+ * Exclusive ownership of the provider's CONFIG FILE for the length of one
+ * write.
+ *
+ * Every action that edits that file shares this: declaring a custom provider,
+ * editing one, re-enabling one, and disconnecting a config-declared custom row
+ * (upstream's disconnect for those appends to `disabled_providers` rather than
+ * removing a credential). Two of them in the air at once contend on one file -
+ * the host's guarded writes stop a silent loss, but the loser fails on drift,
+ * which is an error the user did nothing to cause.
+ *
+ * PLAIN disconnect is deliberately NOT here. That one is `auth.remove` through
+ * the server - it does not touch the config file, so locking it would serialize
+ * actions that never contend.
+ *
+ * The token is what a completion proves itself with, and it is a monotonic
+ * counter rather than a clock or a random id: those are unavailable in some of
+ * the environments this runs in, and all this needs is "later than the one
+ * before". Refs alongside the state because the guard has to read the CURRENT
+ * owner from inside a callback that closed over an older render.
+ */
+type ConfigWriteOwner = {
+  /** The row a config write is in flight for, or null. */
+  readonly activeModelProviderId: string | null;
+  /** Takes ownership, or answers null when someone else already holds it. */
+  readonly claim: (modelProviderId: string) => number | null;
+  readonly isCurrent: (token: number) => boolean;
+  readonly release: (token: number) => void;
+};
+
+function useConfigWriteOwner(): ConfigWriteOwner {
+  const [active, setActive] = useState<{
+    readonly token: number;
+    readonly modelProviderId: string;
+  } | null>(null);
+  const activeRef = useRef<{
+    readonly token: number;
+    readonly modelProviderId: string;
+  } | null>(null);
+  const tokenRef = useRef(0);
+
+  const claim = useCallback((modelProviderId: string) => {
+    if (activeRef.current !== null) return null;
+    const token = tokenRef.current + 1;
+    tokenRef.current = token;
+    activeRef.current = { token, modelProviderId };
+    setActive({ token, modelProviderId });
+    return token;
+  }, []);
+  const isCurrent = useCallback((token: number) => {
+    return activeRef.current?.token === token;
+  }, []);
+  const release = useCallback((token: number) => {
+    if (activeRef.current?.token !== token) return;
+    activeRef.current = null;
+    setActive(null);
+  }, []);
+
+  return {
+    activeModelProviderId: active?.modelProviderId ?? null,
+    claim,
+    isCurrent,
+    release,
+  };
+}
+
+/**
  * The custom-provider form's own state and submit path.
  *
  * Its own hook rather than four more `useState`s in the tab: the tab already
@@ -194,19 +280,14 @@ function attemptForTarget(args: {
  * disconnect target, and the form shares nothing with any of them except the
  * one mutation it borrows.
  */
-function useCustomProviderForm(providerId: ProviderId): {
+function useCustomProviderForm(
+  providerId: ProviderId,
+  configWrite: ConfigWriteOwner,
+): {
   /** The open form, or null. `initial` is what separates edit from declare. */
   readonly state: { readonly initial: CustomProviderValues | null } | null;
   readonly error: string | null;
   readonly isPending: boolean;
-  /**
-   * The row a custom write is in flight for, or null.
-   *
-   * One write at a time, across the WHOLE surface rather than per row. These
-   * all rewrite the same config file, so a second one started while the first
-   * is in the air is a lost update whichever way it lands.
-   */
-  readonly activeModelProviderId: string | null;
   readonly open: (initial: CustomProviderValues | null) => void;
   readonly close: () => void;
   readonly submit: (values: CustomProviderValues) => void;
@@ -217,18 +298,6 @@ function useCustomProviderForm(providerId: ProviderId): {
     readonly initial: CustomProviderValues | null;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<{
-    readonly token: number;
-    readonly modelProviderId: string;
-  } | null>(null);
-  // Mirrored in refs because the guard has to read the CURRENT value from
-  // inside a callback that closed over an older render, which is exactly the
-  // read a state variable cannot serve.
-  const activeRef = useRef<{
-    readonly token: number;
-    readonly modelProviderId: string;
-  } | null>(null);
-  const tokenRef = useRef(0);
   // Its OWN mutation instance rather than the tab's. They share a key and an
   // invalidation, and nothing else: a disconnect in flight has no business
   // spinning this form's submit button, or the other way round.
@@ -244,19 +313,12 @@ function useCustomProviderForm(providerId: ProviderId): {
 
   const send = useCallback(
     (values: CustomProviderValues, declaring: boolean) => {
-      // One write at a time. Bare re-enable is a button on a row with no form
-      // in front of it, so without this a second click - or a click on another
-      // row - launches a concurrent write against the same config file while
-      // the first is still in the air.
-      if (activeRef.current !== null) return;
-      // Identity for THIS write, so a completion can prove it is still the
-      // current one. A monotonic counter rather than a clock or a random id:
-      // those are unavailable in some of the environments this runs in, and all
-      // this needs is "later than the one before".
-      const token = tokenRef.current + 1;
-      tokenRef.current = token;
-      activeRef.current = { token, modelProviderId: values.modelProviderId };
-      setActive({ token, modelProviderId: values.modelProviderId });
+      // One config write at a time. Bare re-enable is a button on a row with no
+      // form in front of it, so without this a second click - or a click on
+      // another row, or a declared row's Disconnect - starts a competing write
+      // against the same file while the first is still in the air.
+      const token = configWrite.claim(values.modelProviderId);
+      if (token === null) return;
       setError(null);
       auth.mutate(
         {
@@ -277,7 +339,7 @@ function useCustomProviderForm(providerId: ProviderId): {
             // The concrete case is a late REJECTION opening an error form over
             // whatever the user did next, reporting a failure for a write that
             // has already been superseded.
-            if (tokenRef.current !== token) return;
+            if (!configWrite.isCurrent(token)) return;
             const failure = customSubmitError(data.result);
             setError(failure);
             // A failure lands the user in the form for THESE values, whether or
@@ -287,14 +349,12 @@ function useCustomProviderForm(providerId: ProviderId): {
             setState(failure === null ? null : { initial: values });
           },
           onSettled: () => {
-            if (tokenRef.current !== token) return;
-            activeRef.current = null;
-            setActive(null);
+            configWrite.release(token);
           },
         },
       );
     },
-    [auth, providerId],
+    [auth, configWrite, providerId],
   );
 
   const submit = useCallback(
@@ -314,7 +374,6 @@ function useCustomProviderForm(providerId: ProviderId): {
     state,
     error,
     isPending: auth.isPending,
-    activeModelProviderId: active?.modelProviderId ?? null,
     open,
     close,
     submit,
@@ -357,7 +416,8 @@ export function ProviderModelProvidersTab(props: {
     enabled: true,
   });
   const auth = useProvidersModelProviderAuth();
-  const customForm = useCustomProviderForm(providerId);
+  const configWrite = useConfigWriteOwner();
+  const customForm = useCustomProviderForm(providerId, configWrite);
   const pendingAuthEntries = useModelProviderPendingAuthStore((s) => s.entries);
 
   const result: ModelProvidersListResult | undefined = listQuery.data?.result;
@@ -405,6 +465,15 @@ export function ProviderModelProvidersTab(props: {
   const handleDisconnect = useCallback(() => {
     const target = disconnectTarget;
     if (target === null) return;
+    // Disconnecting a DECLARED custom row is a config write - upstream disables
+    // the block by appending to `disabled_providers` rather than removing a
+    // credential - so it takes the same lock the form paths do. A plain
+    // disconnect is `auth.remove` through the server and touches no file, so it
+    // runs unlocked; locking it would serialize two actions that never contend.
+    const token = target.configDeclaredCustom
+      ? configWrite.claim(target.id)
+      : null;
+    if (target.configDeclaredCustom && token === null) return;
     setRowError(null);
     auth.mutate(
       {
@@ -413,14 +482,16 @@ export function ProviderModelProvidersTab(props: {
       },
       {
         onSuccess: (data) => {
+          if (token !== null && !configWrite.isCurrent(token)) return;
           setRowError(disconnectRowError(target.id, data.result));
         },
         onSettled: () => {
+          if (token !== null) configWrite.release(token);
           setDisconnectTarget(null);
         },
       },
     );
-  }, [auth, disconnectTarget, providerId]);
+  }, [auth, configWrite, disconnectTarget, providerId]);
 
   const canDisconnect = capabilities.actions.includes("disconnect");
   const canCreateCustom = capabilities.actions.includes("createCustom");
@@ -428,6 +499,10 @@ export function ProviderModelProvidersTab(props: {
   // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
   const disconnectPending = auth.isPending && disconnectTarget !== null;
+  const busyModelProviderIds = busyRowIds({
+    disconnectingId: disconnectPending ? disconnectTarget.id : null,
+    configWritingId: configWrite.activeModelProviderId,
+  });
 
   return (
     <div
@@ -453,7 +528,7 @@ export function ProviderModelProvidersTab(props: {
           // Closed while a custom write is in flight: declaring a provider
           // through this button would open a form whose Save the guard drops,
           // and an older completion would land on the newer dialog's state.
-          disabled={customForm.activeModelProviderId !== null}
+          disabled={configWrite.activeModelProviderId !== null}
           onClick={() => {
             customForm.open(null);
           }}
@@ -506,12 +581,12 @@ export function ProviderModelProvidersTab(props: {
           capabilities.actions.includes("oauth")
         }
         rowError={rowError}
-        busyModelProviderId={
-          disconnectPending
-            ? disconnectTarget.id
-            : customForm.activeModelProviderId
-        }
-        customWriteInFlight={customForm.activeModelProviderId !== null}
+        // BOTH can be true at once: a plain disconnect does not take the config
+        // lock, so it can legitimately run beside a config write on another row.
+        // One id would have migrated the spinner from the first row to the
+        // second instead of showing both.
+        busyModelProviderIds={busyModelProviderIds}
+        configWriteInFlight={configWrite.activeModelProviderId !== null}
         onConnect={(entry) => {
           setRowError(null);
           setConnectTargetId(entry.id);
@@ -591,15 +666,15 @@ function ModelProvidersBody(props: {
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
   readonly canUpdateCustom: boolean;
-  /** A custom write is in flight somewhere on this surface. */
-  readonly customWriteInFlight: boolean;
+  /** A config-file write is in flight somewhere on this surface. */
+  readonly configWriteInFlight: boolean;
   readonly onEditCustom: (values: CustomProviderValues) => void;
   readonly onReenableCustom: (values: CustomProviderValues) => void;
   readonly rowError: {
     readonly modelProviderId: string;
     readonly message: string;
   } | null;
-  readonly busyModelProviderId: string | null;
+  readonly busyModelProviderIds: readonly string[];
   readonly onConnect: (entry: ModelProviderEntry) => void;
   readonly onDisconnect: (entry: ModelProviderEntry) => void;
 }): ReactNode {
@@ -716,8 +791,8 @@ function ModelProvidersBody(props: {
           canDisconnect={props.canDisconnect}
           connectable={props.connectable}
           canUpdateCustom={props.canUpdateCustom}
-          customWriteInFlight={props.customWriteInFlight}
-          busy={props.busyModelProviderId === entry.id}
+          configWriteInFlight={props.configWriteInFlight}
+          busy={props.busyModelProviderIds.includes(entry.id)}
           rowError={
             props.rowError !== null &&
             props.rowError.modelProviderId === entry.id
@@ -772,7 +847,7 @@ function ModelProviderRow(props: {
   readonly canDisconnect: boolean;
   readonly connectable: boolean;
   readonly canUpdateCustom: boolean;
-  readonly customWriteInFlight: boolean;
+  readonly configWriteInFlight: boolean;
   readonly busy: boolean;
   readonly rowError: string | null;
   readonly onConnect: () => void;
@@ -782,11 +857,11 @@ function ModelProviderRow(props: {
 }): ReactNode {
   const { entry } = props;
   const custom = customRowActions(entry, props.canUpdateCustom);
-  // Every custom entry point closes while ANY custom write is in flight, not
-  // just the acting row's. They all rewrite one config file, and a completion
-  // that lands after the user opened a different row's form would apply its
-  // result to state that has moved on.
-  const customBusy = props.busy || props.customWriteInFlight;
+  // Every config-writing entry point closes while ANY of them is in flight, not
+  // just the acting row's. They all rewrite one file, and a completion that
+  // lands after the user started something else would apply its result to state
+  // that has moved on.
+  const configBusy = props.busy || props.configWriteInFlight;
   // The affordance is gated on `canDisconnect` ALONE. `hasStoredCredential`
   // answers a different question ("does Traycer hold a credential for this?")
   // and a later host may answer the two differently - reading either one for
@@ -846,7 +921,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={customBusy}
+              disabled={configBusy}
               onClick={() => {
                 props.onEditCustom(custom.values);
               }}
@@ -860,7 +935,7 @@ function ModelProviderRow(props: {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={customBusy}
+              disabled={configBusy}
               onClick={() => {
                 props.onReenableCustom(custom.values);
               }}
@@ -895,7 +970,11 @@ function ModelProviderRow(props: {
                 "text-muted-foreground",
                 "hover:bg-destructive/10 hover:text-destructive",
               )}
-              disabled={props.busy}
+              // A DECLARED row's Disconnect is a config write (it appends to
+              // `disabled_providers`), so it closes with the rest while one is
+              // in flight. A plain row's Disconnect is `auth.remove` through the
+              // server and contends with nothing, so it stays live.
+              disabled={entry.configDeclaredCustom ? configBusy : props.busy}
               onClick={props.onDisconnect}
               aria-label={`Disconnect ${entry.name}`}
             >
