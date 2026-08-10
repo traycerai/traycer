@@ -562,7 +562,13 @@ export class MockRunnerHost implements IRunnerHost {
         feedSource,
         foregroundAppLocal,
       });
-      return "presented";
+      // Recording the request is not presenting it: this shell has no native
+      // notification capability (see the class doc - notifications are a
+      // no-op on web preview), so nothing is shown or relayed and the caller
+      // owns the fallback cue. Claiming `presented` here would suppress that
+      // cue and leave a blurred dev/preview window with an unseen toast and
+      // nothing else.
+      return "undeliverable";
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
       this.notificationClickHandlers.add(handler);
