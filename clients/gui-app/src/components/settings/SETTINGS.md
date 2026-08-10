@@ -945,6 +945,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         carries one and the section is optional
       - the exists-check is SKIPPED for an id in `disabled_providers`: upstream
         re-enables a disabled custom provider by re-declaring it
+      - **create stays a NAMING surface even then.** Re-declaring over a
+        disabled id skips the exists-check, but not the minting pattern: the
+        wire keeps the regex on `createCustom` and drops it only on
+        `updateCustom`, and the client's two id policies match that split. So a
+        disabled id we could never have minted - a dotted `wafer.ai`, say - is
+        repaired through **Edit** or turned back on through **Connect**, not by
+        retyping it into the create form. Imposing our naming style on an id
+        already in someone's config is the thing that rule was never for.
       - `{env:VAR}` in the key field is a REFERENCE, not a secret — it becomes
         `env: ["VAR"]` and stores no credential
         **Submit stays live and validates on click**, which is upstream's shape

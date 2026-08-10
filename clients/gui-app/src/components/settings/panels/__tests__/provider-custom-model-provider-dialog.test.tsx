@@ -290,6 +290,68 @@ describe("custom model provider dialog", () => {
     });
   });
 
+  it("round-trips a dotted id like wafer.ai through Edit -> Save", () => {
+    // `updateCustom` takes any non-empty existing id on the wire now, because
+    // the minting pattern was never a judgement to make about an id already in
+    // someone's config. `wafer.ai` is the shape that motivated it: legal to the
+    // host, unmintable by us, and previously stuck - no re-enable and an Edit
+    // whose id field could not be changed.
+    const onSubmit = vi.fn();
+    renderDialog({
+      initial: {
+        modelProviderId: "wafer.ai",
+        name: "Wafer",
+        baseUrl: "https://api.wafer.ai/v1",
+        models: [{ id: "wafer-1", name: "Wafer One" }],
+        headers: [],
+        key: null,
+        env: [],
+      },
+      takenIds: ["wafer.ai"],
+      disabledIds: [],
+      onSubmit,
+      submitError: null,
+    });
+    fireEvent.change(screen.getByLabelText("Display name"), {
+      target: { value: "Wafer AI" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(
+      screen.queryByText(
+        "Use lowercase letters, numbers, hyphens, or underscores",
+      ),
+    ).toBeNull();
+    expect(onSubmit).toHaveBeenCalledWith({
+      modelProviderId: "wafer.ai",
+      name: "Wafer AI",
+      baseUrl: "https://api.wafer.ai/v1",
+      models: [{ id: "wafer-1", name: "Wafer One" }],
+      headers: [],
+      key: null,
+      env: [],
+    });
+  });
+
+  it("still refuses to MINT a dotted id", () => {
+    // Create stays a naming surface: the strict pattern is ours to impose on an
+    // id we are proposing, and the wire agrees - `createCustom` keeps the regex
+    // that `updateCustom` dropped.
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    type("Provider ID", "wafer.ai");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(
+      screen.getByText(
+        "Use lowercase letters, numbers, hyphens, or underscores",
+      ),
+    ).toBeTruthy();
+  });
+
   it("keeps the form open and shows what the host rejected", () => {
     renderDialog({
       initial: null,
