@@ -22,6 +22,7 @@ import { installResponsivenessListeners } from "../app/responsiveness";
 import { buildAppUrl } from "../app/app-protocol";
 import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
+import { maybeInjectRecoveredProjectProfiles } from "./recover-project-profiles";
 import {
   placementToBrowserWindowBounds,
   type WindowGeometryPlacement,
@@ -244,6 +245,7 @@ export async function loadMainWindow(
     log.info("[window] loading dev renderer", { devUrl: devRendererUrl });
     try {
       await window.loadURL(devRendererUrl);
+      await maybeRecoverProfilesAfterLoad(window);
       return;
     } catch (err) {
       log.error("[window] dev renderer load failed", err);
@@ -257,10 +259,33 @@ export async function loadMainWindow(
   const rendererUrl = buildAppUrl();
   log.info("[window] loading renderer from", { rendererUrl });
   await window.loadURL(rendererUrl);
+  await maybeRecoverProfilesAfterLoad(window);
+}
+
+async function maybeRecoverProfilesAfterLoad(
+  window: MainWindowLoadTarget,
+): Promise<void> {
+  if (window.webContents === undefined) return;
+  const injected = await maybeInjectRecoveredProjectProfiles(window.webContents);
+  if (!injected) return;
+  // Zustand persist reads localStorage at module init — reload so stores see
+  // the recovered registry.
+  try {
+    window.webContents.reload();
+  } catch (err) {
+    log.warn("[profiles-recovery] reload after inject failed", err);
+  }
 }
 
 export interface MainWindowLoadTarget {
   loadURL(url: string): Promise<void>;
+  readonly webContents?: {
+    executeJavaScript(
+      code: string,
+      userGesture?: boolean,
+    ): Promise<unknown>;
+    reload(): void;
+  };
 }
 
 type StructuredRendererLogLevel = "debug" | "info" | "warn" | "error";
