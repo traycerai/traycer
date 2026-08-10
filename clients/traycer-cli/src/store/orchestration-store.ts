@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import {
   DEFAULT_ORCHESTRATION_SEEDS,
+  SEED_VERSION,
   toOrchestrationRole,
 } from "./orchestration-defaults";
 
@@ -147,9 +148,12 @@ export async function readModelGroup(name: string): Promise<ModelGroup | null> {
 // ─── Orchestrations ─────────────────────────────────────────────────────────
 
 /**
- * Idempotent seed of built-in templates (dev-team-full, critical, basicos, …).
- * - Missing orchestration → create full template + role markdown
- * - Existing orchestration → add only missing role ids (never overwrite user text)
+ * Idempotent seed of built-in templates (dev-team-full, dev-squad, …).
+ * - Missing orchestration → create full template + role markdown.
+ * - Existing with version !== SEED_VERSION → RE-CREATE seed roles (overwrite
+ *   seed-owned ids incl. responsibility text, in seed order so the root rule
+ *   normalizes correctly) and refresh description/rules/pack/artifactChain.
+ *   User-added roles (ids not in the seed) are preserved.
  */
 export async function ensureDefaultOrchestrations(): Promise<void> {
   await mkdir(ORCHESTRATIONS_DIR, { recursive: true });
@@ -160,20 +164,16 @@ export async function ensureDefaultOrchestrations(): Promise<void> {
       const orch: Orchestration = {
         name: seed.name,
         description: seed.description,
-        version: "1.0.0",
+        version: SEED_VERSION,
         defaultModelGroup: seed.defaultModelGroup,
         roles,
-        artifactChain: [],
+        artifactChain: [...seed.artifactChain],
         globalRules: [...seed.globalRules],
       };
       await writeOrchestration(orch);
       for (const roleSeed of seed.roles) {
         await writeFile(
-          join(
-            ORCHESTRATIONS_DIR,
-            seed.name,
-            `roles/${roleSeed.id}.md`,
-          ),
+          join(ORCHESTRATIONS_DIR, seed.name, `roles/${roleSeed.id}.md`),
           roleSeed.responsibility.endsWith("\n")
             ? roleSeed.responsibility
             : `${roleSeed.responsibility}\n`,
@@ -183,16 +183,30 @@ export async function ensureDefaultOrchestrations(): Promise<void> {
       continue;
     }
 
-    // Fill gaps only — preserve user edits on existing roles.
+    if (existing.version === SEED_VERSION) continue;
+
+    // Version bump: overwrite seed-owned roles in seed order (root first, so
+    // the single-lead normalization lands on the seed's root), then refresh
+    // template-level fields. User-added roles survive untouched.
     for (const roleSeed of seed.roles) {
-      if (existing.roles.some((r) => r.id === roleSeed.id)) continue;
       await upsertOrchestrationRole(seed.name, {
         id: roleSeed.id,
         label: roleSeed.label,
         description: roleSeed.description,
         tier: roleSeed.tier,
-        isRoot: roleSeed.isRoot && !existing.roles.some((r) => r.isRoot),
+        isRoot: roleSeed.isRoot,
         responsibility: roleSeed.responsibility,
+      });
+    }
+    const fresh = await readOrchestration(seed.name);
+    if (fresh !== null) {
+      await writeOrchestration({
+        ...fresh,
+        description: seed.description,
+        version: SEED_VERSION,
+        defaultModelGroup: seed.defaultModelGroup,
+        artifactChain: [...seed.artifactChain],
+        globalRules: [...seed.globalRules],
       });
     }
   }
