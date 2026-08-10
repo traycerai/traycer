@@ -2993,6 +2993,40 @@ function applyBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
 ): Partial<ChatSessionState> {
+  return event.type === "image_resolution.updated"
+    ? applyImageResolutionDelta(state, event)
+    : applyContentDelta(state, event);
+}
+
+function applyImageResolutionDelta(
+  state: ChatSessionState,
+  event: Extract<RuntimeEvent, { type: "image_resolution.updated" }>,
+): Partial<ChatSessionState> {
+  const messageIndex = state.messages.findIndex(
+    (message) =>
+      message.role === "assistant" && message.messageId === event.messageId,
+  );
+  if (messageIndex < 0) return {};
+  const message = state.messages[messageIndex];
+  if (message.role !== "assistant") return {};
+  const entryIndex = message.imageResolutions.findIndex(
+    (entry) => entry.canonicalSource === event.entry.canonicalSource,
+  );
+  const imageResolutions =
+    entryIndex < 0
+      ? [...message.imageResolutions, event.entry]
+      : message.imageResolutions.map((entry, index) =>
+          index === entryIndex ? event.entry : entry,
+        );
+  const messages = state.messages.slice();
+  messages[messageIndex] = { ...message, imageResolutions };
+  return { messages };
+}
+
+function applyContentDelta(
+  state: ChatSessionState,
+  event: Exclude<RuntimeEvent, { type: "image_resolution.updated" }>,
+): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
   // "% context left" composer chip can update during the turn. It must
   // NOT flow through the block accumulator (no message content to

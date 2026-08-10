@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { ImageOff, Link, ShieldQuestion } from "lucide-react";
 import type { RequestImageIngestRequest } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -9,7 +9,10 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
-import type { AssistantMarkdownImageResolution } from "@/stores/composer/chat-store";
+import type {
+  AssistantMarkdownImageContext,
+  AssistantMarkdownImageResolution,
+} from "@/stores/composer/chat-store";
 
 const MAX_INLINE_IMAGE_BYTES = 30 * 1024 * 1024;
 const RASTER_DATA_URL_PATTERN =
@@ -29,10 +32,31 @@ type AssistantImageSource =
 export interface AssistantMarkdownImageProps {
   readonly alt: string;
   readonly src: string;
-  readonly epicId: string;
-  readonly chatId: string;
-  readonly resolutions: ReadonlyArray<AssistantMarkdownImageResolution>;
-  readonly deduplicatedSources: ReadonlySet<string>;
+  readonly context: AssistantMarkdownImageContext;
+}
+
+const AssistantMarkdownImageContext =
+  createContext<AssistantMarkdownImageContext | null>(null);
+
+export function AssistantMarkdownImageProvider(props: {
+  readonly context: AssistantMarkdownImageContext | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <AssistantMarkdownImageContext.Provider value={props.context}>
+      {props.children}
+    </AssistantMarkdownImageContext.Provider>
+  );
+}
+
+export function AssistantMarkdownImageNode(
+  props: Record<string, unknown>,
+): ReactNode {
+  const context = useContext(AssistantMarkdownImageContext);
+  if (context === null) return null;
+  const src = typeof props.src === "string" ? props.src : "";
+  const alt = typeof props.alt === "string" ? props.alt : "";
+  return <AssistantMarkdownImage src={src} alt={alt} context={context} />;
 }
 
 function classifyAssistantImageSource(src: string): AssistantImageSource {
@@ -67,11 +91,9 @@ function decodedBase64ByteLength(payload: string): number | null {
   return byteLength <= MAX_INLINE_IMAGE_BYTES ? byteLength : null;
 }
 
-export function AssistantMarkdownImage(
-  props: AssistantMarkdownImageProps,
-): ReactNode {
+function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   const source = classifyAssistantImageSource(props.src);
-  if (props.deduplicatedSources.has(source.src)) {
+  if (props.context.deduplicatedSources.has(source.src)) {
     return <DeduplicatedImageChip alt={props.alt} />;
   }
   if (source.kind === "https" || source.kind === "data-raster") {
@@ -105,7 +127,7 @@ export function AssistantMarkdownImage(
     );
   }
 
-  const resolution = findResolution(props.resolutions, source.src);
+  const resolution = findResolution(props.context.resolutions, source.src);
   if (resolution === null) {
     return (
       <ConsentImageChip alt={props.alt} source={source.src} request={null} />
@@ -126,8 +148,8 @@ export function AssistantMarkdownImage(
         alt={props.alt}
         source={source.src}
         request={{
-          epicId: props.epicId,
-          chatId: props.chatId,
+          epicId: props.context.epicId,
+          chatId: props.context.chatId,
           messageId: resolution.messageId,
           source: resolution.entry.canonicalSource,
         }}

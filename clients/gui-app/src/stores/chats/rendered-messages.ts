@@ -31,6 +31,7 @@ import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import type {
   AssistantTurnMeta,
+  AssistantMarkdownImageResolution,
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
@@ -469,6 +470,7 @@ function completedSteerBadge(
 // Identity-stable empties for the head/tail partition's no-merge fast path.
 const NO_MESSAGES: ReadonlyArray<Message> = [];
 const NO_RENDERED_MESSAGES: ReadonlyArray<ChatMessageModel> = [];
+const NO_DEDUPLICATED_IMAGE_SOURCES: ReadonlySet<string> = new Set();
 const NO_STEERED_IDS: ReadonlySet<string> = new Set();
 const NO_PENDING_APPROVALS: ReadonlyArray<ChatApprovalState> = [];
 const NO_PENDING_FILE_EDIT_APPROVALS: ReadonlyArray<ChatFileEditApprovalState> =
@@ -1009,6 +1011,8 @@ export function useRenderedMessages(
       turnStoppedByTurnKey,
       sweepRetainedTurnKeys: retainedTurnKeys,
       ctx: displayContext,
+      epicId,
+      chatId: ownerId,
     });
   }, [
     partition,
@@ -1023,6 +1027,8 @@ export function useRenderedMessages(
     steeredMessageIds,
     turnStoppedByTurnKey,
     displayContext,
+    epicId,
+    ownerId,
   ]);
 
   // The tail: re-derives per streamed delta, but walks only the active turn's
@@ -1049,6 +1055,8 @@ export function useRenderedMessages(
             // walk (once per snapshot) sweeps the turn cache.
             sweepRetainedTurnKeys: null,
             ctx: displayContext,
+            epicId,
+            chatId: ownerId,
           }),
     [
       partition,
@@ -1062,6 +1070,8 @@ export function useRenderedMessages(
       steeredMessageIds,
       turnStoppedByTurnKey,
       displayContext,
+      epicId,
+      ownerId,
     ],
   );
 
@@ -1084,6 +1094,8 @@ export function useRenderedMessages(
         activeRunState,
         turnPauseAccounting,
         ctx: displayContext,
+        epicId,
+        chatId: ownerId,
       }),
     [
       liveAssistant,
@@ -1094,6 +1106,8 @@ export function useRenderedMessages(
       activeRunState,
       turnPauseAccounting,
       displayContext,
+      epicId,
+      ownerId,
     ],
   );
 
@@ -1457,6 +1471,7 @@ interface AssistantTurnAccumulator {
   serviceTier: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
+  imageResolutions: AssistantMarkdownImageResolution[];
 }
 
 interface PersistedMessagesRenderInput {
@@ -1490,6 +1505,8 @@ interface PersistedMessagesRenderInput {
    */
   readonly sweepRetainedTurnKeys: ReadonlySet<string> | null;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 interface RenderLiveAssistantInput {
@@ -1506,6 +1523,8 @@ interface RenderLiveAssistantInput {
   readonly activeRunState: ChatMessageRunState | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 function renderPersistedMessages(
@@ -1730,6 +1749,8 @@ function renderPersistedAssistantMessageTurn(
     userMessagesById: args.userMessagesById,
     startedAt,
     ctx: input.ctx,
+    epicId: input.epicId,
+    chatId: input.chatId,
   });
   turnCache.set(turnKey, { cacheKey, models });
   return models;
@@ -1765,6 +1786,12 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    existing.imageResolutions.push(
+      ...message.imageResolutions.map((entry) => ({
+        messageId: message.messageId,
+        entry,
+      })),
+    );
     existing.messageId = message.messageId;
     return;
   }
@@ -1781,6 +1808,10 @@ function addAssistantMessageToAccumulator(
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
     costUsd: message.usage?.costUsd ?? null,
+    imageResolutions: message.imageResolutions.map((entry) => ({
+      messageId: message.messageId,
+      entry,
+    })),
   });
 }
 
@@ -1853,14 +1884,33 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
   return blocksIdentityCounter;
 }
 
+let imageResolutionsIdentityCounter = 0;
+const imageResolutionsIdentity = new WeakMap<
+  AssistantMessage["imageResolutions"],
+  number
+>();
+function imageResolutionsIdentityToken(
+  imageResolutions: AssistantMessage["imageResolutions"],
+): number {
+  const existing = imageResolutionsIdentity.get(imageResolutions);
+  if (existing !== undefined) return existing;
+  imageResolutionsIdentityCounter += 1;
+  imageResolutionsIdentity.set(
+    imageResolutions,
+    imageResolutionsIdentityCounter,
+  );
+  return imageResolutionsIdentityCounter;
+}
+
 function assistantRecordSignature(message: AssistantMessage): string {
+  const imageIdentity = imageResolutionsIdentityToken(message.imageResolutions);
   const version = message.blocksVersion;
   if (version !== undefined) {
-    return `v:${version}#${blocksIdentityToken(message.blocks)}`;
+    return `v:${version}#${blocksIdentityToken(message.blocks)}#i:${imageIdentity}`;
   }
   const cached = assistantRecordSignatureCache.get(message);
   if (cached !== undefined) return cached;
-  const computed = `h:${turnSignature(message.blocks)}`;
+  const computed = `h:${turnSignature(message.blocks)}#i:${imageIdentity}`;
   assistantRecordSignatureCache.set(message, computed);
   return computed;
 }
@@ -1882,7 +1932,7 @@ function assistantRecordSignature(message: AssistantMessage): string {
  */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
   if (acc.signatureParts.length === 1) return acc.signatureParts[0];
-  return `h:${turnSignature(acc.blocks)}`;
+  return `h:${turnSignature(acc.blocks)}#records:${acc.signatureParts.join("|")}`;
 }
 
 interface AssistantTurnRenderInput {
@@ -1905,6 +1955,8 @@ interface AssistantTurnRenderInput {
    */
   readonly startedAt: number;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 type AssistantTurnTimelineEntry = {
@@ -1934,6 +1986,8 @@ function renderAssistantTurnRows(
         runState: split ? null : input.runState,
         pause: input.pause,
         ctx: input.ctx,
+        epicId: input.epicId,
+        chatId: input.chatId,
         blocks: chunk,
         chunkIndex,
         split,
@@ -1975,6 +2029,8 @@ function renderAssistantTurnRows(
           runState: input.runState,
           pause: input.pause,
           ctx: input.ctx,
+          epicId: input.epicId,
+          chatId: input.chatId,
           blocks: [],
           chunkIndex: 0,
           split: false,
@@ -2057,6 +2113,8 @@ interface AssistantTurnSliceRenderInput {
   readonly chunkIndex: number;
   readonly split: boolean;
   readonly createdAt: number | null;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 function renderAssistantTurnSlice(
@@ -2089,6 +2147,12 @@ function renderAssistantTurnSlice(
       input.blocks,
       input.checkpointView,
       input.turnComplete,
+      {
+        epicId: input.epicId,
+        chatId: input.chatId,
+        resolutions: input.acc.imageResolutions,
+        deduplicatedSources: NO_DEDUPLICATED_IMAGE_SOURCES,
+      },
     ),
     structuredContent: null,
     attachments: [],
@@ -2162,6 +2226,8 @@ function attachRunStateToTrailingAssistantSlice(
       runState: input.runState,
       pause: input.pause,
       ctx: input.ctx,
+      epicId: input.epicId,
+      chatId: input.chatId,
       blocks: [],
       chunkIndex: nextChunkIndex,
       split: true,
@@ -2397,6 +2463,7 @@ function renderLiveAssistant(
       // A live turn has no final cost yet; it surfaces once the turn completes
       // and re-renders via the persisted path. The live footer is suppressed.
       costUsd: null,
+      imageResolutions: [],
     },
     turnKey: liveAssistant.turnId,
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
@@ -2417,6 +2484,8 @@ function renderLiveAssistant(
     // live→persisted reconciliation.
     startedAt: liveAssistant.startedAt,
     ctx: input.ctx,
+    epicId: input.epicId,
+    chatId: input.chatId,
   }).map((message) =>
     message.role === "assistant"
       ? { ...message, statusLabel: "Streaming" }
@@ -2567,12 +2636,19 @@ function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
+  imageContext: NonNullable<
+    Extract<MessageSegment, { kind: "text" }>["assistantImageContext"]
+  >,
 ): ReadonlyArray<MessageSegment> {
   const flat: MessageSegment[] = [];
   for (const block of blocks) {
     const segment = blockToSegment(block);
     if (segment !== null) {
-      flat.push(segment);
+      flat.push(
+        segment.kind === "text"
+          ? { ...segment, assistantImageContext: imageContext }
+          : segment,
+      );
     }
   }
   const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
@@ -3195,6 +3271,7 @@ const BLOCK_HANDLERS: {
     startedAt: block.startedAt ?? block.timestamp,
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
+    imageResults: block.imageResults,
   }),
   file_change: (block) => ({
     kind: "file_change",

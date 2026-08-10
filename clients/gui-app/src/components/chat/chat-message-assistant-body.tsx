@@ -786,6 +786,7 @@ function AssistantSegment({
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           nextStepActions={nextStepActions}
+          imageContext={segment.assistantImageContext}
         />
       );
     case "reasoning":
