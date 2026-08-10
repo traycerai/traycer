@@ -404,6 +404,7 @@ function buildFakeBridge(
       orchestrationDelete: async () => false,
       orchestrationGroupShow: async () => null,
       orchestrationGroupSave: async () => false,
+      orchestrationGroupDelete: async () => false,
       orchestrationPrelude: async () => null,
     },
     migration: {

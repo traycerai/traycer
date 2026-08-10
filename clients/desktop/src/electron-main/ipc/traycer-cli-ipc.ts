@@ -378,6 +378,20 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.traycerOrchestrationGroupDelete,
+    async (_event, raw: unknown) => {
+      const name = requireString(raw, "name", "traycerOrchestrationGroupDelete");
+      return runTraycerCliJson([
+        "orchestration",
+        "group",
+        "delete",
+        "--name",
+        name,
+      ]);
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.traycerOrchestrationPrelude,
     async (_event, raw: unknown) => {
       const name = requireString(raw, "name", "traycerOrchestrationPrelude");

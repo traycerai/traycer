@@ -28,6 +28,7 @@ import {
   useRunnerOrchestrationCreateMutation,
   useRunnerOrchestrationDeleteMutation,
   useRunnerOrchestrationGroupSaveMutation,
+  useRunnerOrchestrationGroupDeleteMutation,
 } from "@/hooks/runner/use-runner-orchestration-queries";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
 import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
@@ -73,6 +74,7 @@ export function OrchestrationsSettingsPanel() {
   // Effective group name for the editor (chip "default" uses undefined for
   // models query = orchestration default; editor always needs a concrete file).
   const editTargetGroup = selectedGroup ?? "default";
+  const deleteGroupMutation = useRunnerOrchestrationGroupDeleteMutation();
 
   return (
     <SettingsPanelShell
@@ -113,6 +115,35 @@ export function OrchestrationsSettingsPanel() {
             setEditingGroup(null);
             setShowCreateGroupForm(true);
           }}
+          onDeleteGroup={() => {
+            if (selectedGroup === undefined || selectedGroup === "default") {
+              return;
+            }
+            const name = selectedGroup;
+            if (
+              !window.confirm(
+                `Delete model group "${name}"? This removes ~/.traycer/model-groups/${name}.json.`,
+              )
+            ) {
+              return;
+            }
+            deleteGroupMutation.mutate(
+              { name },
+              {
+                onSuccess: (ok) => {
+                  if (!ok) return;
+                  setEditingGroup(null);
+                  setShowCreateGroupForm(false);
+                  setSelectedGroup(undefined);
+                },
+              },
+            );
+          }}
+          canDeleteGroup={
+            selectedGroup !== undefined &&
+            selectedGroup !== "default" &&
+            !deleteGroupMutation.isPending
+          }
         />
 
         <div className="min-w-0 flex-1 overflow-y-auto p-5">
@@ -174,6 +205,8 @@ function OrchestrationsSidebar(props: {
   readonly onSelectGroup: (group: string | undefined) => void;
   readonly onEditGroup: () => void;
   readonly onStartCreateGroup: () => void;
+  readonly onDeleteGroup: () => void;
+  readonly canDeleteGroup: boolean;
 }) {
   return (
     <div className="w-64 shrink-0 border-r border-border/40 overflow-y-auto">
@@ -247,6 +280,19 @@ function OrchestrationsSidebar(props: {
             >
               <Pencil className="size-3" />
             </button>
+            <button
+              onClick={props.onDeleteGroup}
+              disabled={!props.canDeleteGroup}
+              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-30"
+              aria-label="Delete model group"
+              title={
+                props.canDeleteGroup
+                  ? "Delete selected model group"
+                  : "Select a non-default group to delete"
+              }
+            >
+              <Trash2 className="size-3" />
+            </button>
           </div>
         </div>
         <div className="flex flex-wrap gap-1">
@@ -267,8 +313,8 @@ function OrchestrationsSidebar(props: {
             ))}
         </div>
         <p className="mt-1.5 text-ui-xs text-muted-foreground">
-          Pencil edits the selected group (default included). + creates a new
-          one.
+          Pencil edits (default included). + creates. Trash removes custom
+          groups only.
         </p>
       </div>
     </div>

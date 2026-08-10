@@ -171,6 +171,21 @@ describe("ProfileLaunchLanding", () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
+  it("goes to a fresh draft when membership is hydrated empty (new profile)", async () => {
+    const profile = useProjectProfilesStore.getState().profiles[0];
+    useActiveProjectProfileStore.getState().setActiveProfile(profile.id);
+    // Warm empty snapshot — brand-new project with zero history.
+    useHistoryMembershipCacheStore.getState().setMembershipItems([]);
+
+    renderLanding();
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalled();
+    });
+    expect(vi.mocked(activateTabIntent)).not.toHaveBeenCalled();
+    expectDraftRedirect();
+  });
+
   it("does not navigate when no profile is active (All projects owns /)", async () => {
     useHistoryMembershipCacheStore.getState().setMembershipItems([
       historyItem({

@@ -9,6 +9,7 @@ import {
   readOrchestration,
   readResponsibility,
   writeModelGroup,
+  deleteModelGroup,
   writeResponsibility,
   type ModelGroup,
 } from "../store/orchestration-store";
@@ -369,6 +370,53 @@ export function buildOrchestrationGroupSaveCommand(opts: {
     return {
       data: toSave,
       human: `Saved model group: ${name}`,
+      exitCode: 0,
+    };
+  };
+}
+
+// `traycer orchestration group delete --name <name>`
+export function buildOrchestrationGroupDeleteCommand(opts: {
+  readonly name: string | null;
+}): CommandFn {
+  return async (ctx) => {
+    const name = (opts.name ?? "").trim();
+    if (name.length === 0) {
+      return {
+        data: null,
+        human: "Error: --name is required",
+        exitCode: 1,
+      };
+    }
+    if (name === "default") {
+      return {
+        data: null,
+        human: "Error: cannot delete the default model group",
+        exitCode: 1,
+      };
+    }
+    const existing = await readModelGroup(name);
+    if (existing === null) {
+      return {
+        data: null,
+        human: `Model group not found: ${name}`,
+        exitCode: 1,
+      };
+    }
+    const ok = await deleteModelGroup(name);
+    if (!ok) {
+      return {
+        data: null,
+        human: `Failed to delete model group: ${name}`,
+        exitCode: 1,
+      };
+    }
+    if (ctx.runtime.json) {
+      return { data: { deleted: name }, human: null, exitCode: 0 };
+    }
+    return {
+      data: { deleted: name },
+      human: `Deleted model group: ${name}`,
       exitCode: 0,
     };
   };

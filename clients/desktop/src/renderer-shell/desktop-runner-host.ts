@@ -479,6 +479,7 @@ export interface DesktopTraycerCliBridge {
     readonly name: string;
     readonly group: TraycerModelGroup;
   }): Promise<boolean>;
+  orchestrationGroupDelete(input: { readonly name: string }): Promise<boolean>;
   orchestrationPrelude(input: {
     readonly name: string;
     readonly roleId: string;
@@ -781,6 +782,8 @@ export class DesktopRunnerHost implements IRunnerHost {
         this.bridge.traycerCli.orchestrationGroupShow(input),
       orchestrationGroupSave: (input) =>
         this.bridge.traycerCli.orchestrationGroupSave(input),
+      orchestrationGroupDelete: (input) =>
+        this.bridge.traycerCli.orchestrationGroupDelete(input),
       orchestrationPrelude: (input) =>
         this.bridge.traycerCli.orchestrationPrelude(input),
     };

@@ -387,3 +387,16 @@ export async function writeModelGroup(group: ModelGroup): Promise<boolean> {
     return false;
   }
 }
+
+export async function deleteModelGroup(name: string): Promise<boolean> {
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed === "default") {
+    return false;
+  }
+  try {
+    await rm(join(MODEL_GROUPS_DIR, `${trimmed}.json`), { force: false });
+    return true;
+  } catch {
+    return false;
+  }
+}

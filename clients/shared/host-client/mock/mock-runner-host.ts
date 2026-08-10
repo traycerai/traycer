@@ -978,6 +978,12 @@ export class MockTraycerCli implements ITraycerCli {
     return false;
   }
 
+  async orchestrationGroupDelete(_input: {
+    readonly name: string;
+  }): Promise<boolean> {
+    return false;
+  }
+
   async orchestrationPrelude(_input: {
     readonly name: string;
     readonly roleId: string;

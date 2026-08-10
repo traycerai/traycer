@@ -40,6 +40,7 @@ import {
   buildOrchestrationCreateCommand,
   buildOrchestrationDeleteCommand,
   buildOrchestrationGroupsCommand,
+  buildOrchestrationGroupDeleteCommand,
   buildOrchestrationGroupSaveCommand,
   buildOrchestrationGroupShowCommand,
   buildOrchestrationListCommand,
@@ -1442,6 +1443,17 @@ function registerOrchestrationCommands(program: Command): void {
       buildOrchestrationGroupSaveCommand({
         name: typeof opts.name === "string" ? opts.name : null,
         json: typeof opts.data === "string" ? opts.data : null,
+      }),
+  );
+
+  withRunner(
+    group
+      .command("delete")
+      .description("Delete a model group (not default)")
+      .requiredOption("--name <name>", "Model group name"),
+    (opts) =>
+      buildOrchestrationGroupDeleteCommand({
+        name: typeof opts.name === "string" ? opts.name : null,
       }),
   );
 }

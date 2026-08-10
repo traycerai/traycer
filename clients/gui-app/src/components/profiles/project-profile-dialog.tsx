@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Folder, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,6 +59,7 @@ function ProjectProfileDialogBody(props: {
   readonly editing: ProjectProfile | null;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
+  const navigate = useNavigate();
   const createProfile = useProjectProfilesStore((s) => s.createProfile);
   const updateProfile = useProjectProfilesStore((s) => s.updateProfile);
   const deleteProfile = useProjectProfilesStore((s) => s.deleteProfile);
@@ -120,6 +122,10 @@ function ProjectProfileDialogBody(props: {
         folders,
       });
       setActiveProfile(created.id);
+      // New profiles have an empty tab strip and often a still-cold history
+      // cache. Land on the draft composer immediately so the user never sees
+      // a black ProfileLaunchLanding void while membership hydrates.
+      void navigate({ to: "/draft/new", replace: true });
     } else {
       updateProfile(props.editing.id, {
         name: name.trim(),

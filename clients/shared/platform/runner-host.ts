@@ -703,6 +703,7 @@ export interface ITraycerCli {
     readonly name: string;
     readonly group: TraycerModelGroup;
   }): Promise<boolean>;
+  orchestrationGroupDelete(input: { readonly name: string }): Promise<boolean>;
   /**
    * One-shot context block for chat creation (`initialMessage` only).
    * Not used on subsequent sends.

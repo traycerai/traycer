@@ -274,3 +274,17 @@ export function useRunnerOrchestrationGroupSaveMutation() {
     onSuccess: invalidate,
   });
 }
+
+export function useRunnerOrchestrationGroupDeleteMutation() {
+  const runnerHost = useRunnerHost();
+  const invalidate = useInvalidateOrchestrations();
+  return useMutation({
+    mutationFn: (input: { name: string }) => {
+      if (runnerHost.traycerCli === null) {
+        throw new Error("traycerCli unavailable");
+      }
+      return runnerHost.traycerCli.orchestrationGroupDelete(input);
+    },
+    onSuccess: invalidate,
+  });
+}

@@ -158,6 +158,8 @@ export const RunnerHostInvoke = {
   traycerOrchestrationDelete: "runnerHost:traycer:orchestration:delete",
   traycerOrchestrationGroupShow: "runnerHost:traycer:orchestration:group:show",
   traycerOrchestrationGroupSave: "runnerHost:traycer:orchestration:group:save",
+  traycerOrchestrationGroupDelete:
+    "runnerHost:traycer:orchestration:group:delete",
   traycerOrchestrationPrelude: "runnerHost:traycer:orchestration:prelude",
   recentDocumentAdd: "runnerHost:recentDocuments:add",
   windowFlashFrame: "runnerHost:window:flashFrame",

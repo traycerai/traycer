@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { buildProfileLandingEpicIntent } from "@/lib/profiles/profile-landing";
 import { useActiveProjectProfile } from "@/lib/profiles/use-active-project-profile";
 import { activateTabIntent } from "@/lib/tab-navigation";
@@ -19,8 +20,10 @@ export function __resetProfileLaunchLandingForTesting(): void {
  *
  * Semantics:
  * - Fires at most once per launch (module flag).
- * - Waits while the membership cache is cold (empty map) so the landing
- *   target is computed from real data once the history query resolves.
+ * - Waits while the membership cache is cold (`hydrated === false`) so the
+ *   landing target is computed from real data once the history query resolves.
+ *   An empty-but-hydrated cache (new profile, zero epics) is NOT cold — we
+ *   fall through to the draft home instead of a black void.
  * - Launch passes `openEpicIds: null` deliberately: at cold start, jumping to
  *   the most recent owned epic IS the "continue where you left off" feature.
  *   The closed-tab-stays-closed strip authority applies to PROFILE SWITCHING
@@ -51,6 +54,7 @@ export function ProfileLaunchLanding(): ReactNode {
   });
   const activeProfile = useActiveProjectProfile();
   const itemsByEpicId = useHistoryMembershipCacheStore((s) => s.itemsByEpicId);
+  const membershipHydrated = useHistoryMembershipCacheStore((s) => s.hydrated);
   const stripLen = useTabsStore((s) => s.stripOrder.length);
   const jumpPendingRef = useRef(false);
 
@@ -58,7 +62,7 @@ export function ProfileLaunchLanding(): ReactNode {
     if (!launchLandingConsumed) {
       if (activeProfile === null) {
         launchLandingConsumed = true;
-      } else if (itemsByEpicId.size === 0) {
+      } else if (!membershipHydrated) {
         // Cache cold: the launch jump is still pending — no draft fallback
         // yet, or a warm cache's epic would lose the race to a fresh draft.
         return;
@@ -82,8 +86,26 @@ export function ProfileLaunchLanding(): ReactNode {
     if (pathname !== "/") return;
     if (jumpPendingRef.current) return;
     if (stripLen > 0) return;
+    // Still waiting on history for the once-per-launch epic jump.
+    if (!launchLandingConsumed && !membershipHydrated) return;
     navigate({ to: "/draft/new", replace: true });
-  }, [activeProfile, itemsByEpicId, navigate, pathname, stripLen]);
+  }, [
+    activeProfile,
+    itemsByEpicId,
+    membershipHydrated,
+    navigate,
+    pathname,
+    stripLen,
+  ]);
 
-  return null;
+  // Visible while waiting for history / draft redirect — never a pure black void.
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center">
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </div>
+  );
 }
