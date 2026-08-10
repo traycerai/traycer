@@ -119,15 +119,6 @@ export interface ComposerPickerState {
    */
   readonly itemsForSlashScope: ComposerSlashScope | null;
   readonly activeIndex: number;
-  /**
-   * True once the user has navigated this menu with the keyboard (arrow keys)
-   * since it opened. The mention picker's Enter only commits an ENGAGED menu -
-   * an un-engaged Enter is prose punctuation and falls through to the
-   * composer's normal send - so mere menu presence can never hijack Enter
-   * mid-sentence. Per menu-open session: reset on open, close, and step
-   * navigation. Slash ignores it - a typed /command is deliberate.
-   */
-  readonly engaged: boolean;
   readonly loading: boolean;
   /**
    * Background-refetch indicator, distinct from `loading`: true while a
@@ -264,7 +255,6 @@ const INITIAL_STATE: ComposerPickerState = {
   itemsForStepId: null,
   itemsForSlashScope: null,
   activeIndex: 0,
-  engaged: false,
   loading: false,
   fetching: false,
   commit: null,
@@ -368,7 +358,6 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         itemsForSlashScope: null,
         activeIndex: 0,
-        engaged: false,
         loading: false,
         fetching: false,
         commit,
@@ -427,7 +416,6 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: null,
         itemsForSlashScope: null,
         activeIndex: 0,
-        engaged: false,
         loading: false,
         fetching: false,
         loadFailed: false,
@@ -511,13 +499,8 @@ export function createComposerPickerStore(): ComposerPickerStore {
         clampIndex(previous.activeIndex, length) + direction,
         length,
       );
-      if (next === previous.activeIndex) {
-        // A single-row list wraps onto itself, but the arrow press still
-        // counts as engaging the menu - Enter must commit that lone row.
-        if (!previous.engaged) set({ engaged: true });
-        return;
-      }
-      set({ activeIndex: next, engaged: true });
+      if (next === previous.activeIndex) return;
+      set({ activeIndex: next });
     },
 
     commitActiveItem: () => {

@@ -46,6 +46,7 @@ import {
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
 } from "@/lib/host/stream-reopen";
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
+import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 interface HostState {
   id: string | null;
@@ -114,7 +115,9 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 const showNotificationMock = vi.hoisted(() =>
-  vi.fn<NotificationShow>(() => Promise.resolve()),
+  vi.fn<NotificationShow>(() =>
+    Promise.resolve<NotificationShowOutcome>("presented"),
+  ),
 );
 
 vi.mock("@/hooks/notifications/use-notifications", () => ({

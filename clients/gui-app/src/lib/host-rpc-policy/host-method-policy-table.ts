@@ -524,6 +524,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Forking an agent persists a new collaboration record, like agent.create.
+  "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",

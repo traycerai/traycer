@@ -65,6 +65,7 @@ import {
   agentSelectionGuideGlobalSetV10,
   agentSendMessageV10,
   agentStopV10,
+  agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentConfigureDowngradeV20ToV10,
@@ -3225,6 +3226,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostNotificationsListV21,
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
+          // The `host.operation.finished` arm added in 2.1 is emission-gated
+          // by design: the resolver derives arm inclusion from the version
+          // the caller negotiated, and the entry union's own contract
+          // (host-notifications.ts) mandates "a host-side projection that
+          // keeps the arm out of every older version's rows ... never a
+          // post-query filter". See host-notifications-resolvers.ts.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {
@@ -4058,6 +4066,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Brand-new v1.0 method on the same `degrade: unsupported` channel as
+  // `terminal.readOutput` above: a host predating the wrapper fork RPC simply
+  // lacks it, so a caller (the CLI) gets per-call upgrade guidance instead of
+  // a fatal handshake mismatch.
+  "agent.fork": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentForkV10,
           upgradeFromPreviousVersion: null,
         },
       },
