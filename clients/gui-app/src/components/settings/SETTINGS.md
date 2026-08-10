@@ -946,6 +946,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
         and also the way out of the dead-button trap: a Submit disabled until
         valid is dead on a blank form for exactly the errors a blank form has, and
         nothing on screen says why. Nothing is red until asked.
+        This REPLACES an earlier rule on this surface that disabled Submit while
+        the draft was invalid. That rule was written before upstream's form had
+        been read, and it was answered by marking every field pre-dirty on edit -
+        a workaround for a problem the shape it was copying does not have. Both
+        halves of the pair went together, so neither survives alone: reinstating
+        the disabled button reinstates the invisible reasons.
     - **TWO DELIBERATE DIVERGENCES from upstream, both documented here because
       the extraction is the evidence for everything else on this surface.**
       1. **Edit exists; theirs does not.** `DialogCustomProvider` always mounts
