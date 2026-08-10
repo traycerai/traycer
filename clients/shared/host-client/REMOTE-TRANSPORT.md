@@ -153,11 +153,11 @@ reconnects rather than proceeding on a manifest it did not understand. An
 implementation that emits only `rpc` + `stream` (the pre-split shape) will have
 every `OPEN`/`OPEN_ACK` refused.
 
-| Key | Contents | Compat-checked? |
-|---|---|---|
-| `rpc` | the RELEASED FLOOR only | **Yes** - a mismatch is session-fatal |
-| `optionalRpc` | every non-floor method | **No** - merged in for version selection, dispatch and capability gating; a peer missing one degrades per the registry's declared strategy |
-| `stream` | all stream methods, merged | per-subscription at subscribe, never session-fatal |
+| Key           | Contents                   | Compat-checked?                                                                                                                            |
+| ------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rpc`         | the RELEASED FLOOR only    | **Yes** - a mismatch is session-fatal                                                                                                      |
+| `optionalRpc` | every non-floor method     | **No** - merged in for version selection, dispatch and capability gating; a peer missing one degrades per the registry's declared strategy |
+| `stream`      | all stream methods, merged | per-subscription at subscribe, never session-fatal                                                                                         |
 
 Split the two rpc channels with `splitConnectionManifest(registry,
 RELEASED_FLOOR_METHOD_NAMES)`. A host SHOULD narrow `optionalRpc` to methods it
