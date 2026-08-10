@@ -1371,17 +1371,28 @@ const modelProviderEntryBaseSchema = z.object({
    * no `setDisabled` toggle, and nothing that could disagree with disconnect
    * about what "off" means.
    *
+   * It mirrors the write shape field for field - base URL, models with their
+   * names, headers, env var names - because a prefill that carries only part
+   * of the block is the blank-overwrite one field at a time. `key` is the one
+   * deliberate omission: the credential is write-only on this surface, so Edit
+   * reopens with the key field empty and leaving it empty must not clear a
+   * stored one. That is the host's rule to keep; the wire simply never carries
+   * a secret back.
+   *
    * Read-side constraints are LOOSER than the write side on purpose. A user
-   * can hand-edit `opencode.json`, so a declared base URL may be malformed and
-   * a model list may be junk; `createCustom`/`updateCustom` reject those, but
-   * refusing to REPORT them would fail the row's parse and vanish the one
-   * provider whose declaration needs fixing - with Edit, the only surface that
-   * could fix it, gone with it. Validate what we accept; report what we find.
+   * can hand-edit `opencode.json`, so a declared base URL may be malformed, a
+   * model may have no name, and a header key may be blank;
+   * `createCustom`/`updateCustom` reject all of those, but refusing to REPORT
+   * them would fail the row's parse and vanish the one provider whose
+   * declaration needs fixing - with Edit, the only surface that could fix it,
+   * gone with it. Validate what we accept; report what we find.
    */
   custom: z
     .object({
       baseUrl: z.string(),
-      modelIds: z.array(z.string()),
+      models: z.array(z.object({ id: z.string(), name: z.string() })),
+      headers: z.array(z.object({ key: z.string(), value: z.string() })),
+      env: z.array(z.string()),
     })
     .nullable(),
 });
@@ -1584,6 +1595,48 @@ export type ModelProviderAuthInputs = z.infer<
  * whatever attempt happens to be pending.
  */
 /**
+ * Config key for a custom provider block. Lowercase alphanumeric first
+ * character, then alphanumerics, hyphens and underscores - the rule OpenCode's
+ * own connect dialog validates against, mirrored so a name their app accepts
+ * is a name this one accepts.
+ *
+ * CREATION only. It is deliberately not applied to `modelProviderId` on
+ * `connect` / `disconnect` / `startOauth`, which address providers that
+ * already exist: the catalog carries `wafer.ai`, whose dot this rule rejects,
+ * so enforcing it there would make a real provider unaddressable to punish a
+ * name Traycer never chose.
+ */
+const customProviderIdSchema = z
+  .string()
+  .min(1)
+  .regex(/^[a-z0-9][a-z0-9-_]*$/);
+
+/**
+ * One model in a custom provider's map: the id the API is called with, and the
+ * label the picker shows.
+ *
+ * `name` is REQUIRED and non-empty. A model row with a blank name renders as
+ * an unlabelled entry in every model picker in the app, which is worse than
+ * refusing the row - and upstream's dialog requires it too, so accepting one
+ * would be a shape their app cannot produce.
+ *
+ * `id` carries NO character rule, and that is not an oversight: model ids in
+ * the live catalog routinely contain `@`, `/` and `.`
+ * (`@cf/meta/llama-3.2-1b-instruct`). The provider-id rule above must never be
+ * reused here - it would reject roughly 2,000 real model ids.
+ */
+const customProviderModelSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+});
+
+/** One literal request header written to the block's `options.headers`. */
+const customProviderHeaderSchema = z.object({
+  key: z.string().min(1),
+  value: z.string(),
+});
+
+/**
  * The declarable half of a custom provider. Shared by `createCustom` and
  * `updateCustom` because the two differ only in whether the block already
  * exists - upstream's own dialog is the same form either way, and letting the
@@ -1597,27 +1650,58 @@ export type ModelProviderAuthInputs = z.infer<
  */
 const customProviderShape = {
   /** Config key for the block, and the id every other action addresses it by. */
-  modelProviderId: z.string().min(1),
-  /** Display name. Upstream's `provider[id].name`. */
+  modelProviderId: customProviderIdSchema,
+  /** Display name for the provider itself. */
   name: z.string().min(1),
   /**
-   * `options.baseURL`. Parsed as a URL at the boundary rather than left to the
-   * host: a scheme-less host is the paste people actually make, it is
-   * objectively wrong, and catching it here turns a provider that silently
-   * never works into a form error next to the field.
-   */
-  baseUrl: z.url(),
-  /**
-   * Model ids for the block's model map. NON-EMPTY, and that is upstream's
-   * constraint rather than tidiness: `T(id)` requires a non-empty model map,
-   * so a custom provider declared with none would not be recognized as custom
-   * by the very predicate that decides whether this row is editable - it would
-   * be created and then immediately unreachable.
+   * `options.baseURL`. A `http://` or `https://` PREFIX check, matching what
+   * OpenCode's connect dialog enforces - not a full URL parse.
    *
-   * Order is the user's. Duplicates are the host's to collapse, since it owns
-   * the map this becomes.
+   * The looser rule is the point. A parse rejects inputs their app accepts,
+   * which turns "same form, same values" into a Traycer-only failure the user
+   * cannot explain; parity on a validation rule means adopting its edges too,
+   * including the ones a stricter check would have caught. The host still has
+   * to survive a URL that parses here and fails to connect, which it did
+   * anyway - nothing downstream ever trusted this field to be reachable.
    */
-  modelIds: z.array(z.string().min(1)).min(1),
+  baseUrl: z.string().regex(/^https?:\/\//),
+  /**
+   * The block's model map, as ordered rows. NON-EMPTY, and that is upstream's
+   * constraint rather than tidiness: `T(id)` requires a non-empty model map,
+   * so a custom provider declared with none would fail the very predicate that
+   * decides whether this row is editable - it would be created and then
+   * immediately unreachable.
+   *
+   * Order is the user's. Duplicate ids are the host's to collapse, since it
+   * owns the map this becomes.
+   */
+  models: z.array(customProviderModelSchema).min(1),
+  /**
+   * Literal headers for `options.headers`. Defaulted rather than optional so
+   * "no headers" has exactly one spelling on the wire; the host omits the
+   * config key entirely when this is empty, which is where absence belongs -
+   * in the file it writes, not in two possible payloads.
+   */
+  headers: z.array(customProviderHeaderSchema).default([]),
+  /**
+   * The API key typed into the form, or null when the user left it blank.
+   *
+   * Null rather than an empty string for the same reason `credentialKey` once
+   * was: two spellings of "no key" means one of them ends up unhandled. This
+   * is the same secret `connect` carries and travels under the same rule -
+   * plaintext once, on the way in, never echoed back on a row.
+   */
+  key: z.string().min(1).nullable().default(null),
+  /**
+   * Environment variable NAMES the block's key may be read from.
+   *
+   * Upstream's form accepts `{env:VAR}` in its key field and resolves it
+   * client-side; this wire carries the parsed result, so the syntax stays a
+   * presentation detail of whichever client offers it and the host is handed
+   * names rather than a template to re-parse. A client that does not offer the
+   * syntax simply sends none.
+   */
+  env: z.array(z.string().min(1)).default([]),
 };
 
 export const modelProviderAuthActionSchema = z.discriminatedUnion("action", [

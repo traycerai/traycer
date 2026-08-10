@@ -649,7 +649,9 @@ describe("providers.listModelProviders payloads", () => {
       configDeclaredCustom: true,
       custom: {
         baseUrl: "https://api.example.com/v1",
-        modelIds: ["gpt-4o"],
+        models: [{ id: "gpt-4o", name: "GPT-4o" }],
+        headers: [],
+        env: [],
       },
       methods: [],
     });
@@ -673,7 +675,9 @@ describe("providers.listModelProviders payloads", () => {
       configDeclaredCustom: true,
       custom: {
         baseUrl: "https://api.example.com/v1",
-        modelIds: ["gpt-4o"],
+        models: [{ id: "gpt-4o", name: "GPT-4o" }],
+        headers: [],
+        env: [],
       },
       methods: [],
     });
@@ -698,7 +702,9 @@ describe("providers.listModelProviders payloads", () => {
     };
     const declared = {
       baseUrl: "https://api.example.com/v1",
-      modelIds: ["gpt-4o"],
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+      headers: [],
+      env: [],
     };
     expect(
       modelProviderEntrySchema.safeParse({
@@ -736,7 +742,7 @@ describe("providers.listModelProviders payloads", () => {
       canDisconnect: false,
       connected: false,
       configDeclaredCustom: true,
-      custom: { baseUrl: "api.example.com", modelIds: [] },
+      custom: { baseUrl: "api.example.com", models: [], headers: [], env: [] },
       methods: [],
     });
     expect(entry.custom?.baseUrl).toBe("api.example.com");
@@ -746,9 +752,35 @@ describe("providers.listModelProviders payloads", () => {
         modelProviderId: "my-endpoint",
         name: "My Endpoint",
         baseUrl: "api.example.com",
-        modelIds: ["gpt-4o"],
+        models: [{ id: "gpt-4o", name: "GPT-4o" }],
       }).success,
     ).toBe(false);
+  });
+
+  it("never echoes the credential back on a row", () => {
+    // `custom` mirrors the write shape field for field EXCEPT `key`. The
+    // credential is write-only here, so Edit reopens with an empty key field
+    // and leaving it empty must not clear a stored one - a rule the host keeps
+    // because the wire simply cannot carry the secret back.
+    const entry = modelProviderEntrySchema.parse({
+      id: "my-endpoint",
+      name: "My Endpoint",
+      source: "api",
+      hasStoredCredential: true,
+      canDisconnect: true,
+      connected: true,
+      configDeclaredCustom: true,
+      custom: {
+        baseUrl: "https://api.example.com/v1",
+        models: [{ id: "gpt-4o", name: "GPT-4o" }],
+        headers: [],
+        env: [],
+        key: "sk-secret",
+      },
+      methods: [],
+    });
+    expect(entry.custom).not.toBeNull();
+    expect(Object.keys(entry.custom ?? {})).not.toContain("key");
   });
 
   it("round-trips a declaration from the row into updateCustom", () => {
@@ -764,7 +796,12 @@ describe("providers.listModelProviders payloads", () => {
       configDeclaredCustom: true,
       custom: {
         baseUrl: "https://api.example.com/v1",
-        modelIds: ["gpt-4o", "gpt-4o-mini"],
+        models: [
+          { id: "gpt-4o", name: "GPT-4o" },
+          { id: "gpt-4o-mini", name: "GPT-4o mini" },
+        ],
+        headers: [{ key: "X-Org", value: "acme" }],
+        env: ["MY_ENDPOINT_KEY"],
       },
       methods: [],
     });
@@ -775,11 +812,18 @@ describe("providers.listModelProviders payloads", () => {
       modelProviderId: entry.id,
       name: entry.name,
       baseUrl: entry.custom.baseUrl,
-      modelIds: entry.custom.modelIds,
+      models: entry.custom.models,
+      headers: entry.custom.headers,
+      env: entry.custom.env,
     });
     expect(parsed.action).toBe("updateCustom");
     if (parsed.action !== "updateCustom") return;
-    expect(parsed.modelIds).toEqual(["gpt-4o", "gpt-4o-mini"]);
+    expect(parsed.models.map((model) => model.id)).toEqual([
+      "gpt-4o",
+      "gpt-4o-mini",
+    ]);
+    expect(parsed.headers).toEqual([{ key: "X-Org", value: "acme" }]);
+    expect(parsed.env).toEqual(["MY_ENDPOINT_KEY"]);
   });
 
   it("requires configDeclaredCustom rather than defaulting it", () => {
@@ -793,7 +837,9 @@ describe("providers.listModelProviders payloads", () => {
       configDeclaredCustom: true,
       custom: {
         baseUrl: "https://api.example.com/v1",
-        modelIds: ["gpt-4o"],
+        models: [{ id: "gpt-4o", name: "GPT-4o" }],
+        headers: [],
+        env: [],
       },
       methods: [],
     };
@@ -982,11 +1028,21 @@ describe("providers.modelProviderAuth actions", () => {
       modelProviderId: "my-endpoint",
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
-      modelIds: ["gpt-4o-mini", "gpt-4o"],
+      models: [
+        { id: "gpt-4o-mini", name: "GPT-4o mini" },
+        { id: "gpt-4o", name: "GPT-4o" },
+      ],
     });
     expect(parsed.action).toBe("createCustom");
     if (parsed.action !== "createCustom") return;
-    expect(parsed.modelIds).toEqual(["gpt-4o-mini", "gpt-4o"]);
+    expect(parsed.models.map((model) => model.id)).toEqual([
+      "gpt-4o-mini",
+      "gpt-4o",
+    ]);
+    // Defaulted, so "none" has one spelling rather than absent-or-empty.
+    expect(parsed.headers).toEqual([]);
+    expect(parsed.env).toEqual([]);
+    expect(parsed.key).toBeNull();
   });
 
   it("takes the same shape for create and update", () => {
@@ -996,7 +1052,7 @@ describe("providers.modelProviderAuth actions", () => {
       modelProviderId: "my-endpoint",
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
-      modelIds: ["gpt-4o"],
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
     };
     for (const action of ["createCustom", "updateCustom"] as const) {
       expect(
@@ -1015,7 +1071,7 @@ describe("providers.modelProviderAuth actions", () => {
       modelProviderId: "my-endpoint",
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
-      modelIds: ["gpt-4o"],
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
       npm: "@ai-sdk/anthropic",
     });
     expect(Object.keys(parsed)).not.toContain("npm");
@@ -1031,7 +1087,7 @@ describe("providers.modelProviderAuth actions", () => {
           modelProviderId: "my-endpoint",
           name: "My Endpoint",
           baseUrl,
-          modelIds: ["gpt-4o"],
+          models: [{ id: "gpt-4o", name: "GPT-4o" }],
         }).success,
         baseUrl,
       ).toBe(false);
@@ -1042,9 +1098,156 @@ describe("providers.modelProviderAuth actions", () => {
         modelProviderId: "local",
         name: "Local",
         baseUrl: "http://localhost:1234/v1",
-        modelIds: ["llama"],
+        models: [{ id: "llama", name: "Llama" }],
       }).success,
     ).toBe(true);
+  });
+
+  it("requires a name on every model", () => {
+    // A blank name renders as an unlabelled row in every model picker in the
+    // app - worse than refusing it, and a shape upstream's own dialog cannot
+    // produce either.
+    for (const models of [
+      [{ id: "gpt-4o", name: "" }],
+      [{ id: "gpt-4o" }],
+      [{ id: "", name: "GPT-4o" }],
+    ]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "createCustom",
+          modelProviderId: "my-endpoint",
+          name: "My Endpoint",
+          baseUrl: "https://api.example.com/v1",
+          models,
+        }).success,
+        JSON.stringify(models),
+      ).toBe(false);
+    }
+  });
+
+  it("puts no character rule on model ids, which routinely carry @ and /", () => {
+    // The provider-id rule must never be reused here: roughly 2,000 ids in the
+    // live catalog would fail it.
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "createCustom",
+        modelProviderId: "my-endpoint",
+        name: "My Endpoint",
+        baseUrl: "https://api.example.com/v1",
+        models: [
+          { id: "@cf/meta/llama-3.2-1b-instruct", name: "Llama 3.2 1B" },
+          { id: "gpt-4.1", name: "GPT-4.1" },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("constrains a NEW provider id but not an existing one", () => {
+    const base = {
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+    };
+    // Lowercase alphanumeric first, then alphanumerics, hyphens, underscores.
+    for (const id of ["my-endpoint", "my_endpoint", "a1", "0x"]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "createCustom",
+          modelProviderId: id,
+          ...base,
+        }).success,
+        id,
+      ).toBe(true);
+    }
+    for (const id of ["-leading", "_leading", "Upper", "has space", "dot.id"]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({
+          action: "createCustom",
+          modelProviderId: id,
+          ...base,
+        }).success,
+        id,
+      ).toBe(false);
+    }
+    // ...and NOT on the verbs that address a provider that already exists. The
+    // catalog carries `wafer.ai`; enforcing a creation rule there would make a
+    // real provider unaddressable to punish a name Traycer never chose.
+    expect(
+      modelProviderAuthActionSchema.safeParse({
+        action: "disconnect",
+        modelProviderId: "wafer.ai",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts the base URLs upstream's dialog accepts, prefix rule and all", () => {
+    // Their check is a `http(s)://` PREFIX test, not a URL parse. Adopting the
+    // rule means adopting its edges: a value their app takes must not be a
+    // Traycer-only failure the user cannot explain.
+    const base = {
+      action: "createCustom" as const,
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+    };
+    for (const baseUrl of [
+      "https://api.example.com/v1",
+      "http://localhost:1234/v1",
+      "https://host with spaces/v1",
+      "http://",
+    ]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({ ...base, baseUrl }).success,
+        baseUrl,
+      ).toBe(true);
+    }
+    for (const baseUrl of ["api.example.com", "ftp://example.com", "", "  "]) {
+      expect(
+        modelProviderAuthActionSchema.safeParse({ ...base, baseUrl }).success,
+        baseUrl,
+      ).toBe(false);
+    }
+  });
+
+  it("carries headers, an in-form key and parsed env names", () => {
+    const parsed = modelProviderAuthActionSchema.parse({
+      action: "createCustom",
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+      headers: [{ key: "X-Org", value: "acme" }],
+      key: "sk-secret",
+      // The `{env:VAR}` syntax is parsed client-side; the wire carries names,
+      // so the syntax stays a presentation detail of whichever client offers
+      // it and the host is never handed a template to re-parse.
+      env: ["MY_ENDPOINT_KEY"],
+    });
+    expect(parsed.action).toBe("createCustom");
+    if (parsed.action !== "createCustom") return;
+    expect(parsed.headers).toEqual([{ key: "X-Org", value: "acme" }]);
+    expect(parsed.key).toBe("sk-secret");
+    expect(parsed.env).toEqual(["MY_ENDPOINT_KEY"]);
+  });
+
+  it("gives an absent key exactly one spelling", () => {
+    // Null, never "". Two spellings of "no key" means one ends up unhandled.
+    const base = {
+      action: "createCustom" as const,
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+    };
+    expect(modelProviderAuthActionSchema.parse(base)).toMatchObject({
+      key: null,
+    });
+    expect(
+      modelProviderAuthActionSchema.parse({ ...base, key: null }),
+    ).toMatchObject({ key: null });
+    expect(
+      modelProviderAuthActionSchema.safeParse({ ...base, key: "" }).success,
+    ).toBe(false);
   });
 
   it("rejects a custom provider with no models", () => {
@@ -1057,7 +1260,7 @@ describe("providers.modelProviderAuth actions", () => {
         modelProviderId: "my-endpoint",
         name: "My Endpoint",
         baseUrl: "https://api.example.com/v1",
-        modelIds: [],
+        models: [],
       }).success,
     ).toBe(false);
   });
