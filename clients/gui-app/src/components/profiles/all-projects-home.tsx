@@ -8,6 +8,7 @@ import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { profileOwnsEpic } from "@/lib/profiles/profile-membership";
 import type { ProjectProfile } from "@/lib/profiles/types";
 import { activateTabIntent, openOrFocusEpicIntent } from "@/lib/tab-navigation";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { useHistoryMembershipCacheStore } from "@/stores/profiles/history-membership-cache-store";
 import { useProjectProfilesStore } from "@/stores/profiles/project-profiles-store";
 import {
@@ -134,7 +135,11 @@ export function AllProjectsHome(): ReactNode {
         <Button
           type="button"
           onClick={() => {
-            void navigate({ to: "/draft/new" });
+            // Mint + activate directly. The /draft/new resolver bounces to /
+            // whenever the strip already owns a surface (e.g. a Settings tab
+            // sitting in the all-projects bucket), which silently eats the
+            // click and makes New chat look dead.
+            activateTabIntent(navigate, openNewEpicIntent(), undefined);
           }}
           data-testid="all-projects-new-chat"
         >

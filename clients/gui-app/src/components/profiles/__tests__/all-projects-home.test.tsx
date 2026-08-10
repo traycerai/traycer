@@ -253,7 +253,7 @@ describe("AllProjectsHome", () => {
     ).toBeTruthy();
   });
 
-  it("New chat navigates to /draft/new", async () => {
+  it("New chat mints a draft via activateTabIntent", async () => {
     const user = userEvent.setup();
     useProjectProfilesStore.getState().createProfile({
       name: "Acme",
@@ -269,6 +269,8 @@ describe("AllProjectsHome", () => {
     });
     await user.click(screen.getByTestId("all-projects-new-chat"));
 
-    expect(mockNavigate).toHaveBeenCalledWith({ to: "/draft/new" });
+    expect(vi.mocked(activateTabIntent)).toHaveBeenCalledTimes(1);
+    const [, intent] = vi.mocked(activateTabIntent).mock.calls[0];
+    expect(intent.kind).toBe("new-draft");
   });
 });
