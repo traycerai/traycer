@@ -566,6 +566,39 @@ describe("strict objects reject growth", () => {
     expect(violation).not.toBeNull();
   });
 
+
+  it("does not mark a mixed union strict, so the stripping arm may still grow", () => {
+    // One strict arm + one stripping arm share a path. Collapsing the strict
+    // arm's marker onto that path would falsely reject legitimate growth of
+    // the stripping arm.
+    const schema = z.union([
+      z.strictObject({ kind: z.literal("a"), a: z.string() }),
+      z.object({ kind: z.literal("b"), b: z.string() }),
+    ]);
+    expect(collectStrictObjectPaths(schema).has("")).toBe(false);
+  });
+
+  it("marks a union strict when every arm is strict", () => {
+    const schema = z.union([
+      z.strictObject({ kind: z.literal("a") }),
+      z.strictObject({ kind: z.literal("b") }),
+    ]);
+    expect(collectStrictObjectPaths(schema).has("")).toBe(true);
+  });
+
+  it("treats a constraining catchall as refusing unknown keys", () => {
+    // `.catchall(z.string())` VALIDATES unknown keys, so a newly added key of
+    // another type is rejected rather than stripped.
+    const schema = z.object({ a: z.string() }).catchall(z.string());
+    expect(collectStrictObjectPaths(schema).has("")).toBe(true);
+  });
+
+  it("treats a permissive catchall as strip-equivalent", () => {
+    // `.catchall(z.unknown())` accepts anything, so growth stays safe.
+    const schema = z.object({ a: z.string() }).catchall(z.unknown());
+    expect(collectStrictObjectPaths(schema).has("")).toBe(false);
+  });
+
   it("detects strictness nested under a property and an array", () => {
     const schema = z.object({
       rows: z.array(z.strictObject({ id: z.string() })),

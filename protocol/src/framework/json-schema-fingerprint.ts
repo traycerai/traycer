@@ -103,25 +103,56 @@ export function collectStrictObjectPaths(schema: z.ZodType): Set<string> {
   return strictPaths;
 }
 
+type UnknownKeySchemaNode = {
+  readonly type?: unknown;
+  readonly properties?: Record<string, unknown>;
+  readonly additionalProperties?: unknown;
+  readonly anyOf?: readonly unknown[];
+  readonly oneOf?: readonly unknown[];
+  readonly items?: unknown;
+};
+
+function asSchemaNode(node: unknown): UnknownKeySchemaNode | null {
+  if (typeof node !== "object" || node === null) return null;
+  return node as UnknownKeySchemaNode;
+}
+
+function isObjectSchemaNode(node: unknown): boolean {
+  const shape = asSchemaNode(node);
+  return shape !== null && shape.type === "object" && shape.properties !== undefined;
+}
+
+/**
+ * Whether an object refuses to silently accept a key it does not declare -
+ * either by rejecting outright (`additionalProperties: false`, i.e.
+ * `.strict()`) or by VALIDATING unknown keys against a constraining catchall
+ * (`.catchall(z.string())` renders as `additionalProperties: {type:"string"}`
+ * and rejects a key of the wrong type). A permissive catchall
+ * (`.catchall(z.unknown())` -> `additionalProperties: {}`) accepts anything,
+ * so it strips-equivalent and growth stays safe.
+ */
+function rejectsUnknownKeys(node: unknown): boolean {
+  const shape = asSchemaNode(node);
+  if (shape === null) return false;
+  const additional = shape.additionalProperties;
+  if (additional === false) return true;
+  if (typeof additional === "object" && additional !== null) {
+    // An empty schema (`{}`) constrains nothing; anything else does.
+    return Object.keys(additional as Record<string, unknown>).length > 0;
+  }
+  return false;
+}
+
 function collectStrictPaths(
   node: unknown,
   path: readonly string[],
   out: Set<string>,
 ): void {
-  if (typeof node !== "object" || node === null) return;
-  const shape = node as {
-    type?: unknown;
-    properties?: Record<string, unknown>;
-    additionalProperties?: unknown;
-    anyOf?: readonly unknown[];
-    oneOf?: readonly unknown[];
-    items?: unknown;
-  };
+  const shape = asSchemaNode(node);
+  if (shape === null) return;
   if (shape.type === "object" && shape.properties !== undefined) {
-    if (shape.additionalProperties === false) out.add(dottedPath(path));
-    for (const [key, value] of Object.entries(shape.properties)) {
-      collectStrictPaths(value, [...path, key], out);
-    }
+    if (rejectsUnknownKeys(shape)) out.add(dottedPath(path));
+    collectStrictPathsInProperties(shape.properties, path, out);
     return;
   }
   const variants = Array.isArray(shape.anyOf)
@@ -130,13 +161,41 @@ function collectStrictPaths(
       ? shape.oneOf
       : null;
   if (variants !== null) {
-    // Union arms share their parent's path: an arm is selected, not nested,
-    // so a strict arm makes additions at that path unsafe.
-    for (const variant of variants) collectStrictPaths(variant, path, out);
+    // Union arms share their parent's path, so the marker cannot distinguish
+    // them. Mark the path only when EVERY object arm refuses unknown keys:
+    // with a mixed union (one strict arm, one stripping arm) extending the
+    // stripping arm is legitimate, and collapsing the strict arm's marker
+    // onto the shared path would fail a valid registry. The cost is a known
+    // blind spot in the other direction - growth of the strict arm of a
+    // mixed union is not caught - which per-arm tracking would need to fix.
+    const objectArms = variants.filter(isObjectSchemaNode);
+    if (objectArms.length > 0 && objectArms.every(rejectsUnknownKeys)) {
+      out.add(dottedPath(path));
+    }
+    for (const variant of variants) {
+      const armShape = asSchemaNode(variant);
+      if (armShape === null) continue;
+      if (armShape.type === "object" && armShape.properties !== undefined) {
+        // Descend into the arm's properties without re-marking its own path.
+        collectStrictPathsInProperties(armShape.properties, path, out);
+        continue;
+      }
+      collectStrictPaths(variant, path, out);
+    }
     return;
   }
   if (shape.items !== undefined) {
     collectStrictPaths(shape.items, [...path, "items"], out);
+  }
+}
+
+function collectStrictPathsInProperties(
+  properties: Record<string, unknown>,
+  path: readonly string[],
+  out: Set<string>,
+): void {
+  for (const [key, value] of Object.entries(properties)) {
+    collectStrictPaths(value, [...path, key], out);
   }
 }
 

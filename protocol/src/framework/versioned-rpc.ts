@@ -220,6 +220,19 @@ export function validateVersionedRpcRegistry<
         const entry = line.versions[minor];
         const contract = entry.contract;
 
+        // The compatibility loop below starts at the SECOND installed minor,
+        // so an annotation on the first one is never reached - it could sit
+        // in the registry forever as an unverifiable governance claim about
+        // growth that has no predecessor to grow over.
+        if (
+          entry.responseGrowthProjectionGated === true &&
+          minor === minorKeys[0]
+        ) {
+          throw new Error(
+            `Version ${major}.${minor} for method '${method}' cannot declare \`responseGrowthProjectionGated\`: it is the first installed minor of its line, so it has no predecessor to grow over`,
+          );
+        }
+
         if (contract.method !== method) {
           throw new Error(
             `Contract method '${contract.method}' does not match registry method '${method}'`,

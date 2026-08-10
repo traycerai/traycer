@@ -952,4 +952,33 @@ describe("response-lane value-growth strictness", () => {
       /declares `responseGrowthProjectionGated` but its response has no value growth.*remove the annotation/s,
     );
   });
+
+  it("rejects a projection-gated annotation on the first installed minor", () => {
+    const soloV10 = defineRpcContract({
+      method: "solo",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ id: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+
+    const registry = {
+      solo: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: soloV10,
+              upgradeFromPreviousVersion: null,
+              responseGrowthProjectionGated: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      /first installed minor of its line, so it has no predecessor to grow over/,
+    );
+  });
 });
