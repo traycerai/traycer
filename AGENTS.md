@@ -28,7 +28,7 @@ bun install
 bun run build
 bun run compile                 # never tsc directly
 bun run lint && bun run format
-bun run test                    # explicit local run; CI owns the test gate
+make test-affected              # optional targeted run; CI owns the test gate
 bunx nx run @traycer-clients/traycer-cli:build   # single package
 pre-commit run --all-files      # explicit full-repo static validation
 
