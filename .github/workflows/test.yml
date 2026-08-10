@@ -120,8 +120,21 @@ jobs:
         if: failure()
         run: |
           echo "::group::Kernel OOM / kill records"
-          (dmesg -T 2>/dev/null || dmesg 2>/dev/null || echo "dmesg unavailable") \
-            | grep -iE "killed process|out of memory|oom[-_]kill" | tail -40 || true
+          # Capture dmesg FIRST, then grep, and report which case we are in.
+          # Piping dmesg straight into grep makes "dmesg is not readable"
+          # indistinguishable from "no OOM records" - both render as an empty
+          # section, which is the one ambiguity this step exists to remove.
+          if dmesg -T >/tmp/dmesg.txt 2>/dev/null || dmesg >/tmp/dmesg.txt 2>/dev/null; then
+            if grep -iE "killed process|out of memory|oom[-_]kill" /tmp/dmesg.txt | tail -40; then
+              echo "(OOM records found above)"
+            else
+              echo "dmesg READ OK, and it contains NO OOM/kill records."
+            fi
+          else
+            echo "dmesg NOT READABLE on this runner (permission denied)."
+            echo "An OOM kill can NOT be ruled out from this section alone;"
+            echo "use the runner's exit code instead - 137 means SIGKILL."
+          fi
           echo "::endgroup::"
           echo "::group::Memory"
           free -m 2>/dev/null || true

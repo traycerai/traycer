@@ -25,6 +25,23 @@ const testArgs = process.argv.slice(2);
  * a hardcoded path (which the store layout would break). `vitest.mjs` is not
  * reachable through the package's `exports`, so resolve the manifest and join.
  */
+/**
+ * Exit codes for the signals a killed Vitest run realistically reports.
+ * 128+n is the shell convention, so 137 reads as SIGKILL (the OOM killer's
+ * signal) and 139 as SIGSEGV without needing a lookup.
+ */
+const SIGNAL_EXIT_CODES: Readonly<Record<string, number>> = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGQUIT: 131,
+  SIGABRT: 134,
+  SIGBUS: 138,
+  SIGFPE: 136,
+  SIGKILL: 137,
+  SIGSEGV: 139,
+  SIGTERM: 143,
+};
+
 const requireFromHere = createRequire(import.meta.url);
 
 function resolveVitestEntry(): string {
@@ -49,6 +66,23 @@ function runVitest(configPath: string, filePath: string | undefined): void {
   if (result.error !== undefined) {
     throw result.error;
   }
+
+  // A child killed by a SIGNAL reports `status: null` with `signal` set. The
+  // previous `result.status ?? 1` collapsed that to a bare exit 1, which is
+  // why every shard death in CI has looked like an ordinary failure: an OOM
+  // kill (137) and a segfault (139) were both reported as 1, with no summary
+  // because the child never got to print one. Surface the signal explicitly
+  // and exit 128+n, the shell convention, so the next occurrence is
+  // self-identifying instead of ambiguous.
+  if (result.signal !== null) {
+    const signalExit = SIGNAL_EXIT_CODES[result.signal] ?? 1;
+    console.error(
+      `[run-tests] vitest was killed by ${result.signal} (exiting ${signalExit}). ` +
+        `No test failure was reported because the process did not exit normally.`,
+    );
+    process.exit(signalExit);
+  }
+
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
