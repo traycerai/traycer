@@ -255,6 +255,16 @@ export const epicSchemaSurfaceBaseline = {
                   reason: {
                     type: "string",
                   },
+                  retryDeadlineStartedAt: {
+                    anyOf: [
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
                 },
                 required: [
                   "sessionId",
@@ -6969,6 +6979,16 @@ export const epicSchemaSurfaceBaseline = {
                   },
                   reason: {
                     type: "string",
+                  },
+                  retryDeadlineStartedAt: {
+                    anyOf: [
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
                   },
                 },
                 required: [
