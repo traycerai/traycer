@@ -67,6 +67,7 @@ import type {
   ChatMessageEditing,
   ChatMessageUserActions,
 } from "./chat-message";
+import { stripOrchestrationPrelude } from "@/lib/chat/orchestration-prelude";
 import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
@@ -117,6 +118,14 @@ export function UserMessageBody({
 }: UserBodyProps): ReactNode {
   const editing = actions?.editing ?? null;
 
+  // Presentation-only: never mutate stored content. Strip the create-time
+  // orchestration prelude markers from string bodies so the user bubble
+  // shows only the real question.
+  const displayContent = useMemo(
+    () => stripOrchestrationPrelude(message.content),
+    [message.content],
+  );
+
   if (message.role !== "user") {
     return (
       <>
@@ -126,7 +135,7 @@ export function UserMessageBody({
         />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
           <ChatUserMessageContent
-            content={message.content}
+            content={displayContent}
             attachments={message.attachments}
           />
         </div>
@@ -147,7 +156,7 @@ export function UserMessageBody({
         />
         <AgentMessageDisplayView
           messageId={message.id}
-          messageText={message.content}
+          messageText={displayContent}
           agentMessage={message.agentMessage}
           agentSenderInfo={message.agentSenderInfo}
         />
@@ -155,7 +164,13 @@ export function UserMessageBody({
     );
   }
 
-  return <UserMessageDisplayView message={message} actions={actions} />;
+  return (
+    <UserMessageDisplayView
+      message={message}
+      displayContent={displayContent}
+      actions={actions}
+    />
+  );
 }
 
 /**
@@ -296,9 +311,11 @@ function AgentMessageDisplayView({
 
 function UserMessageDisplayView({
   message,
+  displayContent,
   actions,
 }: {
   message: ChatMessageModel;
+  displayContent: string;
   actions: ChatMessageUserActions | null;
 }): ReactNode {
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -322,6 +339,10 @@ function UserMessageDisplayView({
     setExpanded((prev) => !prev);
   }, []);
 
+  // v1: strip only the string path. Injected preludes are plain paragraphs
+  // prepended into the composer JsonContent at create; when the message still
+  // carries string content (or structured is null), this hides the markers.
+  // Structured docs are left intact so rich formatting is not destroyed.
   const body =
     message.structuredContent !== null ? (
       <ComposerContentRenderer
@@ -332,7 +353,7 @@ function UserMessageDisplayView({
       />
     ) : (
       <ChatUserMessageContent
-        content={message.content}
+        content={displayContent}
         attachments={message.attachments}
       />
     );
@@ -357,9 +378,9 @@ function UserMessageDisplayView({
   const copyText = useMemo(
     () =>
       message.structuredContent === null
-        ? message.content
+        ? displayContent
         : composerClipboardPlainText(message.structuredContent),
-    [message.content, message.structuredContent],
+    [displayContent, message.structuredContent],
   );
 
   return (

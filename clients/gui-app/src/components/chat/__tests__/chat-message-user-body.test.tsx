@@ -260,6 +260,58 @@ describe("<UserMessageBody /> agent messages", () => {
     useWorkspaceFoldersStore.setState({ folders: [] });
   });
 
+  it("hides the injected orchestration prelude from the string-path bubble", async () => {
+    const marked = [
+      "<!-- traycer-orchestration-prelude -->",
+      "role text",
+      "<!-- /traycer-orchestration-prelude -->",
+      "",
+      "real question",
+    ].join("\n");
+    render(
+      <UserMessageBody
+        actions={null}
+        message={stringOnlyUserMessage(marked)}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("real question")).toBeTruthy();
+    });
+    expect(screen.queryByText("role text")).toBeNull();
+    expect(
+      screen.queryByText(/traycer-orchestration-prelude/),
+    ).toBeNull();
+  });
+
+  it("renders an unmarked string message unchanged", async () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={stringOnlyUserMessage("just a normal question")}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("just a normal question")).toBeTruthy();
+    });
+  });
+
+  it("fail-open: prelude-only string content still renders (never empty)", async () => {
+    const preludeOnly = [
+      "<!-- traycer-orchestration-prelude -->",
+      "role text only",
+      "<!-- /traycer-orchestration-prelude -->",
+    ].join("\n");
+    render(
+      <UserMessageBody
+        actions={null}
+        message={stringOnlyUserMessage(preludeOnly)}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/role text only/)).toBeTruthy();
+    });
+  });
+
   it("reveals the action chip for keyboard focus", () => {
     render(
       <UserMessageBody
@@ -1032,6 +1084,14 @@ function plainUserMessage(content: string): ChatMessageModel {
     senderLabel: "You",
     agentSenderInfo: null,
     agentMessage: null,
+  };
+}
+
+/** String-path user bubble (no structured content) — used by prelude strip tests. */
+function stringOnlyUserMessage(content: string): ChatMessageModel {
+  return {
+    ...plainUserMessage(content),
+    structuredContent: null,
   };
 }
 
