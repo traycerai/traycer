@@ -11,6 +11,9 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toast } from "sonner";
+import { installPackVersionRefusalMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
+import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
 
 type InstallPackVersionMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.installPackVersion">,
@@ -32,10 +35,13 @@ interface InstallPackVersionMutationContext {
  * it is a success response the panel draws on the version row, alongside the
  * row's own `error` / `unusable` install states.
  *
- * A thrown transport/host failure toasts from HERE rather than from a per-call
- * `onError`. The panel lives inside an unforced Radix popover, so closing the
- * version menu mid-flight unmounts the mutation observer and TanStack drops
- * the per-call callback - which left a real failure visible only in the logs.
+ * BOTH outcomes are owned here rather than per call. The panel lives inside an
+ * unforced Radix popover, so closing the version menu mid-flight unmounts the
+ * observer and TanStack drops anything passed to `mutate`. That silently lost a
+ * thrown failure AND a typed refusal - the latter is the easier one to miss,
+ * because it never touches `onError` at all. The panel keeps drawing refusals
+ * inline while it is mounted; `versionManagerPanelIsMounted` stops both surfaces
+ * firing at once.
  */
 export function useProvidersInstallPackVersion(): InstallPackVersionMutationResult {
   return useProvidersInstallPackVersionForClient(useHostClient());
@@ -56,11 +62,20 @@ export function useProvidersInstallPackVersionForClient(
     options: {
       mutationKey: providersMutationKeys.installPackVersion(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_result, _variables, context) => {
-        if (context.hostId === null) return;
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
-        });
+      onSuccess: (response, _variables, context) => {
+        if (context.hostId !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+        }
+        if (response.result.ok) return;
+        // Typed refusals ride the success path, so `onError` cannot see them.
+        // Only cover the case the panel cannot: it unmounted mid-flight.
+        if (versionManagerPanelIsMounted()) return;
+        toast.error(installPackVersionRefusalMessage(response.result.code));
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't download this version.");

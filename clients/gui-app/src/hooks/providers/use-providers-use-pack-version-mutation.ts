@@ -11,6 +11,9 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toast } from "sonner";
+import { packVersionUseRefusalMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
+import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
 
 type UsePackVersionMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.usePackVersion">,
@@ -26,13 +29,20 @@ interface UsePackVersionMutationContext {
 /**
  * Pin a pack to a version, or clear the pin (`version: null` → auto).
  *
- * Typed refusals (`verification-failed`, `below-security-floor`,
- * `host-ineligible`) return on the response; the panel draws them on the row
- * (or, for a cleared pin, in the header - a refused clear-pin has no row).
+ * EVERY OUTCOME IS OWNED HERE, not per call. The panel lives in an unforced
+ * popover, so closing the version menu unmounts the observer and TanStack drops
+ * anything passed to `mutate`. That covers three kinds of outcome, and only the
+ * first used to survive:
  *
- * A thrown transport/host failure toasts from HERE, for the same reason as
- * install/remove: the popover this panel lives in can unmount mid-flight and
- * take a per-call `onError` with it.
+ *  - a thrown transport/host failure → `onError` below;
+ *  - a success → the confirmation toast below;
+ *  - a typed refusal (`verification-failed`, `below-security-floor`,
+ *    `host-ineligible`), which is a SUCCESSFUL response and so never reaches
+ *    `onError` at all.
+ *
+ * The panel still draws a refusal inline - on the row, or in the header for a
+ * cleared pin, which has no row - while it is mounted. `versionManagerPanelIsMounted`
+ * is what keeps the two surfaces from both firing.
  */
 export function useProvidersUsePackVersion(): UsePackVersionMutationResult {
   return useProvidersUsePackVersionForClient(useHostClient());
@@ -53,11 +63,34 @@ export function useProvidersUsePackVersionForClient(
     options: {
       mutationKey: providersMutationKeys.usePackVersion(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_result, _variables, context) => {
-        if (context.hostId === null) return;
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
-        });
+      onSuccess: (response, variables, context) => {
+        if (context.hostId !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+        }
+        if (response.result.ok) {
+          // Honest semantics: running sessions keep the binary they started
+          // with. Toasted from HERE rather than per call, because the panel
+          // that used to own this sentence unmounts with its popover.
+          toast.success(
+            variables.version === null
+              ? "Pin cleared — new sessions follow automatic version selection"
+              : `New sessions will use ${variables.version}`,
+          );
+          return;
+        }
+        // A typed refusal is a SUCCESSFUL response, so `onError` never sees it.
+        // The panel draws it inline - on the row, or in the header for a
+        // cleared pin - whenever it is still mounted, which is better context
+        // than a toast. This covers only the case it cannot: the popover closed
+        // mid-flight and took the per-call callback with it.
+        if (!versionManagerPanelIsMounted()) {
+          toast.error(packVersionUseRefusalMessage(response.result.code));
+        }
       },
       onError: (error, variables) => {
         // One RPC, two user actions: `version: null` is "use latest

@@ -1,9 +1,8 @@
-import { useCallback, useState, type JSX } from "react";
+import { useCallback, useEffect, useState, type JSX } from "react";
 import type {
   ProviderManagedVersions,
   ProviderPackVersion,
 } from "@traycer/protocol/host/provider-schemas";
-import { toast } from "sonner";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/hover-card";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
+import { registerVersionManagerPanel } from "./provider-pack-version-manager-presence";
 import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
 import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
@@ -125,6 +125,12 @@ export function ProviderPackVersionManagerPanel(
   const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
 
+  // Tell the mutation hooks this panel is on screen to render outcomes. While
+  // it is, refusals draw inline below, anchored to what they are about; once
+  // the popover closes this unregisters and the hooks toast instead. Without
+  // it, an outcome that lands after close is either dropped or double-drawn.
+  useEffect(() => registerVersionManagerPanel(), []);
+
   const sharedLine = formatSharedWithProvidersLine(
     managedVersions.sharedWithProviders,
   );
@@ -191,17 +197,15 @@ export function ProviderPackVersionManagerPanel(
         { packId, version },
         {
           onSettled: () => setPendingVersion(null),
+          // Refusal only. The success confirmation is owned by the hook, so it
+          // still reaches the user when this popover closes mid-flight.
           onSuccess: (response) => {
-            if (!response.result.ok) {
-              setRowNotice({
-                version,
-                kind: "error",
-                message: packVersionUseRefusalMessage(response.result.code),
-              });
-              return;
-            }
-            // Honest semantics: running sessions keep their binary.
-            toast.success(`New sessions will use ${version}`);
+            if (response.result.ok) return;
+            setRowNotice({
+              version,
+              kind: "error",
+              message: packVersionUseRefusalMessage(response.result.code),
+            });
           },
         },
       );
@@ -216,22 +220,18 @@ export function ProviderPackVersionManagerPanel(
       { packId, version: null },
       {
         onSettled: () => setPendingVersion(null),
+        // Refusal only; the hook owns the success confirmation.
         onSuccess: (response) => {
-          if (!response.result.ok) {
-            // The PIN banner. Not a row notice: those render inside
-            // `VersionRow` keyed by version, and the pinned version has no row
-            // exactly when a user is most likely to be clearing the pin (a pin
-            // on a build the channel no longer lists). Not the update banner
-            // either: that one only mounts when an update is pending.
-            setPinNotice({
-              kind: "error",
-              message: packVersionUseRefusalMessage(response.result.code),
-            });
-            return;
-          }
-          toast.success(
-            "Pin cleared — new sessions follow automatic version selection",
-          );
+          if (response.result.ok) return;
+          // The PIN banner. Not a row notice: those render inside `VersionRow`
+          // keyed by version, and the pinned version has no row exactly when a
+          // user is most likely to be clearing the pin (a pin on a build the
+          // channel no longer lists). Not the update banner either: that one
+          // only mounts when an update is pending.
+          setPinNotice({
+            kind: "error",
+            message: packVersionUseRefusalMessage(response.result.code),
+          });
         },
       },
     );

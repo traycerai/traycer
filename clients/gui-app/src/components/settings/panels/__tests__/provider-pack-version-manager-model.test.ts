@@ -8,6 +8,7 @@ import {
   certificationMetaLine,
   comparePackVersionsDescending,
   composeVersionRowMeta,
+  installErrorReasonLabel,
   findRecommendedVersion,
   formatPackSizeBytes,
   formatSharedWithProvidersLine,
@@ -433,6 +434,47 @@ describe("labels and helpers", () => {
     expect(meta.toLowerCase()).toMatch(/not necessarily damaged/);
     expect(meta.toLowerCase()).toMatch(/no longer published|remains on disk/);
     expect(meta.toLowerCase()).not.toMatch(/still usable/);
+  });
+
+  it("never renders the operator-facing wire message on a failed install", () => {
+    // `message` is documented as the UNDERLYING detail and can carry raw
+    // filesystem/network text. The row must speak from the typed reason, which
+    // is also the only field that says whether retrying helps.
+    const raw = "ENOSPC: no space left on device, write '/var/tmp/pack.part'";
+    const meta = composeVersionRowMeta({
+      installState: {
+        status: "error",
+        reason: "disk-full",
+        message: raw,
+        retryAtMs: null,
+      },
+      certification: "eligible",
+      sizeLabel: "40 MB",
+      recommended: false,
+    });
+    expect(meta).not.toContain(raw);
+    expect(meta).not.toContain("ENOSPC");
+    expect(meta).toContain(installErrorReasonLabel("disk-full"));
+  });
+
+  it("gives every install-error reason its own sentence", () => {
+    // Totality matters more than the wording: a reason with no case would be a
+    // compile error, but two reasons collapsing onto one sentence would not,
+    // and that silently loses the retry/no-retry distinction.
+    const reasons = [
+      "disk-full",
+      "network",
+      "verification",
+      "unknown",
+      "unrepairable",
+      "live-owner-stalled",
+      "trust-unavailable",
+      "local-storage-mismatch",
+    ] as const;
+    const sentences = reasons.map((reason) => installErrorReasonLabel(reason));
+    expect(new Set(sentences).size).toBe(reasons.length);
+    for (const sentence of sentences)
+      expect(sentence.length).toBeGreaterThan(0);
   });
 
   it("finds the recommended version from managed state", () => {

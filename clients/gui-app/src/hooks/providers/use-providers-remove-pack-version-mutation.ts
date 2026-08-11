@@ -11,6 +11,9 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toast } from "sonner";
+import { removeResultUserMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
+import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
 
 type RemovePackVersionMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.removePackVersion">,
@@ -54,11 +57,28 @@ export function useProvidersRemovePackVersionForClient(
     options: {
       mutationKey: providersMutationKeys.removePackVersion(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_result, _variables, context) => {
-        if (context.hostId === null) return;
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
-        });
+      onSuccess: (response, _variables, context) => {
+        if (context.hostId !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+        }
+        if (response.result.ok) return;
+        // Typed refusals ride the success path, so `onError` cannot see them.
+        // Only cover the case the panel cannot: it unmounted mid-flight.
+        if (versionManagerPanelIsMounted()) return;
+        const message = removeResultUserMessage(response.result);
+        // `deferred-locked` is not a failure - the delete is recorded and runs
+        // at turnover. Toasting it as an error would contradict the row, which
+        // deliberately draws it as info.
+        if (response.result.code === "deferred-locked") {
+          toast.info(message);
+          return;
+        }
+        toast.error(message);
       },
       onError: (error) => {
         toastFromHostError(error, "Couldn't delete this version.");

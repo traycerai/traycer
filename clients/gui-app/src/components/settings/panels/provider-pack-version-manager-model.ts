@@ -536,7 +536,42 @@ function installStateMetaPart(
     case "unusable":
       return unusableReasonLabel(installState.reason);
     case "error":
-      return installState.message;
+      return installErrorReasonLabel(installState.reason);
+  }
+}
+
+/**
+ * User-facing copy for a failed install, derived from the TYPED reason.
+ *
+ * The wire `message` is deliberately not rendered. The schema documents it as
+ * the underlying operator-facing detail, so it can carry raw filesystem and
+ * network text; and it says nothing about the only thing the reader has to
+ * decide - whether waiting, retrying, or freeing disk is what helps. The typed
+ * reason carries exactly that, so the renderer owns the sentence.
+ *
+ * Total over the union with no `default`, so a ninth reason is a compile error
+ * here rather than a raw diagnostic reaching the row.
+ */
+export function installErrorReasonLabel(
+  reason: ProviderManagedInstallErrorReason,
+): string {
+  switch (reason) {
+    case "disk-full":
+      return "Not enough disk space to install";
+    case "network":
+      return "Download failed — network error";
+    case "verification":
+      return "Downloaded bytes failed verification";
+    case "live-owner-stalled":
+      return "Another process was downloading this and stalled";
+    case "unknown":
+      return "Install failed";
+    case "unrepairable":
+      return "This install cannot be repaired on this machine";
+    case "trust-unavailable":
+      return "Trust is unavailable on this host";
+    case "local-storage-mismatch":
+      return "The local copy does not match the published version";
   }
 }
 
