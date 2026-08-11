@@ -68,8 +68,8 @@ afterEach(() => {
   cleanup();
 });
 
-describe("<HarnessModelPickerItem /> image generation badge", () => {
-  it("shows the Image badge when metadata.capabilities.imageGeneration is true via the shared schema", () => {
+describe("<HarnessModelPickerItem /> image generation capability", () => {
+  it("keeps the capability in the row tooltip without rendering an Image badge", () => {
     // Fixture must round-trip through the shared capability schema - the
     // component uses guiAgentModelCapabilitiesSchema, not ad-hoc narrowing.
     const capabilities = guiAgentModelCapabilitiesSchema.parse({
@@ -83,8 +83,8 @@ describe("<HarnessModelPickerItem /> image generation badge", () => {
       }),
     );
 
-    expect(screen.getByLabelText("Supports image generation")).toBeTruthy();
-    expect(screen.getByText("Image")).toBeTruthy();
+    expect(screen.queryByText("Image")).toBeNull();
+    expect(screen.queryByLabelText("Supports image generation")).toBeNull();
 
     fireEvent.focus(screen.getByRole("option", { name: /GPT Image Test/ }));
     // Tooltip label is keyboard-reachable from the option itself.
@@ -93,7 +93,7 @@ describe("<HarnessModelPickerItem /> image generation badge", () => {
     });
   });
 
-  it("shows no badge when capabilities.imageGeneration is false", () => {
+  it("shows no Image marker when capabilities.imageGeneration is false", () => {
     const capabilities = guiAgentModelCapabilitiesSchema.parse({
       imageGeneration: false,
     });
@@ -102,7 +102,7 @@ describe("<HarnessModelPickerItem /> image generation badge", () => {
     expect(screen.queryByText("Image")).toBeNull();
   });
 
-  it("shows no badge when capabilities are absent (schema default false)", () => {
+  it("shows no Image marker when capabilities are absent", () => {
     expect(guiAgentModelCapabilitiesSchema.parse({}).imageGeneration).toBe(
       false,
     );

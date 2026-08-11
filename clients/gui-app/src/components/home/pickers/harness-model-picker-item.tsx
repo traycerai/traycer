@@ -2,7 +2,7 @@ import type { HarnessModelRow } from "@/components/home/data/harness-model-searc
 import { Badge } from "@/components/ui/badge";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
-import { Check, ImagePlus } from "lucide-react";
+import { Check } from "lucide-react";
 import { guiAgentModelCapabilitiesSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
 interface HarnessModelPickerItemProps {
@@ -44,13 +44,9 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
   );
 
   return (
-    // Anchored to the row button itself (not the inner Badge) so the notice is
-    // reachable by keyboard: the button is natively focusable and Radix merges
-    // the tooltip's hover/focus handlers with the button's own via `asChild`,
-    // whereas a span nested inside it never receives Tab focus. `label={null}`
-    // for non-deprecated rows makes this a transparent pass-through (see
-    // TooltipWrapper) - never add tabIndex to the Badge to "fix" this instead,
-    // that nests a focusable element inside the button, which is invalid.
+    // Anchored to the row button so capability/deprecation details are reachable
+    // by hover and keyboard focus. Radix merges the tooltip handlers with the
+    // button via `asChild`; `label={null}` is a transparent pass-through.
     <TooltipWrapper
       label={tooltipLabel}
       side="top"
@@ -92,16 +88,6 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
         {hasDeprecationNotice ? (
           <Badge variant="destructive" className="shrink-0">
             Deprecated
-          </Badge>
-        ) : null}
-        {supportsImageGeneration ? (
-          <Badge
-            variant="outline"
-            className="h-5 shrink-0 gap-1 px-1.5 text-muted-foreground"
-            aria-label="Supports image generation"
-          >
-            <ImagePlus data-icon="inline-start" aria-hidden />
-            Image
           </Badge>
         ) : null}
         {capacityLabel === null ? null : (
