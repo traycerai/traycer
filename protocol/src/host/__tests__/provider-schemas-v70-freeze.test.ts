@@ -9,6 +9,7 @@ import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   providerCliStateSchema,
   providerCliStateSchemaV70,
+  providerIdSchema,
   providerIdSchemaV70,
   providerLoginCapabilitySchemaV70,
   providerManagedInstallErrorReasonSchemaV70,
@@ -164,6 +165,22 @@ describe("v7.0 schemas are distinct objects from the canonical live schemas", ()
 
   it("providerIdSchemaV70 includes huggingface, the sole v7.0-only provider id", () => {
     expect(providerIdSchemaV70.options).toContain("huggingface");
+  });
+
+  // The LIVE side had no guard. `EXPECTED_PROVIDER_ID_V70_OPTIONS` pins the
+  // frozen enum, so a stray id joining THAT is caught - but a 20th id joining
+  // the live enum failed nothing, and `downgradeProviderCliStateListToV70`
+  // simply drops the row: the provider disappears from a v7.0 peer's list with
+  // no signal anywhere.
+  //
+  // Dropping may well be the right answer for a provider a v7.0 client cannot
+  // represent. The point is that it must be a DECISION. Adding a harness now
+  // fails here until someone states, in this file, which side the new id
+  // belongs on.
+  it("the live and frozen provider id sets have not drifted apart", () => {
+    expect([...providerIdSchema.options].sort()).toEqual(
+      [...providerIdSchemaV70.options].sort(),
+    );
   });
 });
 
@@ -470,6 +487,29 @@ describe("providerManagedInstallStateSchemaV70 pins the v7.0 arm and reason sets
         retryAtMs: null,
       }).success,
     ).toBe(false);
+  });
+
+  // Hand-written, same discipline as EXPECTED_PROVIDER_ID_V70_OPTIONS and for
+  // the same reason: the acceptance loop below iterates `.options`, so it is
+  // derived. A ninth reason silently joining the FROZEN enum keeps that loop
+  // green and keeps every key-set test in this file green, and the only other
+  // guard is the regenerable JSON-Schema fixture. The consequence of a leak is
+  // named in `provider-schemas.ts`: a v7.0 peer `.catch(null)`s the whole
+  // `managedInstallState`, so a stuck install renders as a row with no
+  // message at all.
+  it("pins the eight frozen reasons literally", () => {
+    expect([...providerManagedInstallErrorReasonSchemaV70.options].sort()).toEqual(
+      [
+        "disk-full",
+        "live-owner-stalled",
+        "local-storage-mismatch",
+        "network",
+        "trust-unavailable",
+        "unknown",
+        "unrepairable",
+        "verification",
+      ].sort(),
+    );
   });
 
   it("still accepts every reason it does model", () => {

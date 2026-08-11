@@ -14,7 +14,7 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
 import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
 import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
@@ -26,6 +26,7 @@ import {
   formatPackSizeBytes,
   formatSharedWithProvidersLine,
   installPackVersionRefusalMessage,
+  isBlockingCertification,
   removeResultUserMessage,
   updateBannerDownloadEligibility,
   packVersionUseRefusalMessage,
@@ -42,15 +43,6 @@ import {
   type VersionUseEligibility,
 } from "./provider-pack-version-manager-model";
 
-/**
- * Representative optional method for the four pack-version RPCs. All four
- * share non-floor `degrade: unsupported` registration; gating on one is the
- * capability signal for the whole panel (same host either has the surface or
- * does not).
- */
-export const PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD =
-  "providers.usePackVersion" as const;
-
 /** Pending key for "Use latest automatically" (clear pin / version: null). */
 const CLEAR_PIN_PENDING_KEY = "__auto__";
 
@@ -62,8 +54,10 @@ const CLEAR_PIN_PENDING_KEY = "__auto__";
  * re-read the globally active host — the settings surface can display one
  * host while another is active.
  *
- * Capability: gated on {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD}
- * via `useHostMethodSupport` (three-valued) against the **passed** `hostId`.
+ * Capability: gated on every member of
+ * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS} via
+ * {@link useProviderPackVersionManagerSupport} (three-valued) against the
+ * **passed** `hostId`.
  * - `hostId === null` or support `null` → pending (not unsupported).
  * - support `false` → clear "host too old" (no action buttons).
  * - support `true` → full panel.
@@ -107,18 +101,15 @@ type BannerNotice = {
  * Mutations go through the four v8.0 pack RPCs.
  *
  * Capability-gated (non-floor optional RPCs): see
- * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD}.
+ * {@link PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS}.
  */
 export function ProviderPackVersionManagerPanel(
   props: ProviderPackVersionManagerPanelProps,
 ): JSX.Element {
   const { hostId, packId, packDisplayName, managedVersions } = props;
-  // Gate against the settings-scoped host only. useHostMethodSupport already
-  // returns null when hostId is null (no handshake possible yet).
-  const methodSupport = useHostMethodSupport(
-    hostId,
-    PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-  );
+  // Gate against the settings-scoped host only. The hook already returns null
+  // when hostId is null (no handshake possible yet).
+  const methodSupport = useProviderPackVersionManagerSupport(hostId);
 
   const install = useProvidersInstallPackVersion();
   const remove = useProvidersRemovePackVersion();
@@ -227,12 +218,15 @@ export function ProviderPackVersionManagerPanel(
         onSettled: () => setPendingVersion(null),
         onSuccess: (response) => {
           if (!response.result.ok) {
-            setRowNotice({
-              version: managedVersions.pinnedVersion ?? packId,
+            // BANNER, not a row notice. Row notices render inside `VersionRow`
+            // and are keyed by version, so a refusal keyed to the pinned
+            // version disappears whenever that version has no row - which is
+            // exactly the state a user clears a pin from (a pin on a build the
+            // channel no longer lists). The old `?? packId` fallback could
+            // never match a row at all.
+            setBannerNotice({
               kind: "error",
-              message:
-                response.result.detail ??
-                "Could not clear the pin and return to automatic selection",
+              message: packVersionUseRefusalMessage(response.result.code),
             });
             return;
           }
@@ -245,7 +239,7 @@ export function ProviderPackVersionManagerPanel(
         },
       },
     );
-  }, [clearNotice, managedVersions.pinnedVersion, packId, useVersion]);
+  }, [clearNotice, packId, useVersion]);
 
   const onDelete = useCallback(
     (version: string) => {
@@ -562,10 +556,7 @@ function VersionRow(props: VersionRowProps): JSX.Element {
   const del = versionDeleteEligibility(row);
   const chip = versionRowChip(row);
   const detailLines = versionDetailLines(row);
-  const greyed =
-    row.certification === "yanked" ||
-    row.certification === "below-security-floor" ||
-    row.certification === "host-ineligible";
+  const greyed = isBlockingCertification(row.certification);
 
   const showFetch = versionShowsInstallFetchAction(row);
   const fetchLabel = versionInstallFetchLabel(row);

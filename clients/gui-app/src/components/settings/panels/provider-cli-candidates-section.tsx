@@ -26,7 +26,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-selection-mutation";
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
@@ -42,10 +41,8 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
-import {
-  PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-  ProviderPackVersionManagerPanel,
-} from "./provider-pack-version-manager-panel";
+import { ProviderPackVersionManagerPanel } from "./provider-pack-version-manager-panel";
+import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
 import {
   managedInstallFailureMessage,
   managedVersionsUnavailableMessage,
@@ -214,8 +211,8 @@ function versionManagerPanelDataFor(args: {
 }): VersionManagerPanelData | null {
   // No host is the second case that still HIDES rather than explains. Every
   // reason below is a statement about a host; with none bound there is nothing
-  // true to say, and `useHostSupportsMethod` fails closed for a null hostId -
-  // so explaining here would confidently report "your host is too old" about a
+  // true to say, and the capability read is null for a null hostId - so
+  // explaining here would confidently report "your host is too old" about a
   // host that does not exist.
   if (args.hostId === null) return null;
   if (args.packId === null || args.packId === undefined) return null;
@@ -400,13 +397,13 @@ export function ProviderCliCandidatesSection({
   const radioName = useId();
   const [adding, setAdding] = useState(false);
   const [draftPath, setDraftPath] = useState("");
-  // The version manager's RPCs are all non-floor. `false` also covers the
-  // handshake's transient unknown state, so we keep its entry point absent
-  // until this host has positively advertised the representative method.
-  const supportsVersionManager = useHostSupportsMethod(
-    hostId,
-    PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-  );
+  // The version manager's RPCs are all non-floor, so support is a real
+  // per-host question. Read THREE-VALUED: `useHostSupportsMethod` collapses
+  // "not answered yet" into `false`, which this surface can no longer use -
+  // it now renders a reason rather than hiding, and would confidently tell a
+  // perfectly capable host it is too old for the moments before its handshake
+  // lands.
+  const supportsVersionManager = useProviderPackVersionManagerSupport(hostId);
   const focusDraftInput = useCallback((node: HTMLInputElement | null): void => {
     node?.focus();
   }, []);
@@ -1342,6 +1339,15 @@ function RowStatusLine({
 }): ReactNode {
   if (status === null) return null;
   if (status.kind === "installing") {
+    // Clamp before the value reaches a width or an accessible name. `percent`
+    // is a host wire field: above 100 it overflows the track, below 0 it emits
+    // an invalid width, and `aria-valuenow` would report a figure outside its
+    // own declared min/max. `DownloadProgress` in the version manager clamps
+    // the same field, and the two progress surfaces have to agree.
+    const percent =
+      status.percent === null
+        ? null
+        : Math.min(100, Math.max(0, Math.round(status.percent)));
     return (
       <span className="col-span-3 col-start-2 mt-1.5 flex min-w-0 items-center gap-2 px-2.5">
         <span
@@ -1349,18 +1355,16 @@ function RowStatusLine({
           aria-label={status.label}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={status.percent === null ? undefined : status.percent}
+          aria-valuenow={percent === null ? undefined : percent}
           className="h-1 w-full max-w-48 shrink-0 overflow-hidden rounded-full bg-muted"
         >
           <span
             className={cn(
               "block h-full rounded-full bg-primary",
-              status.percent === null ? "w-1/3 animate-pulse" : "",
+              percent === null ? "w-1/3 animate-pulse" : "",
             )}
             style={
-              status.percent === null
-                ? undefined
-                : { width: `${status.percent}%` }
+              percent === null ? undefined : { width: `${String(percent)}%` }
             }
           />
         </span>

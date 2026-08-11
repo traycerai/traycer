@@ -12,7 +12,6 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { createElement, type ReactNode } from "react";
 import { ProviderCliCandidatesSection } from "@/components/settings/panels/provider-cli-candidates-section";
-import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD } from "@/components/settings/panels/provider-pack-version-manager-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 
@@ -43,6 +42,7 @@ type SectionMocks = {
   removeCustomPathMutate: Mock;
   ensurePackMutate: Mock;
   hostSupportsMethod: boolean | null;
+  useVersionManagerSupport: Mock<(hostId: string | null) => boolean | null>;
   // Concretely typed, not bare `Mock`: a bare one is `Mock<Procedure>`, whose
   // return is `any`, and the two call sites below then trip
   // `no-unsafe-return`.
@@ -66,6 +66,12 @@ const mocks = vi.hoisted((): SectionMocks => ({
       return mocks.hostSupportsMethod;
     },
   ),
+  // Mirrors `useProviderPackVersionManagerSupport`: three-valued, and null for
+  // a null host because no handshake is possible without one.
+  useVersionManagerSupport: vi.fn((hostId: string | null): boolean | null => {
+    if (hostId === null) return null;
+    return mocks.hostSupportsMethod;
+  }),
   lastVersionManagerProps: null,
   versionManagerPanel: vi.fn(
     (props: CapturedVersionManagerProps): ReactNode => {
@@ -78,15 +84,25 @@ const mocks = vi.hoisted((): SectionMocks => ({
   ),
 }));
 
-// Shallow-mount capture for Manage versions open path. Keep the capability
-// constant export so gate tests still import the real method name.
+// Shallow-mount capture for Manage versions open path.
 vi.mock(
   "@/components/settings/panels/provider-pack-version-manager-panel",
   () => ({
-    PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD:
-      "providers.usePackVersion" as const,
     ProviderPackVersionManagerPanel: (props: CapturedVersionManagerProps) =>
       mocks.versionManagerPanel(props),
+  }),
+);
+
+// The capability gate the section reads. THREE-VALUED on purpose: null means
+// "handshake has not landed", which this surface must not render as "your host
+// is too old" - it explains rather than hides now, so a collapsed boolean
+// would put a wrong sentence on screen during first paint.
+vi.mock(
+  "@/components/settings/panels/provider-pack-version-manager-capability",
+  () => ({
+    useProviderPackVersionManagerSupport: (
+      hostId: string | null,
+    ): boolean | null => mocks.useVersionManagerSupport(hostId),
   }),
 );
 
@@ -1242,10 +1258,7 @@ describe("ProviderCliCandidatesSection: version menu capability gate", () => {
   it("still offers the version menu when capability is false, and explains the host is too old", async () => {
     mocks.hostSupportsMethod = false;
     renderSection(stateWithPackFields());
-    expect(mocks.useHostSupportsMethod).toHaveBeenCalledWith(
-      TEST_HOST_ID,
-      PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-    );
+    expect(mocks.useVersionManagerSupport).toHaveBeenCalledWith(TEST_HOST_ID);
     const toggle = screen.getByRole("button", {
       name: "claude-code CLI version",
     });
@@ -1299,14 +1312,11 @@ describe("ProviderCliCandidatesSection: version menu capability gate", () => {
   });
 
   it("hides the version menu when hostId is null even if pack fields are present", () => {
-    // Support flag is irrelevant: null host fails closed (same as the real
-    // useHostSupportsMethod boolean form).
+    // Support flag is irrelevant: a null host has no handshake, so the hook
+    // answers null and this surface hides rather than explains.
     mocks.hostSupportsMethod = true;
     renderSectionWith(stateWithPackFields(), [stateWithPackFields()], null);
-    expect(mocks.useHostSupportsMethod).toHaveBeenCalledWith(
-      null,
-      PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-    );
+    expect(mocks.useVersionManagerSupport).toHaveBeenCalledWith(null);
     expect(
       screen.queryByRole("button", { name: "claude-code CLI version" }),
     ).toBeNull();
@@ -1315,10 +1325,7 @@ describe("ProviderCliCandidatesSection: version menu capability gate", () => {
   it("shows the version menu when capability is true and pack fields are present", () => {
     mocks.hostSupportsMethod = true;
     renderSection(stateWithPackFields());
-    expect(mocks.useHostSupportsMethod).toHaveBeenCalledWith(
-      TEST_HOST_ID,
-      PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-    );
+    expect(mocks.useVersionManagerSupport).toHaveBeenCalledWith(TEST_HOST_ID);
     expect(
       screen.getByRole("button", { name: "claude-code CLI version" }),
     ).toBeDefined();

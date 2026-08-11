@@ -5,17 +5,21 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   certificationBadgeLabel,
+  certificationMetaLine,
   comparePackVersionsDescending,
   composeVersionRowMeta,
   findRecommendedVersion,
   formatPackSizeBytes,
+  formatSharedWithProvidersLine,
   installPackVersionRefusalMessage,
+  removeResultUserMessage,
   unusableReasonLabel,
   updateBannerDownloadEligibility,
   packVersionUseRefusalMessage,
   versionDeleteEligibility,
   versionDownloadEligibility,
   versionErrorIsRetryable,
+  versionInstallFetchLabel,
   versionShowsInstallFetchAction,
   versionUseEligibility,
 } from "@/components/settings/panels/provider-pack-version-manager-model";
@@ -46,12 +50,18 @@ function managed(
   };
 }
 
-function errorState(
-  reason: string,
-): Extract<ProviderPackVersion["installState"], { status: "error" }> {
+type ErrorInstallState = Extract<
+  ProviderPackVersion["installState"],
+  { status: "error" }
+>;
+
+// Typed on the protocol reason union, not `string`. With the assertion a
+// misspelled reason still compiled, and the test then exercised the
+// default-deny arm while claiming to cover the named one.
+function errorState(reason: ErrorInstallState["reason"]): ErrorInstallState {
   return {
     status: "error",
-    reason: reason as "network",
+    reason,
     message: reason,
     retryAtMs: null,
   };
@@ -114,6 +124,13 @@ describe("versionUseEligibility", () => {
         }),
       );
       expect(result.allowed).toBe(false);
+      // Pin the BRANCH, not just the flag. `versionUseEligibility` refuses for
+      // three different reasons; asserting `allowed === false` alone stays
+      // green if the certification check regresses and the not-installed arm
+      // answers instead.
+      if (!result.allowed) {
+        expect(result.reason).toBe(certificationMetaLine(certification));
+      }
     }
   });
 
@@ -268,6 +285,80 @@ describe("versionErrorIsRetryable", () => {
         retryAtMs: null,
       }),
     ).toBe(true);
+  });
+});
+
+describe("copy and label rules with no coverage before this", () => {
+  // `deferred-locked` is the one remove refusal that is NOT a failure: the
+  // host queues the delete for boot GC. The panel renders it as an `info`
+  // notice on that reasoning, so copy that reads as an error would contradict
+  // the surface it appears on.
+  it("states deferred-locked removal as queued, not as a failure", () => {
+    const message = removeResultUserMessage({
+      ok: false,
+      code: "deferred-locked",
+      detail: null,
+    });
+    expect(message).toMatch(/removes when no longer in use/iu);
+    expect(message.toLowerCase()).not.toContain("fail");
+  });
+
+  it("prefers the host detail when one is supplied", () => {
+    expect(
+      removeResultUserMessage({
+        ok: false,
+        code: "is-current",
+        detail: "Pinned as current for this pack",
+      }),
+    ).toBe("Pinned as current for this pack");
+  });
+
+  // Retry is a promise that trying again can work. It may only appear for the
+  // reasons on the retryable allow-list; every other error state still offers
+  // Download, and `versionDownloadEligibility` is what disables it.
+  it("labels the fetch action Retry only for a retryable error", () => {
+    expect(
+      versionInstallFetchLabel(
+        version({ version: "1.0.0", installState: errorState("network") }),
+      ),
+    ).toBe("Retry");
+    expect(
+      versionInstallFetchLabel(
+        version({
+          version: "1.0.0",
+          installState: errorState("trust-unavailable"),
+        }),
+      ),
+    ).toBe("Download");
+  });
+
+  it("labels absent and unusable rows Download", () => {
+    expect(
+      versionInstallFetchLabel(
+        version({ version: "1.0.0", installState: { status: "absent" } }),
+      ),
+    ).toBe("Download");
+    expect(
+      versionInstallFetchLabel(
+        version({
+          version: "1.0.0",
+          installState: { status: "unusable", reason: "corrupt" },
+        }),
+      ),
+    ).toBe("Download");
+  });
+
+  it("joins one, two and three shared providers the way English does", () => {
+    expect(formatSharedWithProvidersLine([])).toBeNull();
+    expect(formatSharedWithProvidersLine(["opencode"])).toBe(
+      "Shared by OpenCode",
+    );
+    expect(formatSharedWithProvidersLine(["opencode", "traycer"])).toBe(
+      "Shared by OpenCode and Traycer",
+    );
+    expect(
+      formatSharedWithProvidersLine(["opencode", "traycer", "openrouter"]),
+    ).toBe("Shared by OpenCode, Traycer, and OpenRouter");
   });
 });
 

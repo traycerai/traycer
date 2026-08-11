@@ -224,15 +224,31 @@ export type VersionRowChip = {
   readonly tone: "current" | "blocked" | "recommended";
 };
 
+/**
+ * Whether the signed certification BLOCKS this version, as opposed to merely
+ * annotating it.
+ *
+ * One predicate, two consumers: the row's blocked chip and the row's dimming.
+ * They were two copies of the same three-member test, so a fourth blocking
+ * certification would have given a row its chip and not its dimming, or the
+ * reverse. `uncertified` is deliberately not a member - an installed copy the
+ * channel stopped listing stays usable (D8).
+ */
+export function isBlockingCertification(
+  certification: ProviderPackVersionCertification,
+): boolean {
+  return (
+    certification === "yanked" ||
+    certification === "below-security-floor" ||
+    certification === "host-ineligible"
+  );
+}
+
 export function versionRowChip(
   version: ProviderPackVersion,
 ): VersionRowChip | null {
   if (version.current) return { label: "Current", tone: "current" };
-  if (
-    version.certification === "yanked" ||
-    version.certification === "below-security-floor" ||
-    version.certification === "host-ineligible"
-  ) {
+  if (isBlockingCertification(version.certification)) {
     const label = certificationBadgeLabel(version.certification);
     if (label !== null) return { label, tone: "blocked" };
   }
@@ -348,14 +364,22 @@ export function composeVersionRowMeta(options: {
   return parts.join(" · ");
 }
 
-/** Error reasons the version-manager Retry button may fire for. Allow-list. */
-const VERSION_MANAGER_RETRYABLE_ERROR_REASONS: ReadonlySet<string> = new Set([
-  "disk-full",
-  "network",
-  "verification",
-  "live-owner-stalled",
-  "unknown",
-]);
+/**
+ * Error reasons the version-manager Retry button may fire for. Allow-list.
+ *
+ * Typed on the protocol union rather than `string`: a `ReadonlySet<string>`
+ * accepts a member the wire no longer has, and the miss is silent - the button
+ * simply stops appearing for a reason it should serve. The union makes a
+ * renamed or removed reason a compile error here.
+ */
+const VERSION_MANAGER_RETRYABLE_ERROR_REASONS: ReadonlySet<ProviderManagedInstallErrorReason> =
+  new Set<ProviderManagedInstallErrorReason>([
+    "disk-full",
+    "network",
+    "verification",
+    "live-owner-stalled",
+    "unknown",
+  ]);
 
 export function versionErrorIsRetryable(
   installState: ProviderPackVersionInstallState,
@@ -514,7 +538,19 @@ function certificationMetaForCompose(
   return certificationMetaLine(certification);
 }
 
-function nonRetryableErrorDownloadReason(reason: string): string {
+/**
+ * Copy for the reasons the Retry allow-list deliberately excludes.
+ *
+ * The parameter is the protocol union, not `string`. With `string` the
+ * `default` arm absorbed every typo and every future reason silently; now a
+ * new non-retryable reason that needs its own sentence shows up as an
+ * unhandled case at the call site rather than as generic copy in the UI. The
+ * `default` stays for the reasons that are on the allow-list and therefore
+ * never reach here.
+ */
+function nonRetryableErrorDownloadReason(
+  reason: ProviderManagedInstallErrorReason,
+): string {
   switch (reason) {
     case "trust-unavailable":
       return "Trust is unavailable on this host — cannot download";

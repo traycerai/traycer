@@ -5,10 +5,8 @@ import type {
   ProviderManagedVersions,
   ProviderPackVersion,
 } from "@traycer/protocol/host/provider-schemas";
-import {
-  PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-  ProviderPackVersionManagerPanel,
-} from "@/components/settings/panels/provider-pack-version-manager-panel";
+import { ProviderPackVersionManagerPanel } from "@/components/settings/panels/provider-pack-version-manager-panel";
+import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS } from "@/components/settings/panels/provider-pack-version-manager-capability";
 
 type UsePackVersionVariables = {
   readonly packId: string;
@@ -36,6 +34,26 @@ type HostMethodSupportArgs = {
   readonly hostId: string | null;
   readonly method: string;
 };
+
+/**
+ * Which capability methods the panel asked about for one host, deduplicated
+ * and in ask order.
+ *
+ * The gate asks once per pack-version RPC, so the old "last call" assertion
+ * would stay green if three of the four stopped being consulted — the exact
+ * regression that let a host advertising a strict subset light up controls
+ * whose calls deterministically return unsupported-method.
+ */
+function methodsAskedFor(hostId: string | null): readonly string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const call of mocks.supportCalls) {
+    if (call.hostId !== hostId || seen.has(call.method)) continue;
+    seen.add(call.method);
+    ordered.push(call.method);
+  }
+  return ordered;
+}
 
 type InstallPackVersionVariables = {
   readonly packId: string;
@@ -68,6 +86,7 @@ type InstallMutateOptions = {
 const mocks = vi.hoisted(() => {
   const supportByHostId = new Map<string, boolean | null>();
   let lastSupportArgs: HostMethodSupportArgs | null = null;
+  let supportCalls: HostMethodSupportArgs[] = [];
   let defaultSupport: boolean | null = true;
   return {
     installMutate:
@@ -95,6 +114,15 @@ const mocks = vi.hoisted(() => {
     },
     set lastSupportArgs(value: HostMethodSupportArgs | null) {
       lastSupportArgs = value;
+      if (value === null) supportCalls = [];
+    },
+    /**
+     * EVERY capability question the panel asked, in order. The gate asks one
+     * per pack-version RPC now, so asserting only the last call would let three
+     * of the four silently stop being consulted.
+     */
+    get supportCalls() {
+      return supportCalls;
     },
     get defaultSupport() {
       return defaultSupport;
@@ -108,6 +136,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.lastSupportArgs = { hostId, method };
+    mocks.supportCalls.push({ hostId, method });
     if (hostId === null) return null;
     if (mocks.supportByHostId.has(hostId)) {
       return mocks.supportByHostId.get(hostId) ?? null;
@@ -244,10 +273,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       screen.queryByTestId("provider-pack-version-manager-unsupported"),
     ).toBeNull();
     expect(screen.queryByTestId("provider-pack-version-manager")).toBeNull();
-    expect(mocks.lastSupportArgs).toEqual({
-      hostId: null,
-      method: PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-    });
+    expect(methodsAskedFor(null)).toEqual([
+      ...PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS,
+    ]);
   });
 
   it("gates capability on the passed hostId, not an ambient host", () => {
@@ -263,10 +291,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    expect(mocks.lastSupportArgs).toEqual({
-      hostId: "host-B",
-      method: PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-    });
+    expect(methodsAskedFor("host-B")).toEqual([
+      ...PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS,
+    ]);
     expect(
       screen.getByTestId("provider-pack-version-manager-unsupported"),
     ).toBeTruthy();
@@ -281,10 +308,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       available: [version({ version: "1.0.0" })],
       managedOverrides: null,
     });
-    expect(mocks.lastSupportArgs).toEqual({
-      hostId: "host-A",
-      method: PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHOD,
-    });
+    expect(methodsAskedFor("host-A")).toEqual([
+      ...PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS,
+    ]);
     const panel = screen.getByTestId("provider-pack-version-manager");
     expect(panel).toBeTruthy();
     expect(panel.getAttribute("data-host-id")).toBe("host-A");

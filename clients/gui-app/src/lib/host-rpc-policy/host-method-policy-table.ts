@@ -7,7 +7,10 @@ import type {
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
-import type { ProviderManagedInstallState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderManagedInstallState,
+  ProviderManagedVersions,
+} from "@traycer/protocol/host/provider-schemas";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -170,11 +173,12 @@ function isRetryWorthWatching(
  */
 function providerHasManagedInstallInFlight(provider: {
   readonly managedInstallState?: ProviderManagedInstallState | null;
-  readonly managedVersions?: {
-    readonly available: readonly {
-      readonly installState: { readonly status: string };
-    }[];
-  } | null;
+  // The protocol type, not a structural stand-in. The row shape used to be
+  // spelled out with `status: string`, which widened the wire union to any
+  // string: rename `downloading` upstream and the comparison below silently
+  // returns false, dropping every user-lane download onto the 15-minute steady
+  // lane with no compile error to notice it.
+  readonly managedVersions?: Pick<ProviderManagedVersions, "available"> | null;
 }): boolean {
   if (provider.managedInstallState?.status === "downloading") return true;
   const managedVersions = provider.managedVersions;

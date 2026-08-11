@@ -2993,13 +2993,13 @@ export function downgradeProviderCliStateToV10(
   // - `managedInstallState` / `versionVisibility` / `advisory` — the
   //   provider-pack-registry fields.
   // - `cliBinaryResolved` — the binary-absent explanation field.
-  // - `packId` / `managedVersions` / `nextRunBinary` (v8.0) — the version
-  //   manager. Same trap, and it is worth restating rather than assuming the
-  //   list above covers it: this parse is STRICT, so every field added to the
-  //   live shape from here to the end of time must be added to this
-  //   destructure too. Forgetting one does not fail loudly - it empties the
-  //   provider list for v1.0 clients, silently, because the row fails the
-  //   parse and the caller filters it out.
+  // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
+  //   `nextRunBinary` (v8.0) — the version manager. Same trap, and it is worth
+  //   restating rather than assuming the list above covers it: this parse is
+  //   STRICT, so every field added to the live shape from here to the end of
+  //   time must be added to this destructure too. Forgetting one does not
+  //   fail loudly - it empties the provider list for v1.0 clients, silently,
+  //   because the row fails the parse and the caller filters it out.
   const {
     availabilityPending: _availabilityPending,
     profiles: _profiles,
