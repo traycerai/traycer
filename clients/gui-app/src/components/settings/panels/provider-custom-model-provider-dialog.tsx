@@ -284,6 +284,11 @@ export function ProviderCustomModelProviderDialog(props: {
 
           <RowSection
             label="Models"
+            note={
+              draft.models.some((model) => model.locked)
+                ? "Saved models can be renamed but not removed - their IDs are fixed. To drop one, disable this provider and declare it again under a new ID."
+                : null
+            }
             addLabel="Add model"
             onAdd={() => {
               setDraft((current) => ({
@@ -303,6 +308,7 @@ export function ProviderCustomModelProviderDialog(props: {
                 secondPlaceholder="Display Name"
                 secondValue={model.name}
                 errors={shown?.models[index]}
+                locked={model.locked}
                 removeLabel={`Remove model ${String(index + 1)}`}
                 // Upstream keeps the last row: the section is required, and a
                 // list you can empty is one whose Add button is its only
@@ -336,6 +342,11 @@ export function ProviderCustomModelProviderDialog(props: {
 
           <RowSection
             label="Headers (optional)"
+            note={
+              draft.headers.some((header) => header.locked)
+                ? "Saved headers can have their value changed but not be removed - their names are fixed. Dropping one takes the same route: disable this provider and declare it again."
+                : null
+            }
             addLabel="Add header"
             onAdd={() => {
               setDraft((current) => ({
@@ -355,6 +366,7 @@ export function ProviderCustomModelProviderDialog(props: {
                 secondPlaceholder="value"
                 secondValue={header.value}
                 errors={shown?.headers[index]}
+                locked={header.locked}
                 removeLabel={`Remove header ${String(index + 1)}`}
                 removeDisabled={draft.headers.length <= 1}
                 onFirstChange={(value) => {
@@ -458,6 +470,8 @@ function Field(props: {
 
 function RowSection(props: {
   readonly label: string;
+  /** Why stored rows cannot be removed, or null when none can be. */
+  readonly note: string | null;
   readonly addLabel: string;
   readonly onAdd: () => void;
   readonly children: ReactNode;
@@ -467,6 +481,9 @@ function RowSection(props: {
       <span className="text-ui-xs font-medium text-muted-foreground">
         {props.label}
       </span>
+      {props.note === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">{props.note}</p>
+      )}
       {props.children}
       <Button
         type="button"
@@ -498,6 +515,12 @@ function EditorRow(props: {
   readonly secondPlaceholder: string;
   readonly secondValue: string;
   readonly errors: CustomProviderRowErrors | undefined;
+  /**
+   * Whether this row is already stored - see `StoredRow` on the draft module
+   * for what the merge can and cannot express. Locks the KEY and drops the
+   * remove entirely.
+   */
+  readonly locked: boolean;
   readonly removeLabel: string;
   readonly removeDisabled: boolean;
   readonly onFirstChange: (value: string) => void;
@@ -514,6 +537,10 @@ function EditorRow(props: {
         placeholder={props.firstPlaceholder}
         value={props.firstValue}
         error={firstError}
+        // READ-ONLY rather than disabled: the value is still worth reading and
+        // copying, and a disabled control drops out of the accessibility tree
+        // that would otherwise say what this row is.
+        readOnly={props.locked}
         onChange={props.onFirstChange}
       />
       <RowField
@@ -522,22 +549,31 @@ function EditorRow(props: {
         placeholder={props.secondPlaceholder}
         value={props.secondValue}
         error={secondError}
+        readOnly={false}
         onChange={props.onSecondChange}
       />
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="ghost"
-        className={cn(
-          "mt-1 text-muted-foreground",
-          "hover:bg-destructive/10 hover:text-destructive",
-        )}
-        disabled={props.removeDisabled}
-        onClick={props.onRemove}
-        aria-label={props.removeLabel}
-      >
-        <Trash2 className="size-3.5" />
-      </Button>
+      {props.locked ? (
+        // GONE, not disabled. A disabled control says "not right now"; this row
+        // can never be removed from this form, and a button that will never
+        // enable is an affordance that lies. The section's note carries the
+        // real route.
+        <div aria-hidden className="mt-1 size-7 shrink-0" />
+      ) : (
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className={cn(
+            "mt-1 text-muted-foreground",
+            "hover:bg-destructive/10 hover:text-destructive",
+          )}
+          disabled={props.removeDisabled}
+          onClick={props.onRemove}
+          aria-label={props.removeLabel}
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
+      )}
     </div>
   );
 }
@@ -556,6 +592,7 @@ function RowField(props: {
   readonly placeholder: string;
   readonly value: string;
   readonly error: string | null;
+  readonly readOnly: boolean;
   readonly onChange: (value: string) => void;
 }): ReactNode {
   const messageId = `${props.id}-message`;
@@ -569,6 +606,8 @@ function RowField(props: {
         placeholder={props.placeholder}
         autoComplete="off"
         spellCheck={false}
+        readOnly={props.readOnly}
+        className={cn(props.readOnly && "text-muted-foreground")}
         onChange={(event) => {
           props.onChange(event.target.value);
         }}

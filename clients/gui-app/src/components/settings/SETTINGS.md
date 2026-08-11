@@ -1027,6 +1027,35 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
          "leave the stored one alone", never "clear it", and the helper text says
          so in edit mode. An env REFERENCE is restored verbatim: it is not a secret,
          and blanking it would silently drop it on the next save.
+    - **Edit can ADD and CHANGE; it cannot REMOVE.** The write is a deep merge,
+      and removal is not something the provider's API can express — probed, not
+      assumed. A null model entry is answered with a 400; a null header value is
+      *accepted* and stores the literal null, poisoning a file the provider's own
+      CLI reads. Their own app never hit this because it has no Edit at all, so
+      removal was never in the contract their API was written to.
+      So a row already in the config is **locked**: no trash on it, and its KEY
+      is read-only while the value beside it stays editable. The key lock is the
+      non-obvious half and it is not fussiness — under a deep merge a key rename
+      is **a removal wearing a rename**: the payload adds the new key and nothing
+      deletes the old one, so one edit yields two entries plus an orphan the user
+      can now never remove. Renaming a model's display name or changing a
+      header's value carries no such risk, which is exactly why the row splits
+      down the middle rather than locking whole.
+      The trash is **gone, not disabled**, on those rows: a disabled control says
+      "not right now", and this one can never enable. The section note carries the
+      honest route instead — disable the provider and declare it again under a
+      new id. Rows added during the session keep their trash until save, since
+      nothing is stored under them yet, and **create mode is untouched**:
+      everything is removable before it is written. A stored key is also left
+      UNJUDGED by validation, for the same reason an existing provider id is —
+      the field is read-only and the file is hand-editable, so a complaint there
+      is one the user cannot act on; it still enters the duplicate set, so a NEW
+      row colliding with it is flagged on the row that can change.
+      The host refuses removal-shaped updates with `invalid_input` as a backstop
+      for a stale client, and that detail renders **on the form**, which is the
+      only surface that can say which key went missing.
+      `env` is the one genuine exception — it clears at block level, so an emptied
+      key field really does mean "drop the fallbacks".
     - **The global "All providers" status lives on the panel HEADING row**, and
       renders only when `isHostScopeUsable(scope.status)`.
       `latestProviderCheckedAt` is a max over every provider and Refresh

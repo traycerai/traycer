@@ -822,6 +822,53 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     });
   });
 
+  it("shows the host's refusal when a removal-shaped update reaches it", () => {
+    // The form cannot express a removal - stored rows have no trash and their
+    // keys are read-only - so this is the STALE CLIENT case: a renderer built
+    // before the lock, or a config that changed under an open dialog. The host
+    // refuses it, and its detail is the only text that can say which key went
+    // missing, so it belongs on the form rather than in a toast the user reads
+    // after the dialog is gone.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    act(() => {
+      hostMocks.authMutate.mock.calls[0][1].onSuccess({
+        result: {
+          kind: "error",
+          code: "invalid_input",
+          detail: "models must keep every stored id: 'a' is missing",
+        },
+      });
+    });
+    expect(
+      screen.getByText("models must keep every stored id: 'a' is missing"),
+    ).toBeTruthy();
+    // And the form is still there to act on, holding the values that were sent.
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it("re-enables a disabled declaration with no form in between", () => {
     // A declared row that is off re-enables through `updateCustom` with its OWN
     // values - the wire has no enable verb, deliberately. Connect would demand

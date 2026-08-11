@@ -50,6 +50,17 @@ function fillValidForm(): void {
   typeNth("Name", 0, "Display Name");
 }
 
+/** A declaration that is already in the config - every row of it stored. */
+const STORED: CustomProviderValues = {
+  modelProviderId: "myprovider",
+  name: "My AI Provider",
+  baseUrl: "https://api.myprovider.com/v1",
+  models: [{ id: "a", name: "A" }],
+  headers: [{ key: "X-Org", value: "acme" }],
+  key: null,
+  env: [],
+};
+
 beforeEach(() => {
   mocks.openExternalLink.mockReset();
 });
@@ -289,6 +300,116 @@ describe("custom model provider dialog", () => {
       key: null,
       env: [],
     });
+  });
+
+  it("locks a STORED row's key and leaves its value editable", () => {
+    // The write is a deep merge with no way to say "delete this key", so
+    // changing one is not a rename - it adds the new key and leaves the old one
+    // behind, which is a duplicate plus an orphan nothing can now remove. The
+    // value beside it carries no such risk.
+    const onSubmit = vi.fn();
+    renderDialog({
+      initial: STORED,
+      takenIds: ["myprovider"],
+      disabledIds: [],
+      onSubmit,
+      submitError: null,
+    });
+    expect(screen.getAllByLabelText("ID")[0].hasAttribute("readonly")).toBe(
+      true,
+    );
+    expect(screen.getAllByLabelText("Header")[0].hasAttribute("readonly")).toBe(
+      true,
+    );
+    expect(screen.getAllByLabelText("Name")[0].hasAttribute("readonly")).toBe(
+      false,
+    );
+    expect(screen.getAllByLabelText("Value")[0].hasAttribute("readonly")).toBe(
+      false,
+    );
+
+    typeNth("Name", 0, "A renamed");
+    typeNth("Value", 0, "wonka");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      modelProviderId: "myprovider",
+      name: "My AI Provider",
+      baseUrl: "https://api.myprovider.com/v1",
+      // The key rides through untouched; only what sits beside it moved.
+      models: [{ id: "a", name: "A renamed" }],
+      headers: [{ key: "X-Org", value: "wonka" }],
+      key: null,
+      env: [],
+    });
+  });
+
+  it("gives a stored row NO remove, rather than a disabled one", () => {
+    // A disabled control says "not right now". This row can never be removed
+    // from this form, so the button would be an affordance that lies.
+    renderDialog({
+      initial: STORED,
+      takenIds: ["myprovider"],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    expect(screen.queryByRole("button", { name: "Remove model 1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove header 1" })).toBeNull();
+  });
+
+  it("keeps the trash on a row added during this session", () => {
+    // Nothing is stored under it yet, so there is nothing the merge could
+    // orphan - it is removable right up until save.
+    renderDialog({
+      initial: STORED,
+      takenIds: ["myprovider"],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    const remove = screen.getByRole("button", { name: "Remove model 2" });
+    expect(remove.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(remove);
+    expect(screen.getAllByPlaceholderText("model-id")).toHaveLength(1);
+  });
+
+  it("says why the rows are locked, and where the removal path is", () => {
+    // "Why is there no delete button" is the question this surface will be
+    // asked, and the honest answer names the route that does work.
+    renderDialog({
+      initial: STORED,
+      takenIds: ["myprovider"],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    expect(
+      screen.getByText(/Saved models can be renamed but not removed/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Saved headers can have their value changed/),
+    ).toBeTruthy();
+  });
+
+  it("leaves CREATE alone - everything is removable before it is saved", () => {
+    renderDialog({
+      initial: null,
+      takenIds: [],
+      disabledIds: [],
+      onSubmit: vi.fn(),
+      submitError: null,
+    });
+    expect(screen.getAllByLabelText("ID")[0].hasAttribute("readonly")).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Remove model 1" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.queryByText(/Saved models/)).toBeNull();
   });
 
   it("round-trips a dotted id like wafer.ai through Edit -> Save", () => {

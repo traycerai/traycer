@@ -10,6 +10,8 @@ import {
   suggestCustomProviderId,
   validateCustomProviderDraft,
   type CustomProviderDraft,
+  type CustomProviderHeaderRow,
+  type CustomProviderModelRow,
 } from "@/components/settings/panels/model-provider-custom-draft";
 
 /**
@@ -23,13 +25,33 @@ const CREATE = { takenIds: [], disabledIds: [], existing: false };
 /** A value that came off an existing row: only the hazard rule applies. */
 const EXISTING = { takenIds: [], disabledIds: [], existing: true };
 
+/**
+ * A row TYPED in this session: removable, and its key still the form's to
+ * judge. The stored counterpart is locked - see the `stored rows` block.
+ */
+function typedModel(
+  row: string,
+  id: string,
+  name: string,
+): CustomProviderModelRow {
+  return { row, id, name, locked: false };
+}
+
+function typedHeader(
+  row: string,
+  key: string,
+  value: string,
+): CustomProviderHeaderRow {
+  return { row, key, value, locked: false };
+}
+
 function draft(overrides: Partial<CustomProviderDraft>): CustomProviderDraft {
   return {
     ...emptyCustomProviderDraft(),
     providerId: "myprovider",
     name: "My AI Provider",
     baseUrl: "https://api.myprovider.com/v1",
-    models: [{ row: "m1", id: "model-id", name: "Display Name" }],
+    models: [typedModel("m1", "model-id", "Display Name")],
     ...overrides,
   };
 }
@@ -131,7 +153,7 @@ describe("base URL", () => {
 describe("model rows", () => {
   it("requires an id AND a display name per row", () => {
     const errors = validateCustomProviderDraft(
-      draft({ models: [{ row: "m1", id: "", name: "" }] }),
+      draft({ models: [typedModel("m1", "", "")] }),
       CREATE,
     );
     expect(errors.models[0]).toEqual({ first: "Required", second: "Required" });
@@ -142,9 +164,9 @@ describe("model rows", () => {
     const errors = validateCustomProviderDraft(
       draft({
         models: [
-          { row: "m1", id: "gpt-4o", name: "One" },
-          { row: "m2", id: "GPT-4o", name: "Two" },
-          { row: "m3", id: "gpt-4o", name: "Three" },
+          typedModel("m1", "gpt-4o", "One"),
+          typedModel("m2", "GPT-4o", "Two"),
+          typedModel("m3", "gpt-4o", "Three"),
         ],
       }),
       CREATE,
@@ -165,7 +187,7 @@ describe("header rows", () => {
 
   it("requires the other half once either is typed", () => {
     const errors = validateCustomProviderDraft(
-      draft({ headers: [{ row: "h1", key: "X-Key", value: "" }] }),
+      draft({ headers: [typedHeader("h1", "X-Key", "")] }),
       CREATE,
     );
     expect(errors.headers[0]).toEqual({ first: null, second: "Required" });
@@ -177,8 +199,8 @@ describe("header rows", () => {
     const errors = validateCustomProviderDraft(
       draft({
         headers: [
-          { row: "h1", key: "X-Key", value: "a" },
-          { row: "h2", key: "x-key", value: "b" },
+          typedHeader("h1", "X-Key", "a"),
+          typedHeader("h2", "x-key", "b"),
         ],
       }),
       CREATE,
@@ -218,10 +240,10 @@ describe("values for the wire", () => {
           // it has been edited.
           apiKey: "sk-live-123",
           apiKeyEdited: true,
-          models: [{ row: "m1", id: " a ", name: " A " }],
+          models: [typedModel("m1", " a ", " A ")],
           headers: [
-            { row: "h1", key: " X-Key ", value: " v " },
-            { row: "h2", key: "", value: "" },
+            typedHeader("h1", " X-Key ", " v "),
+            typedHeader("h2", "", ""),
           ],
         }),
         CREATE,
@@ -241,7 +263,7 @@ describe("values for the wire", () => {
   it("answers null rather than a half-built payload", () => {
     expect(
       customProviderValues(
-        draft({ models: [{ row: "m1", id: "a", name: "" }] }),
+        draft({ models: [typedModel("m1", "a", "")] }),
         CREATE,
       ),
     ).toBeNull();
@@ -310,6 +332,57 @@ describe("editing an existing declaration", () => {
     expect(prefilled.headers.map((row) => [row.key, row.value])).toEqual([
       ["X-Key", "v"],
     ]);
+  });
+
+  it("marks the rows that came off the CONFIG as stored", () => {
+    // The lock is provenance, not position: these are the rows the deep merge
+    // can no longer be told to delete.
+    const prefilled = customProviderDraftFrom(values);
+    expect(prefilled.models.map((row) => row.locked)).toEqual([true]);
+    expect(prefilled.headers.map((row) => row.locked)).toEqual([true]);
+  });
+
+  it("does NOT lock the blank row substituted for an empty list", () => {
+    // Nothing is stored under it, so there is nothing to orphan - locking it
+    // would strand a declaration with no models behind an unusable form.
+    const empty = customProviderDraftFrom({
+      ...values,
+      models: [],
+      headers: [],
+    });
+    expect(empty.models.map((row) => row.locked)).toEqual([false]);
+    expect(empty.headers.map((row) => row.locked)).toEqual([false]);
+  });
+
+  it("does not judge a STORED key, but still judges what sits beside it", () => {
+    // Same reasoning as an existing provider id: the value came off a
+    // hand-editable file rather than out of this form, and the field is
+    // read-only - so a complaint there is one the user cannot act on, and it
+    // would strand the only surface that can repair the rest of the row. The
+    // display name is editable, so its complaint stays.
+    const broken = {
+      ...customProviderDraftFrom(values),
+      models: [{ row: "m1", id: "", name: "", locked: true }],
+    };
+    expect(validateCustomProviderDraft(broken, EXISTING).models[0]).toEqual({
+      first: null,
+      second: "Required",
+    });
+  });
+
+  it("still flags a NEW row that collides with a stored key", () => {
+    // The stored key is unjudged, not invisible: the duplicate is reported on
+    // the row that can actually change.
+    const collide = {
+      ...customProviderDraftFrom(values),
+      models: [
+        { row: "m1", id: "a", name: "A", locked: true },
+        { row: "m2", id: "a", name: "Also A", locked: false },
+      ],
+    };
+    const errors = validateCustomProviderDraft(collide, EXISTING);
+    expect(errors.models[0].first).toBeNull();
+    expect(errors.models[1].first).toBe("Duplicate");
   });
 
   it("reads an entry's declared values off the wire", () => {

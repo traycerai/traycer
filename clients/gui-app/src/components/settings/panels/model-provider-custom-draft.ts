@@ -19,8 +19,30 @@
  * is not a thing this flow can honestly create.
  */
 
+/**
+ * Whether a row is already STORED in the provider's config.
+ *
+ * The write is a deep merge, so a stored row can be added to and changed but
+ * never taken away: the payload has no way to say "delete this key", and the
+ * two ways of trying are both worse than refusing. Sending a null model entry
+ * is a 400; sending a null header value is accepted and stores the literal
+ * null, poisoning a file the provider's own CLI reads.
+ *
+ * That makes removal impossible rather than merely unimplemented, and it makes
+ * a KEY rename a removal wearing a rename - the merge adds the new key and
+ * leaves the old one behind, so one edit yields two entries and an orphan
+ * nothing can now delete. Hence the split the dialog renders: a locked row's
+ * key is read-only, its value is not.
+ *
+ * False for every row created in the form, which is removable until it is
+ * saved, and for both modes of a fresh declaration.
+ */
+type StoredRow = {
+  readonly locked: boolean;
+};
+
 /** One model the endpoint serves. Upstream requires a display name per row. */
-export type CustomProviderModelRow = {
+export type CustomProviderModelRow = StoredRow & {
   /** Stable identity for the list; never sent. */
   readonly row: string;
   readonly id: string;
@@ -28,7 +50,7 @@ export type CustomProviderModelRow = {
 };
 
 /** One extra request header - upstream's escape hatch for header-based auth. */
-export type CustomProviderHeaderRow = {
+export type CustomProviderHeaderRow = StoredRow & {
   readonly row: string;
   readonly key: string;
   readonly value: string;
@@ -108,11 +130,11 @@ function nextRowId(): string {
 }
 
 export function emptyCustomProviderModelRow(): CustomProviderModelRow {
-  return { row: nextRowId(), id: "", name: "" };
+  return { row: nextRowId(), id: "", name: "", locked: false };
 }
 
 export function emptyCustomProviderHeaderRow(): CustomProviderHeaderRow {
-  return { row: nextRowId(), key: "", value: "" };
+  return { row: nextRowId(), key: "", value: "", locked: false };
 }
 
 /**
@@ -151,6 +173,9 @@ export function customProviderDraftFrom(
     apiKey: values.env.length === 1 ? `{env:${values.env[0]}}` : "",
     apiKeyEdited: false,
     originalEnv: values.env,
+    // The rows that came off the config are LOCKED; the blank row substituted
+    // for an empty list is not one of them - nothing is stored under it, so
+    // there is nothing the merge could orphan.
     models:
       values.models.length === 0
         ? [emptyCustomProviderModelRow()]
@@ -158,6 +183,7 @@ export function customProviderDraftFrom(
             row: nextRowId(),
             id: model.id,
             name: model.name,
+            locked: true,
           })),
     headers:
       values.headers.length === 0
@@ -166,6 +192,7 @@ export function customProviderDraftFrom(
             row: nextRowId(),
             key: header.key,
             value: header.value,
+            locked: true,
           })),
   };
 }
@@ -275,6 +302,13 @@ function requiredRowError(value: string, duplicate: boolean): string | null {
 /**
  * Per-row model errors. Ids are compared CASE-SENSITIVELY, because a model id
  * is sent to the endpoint verbatim and `GPT-4o` is not `gpt-4o` to it.
+ *
+ * A LOCKED row's key is not judged, for the same reason an existing provider id
+ * is not: it came off the config rather than out of this form, the field is
+ * read-only, and `opencode.json` is hand-editable - so a complaint there is one
+ * the user cannot act on and would strand the only surface that can repair the
+ * rest of the row. Its key still enters `seen`, so a NEW row colliding with it
+ * is still flagged, on the row that can actually change.
  */
 function modelRowErrors(
   rows: readonly CustomProviderModelRow[],
@@ -285,7 +319,7 @@ function modelRowErrors(
     const duplicate = seen.has(id);
     if (id.length > 0) seen.add(id);
     return {
-      first: requiredRowError(id, duplicate),
+      first: row.locked ? null : requiredRowError(id, duplicate),
       second: row.name.trim().length === 0 ? "Required" : null,
     };
   });
@@ -314,7 +348,8 @@ function headerRowErrors(
     const duplicate = seen.has(key.toLowerCase());
     if (key.length > 0) seen.add(key.toLowerCase());
     return {
-      first: requiredRowError(key, duplicate),
+      // Locked keys go unjudged - see {@link modelRowErrors}.
+      first: row.locked ? null : requiredRowError(key, duplicate),
       second: value.length === 0 ? "Required" : null,
     };
   });
@@ -463,6 +498,10 @@ export function canReenableCustomProvider(
         apiKey: "",
         apiKeyEdited: false,
         originalEnv: values.env,
+        // Judged UNLOCKED, deliberately: this asks whether the write side would
+        // accept these values, and locking would skip the very key checks that
+        // question is about. The dialog locks rows to protect a stored key from
+        // being orphaned by an edit; nothing is being edited here.
         models:
           values.models.length === 0
             ? [emptyCustomProviderModelRow()]
@@ -470,6 +509,7 @@ export function canReenableCustomProvider(
                 row: model.id,
                 id: model.id,
                 name: model.name,
+                locked: false,
               })),
         // The row's REAL headers, not a blank row. Re-enable sends
         // `updateCustom` with these, so judging viability without them judges a
@@ -481,6 +521,7 @@ export function canReenableCustomProvider(
                 row: header.key,
                 key: header.key,
                 value: header.value,
+                locked: false,
               })),
       },
       // An EXISTING declaration, so its id is judged as one.
