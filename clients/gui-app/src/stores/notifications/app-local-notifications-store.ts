@@ -55,6 +55,12 @@ export type AppLocalNotificationKind =
 
 export interface AppLocalNotificationInput {
   readonly id: string;
+  /**
+   * Host that produced this renderer-local failure. Legacy and host-agnostic
+   * rows omit it; those rows must never be consumed by a host completion
+   * because their lineage cannot be proven.
+   */
+  readonly originHostId?: string | null;
   readonly updatedAt: number;
   readonly readAt: number | null;
   readonly kind: AppLocalNotificationKind;
@@ -267,6 +273,12 @@ function hasObservedCompletion(
   );
 }
 
+function isPersistedOriginHostId(
+  value: unknown,
+): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
 function parsePersistedAppLocalEntry(
   id: string,
   value: unknown,
@@ -282,12 +294,15 @@ function parsePersistedAppLocalEntry(
     (value.sourceRef !== null && typeof value.sourceRef !== "string") ||
     typeof value.message !== "string" ||
     (value.detail !== null && typeof value.detail !== "string") ||
+    !isPersistedOriginHostId(value.originHostId) ||
     !isPersistedDisplayReceipt(value.displayedUpdatedAt)
   ) {
     return null;
   }
   return {
     id,
+    originHostId:
+      typeof value.originHostId === "string" ? value.originHostId : null,
     updatedAt: value.updatedAt,
     readAt: value.readAt,
     kind: value.kind,
@@ -307,6 +322,7 @@ export function parseForegroundAppLocalNotificationEntry(
   if (parsed === null) return null;
   return {
     id: parsed.id,
+    originHostId: parsed.originHostId,
     updatedAt: parsed.updatedAt,
     readAt: parsed.readAt,
     kind: parsed.kind,
@@ -567,6 +583,7 @@ export function createAppLocalNotificationsStore(initialName: string) {
             const supersededEntries = Object.values(state.byId).filter(
               (entry) => {
                 if (entry.readAt !== null) return false;
+                if (entry.originHostId !== originHostId) return false;
                 const entryEntity = notificationEntityFromPayload(
                   entry.payload,
                 );
@@ -810,12 +827,14 @@ export function emitTerminalCrashedNotification(input: {
 }
 
 export function emitChatStreamErrorNotification(input: {
+  readonly hostId: string;
   readonly epicId: string;
   readonly chatId: string;
   readonly details: FatalErrorDetails;
 }): void {
   useAppLocalNotificationsStore.getState().upsertRecurringFailure({
-    id: `stream.transport.error:${input.chatId}:${input.details.code}`,
+    id: `stream.transport.error:${input.hostId}:${input.chatId}:${input.details.code}`,
+    originHostId: input.hostId,
     updatedAt: Date.now(),
     readAt: null,
     kind: "stream.transport.error",

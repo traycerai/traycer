@@ -317,6 +317,7 @@ function renderIcon() {
 
 function createHandle(): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: null,

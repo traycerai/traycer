@@ -958,6 +958,7 @@ describe("<NotificationsSessionProvider />", () => {
     }
     useAppLocalNotificationsStore.getState().upsert({
       id: "cross-plane-later-failure",
+      originHostId: baseline.originHostId,
       updatedAt: 25,
       readAt: null,
       kind: "stream.transport.error",
@@ -984,6 +985,32 @@ describe("<NotificationsSessionProvider />", () => {
         .readAt,
     ).toBeNull();
 
+    const otherHostCompletion = {
+      ...cloudRow("cloud-entry-other-host", baseline.entry.updatedAt),
+      originHostId: "host-b",
+    };
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 2,
+        rows: [baseline, otherHostCompletion],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().observedCompletionsByHost[
+          "host-b"
+        ],
+      ).toBeDefined();
+    });
+    expect(
+      useAppLocalNotificationsStore.getState().byId["cross-plane-later-failure"]
+        .readAt,
+    ).toBeNull();
+
     const arrived = {
       ...cloudRow("cloud-entry-arrived", baseline.entry.updatedAt),
       coalesceKey: baseline.coalesceKey,
@@ -997,8 +1024,8 @@ describe("<NotificationsSessionProvider />", () => {
         kind: "snapshot",
         hasBinaryPayload: false,
         connectionState: "connected",
-        version: 2,
-        rows: [baseline, arrived],
+        version: 3,
+        rows: [baseline, otherHostCompletion, arrived],
         summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
       });
     });
@@ -2081,6 +2108,7 @@ describe("<NotificationsSessionProvider />", () => {
       await renderHostNotificationsProvider();
     useAppLocalNotificationsStore.getState().upsert({
       id: "observed-local-error",
+      originHostId: mockLocalHostEntry.hostId,
       updatedAt: 2,
       readAt: null,
       kind: "stream.transport.error",
@@ -2091,6 +2119,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     useAppLocalNotificationsStore.getState().upsert({
       id: "sibling-local-error",
+      originHostId: mockLocalHostEntry.hostId,
       updatedAt: 0,
       readAt: null,
       kind: "stream.transport.error",
@@ -2123,6 +2152,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     useAppLocalNotificationsStore.getState().upsert({
       id: "later-local-error",
+      originHostId: mockLocalHostEntry.hostId,
       updatedAt: 0,
       readAt: null,
       kind: "stream.transport.error",

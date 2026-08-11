@@ -567,6 +567,7 @@ export interface ChatSessionState {
 }
 
 export interface ChatSessionStoreOptions {
+  readonly hostId: string;
   readonly epicId: string;
   readonly chatId: string;
   readonly userId: string | null;
@@ -1671,6 +1672,7 @@ export function createChatSessionStore(
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
           emitChatStreamErrorNotification({
+            hostId: options.hostId,
             epicId: options.epicId,
             chatId: options.chatId,
             details: reason.details,

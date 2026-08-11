@@ -26,6 +26,7 @@ function entry(
 ): AppLocalNotificationEntry {
   return {
     id,
+    originHostId: "host-a",
     updatedAt,
     readAt,
     kind: "stream.transport.error",
@@ -249,6 +250,36 @@ describe("app-local notifications store", () => {
     expect(store.getState().byId["older-match"].readAt).toBe(20);
     expect(store.getState().byId["later-match"].readAt).toBeNull();
     expect(store.getState().byId["older-sibling"].readAt).toBeNull();
+  });
+
+  it("does not consume an exact-entity failure from another host", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("host-a-failure", 10, null));
+
+    store
+      .getState()
+      .observeCompletion(
+        "host-b",
+        { id: "host-b-completion", occurrenceKey: "host-b-completion@20" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        20,
+      );
+
+    expect(store.getState().byId["host-a-failure"].readAt).toBeNull();
+
+    store
+      .getState()
+      .observeCompletion(
+        "host-a",
+        { id: "host-a-completion", occurrenceKey: "host-a-completion@30" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        30,
+      );
+
+    expect(store.getState().byId["host-a-failure"].readAt).toBe(30);
   });
 
   it("persists completion observations so a remount cannot replay one over a later failure", () => {
@@ -492,11 +523,13 @@ describe("app-local notifications store", () => {
       upgradeGuidance: null,
     };
     emitChatStreamErrorNotification({
+      hostId: "host-a",
       epicId: "epic-1",
       chatId: "chat-1",
       details,
     });
-    const notificationId = "stream.transport.error:chat-1:CONNECTION_LOST";
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
     useAppLocalNotificationsStore
       .getState()
       .observeCompletion(
@@ -506,6 +539,7 @@ describe("app-local notifications store", () => {
         20,
       );
     emitChatStreamErrorNotification({
+      hostId: "host-a",
       epicId: "epic-1",
       chatId: "chat-1",
       details,
@@ -515,6 +549,44 @@ describe("app-local notifications store", () => {
     expect(state.orderedIds).toEqual([notificationId]);
     expect(state.byId[notificationId].readAt).toBeNull();
     expect(state.unreadCount).toBe(1);
+  });
+
+  it("keeps same-code chat disconnects from different hosts independent", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    const details = {
+      code: "CONNECTION_LOST",
+      reason: "Connection lost",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+
+    emitChatStreamErrorNotification({
+      hostId: "host-a",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      details,
+    });
+    emitChatStreamErrorNotification({
+      hostId: "host-b",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      details,
+    });
+
+    const state = useAppLocalNotificationsStore.getState();
+    expect(state.orderedIds).toEqual([
+      "stream.transport.error:host-b:chat-1:CONNECTION_LOST",
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST",
+    ]);
+    expect(
+      state.byId["stream.transport.error:host-a:chat-1:CONNECTION_LOST"]
+        .originHostId,
+    ).toBe("host-a");
+    expect(
+      state.byId["stream.transport.error:host-b:chat-1:CONNECTION_LOST"]
+        .originHostId,
+    ).toBe("host-b");
+    expect(state.unreadCount).toBe(2);
   });
 
   it("consumes only epic-level rows for an epic-only presence", () => {

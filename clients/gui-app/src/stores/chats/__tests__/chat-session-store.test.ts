@@ -240,6 +240,7 @@ function createHarness(): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -273,6 +274,7 @@ function createProtocolChainHarness(
   const mockWs = new ProtocolMockWsStreamClient(negotiatedVersion);
   const created: { client: ChatStreamClient | null } = { client: null };
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -612,7 +614,8 @@ describe("createChatSessionStore", () => {
         upgradeGuidance: null,
       },
     };
-    const notificationId = "stream.transport.error:chat-1:CONNECTION_LOST";
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
 
     harness.callbacks().onConnectionStatus("closed", reason);
     useAppLocalNotificationsStore
@@ -635,6 +638,7 @@ describe("createChatSessionStore", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     let closeCalls = 0;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -686,6 +690,7 @@ describe("createChatSessionStore", () => {
   it("retry ignores callbacks from the stale stream client", () => {
     let lastCallbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -4884,6 +4889,7 @@ function createCoalesceHarness(): CoalesceHarness {
   const manual = createManualCoordinator();
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: OWNER_ID,
@@ -5112,6 +5118,7 @@ describe("surface visibility rollup", () => {
       }),
     };
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
@@ -5562,6 +5569,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     let nudges = 0;
     let callbacks: ChatStreamCallbacks | null = null;
     const handle = createChatSessionStore({
+      hostId: "host-a",
       epicId: EPIC_ID,
       chatId: CHAT_ID,
       userId: OWNER_ID,
