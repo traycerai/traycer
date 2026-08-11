@@ -167,6 +167,47 @@ describe("versionDeleteEligibility", () => {
     });
     expect(versionDeleteEligibility(row)).toEqual({ allowed: true });
   });
+
+  // The host reserves a quarantined directory as evidence of a failed
+  // verification and answers `quarantine-reserved`, so an enabled Delete here
+  // is an action offered solely to be refused.
+  it("does not allow Delete for a quarantined version", () => {
+    const result = versionDeleteEligibility(
+      version({
+        version: "1.1.0",
+        current: false,
+        installState: { status: "unusable", reason: "quarantined" },
+      }),
+    );
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      // Same sentence the refusal itself would produce, so the two cannot
+      // drift apart.
+      expect(result.reason).toBe(
+        removeResultUserMessage({
+          ok: false,
+          code: "quarantine-reserved",
+          detail: null,
+        }),
+      );
+    }
+  });
+
+  // The other unusable reasons are NOT reserved - the bytes are just bad, and
+  // deleting them is the repair.
+  it("still allows Delete for the other unusable reasons", () => {
+    for (const reason of ["corrupt", "unverified", "condemned"] as const) {
+      expect(
+        versionDeleteEligibility(
+          version({
+            version: "1.1.0",
+            current: false,
+            installState: { status: "unusable", reason },
+          }),
+        ),
+      ).toEqual({ allowed: true });
+    }
+  });
 });
 
 describe("versionDownloadEligibility", () => {

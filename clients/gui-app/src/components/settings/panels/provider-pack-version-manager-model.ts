@@ -189,7 +189,17 @@ export type VersionDeleteEligibility =
   | { readonly allowed: true }
   | { readonly allowed: false; readonly reason: string };
 
-/** Delete is never offered for the current version ("switch first"). */
+/**
+ * Delete is never offered for the current version ("switch first"), for a
+ * version with nothing on disk, or for a quarantined one.
+ *
+ * The quarantine arm mirrors a positive host rule rather than guessing: the
+ * remove RPC reserves a quarantined directory as evidence of a failed
+ * verification and answers `quarantine-reserved`. Offering the button anyway
+ * means offering an action solely to refuse it, and the row already has a
+ * better place to say why. The host stays the authority - a stale client can
+ * still ask, and still gets the typed refusal.
+ */
 export function versionDeleteEligibility(
   version: ProviderPackVersion,
 ): VersionDeleteEligibility {
@@ -201,6 +211,17 @@ export function versionDeleteEligibility(
     version.installState.status !== "unusable"
   ) {
     return { allowed: false, reason: "Not installed" };
+  }
+  if (
+    version.installState.status === "unusable" &&
+    version.installState.reason === "quarantined"
+  ) {
+    // Same sentence `removeResultUserMessage` gives for the refusal this
+    // pre-empts, so the disabled reason and the refusal cannot drift apart.
+    return {
+      allowed: false,
+      reason: "Held by quarantine after a failed verification",
+    };
   }
   return { allowed: true };
 }
