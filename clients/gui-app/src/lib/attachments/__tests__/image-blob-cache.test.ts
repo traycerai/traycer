@@ -40,8 +40,8 @@ describe("image-blob-cache", () => {
     const cache = createImageBlobCache(ops, 1000);
 
     const [a, b] = await Promise.all([
-      cache.acquire("h1", "image/png", fetcher),
-      cache.acquire("h1", "image/png", fetcher),
+      cache.acquire("h1", "image/png", fetcher, "grace"),
+      cache.acquire("h1", "image/png", fetcher, "grace"),
     ]);
 
     expect(a).toBe(b);
@@ -54,7 +54,7 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const url = await cache.acquire("h1", "image/png", fetcher);
+    const url = await cache.acquire("h1", "image/png", fetcher, "grace");
     cache.release("h1");
     expect(revoked).toHaveLength(0);
 
@@ -68,10 +68,10 @@ describe("image-blob-cache", () => {
     const { ops, revoked, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const first = await cache.acquire("h1", "image/png", fetcher);
+    const first = await cache.acquire("h1", "image/png", fetcher, "grace");
     cache.release("h1");
     await vi.advanceTimersByTimeAsync(500);
-    const second = await cache.acquire("h1", "image/png", fetcher);
+    const second = await cache.acquire("h1", "image/png", fetcher, "grace");
 
     expect(second).toBe(first);
     await vi.advanceTimersByTimeAsync(2000);
@@ -94,7 +94,7 @@ describe("image-blob-cache", () => {
     const { ops, created, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const pending = cache.acquire("h1", "image/png", fetcher);
+    const pending = cache.acquire("h1", "image/png", fetcher, "grace");
     cache.release("h1");
 
     await expect(pending).rejects.toThrow();
@@ -109,11 +109,50 @@ describe("image-blob-cache", () => {
     const { ops } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const a = await cache.acquire("h1", "image/png", fetcher);
-    const b = await cache.acquire("h2", "image/png", fetcher);
+    const a = await cache.acquire("h1", "image/png", fetcher, "grace");
+    const b = await cache.acquire("h2", "image/png", fetcher, "grace");
 
     expect(a).not.toBe(b);
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(cache.size()).toBe(2);
+  });
+
+  it("retains session URLs at zero references past the grace window", async () => {
+    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const url = await cache.acquire(
+      "session-hash",
+      "image/png",
+      fetcher,
+      "session",
+    );
+    cache.release("session-hash");
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(revoked).toHaveLength(0);
+    expect(cache.size()).toBe(1);
+    cache.clear();
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("clear revokes and removes zero-reference session entries", async () => {
+    const fetcher = vi.fn(() => Promise.resolve(new Uint8Array([1])));
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const url = await cache.acquire(
+      "clear-hash",
+      "image/png",
+      fetcher,
+      "session",
+    );
+    cache.release("clear-hash");
+    cache.clear();
+
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
   });
 });

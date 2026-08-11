@@ -76,7 +76,9 @@ export function useImageBlobUrlState(
     const acquire = (): void => {
       attemptCount += 1;
       imageBlobCache
-        .acquire(hash, mediaType, fetcher)
+        // Chat attachments are content-hash-keyed but not treated as
+        // session-immutable here - unchanged grace-window behavior.
+        .acquire(hash, mediaType, fetcher, "grace")
         .then((url) => {
           if (!active) return;
           cancelUnavailable?.();

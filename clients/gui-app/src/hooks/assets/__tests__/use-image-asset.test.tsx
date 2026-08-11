@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { AssetStreamServerFrame } from "@traycer/protocol/host/asset-stream-schemas";
 import type {
@@ -19,6 +20,10 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { useImageAsset, type ImageAssetRequest } from "../use-image-asset";
 import type { AssetStreamFailureReason } from "@traycer-clients/shared/host-transport/asset-stream-client";
 
@@ -144,6 +149,23 @@ const GIT_REQUEST: ImageAssetRequest = {
   stage: "staged",
 };
 
+interface PaneTestState {
+  focused: boolean;
+  visible: boolean;
+}
+
+function makePaneWrapper(state: PaneTestState) {
+  return ({ children }: { readonly children: ReactNode }) => (
+    <PaneSurfaceActivityContext.Provider
+      value={{ focused: state.focused, visible: state.visible }}
+    >
+      <PaneVisibilityContext.Provider value={state.visible}>
+        {children}
+      </PaneVisibilityContext.Provider>
+    </PaneSurfaceActivityContext.Provider>
+  );
+}
+
 function headerFrame(
   contentIdentity: string,
   sizeBytes: number,
@@ -176,6 +198,19 @@ function emitBytes(session: MockStreamSession, bytes: readonly number[]): void {
       byteLength: bytes.length,
     },
     new Uint8Array(bytes),
+  );
+  session.emitFrame({ kind: "assetComplete", hasBinaryPayload: false }, null);
+}
+
+function emitLengthMismatchAfterHeader(session: MockStreamSession): void {
+  session.emitFrame(
+    {
+      kind: "assetChunk",
+      hasBinaryPayload: true,
+      index: 0,
+      byteLength: 1,
+    },
+    new Uint8Array([1]),
   );
   session.emitFrame({ kind: "assetComplete", hasBinaryPayload: false }, null);
 }
@@ -372,6 +407,12 @@ afterEach(async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(10_000);
   });
+  // "session"-retention entries (immutable git object identities) never
+  // revoke on their own - advancing timers above only clears grace-retention
+  // ones. This is the shared app-wide singleton, so a leftover session entry
+  // from one test would otherwise leak into every later test's size()/URL
+  // assertions.
+  imageBlobCache.clear();
   wsStreamClientRef.value = null;
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -458,7 +499,10 @@ describe("useImageAsset", () => {
     expect(first.result.current.url).toBe("blob:image/1");
     expect(second.result.current.url).toBe("blob:image/1");
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
-    expect(firstSession.closed).toBe(false);
+    // Owning session self-closes once ITS OWN assetComplete lands
+    // (de02da59: every terminal path closes), same as the redundant
+    // second session closing immediately on the cache hit.
+    expect(firstSession.closed).toBe(true);
     expect(secondSession.closed).toBe(true);
 
     first.unmount();
@@ -470,6 +514,73 @@ describe("useImageAsset", () => {
     expect(revokeObjectUrlMock).toHaveBeenCalledWith("blob:image/1");
     expect(revokeObjectUrlMock).toHaveBeenCalledTimes(1);
     expect(imageBlobCache.size()).toBe(0);
+  });
+
+  it("keeps the owning stream alive when its first mount unmounts mid-fetch", async () => {
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "shared-in-flight", 3);
+    });
+
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const secondSession = mockWsStreamClient.sessions[1];
+    act(() => {
+      emitHeader(secondSession, "shared-in-flight", 3);
+    });
+
+    first.unmount();
+    expect(firstSession.closed).toBe(false);
+
+    act(() => {
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+
+    expect(second.result.current.status).toBe("ready");
+    expect(second.result.current.url).toBe("blob:image/1");
+    expect(firstSession.closed).toBe(true);
+    expect(secondSession.closed).toBe(true);
+    second.unmount();
+  });
+
+  it("retries a shared identity after the owning stream fails", async () => {
+    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "retryable-identity", 3);
+    });
+
+    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    const secondSession = mockWsStreamClient.sessions[1];
+    act(() => {
+      emitHeader(secondSession, "retryable-identity", 3);
+      emitLengthMismatchAfterHeader(firstSession);
+    });
+    await flushPromises();
+
+    expect(first.result.current.status).toBe("fallback");
+    expect(second.result.current.status).toBe("fallback");
+    expect(imageBlobCache.size()).toBe(0);
+
+    const third = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    expect(mockWsStreamClient.sessions).toHaveLength(3);
+    const thirdSession = mockWsStreamClient.sessions[2];
+    act(() => {
+      emitHeader(thirdSession, "retryable-identity", 3);
+    });
+
+    expect(third.result.current.status).toBe("header");
+    expect(thirdSession.closed).toBe(false);
+    expect(imageBlobCache.size()).toBe(1);
+
+    first.unmount();
+    second.unmount();
+    third.unmount();
   });
 
   it("opens the git stream and keys the old side separately", async () => {
@@ -582,6 +693,61 @@ describe("useImageAsset", () => {
     expect(result.current.status).toBe("ready");
     expect(result.current.meta?.sizeBytes).toBe(3);
     expect(result.current.url).toBe("blob:image/1");
+    unmount();
+  });
+
+  it("reopens a worktree-backed request on a blurred-to-focused transition", async () => {
+    const paneState: PaneTestState = { focused: true, visible: true };
+    const wrapper = makePaneWrapper(paneState);
+    const { result, rerender, unmount } = renderHook(
+      () => useImageAsset(WORKSPACE_REQUEST),
+      { wrapper },
+    );
+
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "focus-refresh", 3);
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+
+    paneState.focused = false;
+    rerender();
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+
+    paneState.focused = true;
+    rerender();
+    await flushPromises();
+    expect(mockWsStreamClient.sessions).toHaveLength(2);
+    unmount();
+  });
+
+  it("does not reopen an immutable git-object request on refocus", async () => {
+    const paneState: PaneTestState = { focused: true, visible: true };
+    const wrapper = makePaneWrapper(paneState);
+    const { result, rerender, unmount } = renderHook(
+      () => useImageAsset(GIT_REQUEST),
+      { wrapper },
+    );
+
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const firstSession = mockWsStreamClient.sessions[0];
+    act(() => {
+      emitHeader(firstSession, "immutable-git-oid", 3);
+      emitBytes(firstSession, [4, 5, 6]);
+    });
+    await flushPromises();
+    expect(result.current.status).toBe("ready");
+
+    paneState.focused = false;
+    rerender();
+    paneState.focused = true;
+    rerender();
+    await flushPromises();
+
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
     unmount();
   });
 });

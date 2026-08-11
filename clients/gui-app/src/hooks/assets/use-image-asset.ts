@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AssetStreamClient,
   type AssetStreamCallbacks,
@@ -8,11 +8,13 @@ import {
 } from "@traycer-clients/shared/host-transport/asset-stream-client";
 import type { AssetMediaType } from "@traycer/protocol/host/asset-stream-schemas";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   imageBlobCache,
+  type ImageBlobRetention,
   type ImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
 import {
@@ -111,7 +113,21 @@ function requestKeyFor(request: ImageAssetRequest): string {
     : `git|${request.runningDir}|${request.filePath}|${request.previousPath ?? ""}|${request.side}|${request.stage}`;
 }
 
-interface ImageAssetRequestPrimitives {
+/**
+ * Whether `request` reads live filesystem bytes that can change independently
+ * of any git object identity - the workspace file itself, or a git side's
+ * "new" position while unstaged (worktree via fs, per the tech plan's
+ * side-selection table). Every other git side (staged/HEAD/index reads) is
+ * immutable for the life of the session (decision #11): it must neither
+ * re-fetch on refocus nor lose its cached blob to grace-window revocation.
+ */
+function isWorktreeBackedRequest(request: ImageAssetRequest): boolean {
+  if (request.method === "workspace") return true;
+  return request.side === "new" && request.stage === "unstaged";
+}
+
+/** Built directly from primitive fields, inside the effect that needs it (no memoization - see the hook's doc comment). */
+function buildImageAssetRequest(fields: {
   readonly method: "workspace" | "git" | null;
   readonly filePath: string | null;
   readonly workspacePath: string | null;
@@ -119,44 +135,16 @@ interface ImageAssetRequestPrimitives {
   readonly previousPath: string | null;
   readonly side: "old" | "new" | null;
   readonly stage: "staged" | "unstaged" | null;
-}
-
-const EMPTY_REQUEST_PRIMITIVES: ImageAssetRequestPrimitives = {
-  method: null,
-  filePath: null,
-  workspacePath: null,
-  runningDir: null,
-  previousPath: null,
-  side: null,
-  stage: null,
-};
-
-/**
- * Flattens `request` to primitive fields so `useImageAsset` can build a
- * `useMemo` dependency array that stays stable across renders even when the
- * caller passes a fresh `request` object literal every time.
- */
-function extractRequestPrimitives(
-  request: ImageAssetRequest | null,
-): ImageAssetRequestPrimitives {
-  if (request === null) return EMPTY_REQUEST_PRIMITIVES;
-  if (request.method === "workspace") {
-    return {
-      ...EMPTY_REQUEST_PRIMITIVES,
-      method: "workspace",
-      filePath: request.filePath,
-      workspacePath: request.workspacePath,
-    };
+}): ImageAssetRequest | null {
+  const { method, filePath } = fields;
+  if (method === null || filePath === null) return null;
+  if (method === "workspace") {
+    if (fields.workspacePath === null) return null;
+    return { method, workspacePath: fields.workspacePath, filePath };
   }
-  return {
-    ...EMPTY_REQUEST_PRIMITIVES,
-    method: "git",
-    filePath: request.filePath,
-    runningDir: request.runningDir,
-    previousPath: request.previousPath,
-    side: request.side,
-    stage: request.stage,
-  };
+  const { runningDir, previousPath, side, stage } = fields;
+  if (runningDir === null || side === null || stage === null) return null;
+  return { method, runningDir, filePath, previousPath, side, stage };
 }
 
 /**
@@ -169,12 +157,21 @@ function extractRequestPrimitives(
  * `useHostStreamClientFor`), never the renderer-default host - mirrors
  * `usePrDetailSubscription`'s tab-scoped stream pattern.
  *
- * On a repeat mount of the same path whose header reports the SAME
- * `contentIdentity` as an already-cached fetch (a re-focused worktree tile,
- * or a second tile for the same git side), the cache lookup resolves without
- * this fetch's bytes ever being awaited, and the now-redundant stream is
- * closed immediately instead of assembling bytes nobody will use (decision
- * log #11: "bytes only re-transfer when the identity changed").
+ * `request` is reduced to primitive fields (not a `useMemo`-stabilized
+ * object) precisely because the caller passes a fresh literal every render;
+ * the effect below depends on those primitives directly and reconstructs the
+ * typed request from them itself - `buildImageAssetRequest` is a plain
+ * function, not a hook, so it needs no memoization to stay cheap.
+ *
+ * On a re-focus of a worktree-backed request (a workspace file, or a git
+ * side's unstaged worktree position), the stream reopens to re-stat the file
+ * (decision #11); immutable git-object sides never do. Whichever request
+ * OWNS the shared cache fetch (the first to reach a given identity) keeps its
+ * stream alive across its own unmount as long as the cache still has other
+ * consumers - only the cache's own last-reference-drops abort, or this
+ * fetch's own terminal frame, closes it - so a sibling `useImageAsset` still
+ * mid-fetch is never stranded on the header skeleton nor poisoned by an
+ * unrelated unmount.
  */
 export function useImageAsset(
   request: ImageAssetRequest | null,
@@ -183,11 +180,23 @@ export function useImageAsset(
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   const wsStreamClient = useHostStreamClientFor(target, auth);
+  const paneFocused = usePaneFocused();
 
-  // Normalized to a REFERENCE-STABLE object across renders with the same
-  // primitive fields - `request` itself may be a fresh literal every render
-  // (mirrors `usePrDetailSubscription`'s `stableArgs`).
-  const {
+  const method = request?.method ?? null;
+  const filePath = request?.filePath ?? null;
+  const workspacePath =
+    request?.method === "workspace" ? request.workspacePath : null;
+  const [runningDir, previousPath, side, stage] =
+    request?.method === "git"
+      ? ([
+          request.runningDir,
+          request.previousPath,
+          request.side,
+          request.stage,
+        ] as const)
+      : ([null, null, null, null] as const);
+
+  const currentRequest = buildImageAssetRequest({
     method,
     filePath,
     workspacePath,
@@ -195,17 +204,24 @@ export function useImageAsset(
     previousPath,
     side,
     stage,
-  } = extractRequestPrimitives(request);
+  });
+  const isWorktreeBacked =
+    currentRequest !== null && isWorktreeBackedRequest(currentRequest);
 
-  const normalizedRequest: ImageAssetRequest | null = useMemo(() => {
-    if (method === null || filePath === null) return null;
-    if (method === "workspace") {
-      if (workspacePath === null) return null;
-      return { method: "workspace", workspacePath, filePath };
+  // Re-stat on refocus (decision #11): only a worktree-backed request bumps
+  // this on the pane's blurred->focused transition, so a still-mounted tile
+  // reopens the stream and picks up an externally edited file. An immutable
+  // git-object request never bumps it - refetching would only re-confirm the
+  // same OID.
+  const wasFocusedRef = useRef(paneFocused);
+  const [focusRefreshNonce, setFocusRefreshNonce] = useState(0);
+  useEffect(() => {
+    const wasFocused = wasFocusedRef.current;
+    wasFocusedRef.current = paneFocused;
+    if (paneFocused && !wasFocused && isWorktreeBacked) {
+      setFocusRefreshNonce((nonce) => nonce + 1);
     }
-    if (runningDir === null || side === null || stage === null) return null;
-    return { method: "git", runningDir, filePath, previousPath, side, stage };
-  }, [method, filePath, workspacePath, runningDir, previousPath, side, stage]);
+  }, [paneFocused, isWorktreeBacked]);
 
   // Render-time derived state, mirroring `useImageBlobUrlState`: only stream
   // callbacks (genuinely async - fired later, in response to WS events) ever
@@ -220,16 +236,30 @@ export function useImageAsset(
   } | null>(null);
 
   useEffect(() => {
+    const normalizedRequest = buildImageAssetRequest({
+      method,
+      filePath,
+      workspacePath,
+      runningDir,
+      previousPath,
+      side,
+      stage,
+    });
     if (normalizedRequest === null || wsStreamClient === null) {
       return;
     }
     const requestKey = requestKeyFor(normalizedRequest);
+    const retention: ImageBlobRetention = isWorktreeBackedRequest(
+      normalizedRequest,
+    )
+      ? "grace"
+      : "session";
 
     let active = true;
     let cacheKey: string | null = null;
     let client: AssetStreamClient | null = null;
     // Set only while a fetch this hook OWNS (a cache miss) is in flight -
-    // bridges this session's `onReady`/onFailure` into the promise
+    // bridges this session's `onReady`/`onFailure` into the promise
     // `imageBlobCache.acquire`'s fetcher returned. Stays `null` on a cache
     // hit, since the fetcher is then never invoked.
     let settleFetch: ((bytes: Uint8Array<ArrayBuffer>) => void) | null = null;
@@ -281,13 +311,22 @@ export function useImageAsset(
             rejectFetch = reject;
             signal.addEventListener(
               "abort",
-              () => reject(new Error("Image asset fetch was cancelled.")),
+              () => {
+                reject(new Error("Image asset fetch was cancelled."));
+                // The cache aborts ONLY once the last reference to this
+                // identity drops (`imageBlobCache.release`) - that is the
+                // one moment this stream, which may be OWNED by a
+                // component other than the one that spawned it, is truly
+                // unneeded. A spawning component's own unmount must not
+                // reach this: see the cleanup below.
+                client?.close();
+              },
               { once: true },
             );
           });
         };
 
-        imageBlobCache.acquire(key, header.mediaType, fetcher).then(
+        imageBlobCache.acquire(key, header.mediaType, fetcher, retention).then(
           (url) => {
             if (!active) return;
             // Cache hit: `fetcher` above was never invoked, so this
@@ -378,13 +417,34 @@ export function useImageAsset(
 
     return () => {
       active = false;
-      client.close();
+      // If this fetch is the shared cache entry's OWNER (`usedForFetch`),
+      // its stream must outlive THIS unmount when other consumers still
+      // hold a reference - closing it here would strand every sibling on
+      // the header skeleton forever, since only the owner's `onReady` /
+      // `onFailure` ever settles the shared promise. `imageBlobCache.release`
+      // below is what may still close it, via the fetcher's abort listener,
+      // but only once the LAST reference drops. A fetch that never became
+      // the owner (never reached `onHeader`, or lost the cache race) has no
+      // such shared responsibility - nothing else will ever close it, so it
+      // must be closed directly.
+      if (!usedForFetch) client.close();
       if (cacheKey !== null) imageBlobCache.release(cacheKey);
     };
-  }, [normalizedRequest, wsStreamClient, hostId]);
+  }, [
+    method,
+    filePath,
+    workspacePath,
+    runningDir,
+    previousPath,
+    side,
+    stage,
+    wsStreamClient,
+    hostId,
+    focusRefreshNonce,
+  ]);
 
   const currentKey =
-    normalizedRequest === null ? null : requestKeyFor(normalizedRequest);
+    currentRequest === null ? null : requestKeyFor(currentRequest);
   return resolved !== null && resolved.key === currentKey
     ? resolved.state
     : LOADING_STATE;

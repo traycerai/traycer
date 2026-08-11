@@ -11,11 +11,16 @@
  * `buildImageAssetCacheKey` instead - the cache itself is agnostic to what
  * the key encodes, so both callers share the same lifecycle unchanged.
  *
- * Lifecycle is reference-counted: the URL is revoked once nothing holds it,
- * after a short grace window so scroll/remount churn reuses the live blob. A
- * still-pending fetch is aborted once its last reference drops, and a failed
- * fetch never poisons the entry - the next acquire retries.
+ * Lifecycle is reference-counted: a `"grace"`-retention URL is revoked once
+ * nothing holds it, after a short grace window so scroll/remount churn
+ * reuses the live blob; a `"session"`-retention URL (an immutable git
+ * object, per image-preview decision #11) is never revoked once created,
+ * only ever dropped by a page reload. A still-pending fetch is aborted once
+ * its last reference drops regardless of retention, and a failed fetch never
+ * poisons the entry - the next acquire retries.
  */
+
+export type ImageBlobRetention = "grace" | "session";
 
 export type ImageBytesFetcher = (
   hash: string,
@@ -42,6 +47,7 @@ interface CacheEntry {
   url: string | null;
   inFlight: Promise<string> | null;
   abort: AbortController | null;
+  retention: ImageBlobRetention;
   // Cancels the pending revoke timer (null when none is scheduled). We store the
   // canceller, not the timer handle, so this shared file never names the timer
   // type - it compiles under both browser (number) and node (Timeout) lib configs.
@@ -53,17 +59,29 @@ export interface ImageBlobCache {
    * Acquire (and ref) the shared blob URL for `hash`, fetching bytes once via
    * `fetcher`. The fetcher is passed per call because the byte source is the
    * tab-scoped host; concurrent acquirers of the same hash reuse the first
-   * in-flight fetch, so only one fetcher actually runs per hash.
+   * in-flight fetch, so only one fetcher actually runs per hash. `retention`
+   * is read only when this call CREATES the entry - later acquirers of the
+   * same hash must agree with the first caller (the key already encodes
+   * whether the content is immutable), so it is not re-applied on a hit.
    */
   acquire: (
     hash: string,
     mediaType: string,
     fetcher: ImageBytesFetcher,
+    retention: ImageBlobRetention,
   ) => Promise<string>;
   /** Release one reference; the URL is revoked once no references remain. */
   release: (hash: string) => void;
   /** Live entry count (diagnostics/tests). */
   size: () => number;
+  /**
+   * Test-only: drops every entry immediately, bypassing grace/session
+   * retention and revoking every live URL. `"session"`-retention entries
+   * exist precisely to outlive their own test otherwise, so a shared cache
+   * instance (the app-wide singleton) needs this to stay isolated between
+   * tests - never call it from production code.
+   */
+  clear: () => void;
 }
 
 const DEFAULT_REVOKE_GRACE_MS = 10_000;
@@ -75,6 +93,11 @@ export function createImageBlobCache(
   const entries = new Map<string, CacheEntry>();
 
   const scheduleRevoke = (hash: string, entry: CacheEntry): void => {
+    // Session retention (immutable git object bytes, decision #11): a
+    // zero-ref entry stays cached for the rest of the app session rather
+    // than being revoked after the grace window, so a remount later reuses
+    // it instead of re-transferring bytes that cannot have changed.
+    if (entry.retention === "session") return;
     if (entry.cancelRevoke !== null) return;
     const handle = setTimeout(() => {
       entry.cancelRevoke = null;
@@ -89,6 +112,7 @@ export function createImageBlobCache(
     hash: string,
     mediaType: string,
     fetcher: ImageBytesFetcher,
+    retention: ImageBlobRetention,
   ): Promise<string> => {
     let entry = entries.get(hash);
     if (entry === undefined) {
@@ -97,6 +121,7 @@ export function createImageBlobCache(
         url: null,
         inFlight: null,
         abort: null,
+        retention,
         cancelRevoke: null,
       };
       entries.set(hash, entry);
@@ -157,7 +182,16 @@ export function createImageBlobCache(
     scheduleRevoke(hash, entry);
   };
 
-  return { acquire, release, size: () => entries.size };
+  const clear = (): void => {
+    for (const entry of entries.values()) {
+      entry.cancelRevoke?.();
+      entry.abort?.abort();
+      if (entry.url !== null) ops.revoke(entry.url);
+    }
+    entries.clear();
+  };
+
+  return { acquire, release, size: () => entries.size, clear };
 }
 
 /**
