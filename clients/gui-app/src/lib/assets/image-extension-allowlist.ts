@@ -37,3 +37,13 @@ export function candidateImageMediaType(path: string): AssetMediaType | null {
 export function isImageAssetPath(path: string): boolean {
   return candidateImageMediaType(path) !== null;
 }
+
+/**
+ * SVG is text to git and valid UTF-8 to `readFile` (image-preview decision
+ * log, decision #5) - both tiles route it to image preview by default with a
+ * per-tile toggle back to the existing source view, unlike the other four
+ * formats which have no source view at all.
+ */
+export function isSvgAssetPath(path: string): boolean {
+  return candidateImageMediaType(path) === "image/svg+xml";
+}

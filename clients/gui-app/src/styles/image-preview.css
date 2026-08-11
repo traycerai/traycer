@@ -1,0 +1,22 @@
+/**
+ * Low-contrast checkerboard behind transparent image regions
+ * (image-preview decision log, decision #16). Built from `--canvas` /
+ * `--muted` - the app's own theme tokens already redefine both together for
+ * every preset (`:root`, `.dark`, and each named `[data-theme]` override), so
+ * this never needs a per-theme override of its own and never inverts an
+ * image in dark mode: the checker just rides whatever those two tokens are.
+ */
+.image-preview-checkerboard {
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(45deg, var(--muted) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--muted) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--muted) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--muted) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}

@@ -4,7 +4,9 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 interface BinaryPlaceholderProps {
   readonly fileName: string;
-  readonly sizeBytes: number;
+  readonly sizeBytes: number | null;
+  /** One-line reason shown below the size (image-preview decision log, decision #14). `null` renders none. */
+  readonly reason: string | null;
   readonly onOpenExternally: () => void;
   readonly openExternallyOpening: boolean;
 }
@@ -15,9 +17,14 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
       <FileQuestionMarkIcon className="size-12 text-muted-foreground" />
       <h3 className="text-base font-semibold">Binary File</h3>
       <p className="text-sm text-muted-foreground">{props.fileName}</p>
-      <p className="text-xs text-muted-foreground">
-        {props.sizeBytes.toLocaleString()} bytes
-      </p>
+      {props.sizeBytes !== null ? (
+        <p className="text-xs text-muted-foreground">
+          {props.sizeBytes.toLocaleString()} bytes
+        </p>
+      ) : null}
+      {props.reason !== null ? (
+        <p className="text-xs text-muted-foreground">{props.reason}</p>
+      ) : null}
       <Button
         onClick={props.onOpenExternally}
         variant="outline"

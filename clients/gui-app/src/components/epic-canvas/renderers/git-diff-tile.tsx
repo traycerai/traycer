@@ -39,7 +39,7 @@ import { useRegisterDiffTileFindAdapter } from "@/components/diff/use-register-d
 import type { DiffFindMetadataUnitInput } from "@/lib/diff/diff-find";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import { useBundleDiffScrollRestoration } from "@/hooks/scroll/use-bundle-diff-scroll-restoration";
-import { BinaryPlaceholder } from "@/components/epic-canvas/git-diff/binary-placeholder";
+import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { NoLongerChanged } from "@/components/epic-canvas/git-diff/placeholders/no-longer-changed";
 import { SubscriptionErrorState } from "@/components/epic-canvas/git-diff/empty-states/subscription-error-state";
 import { NoChangesInWorktree } from "@/components/epic-canvas/git-diff/empty-states/no-changes-in-worktree";
@@ -537,6 +537,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       <BinaryPlaceholder
         fileName={props.file.path}
         sizeBytes={props.file.sizeBytes}
+        reason={null}
         onOpenExternally={handleOpenExternally}
         openExternallyOpening={openExternallyOpening}
       />
@@ -562,6 +563,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
       <BinaryPlaceholder
         fileName={props.file.path}
         sizeBytes={props.file.sizeBytes}
+        reason={null}
         onOpenExternally={handleOpenExternally}
         openExternallyOpening={openExternallyOpening}
       />
