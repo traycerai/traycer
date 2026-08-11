@@ -114,7 +114,11 @@ every resume**:
 {
   "muxVersion": 1,
   "bearer": "<user JWS>",          // R4-A2: re-presented on attach AND resume
-  "manifest": { "rpc": { …ConnectionManifest… }, "stream": { …ConnectionManifest… } },
+  "manifest": {                     // see "Manifest shape" below - all three keys REQUIRED
+    "rpc": { …ConnectionManifest… },         // released floor ONLY
+    "optionalRpc": { …ConnectionManifest… }, // every non-floor method
+    "stream": { …ConnectionManifest… }
+  },
   "authz": null,                    // R4-D1 RESERVED: versioned session-grant slot (team hosts, v3)
   "resume": null                    // R4-E3 RESERVED: always null (v1 = fresh full attach)
 }
@@ -136,15 +140,38 @@ every resume**:
 
 ```jsonc
 {
-  "manifest": { "rpc": …, "stream": … },      // host's combined manifests
+  "manifest": { "rpc": …, "optionalRpc": …, "stream": … },  // same shape as OPEN
   "capabilities": ["credentialUpdate"]         // additive; e.g. in-place bearer rotation
 }
 ```
 
-Version negotiation is amortized: the client runs `checkCompatibility` (rpc) at
-`OPEN_ACK`, then per-stream `checkStreamMethodCompatibility` at each subscribe,
-reusing the exact framework helpers the local transports use. A hard
-incompatibility → session `FATAL{code:"INCOMPATIBLE"}`.
+### Manifest shape (floor / optional split)
+
+`rpc`, `optionalRpc` and `stream` are **all three required** on both frames -
+`sessionManifestsSchema` rejects a frame missing any of them, and the session
+reconnects rather than proceeding on a manifest it did not understand. An
+implementation that emits only `rpc` + `stream` (the pre-split shape) will have
+every `OPEN`/`OPEN_ACK` refused.
+
+| Key           | Contents                   | Compat-checked?                                                                                                                            |
+| ------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rpc`         | the RELEASED FLOOR only    | **Yes** - a mismatch is session-fatal                                                                                                      |
+| `optionalRpc` | every non-floor method     | **No** - merged in for version selection, dispatch and capability gating; a peer missing one degrades per the registry's declared strategy |
+| `stream`      | all stream methods, merged | per-subscription at subscribe, never session-fatal                                                                                         |
+
+Split the two rpc channels with `splitConnectionManifest(registry,
+RELEASED_FLOOR_METHOD_NAMES)`. A host SHOULD narrow `optionalRpc` to methods it
+actually has a resolver for (`deriveHostManifest`) - advertising one it cannot
+serve makes a client gate the feature ON and then take a 404 instead of its
+clean `E_HOST_UNSUPPORTED` degrade. The floor is deliberately NOT filtered: a
+floor method without a resolver is a host bug, and hiding it would revive the
+fatal equal-set handshake failure.
+
+Version negotiation is amortized: the client runs `checkCompatibility` over the
+FLOOR channel at `OPEN_ACK`, then per-stream `checkStreamMethodCompatibility` at
+each subscribe, reusing the exact framework helpers the local transports use. A
+hard floor incompatibility → session `FATAL{code:"INCOMPATIBLE"}`; an optional
+method either side lacks never fatals the session.
 
 ## 5. Unary RPC (single-flight, no post-send auto-retry — audit C3)
 

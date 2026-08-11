@@ -96,6 +96,7 @@ export async function resolveWorktreeBranchSelection(
     name,
     source,
     carryUncommittedChanges: opts.carryUncommittedChanges,
+    collision: "fail",
   };
 }
 

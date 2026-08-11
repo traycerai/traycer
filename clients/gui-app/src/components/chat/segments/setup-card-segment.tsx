@@ -36,6 +36,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
+import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
@@ -198,7 +199,7 @@ export function SetupCardSegment(props: {
           epicId: aggregate.epicId,
           ownerId: aggregate.ownerId,
           ownerKind: aggregate.ownerKind,
-          entries: [workspace.retryFolderIntent],
+          entries: worktreeCreateEntries([workspace.retryFolderIntent]),
         },
         {
           // A failed entry does NOT reject the RPC - it rides `perEntry` on a

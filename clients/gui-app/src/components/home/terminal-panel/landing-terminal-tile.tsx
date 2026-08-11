@@ -23,6 +23,7 @@ import {
   focusTerminalInstance,
 } from "@/lib/terminals/terminal-focus-registry";
 import {
+  landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
@@ -31,6 +32,7 @@ import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconcilia
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
 export interface LandingTerminalTileProps {
+  readonly landingPageId: string;
   readonly tab: LandingTerminalTabRef;
   readonly active: boolean;
   /** True only after active-host probe/reconciliation has settled. */
@@ -67,17 +69,20 @@ function LandingTerminalTileBootstrap(
     (instanceId: string): void => {
       const wasActive =
         useLandingTerminalStore.getState().activeInstanceId === instanceId;
-      removeExitedTab(instanceId);
+      removeExitedTab(props.landingPageId, instanceId);
       if (!wasActive) return;
       const state = useLandingTerminalStore.getState();
-      if (state.panelOpen && state.activeInstanceId !== null) {
+      if (
+        landingTerminalLayoutFor(state, props.landingPageId).panelOpen &&
+        state.activeInstanceId !== null
+      ) {
         focusTerminalInstance(state.activeInstanceId);
         return;
       }
       clearPendingTerminalFocus();
       focusActiveComposer();
     },
-    [removeExitedTab],
+    [props.landingPageId, removeExitedTab],
   );
   const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
   const hostEntry = useHostDirectoryEntry(props.tab.hostId);

@@ -55,6 +55,7 @@ describe("resolveWorktreeBranchSelection", () => {
       name: "feature/x",
       source: "main",
       carryUncommittedChanges: true,
+      collision: "fail",
     });
     expect(rpcMock).not.toHaveBeenCalled();
   });
@@ -85,6 +86,7 @@ describe("resolveWorktreeBranchSelection", () => {
       name: "feature/x",
       source: "develop",
       carryUncommittedChanges: false,
+      collision: "fail",
     });
   });
 
@@ -112,6 +114,7 @@ describe("resolveWorktreeBranchSelection", () => {
       name: "feature/x",
       source: "develop",
       carryUncommittedChanges: false,
+      collision: "fail",
     });
   });
 

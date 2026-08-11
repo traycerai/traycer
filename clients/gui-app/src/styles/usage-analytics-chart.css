@@ -1,0 +1,49 @@
+/**
+ * Categorical palette for the Usage surfaces' harness breakdown. Scoped
+ * locally under `.usage-chart-root` rather than on `:root` - these eight
+ * hues carry ONE meaning (harness identity) and must not leak into the
+ * app's general token space.
+ *
+ * Every consumer of `UsageSeriesScale.colorVar` must therefore render
+ * INSIDE that class, not merely next to something that has it: the daily
+ * chart owns it for its standalone use in the epic dialog, and the Settings
+ * dashboard puts it on the ancestor it shares with `UsageHarnessSplit`.
+ *
+ * Values are the dataviz skill's validated default palette (see
+ * `references/palette.md`), re-validated against this app's actual card
+ * surfaces (`--card: #ffffff` light, `~#292929` dark) with
+ * `scripts/validate_palette.js`: both modes clear every hard gate (worst
+ * adjacent CVD ΔE 9.1 light / 8.4 dark; normal-vision floor 19.6 / 19.3).
+ * Three light-mode slots and one dark-mode slot land in the sub-3:1
+ * contrast WARN band - the breakdown table beneath the chart is the
+ * relief channel the skill requires for that band (every value is also
+ * reachable there, not gated behind the fill's contrast).
+ *
+ * Dark override rides this app's actual mechanism (`.dark` class on
+ * `<html>`, set by `theme-applier.ts`) - not `[data-theme="dark"]`, which
+ * this app reserves for named presets (`dracula`, `nord`, ...) orthogonal
+ * to light/dark.
+ */
+.usage-chart-root {
+  --usage-series-1: #2a78d6; /* blue */
+  --usage-series-2: #eb6834; /* orange */
+  --usage-series-3: #1baf7a; /* aqua */
+  --usage-series-4: #eda100; /* yellow */
+  --usage-series-5: #e87ba4; /* magenta */
+  --usage-series-6: #008300; /* green */
+  --usage-series-7: #4a3aa7; /* violet */
+  --usage-series-8: #e34948; /* red */
+  --usage-series-other: var(--muted-foreground);
+}
+
+.dark .usage-chart-root {
+  --usage-series-1: #3987e5;
+  --usage-series-2: #d95926;
+  --usage-series-3: #199e70;
+  --usage-series-4: #c98500;
+  --usage-series-5: #d55181;
+  --usage-series-6: #008300;
+  --usage-series-7: #9085e9;
+  --usage-series-8: #e66767;
+  --usage-series-other: var(--muted-foreground);
+}

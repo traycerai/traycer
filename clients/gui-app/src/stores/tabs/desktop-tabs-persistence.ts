@@ -43,6 +43,7 @@ const SETTINGS_PATHS = new Set([
   "providers",
   "service",
   "shell",
+  "usage",
   "worktrees",
 ]);
 

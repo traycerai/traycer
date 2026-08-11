@@ -63,6 +63,7 @@ export type AnalyticsSettingsSection =
   | "notifications"
   | "providers"
   | "shell"
+  | "usage"
   | "worktrees";
 
 export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
@@ -935,18 +936,32 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "traycer",
 ]);
 
-const ANALYTICS_SETTINGS_SECTIONS = new Set<string>([
-  "agents",
-  "appearance",
-  "diagnostics",
-  "general",
-  "host",
-  "keybindings",
-  "notifications",
-  "providers",
-  "shell",
-  "worktrees",
-]);
+/**
+ * Built from a `satisfies Record<AnalyticsSettingsSection, true>` rather than
+ * a bare string list, because the bare list is a seam that fails SILENTLY:
+ * this set is what `sanitizeAnalyticsProperties` validates `section` against,
+ * and a value in the union but missing here makes `Analytics.track` return
+ * `false` and drop the event — no type error, no runtime error, just a
+ * section whose navigation is never recorded. Both `devices` and `usage` had
+ * already gone missing that way. The `satisfies` makes adding a section to
+ * the union without listing it here a COMPILE error instead.
+ */
+const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
+  Object.keys({
+    agents: true,
+    appearance: true,
+    devices: true,
+    diagnostics: true,
+    general: true,
+    host: true,
+    keybindings: true,
+    notifications: true,
+    providers: true,
+    shell: true,
+    usage: true,
+    worktrees: true,
+  } satisfies Record<AnalyticsSettingsSection, true>),
+);
 
 const ANALYTICS_SETTINGS = new Set<string>([
   "allowPrereleaseUpdates",

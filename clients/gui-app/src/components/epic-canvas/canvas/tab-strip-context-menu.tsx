@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Copy,
   Eye,
+  LineChart,
   Pencil,
 } from "lucide-react";
 
@@ -43,6 +44,13 @@ export interface TabStripContextMenuProps {
   readonly canRename: boolean;
   /** Switches the tab title into the inline editable input. */
   readonly onEditTitle: () => void;
+  /**
+   * Ticket 12's chat cost line - opens the chat's usage/drill-down dialog.
+   * `null` for every non-chat tab and for a chat whose host has not
+   * negotiated `host.usage.summary` (the overflow item itself is the
+   * "unsupported chats show nothing" case - see `ChatUsageDialog`).
+   */
+  readonly onOpenUsage: (() => void) | null;
 }
 
 /**
@@ -66,6 +74,7 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
     onCopyFilePath,
     canRename,
     onEditTitle,
+    onOpenUsage,
   } = props;
 
   return (
@@ -133,6 +142,15 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
         <Eye className="size-4" />
         Reveal in Sidebar
       </ContextMenuItem>
+      {onOpenUsage === null ? null : (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={onOpenUsage}>
+            <LineChart className="size-4" />
+            Usage
+          </ContextMenuItem>
+        </>
+      )}
     </ContextMenuContent>
   );
 }
