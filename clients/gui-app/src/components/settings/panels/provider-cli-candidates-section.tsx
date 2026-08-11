@@ -62,13 +62,18 @@ type ProviderId = ProviderCliState["providerId"];
 // Retry swapped that cell to a progress bar and the whole table reflowed. The
 // `0.2fr` max keeps it fluid (it grows with the dialog, per the repo's
 // no-fixed-layout-widths rule) while making it impossible for cell content to
-// size it - the property that makes the table hold still. The 5.5rem floor is
-// what a `v0.147.0` needs before it truncates.
+// size it - the property that makes the table hold still.
+//
+// The floor is `0`, not the `5.5rem` a `v0.147.0` wants before it truncates.
+// A rem floor is a fixed layout width: combined with the other tracks and the
+// cell padding it stops the grid shrinking with its viewport-sized container,
+// so a narrow settings dialog overflows horizontally instead of truncating.
+// The cell already truncates, which is the graceful answer at that width.
 //
 // The row wrapper still has to be a real box (borders, hover, dimming), which
 // is why this is subgrid and not `display: contents`.
 const TABLE_GRID =
-  "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(5.5rem,0.2fr)_2.25rem]";
+  "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(0,0.2fr)_2.25rem]";
 const TABLE_ROW = "col-span-4 grid grid-cols-subgrid items-center";
 // Every cell in every row and in the header uses the SAME horizontal padding,
 // so the Version header's right edge lands exactly on each row's version. The
@@ -1067,7 +1072,14 @@ function VersionMenuTrigger({
         container={dialogContainer ?? undefined}
         collisionBoundary={dialogContainer ?? undefined}
         collisionPadding={8}
-        className="w-[min(90vw,26rem)] overflow-hidden p-0"
+        // Bounded in BOTH axes. Width was already viewport-derived; height was
+        // not, and the list is `managedVersions.available` in full - every
+        // published version plus every retained install. Past the dialog's
+        // collision boundary the older rows and their Use / Delete controls
+        // were simply unreachable, because `overflow-hidden` clips rather than
+        // scrolls. The panel scrolls its own list, so the header and the
+        // auto-download toggle stay put.
+        className="flex max-h-[min(70vh,32rem)] w-[min(90vw,26rem)] flex-col overflow-hidden p-0"
       >
         {data.kind === "unavailable" ? (
           <div className="px-4 py-3" data-testid="version-manager-unavailable">

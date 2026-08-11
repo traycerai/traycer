@@ -19,7 +19,6 @@ import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-
 import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
 import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-pack-version-mutation";
-import { toastFromHostError } from "@/lib/host-error-toast";
 import { cn } from "@/lib/utils";
 import {
   comparePackVersionsDescending,
@@ -178,9 +177,6 @@ export function ProviderPackVersionManagerPanel(
               }
             }
           },
-          onError: (error) => {
-            toastFromHostError(error, "Couldn't download this version.");
-          },
         },
       );
     },
@@ -206,9 +202,6 @@ export function ProviderPackVersionManagerPanel(
             }
             // Honest semantics: running sessions keep their binary.
             toast.success(`New sessions will use ${version}`);
-          },
-          onError: (error) => {
-            toastFromHostError(error, "Couldn't switch to this version.");
           },
         },
       );
@@ -240,9 +233,6 @@ export function ProviderPackVersionManagerPanel(
             "Pin cleared — new sessions follow automatic version selection",
           );
         },
-        onError: (error) => {
-          toastFromHostError(error, "Couldn't clear the pin.");
-        },
       },
     );
   }, [clearNotice, packId, useVersion]);
@@ -265,9 +255,6 @@ export function ProviderPackVersionManagerPanel(
                 message,
               });
             }
-          },
-          onError: (error) => {
-            toastFromHostError(error, "Couldn't delete this version.");
           },
         },
       );
@@ -321,7 +308,9 @@ export function ProviderPackVersionManagerPanel(
       data-testid="provider-pack-version-manager"
       data-pack-id={packId}
       data-host-id={hostId}
-      className="w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-card"
+      // `min-h-0` so the list below can actually scroll inside a height-capped
+      // container instead of forcing this section past it.
+      className="flex w-full min-h-0 max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card"
       aria-label={`${packDisplayName} versions`}
     >
       <VersionManagerHeader
@@ -354,7 +343,7 @@ export function ProviderPackVersionManagerPanel(
         />
       ) : null}
 
-      <ul className="flex w-full flex-col">
+      <ul className="flex w-full min-h-0 flex-col overflow-y-auto">
         {rows.map((row) => (
           <VersionRow
             key={row.version}

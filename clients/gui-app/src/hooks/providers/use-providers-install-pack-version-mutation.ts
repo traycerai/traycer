@@ -10,6 +10,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { toastFromHostError } from "@/lib/host-error-toast";
 
 type InstallPackVersionMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.installPackVersion">,
@@ -27,8 +28,14 @@ interface InstallPackVersionMutationContext {
  *
  * Non-blocking: the response is the version's state as of the kick. Progress
  * and terminal outcomes arrive through `providers.list` →
- * `managedVersions.available[]`. No toast on error — install failures surface
- * on the version row (`error` / `unusable` / typed `ok: false` result).
+ * `managedVersions.available[]`. A typed `ok: false` result is NOT an error -
+ * it is a success response the panel draws on the version row, alongside the
+ * row's own `error` / `unusable` install states.
+ *
+ * A thrown transport/host failure toasts from HERE rather than from a per-call
+ * `onError`. The panel lives inside an unforced Radix popover, so closing the
+ * version menu mid-flight unmounts the mutation observer and TanStack drops
+ * the per-call callback - which left a real failure visible only in the logs.
  */
 export function useProvidersInstallPackVersion(): InstallPackVersionMutationResult {
   return useProvidersInstallPackVersionForClient(useHostClient());
@@ -54,6 +61,9 @@ export function useProvidersInstallPackVersionForClient(
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
         });
+      },
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't download this version.");
       },
     },
   });
