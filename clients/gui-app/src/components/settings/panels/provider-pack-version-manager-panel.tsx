@@ -8,6 +8,11 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
@@ -17,10 +22,7 @@ import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { cn } from "@/lib/utils";
 import {
-  certificationBadgeLabel,
   comparePackVersionsDescending,
-  composeVersionRowMeta,
-  findRecommendedVersion,
   formatPackSizeBytes,
   formatSharedWithProvidersLine,
   installPackVersionRefusalMessage,
@@ -28,12 +30,15 @@ import {
   updateBannerDownloadEligibility,
   packVersionUseRefusalMessage,
   versionDeleteEligibility,
+  versionDetailLines,
   versionDownloadEligibility,
   versionInstallFetchLabel,
+  versionRowChip,
   versionShowsInstallFetchAction,
   versionUseEligibility,
   type VersionDeleteEligibility,
   type VersionDownloadEligibility,
+  type VersionRowChip,
   type VersionUseEligibility,
 } from "./provider-pack-version-manager-model";
 
@@ -124,7 +129,6 @@ export function ProviderPackVersionManagerPanel(
   const [bannerNotice, setBannerNotice] = useState<BannerNotice | null>(null);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
 
-  const recommendedVersion = findRecommendedVersion(managedVersions);
   const sharedLine = formatSharedWithProvidersLine(
     managedVersions.sharedWithProviders,
   );
@@ -354,7 +358,6 @@ export function ProviderPackVersionManagerPanel(
           <VersionRow
             key={row.version}
             row={row}
-            recommendedVersion={recommendedVersion}
             notice={
               rowNotice !== null && rowNotice.version === row.version
                 ? rowNotice
@@ -515,7 +518,6 @@ function UpdateAvailableBanner(props: {
 
 type VersionRowProps = {
   readonly row: ProviderPackVersion;
-  readonly recommendedVersion: string | null;
   readonly notice: RowNotice | null;
   readonly downloadPending: boolean;
   readonly usePending: boolean;
@@ -526,10 +528,25 @@ type VersionRowProps = {
   readonly onDelete: (version: string) => void;
 };
 
+/**
+ * ONE LINE PER VERSION: the number, at most one chip, one action.
+ *
+ * This row used to carry the number, up to three badges, a meta line that
+ * repeated two of those badges, a condemned sentence that repeated the meta,
+ * a `Use disabled: …` line, and up to three buttons. A list whose job is
+ * "pick a version" was the hardest thing on the screen to read.
+ *
+ * What stayed inline is what a list cannot delegate: the number you scan, the
+ * one state worth scanning FOR, and the control. What moved to the hover card
+ * is everything you only want once you have already picked a row.
+ *
+ * Two things deliberately did NOT move to the card, because a card you have
+ * to go find is the wrong home for them: live download progress, and the
+ * notice returned by an action you just took.
+ */
 function VersionRow(props: VersionRowProps): JSX.Element {
   const {
     row,
-    recommendedVersion,
     notice,
     downloadPending,
     usePending,
@@ -541,16 +558,10 @@ function VersionRow(props: VersionRowProps): JSX.Element {
   } = props;
 
   const download = versionDownloadEligibility(row);
-  const useElig = versionUseEligibility(row, recommendedVersion);
+  const useElig = versionUseEligibility(row);
   const del = versionDeleteEligibility(row);
-  const certBadge = certificationBadgeLabel(row.certification);
-  const sizeLabel = formatPackSizeBytes(row.sizeBytes);
-  const meta = composeVersionRowMeta({
-    installState: row.installState,
-    certification: row.certification,
-    sizeLabel,
-    recommended: row.recommended,
-  });
+  const chip = versionRowChip(row);
+  const detailLines = versionDetailLines(row);
   const greyed =
     row.certification === "yanked" ||
     row.certification === "below-security-floor" ||
@@ -558,127 +569,122 @@ function VersionRow(props: VersionRowProps): JSX.Element {
 
   const showFetch = versionShowsInstallFetchAction(row);
   const fetchLabel = versionInstallFetchLabel(row);
-  const showCondemnedNoRetry =
-    row.installState.status === "unusable" &&
-    row.installState.reason === "condemned";
-  const useDisabledReason =
-    !useElig.allowed && row.installState.status === "installed" && !row.current
-      ? useElig.reason
-      : null;
 
   return (
     <li
       data-testid={`provider-pack-version-row-${row.version}`}
       data-version={row.version}
       className={cn(
-        "flex w-full flex-col gap-2 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5",
+        "w-full border-t border-border px-4 py-2.5 sm:px-5",
         greyed && "opacity-70",
       )}
     >
-      <div className="min-w-0 flex-1">
-        <VersionRowIdentity
-          version={row.version}
-          recommended={row.recommended}
-          current={row.current}
-          certBadge={certBadge}
-          certification={row.certification}
+      <div className="flex w-full items-center gap-2">
+        <VersionDetailsHoverCard version={row.version} lines={detailLines}>
+          <span className="font-mono text-ui-sm text-foreground">
+            {row.version}
+          </span>
+        </VersionDetailsHoverCard>
+        {chip === null ? null : (
+          <Badge
+            variant={chipVariant(chip.tone)}
+            data-testid={`version-row-chip-${chip.tone}`}
+          >
+            {chip.label}
+          </Badge>
+        )}
+        <span className="flex-1" />
+        <VersionRowActions
+          row={row}
+          download={download}
+          useElig={useElig}
+          del={del}
+          showFetch={showFetch}
+          fetchLabel={fetchLabel}
+          downloadPending={downloadPending}
+          usePending={usePending}
+          deletePending={deletePending}
+          actionsDisabled={actionsDisabled}
+          onDownload={onDownload}
+          onUse={onUse}
+          onDelete={onDelete}
         />
-        {meta.length > 0 ? (
-          <p
-            data-testid="version-row-meta"
-            className="mt-1 text-ui-xs text-muted-foreground"
-          >
-            {meta}
-          </p>
-        ) : null}
-
-        {row.installState.status === "downloading" ? (
-          <DownloadProgress percent={row.installState.percent} />
-        ) : null}
-
-        {showCondemnedNoRetry ? (
-          <p
-            data-testid="condemned-no-retry"
-            className="mt-1.5 text-ui-xs text-destructive"
-          >
-            Install failed permanently on this machine — no retry
-          </p>
-        ) : null}
-
-        {notice !== null ? (
-          <p
-            data-testid="version-row-notice"
-            className={cn(
-              "mt-1.5 text-ui-xs",
-              notice.kind === "error"
-                ? "text-destructive"
-                : "text-muted-foreground",
-            )}
-          >
-            {notice.message}
-          </p>
-        ) : null}
-
-        {useDisabledReason !== null ? (
-          <p
-            data-testid="use-disabled-reason"
-            className="mt-1 text-ui-xs text-muted-foreground"
-          >
-            Use disabled: {useDisabledReason}
-          </p>
-        ) : null}
       </div>
 
-      <VersionRowActions
-        row={row}
-        download={download}
-        useElig={useElig}
-        del={del}
-        showFetch={showFetch}
-        fetchLabel={fetchLabel}
-        downloadPending={downloadPending}
-        usePending={usePending}
-        deletePending={deletePending}
-        actionsDisabled={actionsDisabled}
-        onDownload={onDownload}
-        onUse={onUse}
-        onDelete={onDelete}
-      />
+      {row.installState.status === "downloading" ? (
+        <DownloadProgress percent={row.installState.percent} />
+      ) : null}
+
+      {notice !== null ? (
+        <p
+          data-testid="version-row-notice"
+          className={cn(
+            "mt-1.5 text-ui-xs",
+            notice.kind === "error"
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+        >
+          {notice.message}
+        </p>
+      ) : null}
     </li>
   );
 }
 
-function VersionRowIdentity(props: {
+function chipVariant(
+  tone: VersionRowChip["tone"],
+): "default" | "destructive" | "secondary" {
+  if (tone === "current") return "default";
+  if (tone === "blocked") return "destructive";
+  return "secondary";
+}
+
+/**
+ * The version's details, on hover or focus of its number.
+ *
+ * READ-ONLY BY CONTRACT. `hover-card.tsx` documents that Radix keeps card
+ * content out of the sequential tab order, so anything actionable placed here
+ * would be unreachable by keyboard - which is why every control stayed in the
+ * row and only sentences came here.
+ *
+ * The same sentences are also the trigger's accessible name: a HoverCard
+ * mounts no visually-hidden a11y clone the way a Tooltip does, so without this
+ * a screen reader would get the bare version number and none of its state.
+ */
+function VersionDetailsHoverCard(props: {
   readonly version: string;
-  readonly recommended: boolean;
-  readonly current: boolean;
-  readonly certBadge: string | null;
-  readonly certification: ProviderPackVersion["certification"];
+  readonly lines: readonly string[];
+  readonly children: JSX.Element;
 }): JSX.Element {
+  if (props.lines.length === 0) return props.children;
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="font-mono text-ui-sm text-foreground">
-        {props.version}
-      </span>
-      {props.recommended ? (
-        <Badge variant="secondary" data-testid="badge-recommended">
-          Recommended
-        </Badge>
-      ) : null}
-      {props.current ? (
-        <Badge variant="default" data-testid="badge-current">
-          Current
-        </Badge>
-      ) : null}
-      {props.certBadge !== null ? (
-        <Badge
-          variant={props.certification === "yanked" ? "destructive" : "outline"}
-          data-testid={`badge-cert-${props.certification}`}
+    <HoverCard>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          data-testid={`version-details-trigger-${props.version}`}
+          aria-label={`${props.version} — ${props.lines.join(". ")}`}
+          className="cursor-default rounded-sm decoration-dotted underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
-          {props.certBadge}
-        </Badge>
-      ) : null}
-    </div>
+          {props.children}
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent
+        // `max-w-*` rather than a fixed `w-*`: a row whose only detail is
+        // "Not installed" gets a card that size, and the repo forbids fixed
+        // widths for layout surfaces anyway.
+        className="max-w-xs p-3"
+        data-testid={`version-details-${props.version}`}
+      >
+        <p className="font-mono text-ui-sm text-foreground">{props.version}</p>
+        {props.lines.map((line) => (
+          <p key={line} className="mt-1 text-ui-xs text-muted-foreground">
+            {line}
+          </p>
+        ))}
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 

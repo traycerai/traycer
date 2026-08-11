@@ -9,6 +9,7 @@ import {
   providerCliStateSchema,
   providerManagedInstallStateSchema,
   providerManagedVersionsSchema,
+  providerManagedVersionsUnavailableSchema,
   providerPackVersionCertificationSchema,
   providerPackVersionInstallStateSchema,
   providerPackVersionSchema,
@@ -117,6 +118,9 @@ describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
     });
     expect(frozen.providers[0]).not.toHaveProperty("packId");
     expect(frozen.providers[0]).not.toHaveProperty("managedVersions");
+    expect(frozen.providers[0]).not.toHaveProperty(
+      "managedVersionsUnavailable",
+    );
     expect(frozen.providers[0]).not.toHaveProperty("nextRunBinary");
 
     const downgraded = downgradeResponseAcrossMajors(
@@ -130,6 +134,9 @@ describe("providers.list@8.0 freezes v7 and bridges all older lines", () => {
     expect(downgraded.value.providers).toHaveLength(1);
     expect(downgraded.value.providers[0]).not.toHaveProperty("packId");
     expect(downgraded.value.providers[0]).not.toHaveProperty("managedVersions");
+    expect(downgraded.value.providers[0]).not.toHaveProperty(
+      "managedVersionsUnavailable",
+    );
     expect(downgraded.value.providers[0]).not.toHaveProperty("nextRunBinary");
     expect(downgraded.value.providers[0].managedInstallState).toEqual({
       status: "installed",
@@ -388,19 +395,19 @@ describe("v8 per-pack RPC contracts", () => {
         result: { ok: true, installState: { status: "installed" } },
       }).success,
     ).toBe(true);
-    // All seven, written out literally. The enum is one member per producer
+    // All six, written out literally. The enum is one member per producer
     // outcome of `resolveUserPickedProviderPackTarget` (four arms fanning out
-    // to seven refusals), so a member silently disappearing here would leave
-    // the host with a real refusal it cannot express and force a lossy
-    // "closest fit" at the resolver - the collapse the enum's own comment
-    // exists to prevent. Listed rather than derived from `.options` for the
-    // same reason the v7.0 key-set pins are literal: a derived list stays
-    // green through exactly the drift it is supposed to catch.
+    // to six refusals; `pin-below-floor` left with the 2026-08-12 D1
+    // revision), so a member silently disappearing here would leave the host
+    // with a real refusal it cannot express and force a lossy "closest fit"
+    // at the resolver - the collapse the enum's own comment exists to
+    // prevent. Listed rather than derived from `.options` for the same
+    // reason the v7.0 key-set pins are literal: a derived list stays green
+    // through exactly the drift it is supposed to catch.
     for (const code of [
       "condemned",
       "unfetchable",
       "invalid-version",
-      "pin-below-floor",
       "below-security-floor",
       "host-ineligible",
       "yanked",
@@ -459,7 +466,6 @@ describe("v8 per-pack RPC contracts", () => {
       }).success,
     ).toBe(true);
     for (const code of [
-      "pin-below-floor",
       "verification-failed",
       "below-security-floor",
       "host-ineligible",
@@ -586,5 +592,41 @@ describe("v8 provider-pack schema distinctions", () => {
     expect(row.managedVersions).not.toBeNull();
     expect(row.managedVersions?.sharedWithProviders).toEqual([]);
     expect(row.packId).toBe("pack-shared");
+  });
+});
+
+describe("managedVersionsUnavailable: why the panel is absent", () => {
+  it("accepts every reason the host can produce", () => {
+    for (const reason of [
+      "registry-unconfigured",
+      "registry-unreachable",
+      "registry-not-yet-checked",
+      "install-manager-unavailable",
+    ] as const) {
+      expect(
+        providerManagedVersionsUnavailableSchema.parse({ reason }),
+      ).toEqual({ reason });
+    }
+  });
+
+  it("rejects a reason outside the enum rather than inventing one", () => {
+    expect(
+      providerManagedVersionsUnavailableSchema.safeParse({
+        reason: "something-new",
+      }).success,
+    ).toBe(false);
+  });
+
+  // The field-level `.catch(null)` must degrade only THIS field. A newer host
+  // sending a reason this client does not know must not take the row - or the
+  // version panel next to it - down with it.
+  it("degrades an unknown reason to null without disturbing managedVersions", () => {
+    const parsed = providerCliStateSchema.parse({
+      ...v8ProviderState("claude-code"),
+      managedVersions: MANAGED_VERSIONS,
+      managedVersionsUnavailable: { reason: "reason-from-a-newer-host" },
+    });
+    expect(parsed.managedVersionsUnavailable).toBeNull();
+    expect(parsed.managedVersions).not.toBeNull();
   });
 });

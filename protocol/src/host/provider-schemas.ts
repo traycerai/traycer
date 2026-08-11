@@ -642,10 +642,11 @@ export type ProviderPackVersion = z.infer<typeof providerPackVersionSchema>;
  */
 export const providerManagedVersionsSchema = z.object({
   autoDownload: z.boolean(),
-  // Null = auto (follow the newest eligible). A pin is always `>= bakedPin`
-  // (D1): below-pin pins are refused at the RPC with `pin-below-floor`,
-  // because the forward-only current-walk would immediately flip them back -
-  // a user-triggered ping-pong.
+  // Null = auto (follow the newest eligible). A pin may sit below the baked
+  // pin (D1 as revised 2026-08-12): the RPC refuses only versions the signed
+  // head positively rules out (`below-security-floor` / `host-ineligible`).
+  // No ping-pong follows - target derivation consults the user pin before the
+  // baked pin, and the forward-only current-walk governs only unpinned cells.
   pinnedVersion: z.string().nullable(),
   // Only ever non-null while auto-download is paused or a pin is set: with
   // auto-download on there is nothing to announce, since a newer eligible
@@ -674,6 +675,44 @@ export const providerManagedVersionsSchema = z.object({
 });
 export type ProviderManagedVersions = z.infer<
   typeof providerManagedVersionsSchema
+>;
+
+/**
+ * Why the version manager cannot be offered for a pack that HAS one.
+ *
+ * A null `managedVersions` used to be the whole story, and the panel simply
+ * disappeared. That is indistinguishable from "this build has no version
+ * manager" and left a user staring at a settings tab with nothing to act on
+ * and nothing to read - the reported bug.
+ *
+ * The members are the host's real outcomes, taken from `RegistryKeyringState`
+ * (`loaded | unconfigured | unavailable | unattempted`) plus the one gate that
+ * is not a trust state, NOT from a guessed error table. Note that only
+ * `unavailable` ever produced any user-visible signal before this; the other
+ * two silent states are what a dev build actually hits.
+ *
+ * `packId === null` is deliberately NOT a member: a provider with no baked pin
+ * has no managed pack at all, so there is nothing to explain and both this and
+ * `managedVersions` stay null.
+ */
+export const providerManagedVersionsUnavailableSchema = z.object({
+  reason: z.enum([
+    // Trust roots are not configured in this build, so no managed registry is
+    // reachable by design. Terminal for this install - not a retry.
+    "registry-unconfigured",
+    // Trust roots exist and a load was attempted and failed (offline,
+    // unreachable registry, verification failure). Retried with backoff.
+    "registry-unreachable",
+    // No load attempted yet this process. Transient by construction: the
+    // keyring loader retries, and a later poll answers differently.
+    "registry-not-yet-checked",
+    // The keyring verified but no install manager is attached, so nothing can
+    // enumerate or fetch versions. The wedge-recovery seam.
+    "install-manager-unavailable",
+  ]),
+});
+export type ProviderManagedVersionsUnavailable = z.infer<
+  typeof providerManagedVersionsUnavailableSchema
 >;
 
 /**
@@ -1300,6 +1339,19 @@ const providerCliStateBaseShape = {
   // whenever `packId` is null, and also when the host has a pack but no
   // channel knowledge to describe it with.
   managedVersions: providerManagedVersionsSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  // Why `managedVersions` is null, when the reason is worth showing. Carried
+  // as a SIBLING rather than folded into `managedVersions` as a union member
+  // on purpose: that field's `.catch(null)` exists to collapse the whole panel
+  // on a parse error, and a union would let the same catch swallow the reason
+  // too - reintroducing exactly the silence this field exists to remove.
+  //
+  // Both null is a real and correct combination: this provider has no managed
+  // pack. When both are somehow non-null the panel wins, since a renderable
+  // panel is strictly more useful than an explanation of its absence.
+  managedVersionsUnavailable: providerManagedVersionsUnavailableSchema
     .nullable()
     .catch(null)
     .optional(),
@@ -2650,13 +2702,15 @@ export const providersInstallPackVersionResultSchema = z.union([
     ok: z.literal(false),
     // ONE MEMBER PER PRODUCER OUTCOME, deliberately. The host resolves a
     // user-picked version through `resolveUserPickedProviderPackTarget`, whose
-    // result is a four-arm union that fans out to exactly these seven refusals
-    // (`refused` -> `invalid-version` / `pin-below-floor`; `ineligible` ->
+    // result is a four-arm union that fans out to exactly these six refusals
+    // (`refused` -> `invalid-version`; `ineligible` ->
     // `below-security-floor` / `host-ineligible` / `yanked`; plus
     // `unfetchable` and the terminal `condemned` verdict). Keeping the mapping
     // 1:1 is the point: it is total and mechanical, so no host author has to
     // pick a "closest fit" and no later reader has to reverse-engineer which
-    // real outcome a collapsed code stood for.
+    // real outcome a collapsed code stood for. (`pin-below-floor` was the
+    // seventh member until the 2026-08-12 D1 revision made below-pin versions
+    // an ordinary, certification-gated offer.)
     //
     // The temptation was to fold the three `ineligible` reasons into
     // `unfetchable`. That is wrong on the facts and wrong in the copy it
@@ -2682,7 +2736,6 @@ export const providersInstallPackVersionResultSchema = z.union([
       "condemned",
       "unfetchable",
       "invalid-version",
-      "pin-below-floor",
       "below-security-floor",
       "host-ineligible",
       "yanked",
@@ -2760,11 +2813,11 @@ export type ProvidersRemovePackVersionResponse = z.infer<
  * background pre-staging, so a pinned pack announces a new version and waits
  * for the user to ask, identical to the paused surface.
  *
- * `pin-below-floor` enforces D1 at the RPC, not just in the UI. A pin below
- * the baked pin would be flipped straight back by the forward-only
- * current-walk, so honouring it would be a ping-pong the user triggered and
- * cannot see the cause of. The bound must hold server-side because the UI is
- * not the only caller and a stale client can ask for anything.
+ * A pin below the baked pin is honoured (D1 as revised 2026-08-12): target
+ * derivation consults the user pin before the baked pin, so no flip-back
+ * follows, and the only server-side bounds are the signed refusal facts
+ * below - which must hold server-side because the UI is not the only caller
+ * and a stale client can ask for anything.
  *
  * `below-security-floor` and `host-ineligible` are signed positive refusal
  * facts. Unlike a yanked or uncertified installed copy (D8), neither may
@@ -2799,7 +2852,6 @@ export const providersUsePackVersionResultSchema = z.union([
   z.object({
     ok: z.literal(false),
     code: z.enum([
-      "pin-below-floor",
       "verification-failed",
       "below-security-floor",
       "host-ineligible",
@@ -2921,6 +2973,7 @@ export type DowngradableToV10ProviderState = (
   // v8.0 fields, present only when the source is a live-shaped row.
   packId?: ProviderCliState["packId"];
   managedVersions?: ProviderCliState["managedVersions"];
+  managedVersionsUnavailable?: ProviderCliState["managedVersionsUnavailable"];
   nextRunBinary?: ProviderCliState["nextRunBinary"];
   loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
 };
@@ -2957,6 +3010,7 @@ export function downgradeProviderCliStateToV10(
     cliBinaryResolved: _cliBinaryResolved,
     packId: _packId,
     managedVersions: _managedVersions,
+    managedVersionsUnavailable: _managedVersionsUnavailable,
     nextRunBinary: _nextRunBinary,
     ...rest
   } = state;

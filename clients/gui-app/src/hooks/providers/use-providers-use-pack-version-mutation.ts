@@ -25,9 +25,9 @@ interface UsePackVersionMutationContext {
 /**
  * Pin a pack to a version, or clear the pin (`version: null` → auto).
  *
- * Typed refusals (`pin-below-floor`, `verification-failed`) return on the
- * response; the panel draws them on the row. No auto-toast for the same reason
- * as install/remove.
+ * Typed refusals (`verification-failed`, `below-security-floor`,
+ * `host-ineligible`) return on the response; the panel draws them on the row.
+ * No auto-toast for the same reason as install/remove.
  */
 export function useProvidersUsePackVersion(): UsePackVersionMutationResult {
   return useProvidersUsePackVersionForClient(useHostClient());

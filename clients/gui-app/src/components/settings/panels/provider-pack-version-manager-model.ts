@@ -1,7 +1,9 @@
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderId,
+  type ProviderManagedInstallErrorReason,
   type ProviderManagedVersions,
+  type ProviderManagedVersionsUnavailable,
   type ProviderPackVersion,
   type ProviderPackVersionCertification,
   type ProviderPackVersionInstallState,
@@ -156,15 +158,14 @@ export type VersionUseEligibility =
   | { readonly allowed: false; readonly reason: string };
 
 /**
- * Use is disabled for the current version and for any version below the
- * recommended (baked-pin) baseline, regardless of list source (D1).
- *
- * Fail closed when the baseline is unknown (offline / no recommended row):
- * offer Use only on positive proof the candidate clears the floor.
+ * Use is disabled for the current version, for rows not installed yet, and
+ * for the signed positive refusals (`below-security-floor` /
+ * `host-ineligible`). Nothing else gates it — a below-baseline version that
+ * certifies eligible is selectable (D1 as revised 2026-08-12), and yanked /
+ * uncertified installed copies remain selectable under D8.
  */
 export function versionUseEligibility(
   version: ProviderPackVersion,
-  recommendedVersion: string | null,
 ): VersionUseEligibility {
   if (version.current) {
     return { allowed: false, reason: "Already current" };
@@ -179,19 +180,6 @@ export function versionUseEligibility(
     return {
       allowed: false,
       reason: certificationBlockReason(version.certification),
-    };
-  }
-  if (recommendedVersion === null) {
-    return {
-      allowed: false,
-      reason:
-        "Can't confirm the shipped baseline — reconnect to switch versions",
-    };
-  }
-  if (isVersionBelowBaseline(version.version, recommendedVersion)) {
-    return {
-      allowed: false,
-      reason: `Below shipped baseline ${recommendedVersion}`,
     };
   }
   return { allowed: true };
@@ -215,6 +203,70 @@ export function versionDeleteEligibility(
     return { allowed: false, reason: "Not installed" };
   }
   return { allowed: true };
+}
+
+/**
+ * The ONE chip a version row may wear, or none.
+ *
+ * The row used to stack up to three (`Recommended` + `Current` + a
+ * certification badge) beside a meta line that repeated two of them, so the
+ * list read as a wall of labels rather than a list of versions. One chip, by
+ * priority; everything else moves to the row's hover card.
+ *
+ * `uncertified` deliberately earns NO chip. "No longer published" is
+ * informational - the copy stays installed and stays usable - and it was the
+ * single loudest thing on a healthy row. The three certifications that
+ * genuinely BLOCK do outrank `Recommended`, because a version you cannot use
+ * matters more than one we suggest.
+ */
+export type VersionRowChip = {
+  readonly label: string;
+  readonly tone: "current" | "blocked" | "recommended";
+};
+
+export function versionRowChip(
+  version: ProviderPackVersion,
+): VersionRowChip | null {
+  if (version.current) return { label: "Current", tone: "current" };
+  if (
+    version.certification === "yanked" ||
+    version.certification === "below-security-floor" ||
+    version.certification === "host-ineligible"
+  ) {
+    const label = certificationBadgeLabel(version.certification);
+    if (label !== null) return { label, tone: "blocked" };
+  }
+  if (version.recommended) return { label: "Recommended", tone: "recommended" };
+  return null;
+}
+
+/**
+ * Everything about a version that is NOT its number, its chip, or its action.
+ *
+ * Lives in the row's hover card. Returned as lines rather than one string so
+ * the card can space them; `composeVersionRowMeta` still owns the one-line
+ * composition of install-state + size + certification, including the
+ * uncertified/unverified pair that must not read as "still usable".
+ */
+export function versionDetailLines(
+  version: ProviderPackVersion,
+): readonly string[] {
+  const lines: string[] = [];
+  const meta = composeVersionRowMeta({
+    installState: version.installState,
+    certification: version.certification,
+    sizeLabel: formatPackSizeBytes(version.sizeBytes),
+    recommended: version.recommended,
+  });
+  if (meta.length > 0) lines.push(meta);
+
+  // Only ever stated for a row that RENDERS a disabled Use - an installed,
+  // non-current version. Anywhere else there is no control for it to explain.
+  if (version.installState.status === "installed" && !version.current) {
+    const useElig = versionUseEligibility(version);
+    if (!useElig.allowed) lines.push(`Can't switch to it — ${useElig.reason}`);
+  }
+  return lines;
 }
 
 export function certificationBadgeLabel(
@@ -346,8 +398,6 @@ export function installPackVersionRefusalMessage(
       return "This version is not in the current channel — reconnect or refresh to download it";
     case "invalid-version":
       return "This is not a valid version string";
-    case "pin-below-floor":
-      return "Cannot install below the shipped baseline";
     case "below-security-floor":
       return "Below the publisher's security minimum — cannot download";
     case "host-ineligible":
@@ -368,8 +418,6 @@ export function packVersionUseRefusalMessage(
   code: Extract<ProvidersUsePackVersionResult, { ok: false }>["code"],
 ): string {
   switch (code) {
-    case "pin-below-floor":
-      return "Cannot select below the shipped baseline";
     case "verification-failed":
       return "Could not verify this install before switching — the pin was not kept";
     case "below-security-floor":
@@ -422,29 +470,6 @@ export function comparePackVersionsDescending(
   }
   if (left === right) return 0;
   return left < right ? -1 : 1;
-}
-
-/**
- * Baseline comparison for the Use-below-recommended rule (D1).
- *
- * Delegates to the single shared SemVer authority
- * (`@traycer-clients/shared/host-version/compare-host-versions`) used by CLI
- * and desktop for host-update decisions — full §11 precedence including
- * prereleases, with build metadata (`+…`) ignored. A third hand-rolled
- * comparator is deliberately not introduced here (finding 4 harden).
- *
- * When either side is not SemVer, fails closed (treated as below baseline)
- * so Use is not offered without a positive proof the candidate clears the
- * floor. Identity still returns false.
- */
-export function isVersionBelowBaseline(
-  version: string,
-  baseline: string,
-): boolean {
-  if (version === baseline) return false;
-  const result = compareHostVersions(version, baseline);
-  if (!result.comparable) return true;
-  return result.ordering === "less";
 }
 
 // ---------------------------------------------------------------------------
@@ -506,4 +531,78 @@ function certificationBlockReason(
   certification: "below-security-floor" | "host-ineligible",
 ): string {
   return certificationMetaLine(certification) ?? "Not usable";
+}
+
+/**
+ * Why the version manager is not on screen, in the user's terms.
+ *
+ * Total over the wire enum plus the one client-side cause the host cannot
+ * report (a host too old to have the RPCs at all). The panel used to render
+ * nothing for every one of these, which reads as "this feature does not exist"
+ * rather than "it cannot run right now".
+ *
+ * Each line says whether waiting will help, because that is the only decision
+ * the reader actually has.
+ */
+export function managedVersionsUnavailableMessage(
+  cause: ProviderManagedVersionsUnavailableCause,
+): string {
+  switch (cause) {
+    case "host-unsupported":
+      return "This host is too old to manage provider CLI versions. Update the host to turn this on.";
+    case "registry-unconfigured":
+      return "This build has no provider registry configured, so there are no versions to manage. Waiting will not change it.";
+    case "registry-unreachable":
+      return "Traycer could not verify the provider registry's signing keys — usually no network, or the registry is down. It keeps retrying in the background.";
+    case "registry-not-yet-checked":
+      return "Traycer has not finished checking the provider registry yet. This should resolve on its own in a moment.";
+    case "install-manager-unavailable":
+      return "The registry was verified, but Traycer could not start its installer, so versions cannot be listed. Restarting the host usually clears this.";
+  }
+}
+
+export type ProviderManagedVersionsUnavailableCause =
+  "host-unsupported" | ProviderManagedVersionsUnavailable["reason"];
+
+/**
+ * Why the managed install failed, for the CLI row's warning affordance.
+ *
+ * DELIBERATELY NOT the row's headline. When this fires the provider is still
+ * runnable - the resolver fell through to the bundled or PATH binary and the
+ * row's Active chip names it - so the failure is a footnote to a working
+ * state, not the state itself. Leading with it is what made a healthy row read
+ * as broken.
+ *
+ * Names the version because "Install failed" alone cannot be acted on: the
+ * common cause is a pinned version the registry has no artifact for, and
+ * seeing WHICH version is the difference between "retry" and "this pin was
+ * never published".
+ *
+ * Each line ends by saying whether a retry can help, since that is the only
+ * decision available here - and for four of these reasons the honest answer is
+ * no, which the old shared copy could not express.
+ */
+export function managedInstallFailureMessage(
+  reason: ProviderManagedInstallErrorReason,
+  version: string | null,
+): string {
+  const build = version === null ? "the managed build" : `managed v${version}`;
+  switch (reason) {
+    case "disk-full":
+      return `Not enough disk space to install ${build}. Free some space, then retry.`;
+    case "network":
+      return `Traycer could not download ${build}. That is usually a network problem, but it also happens when the registry carries no artifact for this version and platform - in which case retrying will not help.`;
+    case "verification":
+      return `${build} failed its signature check and was discarded. Traycer will not run bytes it cannot verify.`;
+    case "live-owner-stalled":
+      return `Another Traycer host on this machine was installing ${build} and stalled. Retrying takes the download over.`;
+    case "trust-unavailable":
+      return `Traycer cannot verify downloads on this host, so ${build} was not installed. Retrying will not help until the registry's signing keys load.`;
+    case "local-storage-mismatch":
+      return `The stored copy of ${build} does not match what Traycer expects, and it cannot be re-downloaded on this machine.`;
+    case "unrepairable":
+      return `${build} cannot be installed on this machine, and retrying will not change that.`;
+    case "unknown":
+      return `Traycer could not install ${build}.`;
+  }
 }

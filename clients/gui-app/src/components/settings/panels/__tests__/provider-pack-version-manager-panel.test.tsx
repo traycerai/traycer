@@ -16,10 +16,7 @@ type UsePackVersionVariables = {
 };
 
 type UsePackVersionRefusalCode =
-  | "pin-below-floor"
-  | "verification-failed"
-  | "below-security-floor"
-  | "host-ineligible";
+  "verification-failed" | "below-security-floor" | "host-ineligible";
 
 type UseMutateOptions = {
   readonly onSuccess?: (response: {
@@ -58,7 +55,6 @@ type InstallMutateOptions = {
             | "condemned"
             | "unfetchable"
             | "invalid-version"
-            | "pin-below-floor"
             | "below-security-floor"
             | "host-ineligible"
             | "yanked";
@@ -202,6 +198,24 @@ function renderPanel(options: {
   );
 }
 
+/**
+ * The row's details, as a screen reader gets them.
+ *
+ * THROWS rather than `?? ""`: an absent aria-label is the exact regression
+ * these assertions exist to catch (Radix keeps hover-card content out of the
+ * a11y tree, so the label is the only form a screen reader ever sees), and a
+ * fallback would turn that into a passing test against an empty string.
+ */
+function detailsLabel(version: string): string {
+  const label = screen
+    .getByTestId(`version-details-trigger-${version}`)
+    .getAttribute("aria-label");
+  if (label === null) {
+    throw new Error(`version ${version} rendered no details aria-label`);
+  }
+  return label;
+}
+
 describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
   afterEach(() => {
     cleanup();
@@ -339,7 +353,11 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("shows condemned-no-retry and hides Retry for condemned unusable rows", () => {
+  it("states a condemned install in the row's details and hides Retry", () => {
+    // The row used to carry a `condemned-no-retry` sentence that repeated the
+    // meta line directly above it. The state is stated once now, in the
+    // details; "no retry" is carried by the ABSENCE of the button, which this
+    // still pins.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -351,14 +369,15 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    expect(screen.getByTestId("condemned-no-retry")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
-    const row = screen.getByTestId("provider-pack-version-row-1.0.0");
-    expect(row.textContent).toMatch(/permanently/i);
+    expect(detailsLabel("1.0.0")).toMatch(/permanently/i);
   });
 
-  it("renders Recommended and Current badges when those flags are set", () => {
+  it("wears ONE chip — Current outranks Recommended rather than stacking", () => {
+    // Both flags are set. The row used to render both badges plus a meta line
+    // that said "pairs with this Traycer release" a third time. One chip; the
+    // rest is in the details.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -372,8 +391,14 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    expect(screen.getByTestId("badge-recommended")).toBeTruthy();
-    expect(screen.getByTestId("badge-current")).toBeTruthy();
+    expect(screen.getByTestId("version-row-chip-current").textContent).toBe(
+      "Current",
+    );
+    expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
+    const row = screen.getByTestId("provider-pack-version-row-1.2.0");
+    expect(row.textContent).not.toMatch(/Recommended/u);
+    // Not lost — demoted.
+    expect(detailsLabel("1.2.0")).toMatch(/pairs with this Traycer release/iu);
   });
 
   it("offers no Download or Retry button for a non-retryable error (finding 1)", () => {
@@ -465,19 +490,21 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    const meta = screen.getByTestId("version-row-meta");
-    // getByTestId yields a mounted HTMLElement; textContent is the composed
-    // meta string (always non-empty for this fixture). No ?? — that was the
-    // lint-only safety that made the assertion look optional.
-    const text = meta.textContent;
-    expect(typeof text).toBe("string");
+    // The composed meta now lives in the row's details rather than as a line
+    // under the version. Read through the accessible name, which is the same
+    // string the hover card renders — and the only form a screen reader gets,
+    // since Radix keeps hover-card content out of the a11y tree.
+    const text = detailsLabel("1.1.0");
     expect(text.length).toBeGreaterThan(0);
     expect(text.toLowerCase()).toMatch(/not necessarily damaged/);
     expect(text.toLowerCase()).not.toMatch(/still usable/);
   });
 
-  it("disables Use offline when no recommended baseline row is present", () => {
-    // Integration finding 1: current 3.0.0, retained 1.0.0, baked 2.0.0 absent.
+  it("offers Use on an installed non-current version even offline with no recommended row (D1 as revised 2026-08-12)", () => {
+    // Formerly this failed closed on the missing baseline. The client no
+    // longer does baseline math: the host refuses the signed ineligibilities
+    // server-side, and those arrive as row certification - absent here, so
+    // the installed retained version is honestly selectable.
     renderPanel({
       hostId: "host-1",
       available: [
@@ -496,11 +523,8 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       managedOverrides: null,
     });
 
-    // Use remains visible but disabled with an honest reason (fail closed).
     const useButton = screen.getByRole("button", { name: "Use" });
-    expect(useButton.hasAttribute("disabled")).toBe(true);
-    const disabled = screen.getByTestId("use-disabled-reason");
-    expect(disabled.textContent.toLowerCase()).toMatch(/baseline|reconnect/);
+    expect(useButton.hasAttribute("disabled")).toBe(false);
   });
 
   it("disables the update banner Download when the durable version has no row", () => {
@@ -598,11 +622,6 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       forbid: /withdrawn|right now/i,
     },
     {
-      code: "pin-below-floor" as const,
-      expectMatch: /baseline|select/i,
-      forbid: /withdrawn|right now/i,
-    },
-    {
       code: "verification-failed" as const,
       expectMatch: /verif/i,
       forbid: /withdrawn/i,
@@ -642,4 +661,107 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
       expect(notice.textContent).not.toMatch(forbid);
     },
   );
+});
+
+/**
+ * The list is a list. Everything a version says about itself beyond "here I
+ * am, here is my one state, here is the button" lives in its hover card.
+ *
+ * Reported from the running app: the dropdown carried version + three badges +
+ * a meta line repeating two of them + a Delete, per row.
+ */
+describe("ProviderPackVersionManagerPanel: row density", () => {
+  // This file's other `afterEach(cleanup)` is scoped INSIDE its describe, so a
+  // new top-level block gets none and every render accumulates in the same
+  // document - which surfaces as "Found multiple elements", not as a leak.
+  afterEach(cleanup);
+
+  it("opens the details card on focus and renders the composed meta", async () => {
+    // The a11y-name assertions elsewhere would ALL still pass if the card
+    // never rendered. This is the one that proves the visible surface exists.
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.2.0",
+          recommended: true,
+          sizeBytes: 40 * 1024 * 1024,
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    screen.getByTestId("version-details-trigger-1.2.0").focus();
+    const card = await screen.findByTestId("version-details-1.2.0");
+    expect(card.textContent).toMatch(/Installed/u);
+    expect(card.textContent).toMatch(/40 MB/u);
+    expect(card.textContent).toMatch(/pairs with this Traycer release/iu);
+  });
+
+  it("keeps a plain published version down to its number and its button", () => {
+    // Nothing to say ⇒ no chip, and no details trigger at all: an affordance
+    // that opens an empty card is worse than no affordance.
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.2.0",
+          recommended: false,
+          current: false,
+          sizeBytes: null,
+          installState: { status: "absent" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    const row = screen.getByTestId("provider-pack-version-row-1.2.0");
+    expect(row.textContent).toBe("1.2.0Download");
+  });
+
+  it("gives a yanked row its blocking chip, outranking Recommended", () => {
+    // A version you cannot use outranks one we suggest.
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "1.2.0",
+          recommended: true,
+          certification: "yanked",
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    expect(screen.getByTestId("version-row-chip-blocked").textContent).toBe(
+      "Withdrawn",
+    );
+    expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
+  });
+
+  it("demotes 'No longer published' out of the row and into the details", () => {
+    // THE REPORTED ROW. `uncertified` is informational — the copy stays
+    // installed and stays usable — and it was the loudest thing on a healthy
+    // row, stated twice: once as a badge, once inside the meta line.
+    renderPanel({
+      hostId: "host-1",
+      available: [
+        version({
+          version: "0.147.0",
+          recommended: true,
+          current: true,
+          certification: "uncertified",
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: null,
+    });
+
+    const row = screen.getByTestId("provider-pack-version-row-0.147.0");
+    expect(row.textContent).not.toMatch(/No longer published/u);
+    expect(screen.getByTestId("version-row-chip-current")).toBeTruthy();
+    expect(detailsLabel("0.147.0")).toMatch(/No longer published/u);
+  });
 });

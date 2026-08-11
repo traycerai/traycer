@@ -10,7 +10,6 @@ import {
   findRecommendedVersion,
   formatPackSizeBytes,
   installPackVersionRefusalMessage,
-  isVersionBelowBaseline,
   unusableReasonLabel,
   updateBannerDownloadEligibility,
   packVersionUseRefusalMessage,
@@ -59,33 +58,24 @@ function errorState(
 }
 
 describe("versionUseEligibility", () => {
-  it("disables Use when installed version is below the recommended baseline", () => {
+  it("allows Use for an installed version below the recommended baseline (D1 as revised 2026-08-12)", () => {
+    // The below-baseline disable and the offline fail-closed arm are gone:
+    // the host refuses `below-security-floor` / `host-ineligible` server-side,
+    // and those arrive as certification on the row, not as a baseline math
+    // problem for the client.
     const row = version({
       version: "1.0.0",
       installState: { status: "installed" },
     });
-    const result = versionUseEligibility(row, "1.2.0");
-    expect(result.allowed).toBe(false);
-    if (!result.allowed) {
-      expect(result.reason.toLowerCase()).toContain("baseline");
-    }
+    expect(versionUseEligibility(row)).toEqual({ allowed: true });
   });
 
-  it("allows Use when installed version is above the recommended baseline and not current", () => {
+  it("allows Use for an installed version above the recommended baseline and not current", () => {
     const row = version({
       version: "1.3.0",
       installState: { status: "installed" },
     });
-    expect(versionUseEligibility(row, "1.2.0")).toEqual({ allowed: true });
-  });
-
-  it("allows Use when installed version equals the recommended baseline and not current", () => {
-    const row = version({
-      version: "1.2.0",
-      recommended: true,
-      installState: { status: "installed" },
-    });
-    expect(versionUseEligibility(row, "1.2.0")).toEqual({ allowed: true });
+    expect(versionUseEligibility(row)).toEqual({ allowed: true });
   });
 
   it("disables Use for the current installed version", () => {
@@ -94,46 +84,46 @@ describe("versionUseEligibility", () => {
       current: true,
       installState: { status: "installed" },
     });
-    const result = versionUseEligibility(row, "1.2.0");
+    const result = versionUseEligibility(row);
     expect(result.allowed).toBe(false);
     if (!result.allowed) {
       expect(result.reason.toLowerCase()).toMatch(/already current|current/);
     }
   });
 
-  it("allows Use for installed yanked when not current and not below recommended", () => {
+  it("allows Use for an installed yanked copy when not current (D8)", () => {
     // Yanked certification does not block Use in the model once installed.
     const row = version({
       version: "1.3.0",
       certification: "yanked",
       installState: { status: "installed" },
     });
-    expect(versionUseEligibility(row, "1.2.0")).toEqual({ allowed: true });
+    expect(versionUseEligibility(row)).toEqual({ allowed: true });
   });
 
-  it("disables Use for a prerelease below the stable recommended baseline (D1)", () => {
-    const row = version({
-      version: "1.2.3-beta.1",
-      installState: { status: "installed" },
-    });
-    const result = versionUseEligibility(row, "1.2.3");
-    expect(result.allowed).toBe(false);
-    if (!result.allowed) {
-      expect(result.reason.toLowerCase()).toContain("baseline");
+  it("disables Use on the signed positive refusals, regardless of position", () => {
+    for (const certification of [
+      "below-security-floor",
+      "host-ineligible",
+    ] as const) {
+      const result = versionUseEligibility(
+        version({
+          version: "1.3.0",
+          certification,
+          installState: { status: "installed" },
+        }),
+      );
+      expect(result.allowed).toBe(false);
     }
   });
 
-  it("fails closed when the shipped baseline is unknown (offline / no recommended row)", () => {
-    // Integration finding 1: honest offline shape with no recommended row
-    // must not optimistically allow Use.
-    const row = version({
-      version: "1.0.0",
-      installState: { status: "installed" },
-    });
-    const result = versionUseEligibility(row, null);
+  it("disables Use for a row that is not installed", () => {
+    const result = versionUseEligibility(
+      version({ version: "1.0.0", installState: { status: "absent" } }),
+    );
     expect(result.allowed).toBe(false);
     if (!result.allowed) {
-      expect(result.reason.toLowerCase()).toMatch(/baseline|reconnect/);
+      expect(result.reason.toLowerCase()).toContain("install");
     }
   });
 });
@@ -326,19 +316,11 @@ describe("labels and helpers", () => {
     expect(findRecommendedVersion(managed([]))).toBeNull();
   });
 
-  it("compares versions against a baseline with real semver including prereleases", () => {
-    expect(isVersionBelowBaseline("1.1.0", "1.2.0")).toBe(true);
-    expect(isVersionBelowBaseline("1.2.0", "1.2.0")).toBe(false);
-    expect(isVersionBelowBaseline("1.3.0", "1.2.0")).toBe(false);
-    // Finding 4: prerelease is strictly below the matching release.
-    expect(isVersionBelowBaseline("1.2.3-beta.1", "1.2.3")).toBe(true);
-    expect(isVersionBelowBaseline("1.2.3", "1.2.3-beta.1")).toBe(false);
-    expect(isVersionBelowBaseline("1.2.3-beta.1", "1.2.3-beta.2")).toBe(true);
-  });
-
-  it("matches the SemVer §11 canonical precedence chain (finding 4 harden)", () => {
+  it("orders the SemVer §11 canonical precedence chain (finding 4 harden)", () => {
     // Spec-published chain: catches numeric-vs-alphanumeric identifier
     // ordering and beta.2 < beta.11 (naive string compare gets both wrong).
+    // Anchored on the list's own comparator since the baseline predicate
+    // left with the 2026-08-12 D1 revision.
     const chain = [
       "1.0.0-alpha",
       "1.0.0-alpha.1",
@@ -351,28 +333,15 @@ describe("labels and helpers", () => {
     ] as const;
     for (let i = 0; i < chain.length; i += 1) {
       for (let j = i + 1; j < chain.length; j += 1) {
-        expect(isVersionBelowBaseline(chain[i], chain[j])).toBe(true);
-        expect(isVersionBelowBaseline(chain[j], chain[i])).toBe(false);
+        expect(
+          comparePackVersionsDescending(chain[i], chain[j]),
+        ).toBeGreaterThan(0);
+        expect(comparePackVersionsDescending(chain[j], chain[i])).toBeLessThan(
+          0,
+        );
       }
-      expect(isVersionBelowBaseline(chain[i], chain[i])).toBe(false);
+      expect(comparePackVersionsDescending(chain[i], chain[i])).toBe(0);
     }
-  });
-
-  it("ignores build metadata for baseline precedence", () => {
-    // SemVer §11: +build does not affect ordering.
-    expect(isVersionBelowBaseline("1.0.0+abc", "1.0.0+def")).toBe(false);
-    expect(isVersionBelowBaseline("1.0.0+build", "1.0.0")).toBe(false);
-    expect(isVersionBelowBaseline("1.0.0-rc.1+build", "1.0.0")).toBe(true);
-    expect(isVersionBelowBaseline("1.0.0", "1.0.0-rc.1+build")).toBe(false);
-  });
-
-  it("fails closed (treats as below) when either side is not SemVer", () => {
-    expect(isVersionBelowBaseline("not-a-version", "1.0.0")).toBe(true);
-    expect(isVersionBelowBaseline("1.0.0", "not-a-version")).toBe(true);
-    // Identity still clears.
-    expect(isVersionBelowBaseline("not-a-version", "not-a-version")).toBe(
-      false,
-    );
   });
 
   it("sorts versions newest-first with SemVer precedence (not localeCompare)", () => {
@@ -399,9 +368,6 @@ describe("labels and helpers", () => {
     expect(installPackVersionRefusalMessage("invalid-version")).toMatch(
       /valid version/i,
     );
-    expect(installPackVersionRefusalMessage("pin-below-floor")).toMatch(
-      /baseline/i,
-    );
     expect(installPackVersionRefusalMessage("below-security-floor")).toMatch(
       /security minimum/i,
     );
@@ -412,9 +378,6 @@ describe("labels and helpers", () => {
   });
 
   it("maps every use/pin refusal code without inviting retry or saying withdrawn", () => {
-    expect(packVersionUseRefusalMessage("pin-below-floor")).toMatch(
-      /baseline|select/i,
-    );
     expect(packVersionUseRefusalMessage("verification-failed")).toMatch(
       /verif/i,
     );
