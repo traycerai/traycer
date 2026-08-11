@@ -58,7 +58,7 @@ describe("app-local notifications store", () => {
       byId: { retained: entry("retained", 20, null) },
       orderedIds: ["retained"],
       unreadCount: 1,
-      observedCompletionIdsByHost: {},
+      observedCompletionsByHost: {},
     });
   });
 
@@ -239,7 +239,7 @@ describe("app-local notifications store", () => {
       .getState()
       .observeCompletion(
         "host-a",
-        "completion-1",
+        { id: "completion-1", occurrenceKey: "completion-1@10" },
         { epicId: "epic-1", chatId: "chat-1" },
         20,
       );
@@ -258,7 +258,7 @@ describe("app-local notifications store", () => {
       .getState()
       .observeCompletion(
         "host-a",
-        "completion-1",
+        { id: "completion-1", occurrenceKey: "completion-1@10" },
         { epicId: "epic-1", chatId: "chat-1" },
         20,
       );
@@ -270,7 +270,7 @@ describe("app-local notifications store", () => {
       .getState()
       .observeCompletion(
         "host-a",
-        "completion-1",
+        { id: "completion-1", occurrenceKey: "completion-1@10" },
         { epicId: "epic-1", chatId: "chat-1" },
         40,
       );
@@ -288,27 +288,61 @@ describe("app-local notifications store", () => {
       index < APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST + 1;
       index++
     ) {
-      store
-        .getState()
-        .observeCompletion(
-          "host-a",
-          `completion-${index}`,
-          { epicId: "epic-1", chatId: `chat-${index}` },
-          index,
-        );
+      store.getState().observeCompletion(
+        "host-a",
+        {
+          id: `completion-${index}`,
+          occurrenceKey: `completion-${index}@${index}`,
+        },
+        { epicId: "epic-1", chatId: `chat-${index}` },
+        index,
+      );
     }
 
-    expect(store.getState().observedCompletionIdsByHost["host-a"]).toHaveLength(
+    expect(store.getState().observedCompletionsByHost["host-a"]).toHaveLength(
       APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST,
     );
     expect(
-      store.getState().observedCompletionIdsByHost["host-a"],
-    ).not.toContain("completion-0");
+      store.getState().observedCompletionsByHost["host-a"],
+    ).not.toContainEqual({
+      id: "completion-0",
+      occurrenceKey: "completion-0@0",
+    });
 
     store.getState().removeObservedCompletions("host-a", ["completion-1"]);
     expect(
-      store.getState().observedCompletionIdsByHost["host-a"],
-    ).not.toContain("completion-1");
+      store.getState().observedCompletionsByHost["host-a"],
+    ).not.toContainEqual({
+      id: "completion-1",
+      occurrenceKey: "completion-1@1",
+    });
+  });
+
+  it("consumes a later occurrence that reuses a semantic completion id", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store
+      .getState()
+      .observeCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@10" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        20,
+      );
+    store.getState().upsert(entry("between-runs", 30, null));
+
+    store
+      .getState()
+      .observeCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@40" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        50,
+      );
+
+    expect(store.getState().byId["between-runs"].readAt).toBe(50);
   });
 
   it("resurfaces a same-code chat disconnect after completion", () => {
@@ -329,7 +363,7 @@ describe("app-local notifications store", () => {
       .getState()
       .observeCompletion(
         "host-a",
-        "completion-1",
+        { id: "completion-1", occurrenceKey: "completion-1@10" },
         { epicId: "epic-1", chatId: "chat-1" },
         20,
       );

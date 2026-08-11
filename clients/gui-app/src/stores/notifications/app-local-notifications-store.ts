@@ -70,13 +70,18 @@ interface AppLocalNotificationsProjection {
   readonly unreadCount: number;
 }
 
+interface ObservedCompletion {
+  readonly id: string;
+  readonly occurrenceKey: string;
+}
+
 export interface AppLocalNotificationsState {
   readonly activeUserId: string | null;
   readonly byId: Readonly<Record<string, AppLocalNotificationEntry>>;
   readonly orderedIds: ReadonlyArray<string>;
   readonly unreadCount: number;
-  readonly observedCompletionIdsByHost: Readonly<
-    Partial<Record<string, ReadonlyArray<string>>>
+  readonly observedCompletionsByHost: Readonly<
+    Partial<Record<string, ReadonlyArray<ObservedCompletion>>>
   >;
 
   activateIdentity: (userId: string) => void;
@@ -97,7 +102,7 @@ export interface AppLocalNotificationsState {
   ) => void;
   observeCompletion: (
     originHostId: string,
-    completionId: string,
+    completion: ObservedCompletion,
     entity: HostNotificationsEntityRef,
     observedAt: number,
   ) => void;
@@ -118,14 +123,14 @@ function appLocalInitialState(): Pick<
   | "byId"
   | "orderedIds"
   | "unreadCount"
-  | "observedCompletionIdsByHost"
+  | "observedCompletionsByHost"
 > {
   return {
     activeUserId: null,
     byId: {},
     orderedIds: [],
     unreadCount: 0,
-    observedCompletionIdsByHost: {},
+    observedCompletionsByHost: {},
   };
 }
 
@@ -169,7 +174,7 @@ function pendingDisplayEntry(
 
 type AppLocalNotificationsPersistedState = Pick<
   AppLocalNotificationsState,
-  "byId" | "orderedIds" | "unreadCount" | "observedCompletionIdsByHost"
+  "byId" | "orderedIds" | "unreadCount" | "observedCompletionsByHost"
 >;
 
 /**
@@ -186,7 +191,7 @@ export function migrateAppLocalNotificationsPersistedState(
       byId: {},
       orderedIds: [],
       unreadCount: 0,
-      observedCompletionIdsByHost: {},
+      observedCompletionsByHost: {},
     };
   }
   const byId = Object.fromEntries(
@@ -200,26 +205,35 @@ export function migrateAppLocalNotificationsPersistedState(
     byId,
     orderedIds: projection.orderedIds,
     unreadCount: projection.unreadCount,
-    observedCompletionIdsByHost: parseObservedCompletionIdsByHost(
-      persisted.observedCompletionIdsByHost,
+    observedCompletionsByHost: parseObservedCompletionsByHost(
+      persisted.observedCompletionsByHost,
     ),
   };
 }
 
-function parseObservedCompletionIdsByHost(
+function parseObservedCompletionsByHost(
   value: unknown,
-): Readonly<Partial<Record<string, ReadonlyArray<string>>>> {
+): Readonly<Partial<Record<string, ReadonlyArray<ObservedCompletion>>>> {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
-    Object.entries(value).flatMap(([hostId, ids]) => {
-      if (!Array.isArray(ids)) return [];
-      const parsedIds = ids.filter(
-        (id): id is string => typeof id === "string",
-      );
+    Object.entries(value).flatMap(([hostId, completions]) => {
+      if (!Array.isArray(completions)) return [];
+      const parsedCompletions = completions.filter(isObservedCompletion);
       return [
-        [hostId, parsedIds.slice(-APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST)],
+        [
+          hostId,
+          parsedCompletions.slice(-APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST),
+        ],
       ];
     }),
+  );
+}
+
+function isObservedCompletion(value: unknown): value is ObservedCompletion {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.occurrenceKey === "string"
   );
 }
 
@@ -488,16 +502,22 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        observeCompletion: (originHostId, completionId, entity, observedAt) => {
+        observeCompletion: (originHostId, completion, entity, observedAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
             const observedForHost =
-              state.observedCompletionIdsByHost[originHostId] ?? [];
-            if (observedForHost.includes(completionId)) return state;
-            const nextObservedForHost = [
-              ...observedForHost,
-              completionId,
-            ].slice(-APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST);
+              state.observedCompletionsByHost[originHostId] ?? [];
+            if (
+              observedForHost.some(
+                (observed) =>
+                  observed.occurrenceKey === completion.occurrenceKey,
+              )
+            ) {
+              return state;
+            }
+            const nextObservedForHost = [...observedForHost, completion].slice(
+              -APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST,
+            );
             const supersededEntries = Object.values(state.byId).filter(
               (entry) => {
                 if (entry.readAt !== null) return false;
@@ -512,8 +532,8 @@ export function createAppLocalNotificationsStore(initialName: string) {
             );
             if (supersededEntries.length === 0) {
               return {
-                observedCompletionIdsByHost: {
-                  ...state.observedCompletionIdsByHost,
+                observedCompletionsByHost: {
+                  ...state.observedCompletionsByHost,
                   [originHostId]: nextObservedForHost,
                 },
               };
@@ -532,8 +552,8 @@ export function createAppLocalNotificationsStore(initialName: string) {
               byId,
               orderedIds: projection.orderedIds,
               unreadCount: projection.unreadCount,
-              observedCompletionIdsByHost: {
-                ...state.observedCompletionIdsByHost,
+              observedCompletionsByHost: {
+                ...state.observedCompletionsByHost,
                 [originHostId]: nextObservedForHost,
               },
             };
@@ -544,20 +564,22 @@ export function createAppLocalNotificationsStore(initialName: string) {
           if (completionIds.length === 0) return;
           set((state) => {
             const observedForHost =
-              state.observedCompletionIdsByHost[originHostId];
+              state.observedCompletionsByHost[originHostId];
             if (observedForHost === undefined) return state;
             const removed = new Set(completionIds);
-            const retained = observedForHost.filter((id) => !removed.has(id));
+            const retained = observedForHost.filter(
+              (completion) => !removed.has(completion.id),
+            );
             if (retained.length === observedForHost.length) return state;
-            const observedCompletionIdsByHost = {
-              ...state.observedCompletionIdsByHost,
+            const observedCompletionsByHost = {
+              ...state.observedCompletionsByHost,
             };
             if (retained.length === 0) {
-              delete observedCompletionIdsByHost[originHostId];
+              delete observedCompletionsByHost[originHostId];
             } else {
-              observedCompletionIdsByHost[originHostId] = retained;
+              observedCompletionsByHost[originHostId] = retained;
             }
-            return { observedCompletionIdsByHost };
+            return { observedCompletionsByHost };
           });
         },
 
@@ -644,7 +666,7 @@ export function createAppLocalNotificationsStore(initialName: string) {
           byId: state.byId,
           orderedIds: state.orderedIds,
           unreadCount: state.unreadCount,
-          observedCompletionIdsByHost: state.observedCompletionIdsByHost,
+          observedCompletionsByHost: state.observedCompletionsByHost,
         }),
         migrate: (persisted) =>
           migrateAppLocalNotificationsPersistedState(persisted),

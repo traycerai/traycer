@@ -77,6 +77,7 @@ import {
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
+import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -150,9 +151,19 @@ export function NotificationsSessionProvider(
       if (entry.severity !== "done") return;
       const entity = notificationEntityFromHostEntry(entry);
       if (entity === null) return;
-      useAppLocalNotificationsStore
-        .getState()
-        .observeCompletion(originHostId, entry.id, entity, Date.now());
+      useAppLocalNotificationsStore.getState().observeCompletion(
+        originHostId,
+        {
+          id: entry.id,
+          occurrenceKey: occurrenceKeyForNotification({
+            feedId: entry.id,
+            createdAt: entry.updatedAt,
+            sourceRef: entry.sourceRef,
+          }),
+        },
+        entity,
+        Date.now(),
+      );
     },
     [],
   );
