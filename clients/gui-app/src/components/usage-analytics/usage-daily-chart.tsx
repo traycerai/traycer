@@ -6,6 +6,10 @@ import {
   type UsageMetric,
 } from "@/lib/usage-analytics/usage-chart-data";
 import { buildUsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
+import {
+  formatDayLabel,
+  formatMetricValue,
+} from "@/lib/usage-analytics/format-metric-value";
 import type { UsageSeriesScale } from "@/lib/usage-analytics/usage-series-scale";
 import { EChartsContainer } from "@/components/usage-analytics/echarts-container";
 
@@ -34,14 +38,19 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
   const [hiddenSeries, setHiddenSeries] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const visibleColumns = useMemo(
+    () => applyUsageSeriesVisibility(columns, hiddenSeries),
+    [columns, hiddenSeries],
+  );
   const option = useMemo(
     () =>
       buildUsageChartOption({
-        columns: applyUsageSeriesVisibility(columns, hiddenSeries),
+        columns: visibleColumns,
         scale,
         metric,
+        hiddenSeries,
       }),
-    [columns, hiddenSeries, scale, metric],
+    [visibleColumns, hiddenSeries, scale, metric],
   );
   const toggleSeries = (seriesKey: string) => {
     setHiddenSeries((prev) => {
@@ -66,6 +75,12 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
         ariaLabel="Daily usage chart"
         testId="usage-daily-chart-canvas"
       />
+      <UsageDailyChartDataTable
+        columns={visibleColumns}
+        scale={scale}
+        metric={metric}
+        hiddenSeries={hiddenSeries}
+      />
       {/* The `>= 2` gate keeps a one-chip legend off a single-series chart,
           where filtering is meaningless. It must not apply when that lone
           series is HIDDEN, though: `hiddenSeries` outlives a prop change, so
@@ -81,6 +96,62 @@ export function UsageDailyChart(props: UsageDailyChartProps): ReactNode {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The chart's values as a real table, visually hidden but fully in the
+ * accessibility tree and reachable by keyboard.
+ *
+ * The bar version made every day a focusable button, so tabbing through the
+ * chart read out each day's total; ECharts draws one opaque graphic whose
+ * per-day values live only in a POINTER-triggered tooltip. The Settings
+ * dashboard has a by-day breakdown table underneath, but the epic dialog's
+ * table is grouped by chat, so without this there is no non-pointer path to
+ * the plotted values there at all.
+ *
+ * Hidden series are omitted, matching what the chart draws - the table is
+ * the same view by another means, not a second, contradictory dataset.
+ */
+function UsageDailyChartDataTable(props: {
+  readonly columns: readonly UsageChartColumn[];
+  readonly scale: UsageSeriesScale;
+  readonly metric: UsageMetric;
+  readonly hiddenSeries: ReadonlySet<string>;
+}): ReactNode {
+  const { columns, scale, metric, hiddenSeries } = props;
+  const visibleKeys = scale.order.filter((key) => !hiddenSeries.has(key));
+  return (
+    <table className="sr-only" data-testid="usage-daily-chart-data-table">
+      <caption>Daily usage by harness</caption>
+      <thead>
+        <tr>
+          <th scope="col">Day</th>
+          {visibleKeys.map((seriesKey) => (
+            <th key={seriesKey} scope="col">
+              {scale.labelFor(seriesKey)}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {columns.map((column) => (
+          <tr key={column.day}>
+            <th scope="row">{formatDayLabel(column.day)}</th>
+            {visibleKeys.map((seriesKey) => (
+              <td key={seriesKey}>
+                {formatMetricValue(
+                  column.segments.find(
+                    (segment) => segment.seriesKey === seriesKey,
+                  )?.value ?? 0,
+                  metric,
+                )}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

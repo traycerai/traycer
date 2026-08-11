@@ -31,8 +31,16 @@ export function buildUsageChartOption(input: {
   readonly columns: readonly UsageChartColumn[];
   readonly scale: UsageSeriesScale;
   readonly metric: UsageMetric;
+  /**
+   * Legend-filtered series keys. Zeroing a series' VALUES is not enough to
+   * hide it: a stacked line at zero still draws its 2px stroke, so a
+   * filtered harness stays visible riding the baseline or the series
+   * below it. The series stays in the option (slot order and color
+   * assignment never shift) but renders nothing.
+   */
+  readonly hiddenSeries: ReadonlySet<string>;
 }): UsageChartOption {
-  const { columns, scale, metric } = input;
+  const { columns, scale, metric, hiddenSeries } = input;
   // A one-point line with hidden symbols renders zero visible pixels - an
   // epic whose whole life fits in one day would show an empty chart. The
   // dot only appears when it is the ONLY mark available.
@@ -87,6 +95,7 @@ export function buildUsageChartOption(input: {
     },
     series: scale.order.map((seriesKey) => {
       const colorVar = scale.colorVar(seriesKey);
+      const hidden = hiddenSeries.has(seriesKey);
       return {
         name: scale.labelFor(seriesKey),
         type: "line" as const,
@@ -94,11 +103,11 @@ export function buildUsageChartOption(input: {
         // same accumulate-by-slot semantics the bars had.
         stack: "usage",
         smooth: true,
-        showSymbol,
+        showSymbol: showSymbol && !hidden,
         symbolSize: 6,
         color: colorVar,
-        lineStyle: { width: 2 },
-        areaStyle: { opacity: 0.3 },
+        lineStyle: { width: hidden ? 0 : 2 },
+        areaStyle: { opacity: hidden ? 0 : 0.3 },
         // Every emphasis color is pinned to the series' own var() reference.
         // This is not decorative: with no explicit emphasis color, ECharts
         // applies its default hover "color lift" (states.js -> zrender
@@ -109,8 +118,8 @@ export function buildUsageChartOption(input: {
         // skip that lift branch entirely.
         emphasis: {
           focus: "none" as const,
-          lineStyle: { color: colorVar, width: 2 },
-          areaStyle: { color: colorVar, opacity: 0.3 },
+          lineStyle: { color: colorVar, width: hidden ? 0 : 2 },
+          areaStyle: { color: colorVar, opacity: hidden ? 0 : 0.3 },
           itemStyle: { color: colorVar },
         },
         data: columns.map(

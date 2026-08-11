@@ -51,7 +51,12 @@ const columns = buildUsageChartColumns(
 );
 
 describe("buildUsageChartOption", () => {
-  const option = buildUsageChartOption({ columns, scale, metric: "cost" });
+  const option = buildUsageChartOption({
+    columns,
+    scale,
+    metric: "cost",
+    hiddenSeries: new Set(),
+  });
 
   it("emits one stacked area series per scale slot, in slot order", () => {
     const series = seriesList(option);
@@ -106,6 +111,7 @@ describe("buildUsageChartOption", () => {
       columns: columns.slice(0, 1),
       scale,
       metric: "cost",
+      hiddenSeries: new Set(),
     });
     expect(seriesList(single).every((entry) => entry.showSymbol === true)).toBe(
       true,
@@ -117,10 +123,34 @@ describe("buildUsageChartOption", () => {
       columns: applyUsageSeriesVisibility(columns, new Set(["codex"])),
       scale,
       metric: "cost",
+      hiddenSeries: new Set(["codex"]),
     });
     const series = seriesList(filtered);
     expect(series.map((entry) => entry.name)).toEqual(["claude", "codex"]);
     expect(series[1]?.data).toEqual([0, 0]);
+  });
+
+  it("draws nothing for a hidden series - zeroed values alone still stroke a line", () => {
+    // A stacked line at zero rides the baseline (or the series below it) and
+    // stays visible with its 2px stroke, so filtering it out of the legend
+    // has to suppress the stroke/area/symbol too, not just the values.
+    const filtered = buildUsageChartOption({
+      columns: applyUsageSeriesVisibility(columns, new Set(["codex"])),
+      scale,
+      metric: "cost",
+      hiddenSeries: new Set(["codex"]),
+    });
+    const codex = seriesList(filtered).find((entry) => entry.name === "codex");
+    expect(codex?.lineStyle?.width).toBe(0);
+    expect(codex?.areaStyle?.opacity).toBe(0);
+    expect(codex?.showSymbol).toBe(false);
+    expect(codex?.emphasis?.lineStyle?.width).toBe(0);
+    // The visible series keeps its full treatment.
+    const claude = seriesList(filtered).find(
+      (entry) => entry.name === "claude",
+    );
+    expect(claude?.lineStyle?.width).toBe(2);
+    expect(claude?.areaStyle?.opacity).toBe(0.3);
   });
 });
 
