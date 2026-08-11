@@ -23,10 +23,7 @@ import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { createHostCloudChatReadPort } from "@/lib/chats/cloud-chat-read-port";
-import {
-  browserChatPartCacheStorage,
-  resolveChatPartCache,
-} from "@/lib/chats/cloud-chat-part-cache";
+import { activeChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import { cloudChatQueryKeys } from "@/lib/query-keys/cloud-chat-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -45,9 +42,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * would announce an older host as an error, which is the one thing the
  * degrade-to-unsupported story exists to avoid.
  */
-
-/** The store every read in this renderer shares. Immutable entries, so one is enough. */
-const partCache = resolveChatPartCache(browserChatPartCacheStorage());
 
 /**
  * The signed-in viewer's id, as the key component these reads must carry.
@@ -179,7 +173,11 @@ export function useCloudChatRead(
       return await readCloudChat({
         identity,
         port: createHostCloudChatReadPort(client),
-        cache: partCache,
+        // Resolved per read, not captured at module load: sign-out DROPS the
+        // store (an already-opened `Cache` handle survives its own deletion, and
+        // the no-Cache-API fallback is not in `CacheStorage` at all), so a
+        // module-level binding would go on serving the previous account's bytes.
+        cache: activeChatPartCache(),
         sha256Hex: webCryptoSha256Hex,
       });
     } catch (error) {

@@ -152,15 +152,45 @@ export function browserChatPartCacheStorage():
 }
 
 /**
- * Drops every cached part.
+ * The renderer's one store, built on first use.
+ *
+ * Module-level rather than per-caller for the reason the adapter opens its Cache
+ * once: a p99 chat is ~165 concurrent gets and they should all reach the same
+ * store. Owned HERE, next to the clear, because the two are one mechanism -
+ * dropping the entries without dropping the handle that holds them clears
+ * nothing (see {@link clearChatPartCache}).
+ */
+let activeCache: ChatPartCache | null = null;
+
+export function activeChatPartCache(): ChatPartCache {
+  activeCache =
+    activeCache ?? resolveChatPartCache(browserChatPartCacheStorage());
+  return activeCache;
+}
+
+/**
+ * Drops every cached part, and the adapter holding them.
  *
  * For sign-out. Deliberately a plain function rather than a method on the cache:
  * clearing is not something a reader ever does, and putting it on the interface
  * would invite one to.
+ *
+ * Both halves are load-bearing, and deleting the storage entry alone was neither
+ * of them for two live cases. `CacheStorage.delete` unlinks a NAME: an adapter
+ * that already resolved its `Cache` keeps a working handle to the deleted
+ * object, so it goes on serving - and storing - the signed-out account's bytes
+ * for the life of the renderer. And where there is no Cache API at all the store
+ * is the in-memory fallback, which `CacheStorage` never knew about, so the clear
+ * was a no-op over the very environment the fallback exists for.
+ *
+ * Dropping the singleton covers both: the next read builds a fresh adapter over
+ * a fresh cache. Ordered first, so an account's bytes stop being reachable even
+ * if the storage delete then fails.
  */
 export async function clearChatPartCache(
   storage: ChatPartCacheStorage | undefined,
 ): Promise<void> {
+  activeCache = null;
   if (storage === undefined) return;
   try {
     await storage.delete(PART_CACHE_NAME);
