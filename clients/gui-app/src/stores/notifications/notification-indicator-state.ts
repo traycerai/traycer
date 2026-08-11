@@ -121,16 +121,18 @@ export function selectCloudNotificationIndicators(
     collectCloudIndicatorEntry(accumulator, row);
   }
   for (const [epicId, terminalWinners] of epicTerminalWinners) {
-    epics[epicId] = mergeTerminalContributions(
+    const merged = mergeTerminalContributions(
       epics[epicId],
       terminalEntriesForEpic(terminalWinners),
     );
+    if (merged !== undefined) epics[epicId] = merged;
   }
   for (const [chatId, originWinners] of chatTerminalWinners) {
-    chats[chatId] = mergeTerminalContributions(
+    const merged = mergeTerminalContributions(
       chats[chatId],
       terminalEntriesForOrigins(originWinners),
     );
+    if (merged !== undefined) chats[chatId] = merged;
   }
   return { epics, chats };
 }
@@ -257,13 +259,16 @@ function terminalEntriesForOrigins(
 function mergeTerminalContributions(
   current: HostNotificationsIndicatorState | undefined,
   entries: ReadonlyArray<HostNotificationEntry>,
-): HostNotificationsIndicatorState {
-  return entries.reduce<HostNotificationsIndicatorState>((merged, entry) => {
-    const contribution = terminalIndicatorContribution(entry);
-    return contribution === null
-      ? merged
-      : mergeIndicatorFlags(merged, contribution);
-  }, current ?? EMPTY_HOST_INDICATOR_STATE);
+): HostNotificationsIndicatorState | undefined {
+  return entries.reduce<HostNotificationsIndicatorState | undefined>(
+    (merged, entry) => {
+      const contribution = terminalIndicatorContribution(entry);
+      return contribution === null
+        ? merged
+        : mergeIndicatorFlags(merged, contribution);
+    },
+    current,
+  );
 }
 
 function terminalWinnersForEntity(

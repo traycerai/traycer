@@ -385,6 +385,31 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"]).toBeUndefined();
   });
 
+  it("keeps a read completion as the quiet winner over an older failure", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "done-read",
+          severity: "done",
+          readAt: 3,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
+      ]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result).toEqual({ epics: {}, chats: {} });
+  });
+
   it("pends an approval only while resolvedAt is null", () => {
     const unresolved = selectCloudNotificationIndicators(
       rowsById([prompt("approval", "approval.requested", null)]),
