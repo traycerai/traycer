@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useLayoutEffect, type ReactNode } from "react";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
@@ -192,15 +193,38 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
 }));
 
+// Rows are built as WHOLE `CloudChatSummary` values, not as the subset the
+// consumer happened to read when this stub was written. `tab-group-view`'s
+// same-host arm reads `isOwnedByViewer` as well as `identity`, and a stub
+// that enumerates fields answers `undefined` for the ones it forgot - which
+// a boolean predicate reads as "not the viewer's", silently withdrawing the
+// substitution this suite exists to assert. The return annotation is the
+// gate: the next field the row gains fails `compile` here instead of
+// quietly turning these tests red in CI.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({
     data:
       testState.cloudKnownChatIds.size === 0
         ? undefined
         : {
-            chats: [...testState.cloudKnownChatIds].map((chatId) => ({
-              identity: { taskId: "epic-1", chatId, ownerUserId: "user-1" },
-            })),
+            chats: [...testState.cloudKnownChatIds].map(
+              (chatId): CloudChatSummary => ({
+                identity: { taskId: "epic-1", chatId, ownerUserId: "user-1" },
+                ownerHostId: "host-A",
+                createdAt: 1,
+                visibility: "task",
+                title: null,
+                isTitleEditedByUser: false,
+                parentChatId: null,
+                isArchived: false,
+                runSettingsSummary: null,
+                metadataUpdatedAt: 1,
+                headSha256: null,
+                publishedAt: null,
+                throughRecordSeq: null,
+                isOwnedByViewer: true,
+              }),
+            ),
           },
     isError: false,
     isPending: false,

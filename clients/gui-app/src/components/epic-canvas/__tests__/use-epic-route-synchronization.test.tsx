@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
@@ -163,16 +164,37 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
+// A SETTLED, successful list - the sweep under test refuses to run until the
+// cloud list has answered (`isSuccess || isError`), because an in-flight list
+// reads every cloud row as absent and would reap the never-adopted same-host
+// chat the exemption exists for. A stub that enumerates only the flags its
+// consumer read when it was written answers `undefined` for `isSuccess`, which
+// that gate takes as "still in flight" - the sweep then never runs at all and
+// every assertion about it times out instead of failing on its subject. Rows
+// are whole `CloudChatSummary` values for the same reason: the next field a
+// consumer starts reading fails `compile` here rather than silently reading
+// `undefined`.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({
-    data:
-      testState.cloudChatIds.size === 0
-        ? undefined
-        : {
-            chats: [...testState.cloudChatIds].map((chatId) => ({
-              identity: { taskId: EPIC_ID, chatId, ownerUserId: "user-1" },
-            })),
-          },
+    data: {
+      chats: [...testState.cloudChatIds].map((chatId): CloudChatSummary => ({
+        identity: { taskId: EPIC_ID, chatId, ownerUserId: "user-1" },
+        ownerHostId: "owner-host",
+        createdAt: 1,
+        visibility: "task",
+        title: null,
+        isTitleEditedByUser: false,
+        parentChatId: null,
+        isArchived: false,
+        runSettingsSummary: null,
+        metadataUpdatedAt: 1,
+        headSha256: null,
+        publishedAt: null,
+        throughRecordSeq: null,
+        isOwnedByViewer: true,
+      })),
+    },
+    isSuccess: true,
     isError: false,
     isPending: false,
     isFetching: false,
