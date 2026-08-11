@@ -74,15 +74,12 @@ interface ContainerSize {
 export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
   const { svg, ariaLabel, className } = props;
   const intrinsic = useMemo(() => getSvgIntrinsicSize(svg), [svg]);
-  const renderedSvg = useMemo(
-    () =>
-      props.source === "trusted" ? (
-        trustedMarkupToReactNodes(svg, "svg")
-      ) : (
-        <SanitizedSvgMarkup svg={svg} />
-      ),
-    [props.source, svg],
-  );
+  const renderedSvg =
+    props.source === "trusted" ? (
+      trustedMarkupToReactNodes(svg, "svg")
+    ) : (
+      <SanitizedSvgMarkup svg={svg} />
+    );
 
   const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const containerRef = useRef<HTMLElement | null>(null);
@@ -356,16 +353,10 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
 }
 
 function SanitizedSvgMarkup(props: { readonly svg: string }) {
-  const setHost = useCallback(
-    (host: HTMLDivElement | null): void => {
-      if (host === null) return;
-      const parsed = new DOMParser().parseFromString(
-        props.svg,
-        "image/svg+xml",
-      );
-      host.replaceChildren(document.importNode(parsed.documentElement, true));
-    },
-    [props.svg],
-  );
+  const setHost = (host: HTMLDivElement | null): void => {
+    if (host === null) return;
+    const parsed = new DOMParser().parseFromString(props.svg, "image/svg+xml");
+    host.replaceChildren(document.importNode(parsed.documentElement, true));
+  };
   return <div ref={setHost} className="size-full [&>svg]:size-full" />;
 }

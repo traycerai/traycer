@@ -37,36 +37,27 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
 
-  const runAction = async (action: ImageAction): Promise<void> => {
+  const runAction = (action: ImageAction): void => {
     if (pendingAction !== null) return;
     setPendingAction(action);
-    try {
-      const blob = await fetchImageBlob(props.src, props.mediaType);
-      if (action === "copy") {
-        await copyImageBlobToClipboard(blob);
-        toast.success("Image copied");
-      } else {
-        const saved = await saveBlobToDisk(blob, suggestedName);
-        if (saved !== null) toast.success(`Saved ${saved}`);
-      }
-    } catch (error) {
-      appLogger.errorSummary(`[image] ${action} failed`, {}, error);
-      reportableErrorToast(`Failed to ${action} image`, undefined, {
-        title: `Could not ${action} image`,
-        message: null,
-        code: null,
-        source: "Image viewer",
-      });
-    } finally {
-      setPendingAction(null);
-    }
+    void performImageAction(action, props.src, props.mediaType, suggestedName)
+      .catch((error: unknown) => {
+        appLogger.errorSummary(`[image] ${action} failed`, {}, error);
+        reportableErrorToast(`Failed to ${action} image`, undefined, {
+          title: `Could not ${action} image`,
+          message: null,
+          code: null,
+          source: "Image viewer",
+        });
+      })
+      .finally(() => setPendingAction(null));
   };
 
   const actions = (
     <ImageActions
       pendingAction={pendingAction}
-      onCopy={() => void runAction("copy")}
-      onDownload={() => void runAction("download")}
+      onCopy={() => runAction("copy")}
+      onDownload={() => runAction("download")}
     />
   );
 
@@ -175,6 +166,22 @@ async function fetchImageBlob(
   const blob = await response.blob();
   if (blob.type.length > 0 || mediaType === null) return blob;
   return new Blob([await blob.arrayBuffer()], { type: mediaType });
+}
+
+async function performImageAction(
+  action: ImageAction,
+  src: string,
+  mediaType: string | null,
+  suggestedName: string,
+): Promise<void> {
+  const blob = await fetchImageBlob(src, mediaType);
+  if (action === "copy") {
+    await copyImageBlobToClipboard(blob);
+    toast.success("Image copied");
+    return;
+  }
+  const saved = await saveBlobToDisk(blob, suggestedName);
+  if (saved !== null) toast.success(`Saved ${saved}`);
 }
 
 function imageFileName(
