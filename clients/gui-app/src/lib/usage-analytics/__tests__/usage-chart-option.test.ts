@@ -79,6 +79,19 @@ describe("buildUsageChartOption", () => {
     }
   });
 
+  it("pins explicit emphasis colors so hover never runs the default color lift", () => {
+    // Regression: with no explicit emphasis color, ECharts "lifts" the
+    // series color on hover by parsing it - `var(...)` doesn't parse, the
+    // lift returns undefined, and the whole chart blanked out under the
+    // axis pointer (2026-08-11 live report).
+    for (const entry of seriesList(option)) {
+      const emphasis = entry.emphasis;
+      expect(emphasis?.lineStyle?.color).toMatch(/^var\(--usage-series-/);
+      expect(emphasis?.areaStyle?.color).toMatch(/^var\(--usage-series-/);
+      expect(emphasis?.itemStyle?.color).toMatch(/^var\(--usage-series-/);
+    }
+  });
+
   it("labels the x-axis with formatted day labels", () => {
     const { xAxis } = option;
     const axis = Array.isArray(xAxis) ? xAxis[0] : xAxis;

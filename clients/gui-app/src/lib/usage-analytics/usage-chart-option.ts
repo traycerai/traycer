@@ -85,25 +85,41 @@ export function buildUsageChartOption(input: {
         );
       },
     },
-    series: scale.order.map((seriesKey) => ({
-      name: scale.labelFor(seriesKey),
-      type: "line",
-      // One shared stack id turns adjacent lines into a stacked area - the
-      // same accumulate-by-slot semantics the bars had.
-      stack: "usage",
-      smooth: true,
-      showSymbol,
-      symbolSize: 6,
-      color: scale.colorVar(seriesKey),
-      lineStyle: { width: 2 },
-      areaStyle: { opacity: 0.3 },
-      emphasis: { focus: "none" },
-      data: columns.map(
-        (column) =>
-          column.segments.find((segment) => segment.seriesKey === seriesKey)
-            ?.value ?? 0,
-      ),
-    })),
+    series: scale.order.map((seriesKey) => {
+      const colorVar = scale.colorVar(seriesKey);
+      return {
+        name: scale.labelFor(seriesKey),
+        type: "line" as const,
+        // One shared stack id turns adjacent lines into a stacked area - the
+        // same accumulate-by-slot semantics the bars had.
+        stack: "usage",
+        smooth: true,
+        showSymbol,
+        symbolSize: 6,
+        color: colorVar,
+        lineStyle: { width: 2 },
+        areaStyle: { opacity: 0.3 },
+        // Every emphasis color is pinned to the series' own var() reference.
+        // This is not decorative: with no explicit emphasis color, ECharts
+        // applies its default hover "color lift" (states.js -> zrender
+        // `liftColor`), which parses the color to brighten it - `var(...)`
+        // strings don't parse, `lift` returns undefined, and the whole
+        // band/line renders as fill:none for as long as the axis pointer
+        // hovers the chart. Explicit colors make `hasFillOrStroke` true and
+        // skip that lift branch entirely.
+        emphasis: {
+          focus: "none" as const,
+          lineStyle: { color: colorVar, width: 2 },
+          areaStyle: { color: colorVar, opacity: 0.3 },
+          itemStyle: { color: colorVar },
+        },
+        data: columns.map(
+          (column) =>
+            column.segments.find((segment) => segment.seriesKey === seriesKey)
+              ?.value ?? 0,
+        ),
+      };
+    }),
   };
 }
 
