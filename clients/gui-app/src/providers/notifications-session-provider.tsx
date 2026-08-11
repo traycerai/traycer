@@ -420,10 +420,17 @@ export function NotificationsSessionProvider(
       const activeEntity = activeEntityRef.current;
       if (activeEntity === null) return;
       const hasUnreadArrivalForActiveEntity = Object.values(state.byId).some(
-        (entry) =>
-          entry.readAt === null &&
-          !Object.hasOwn(previous.byId, entry.id) &&
-          notificationPayloadBelongsToEntity(entry.payload, activeEntity),
+        (entry) => {
+          if (entry.readAt !== null) return false;
+          const prior = Object.hasOwn(previous.byId, entry.id)
+            ? previous.byId[entry.id]
+            : null;
+          const isNewUnreadOccurrence = prior === null || prior.readAt !== null;
+          return (
+            isNewUnreadOccurrence &&
+            notificationPayloadBelongsToEntity(entry.payload, activeEntity)
+          );
+        },
       );
       if (hasUnreadArrivalForActiveEntity) {
         consumeEntity(activeEntity);
@@ -545,7 +552,7 @@ export function NotificationsSessionProvider(
             recordCompletion(
               row.entry,
               row.originHostId,
-              row.coalesceKey,
+              row.entryId,
               arrivalIds.has(row.entryId) ? "observe" : "seed",
             );
           }

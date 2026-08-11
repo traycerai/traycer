@@ -948,7 +948,7 @@ describe("<NotificationsSessionProvider />", () => {
       const observation = useAppLocalNotificationsStore
         .getState()
         .observedCompletionsByHost[baseline.originHostId]?.find(
-          (completion) => completion.id === baseline.coalesceKey,
+          (completion) => completion.id === baseline.entryId,
         );
       expect(observation).toBeDefined();
       return observation;
@@ -973,7 +973,7 @@ describe("<NotificationsSessionProvider />", () => {
     useAppLocalNotificationsStore.getState().observeCompletion(
       baseline.originHostId,
       {
-        id: baseline.coalesceKey,
+        id: baseline.entryId,
         occurrenceKey: baselineObservation.occurrenceKey,
       },
       { epicId: "epic-cloud", chatId: "chat-cloud" },
@@ -985,8 +985,12 @@ describe("<NotificationsSessionProvider />", () => {
     ).toBeNull();
 
     const arrived = {
-      ...cloudRow("cloud-entry-arrived", 30),
+      ...cloudRow("cloud-entry-arrived", baseline.entry.updatedAt),
       coalesceKey: baseline.coalesceKey,
+      entry: {
+        ...cloudRow("cloud-entry-arrived", baseline.entry.updatedAt).entry,
+        sourceRef: baseline.entry.sourceRef,
+      },
     };
     act(() => {
       streamClient.session.emitServerFrame({
@@ -2267,6 +2271,57 @@ describe("<NotificationsSessionProvider />", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(markReadCalls).toEqual([]);
+  });
+
+  it("consumes a same-id failure recurrence while its chat stays focused", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { markReadCalls } = await renderHostNotificationsProvider();
+
+    act(() => {
+      setFocusedChat("epic-a", "chat-a");
+      hasFocus.mockReturnValue(true);
+      sendPresence();
+    });
+    await waitFor(() => expect(markReadCalls).toHaveLength(1));
+    markReadCalls.splice(0);
+
+    const recurringFailure = {
+      id: "stream.transport.error:chat-a:UNAVAILABLE",
+      updatedAt: 10,
+      readAt: null,
+      kind: "stream.transport.error" as const,
+      sourceRef: "chat-a",
+      payload: { kind: "chat" as const, epicId: "epic-a", chatId: "chat-a" },
+      message: "Connection lost",
+      detail: null,
+    };
+    act(() => {
+      useAppLocalNotificationsStore
+        .getState()
+        .upsertRecurringFailure(recurringFailure);
+    });
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId[recurringFailure.id]
+          .readAt,
+      ).not.toBeNull();
+    });
+    expect(markReadCalls).toHaveLength(1);
+    markReadCalls.splice(0);
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsertRecurringFailure({
+        ...recurringFailure,
+        updatedAt: 20,
+      });
+    });
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId[recurringFailure.id]
+          .readAt,
+      ).not.toBeNull();
+      expect(markReadCalls).toHaveLength(1);
+    });
   });
 
   it("does not consume done rows belonging to a different tile in the same epic", async () => {
