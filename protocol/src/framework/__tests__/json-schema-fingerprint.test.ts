@@ -27,7 +27,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
       const next = fingerprint(
         z.object({ id: z.string(), note: z.string().optional() }),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("accepts a new field nested inside an object property", () => {
@@ -39,7 +41,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
           agents: z.array(z.object({ id: z.string(), model: z.string() })),
         }),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("accepts a new field inside a discriminated-union arm (array root)", () => {
@@ -67,7 +71,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
           ]),
         ),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("accepts a brand-new union variant", () => {
@@ -80,15 +86,17 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
           z.object({ kind: z.literal("b"), other: z.number() }),
         ]),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("accepts new enum values", () => {
       const previous = fingerprint(z.object({ role: z.enum(["owner"]) }));
-      const next = fingerprint(
-        z.object({ role: z.enum(["owner", "editor"]) }),
-      );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      const next = fingerprint(z.object({ role: z.enum(["owner", "editor"]) }));
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("treats the same addition identically under an object root and an array-union root", () => {
@@ -110,11 +118,109 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
         z.array(z.union([z.object({ id: z.string(), extra: z.boolean() })])),
       );
       expect(
-        findAdditivityViolation(objectRootPrevious, objectRootNext, "lenient", null, null),
+        findAdditivityViolation(
+          objectRootPrevious,
+          objectRootNext,
+          "lenient",
+          null,
+          null,
+        ),
       ).toBeNull();
       expect(
-        findAdditivityViolation(arrayRootPrevious, arrayRootNext, "lenient", null, null),
+        findAdditivityViolation(
+          arrayRootPrevious,
+          arrayRootNext,
+          "lenient",
+          null,
+          null,
+        ),
       ).toBeNull();
+    });
+  });
+
+  describe("record values are walked, not compared as opaque leaves", () => {
+    // The regression: a z.record node classified `opaque`, so ANY evolution
+    // of its value schema - including a strip-clean field addition - was
+    // priced as a schema-kind change, in both modes. indicatorState@1.1's
+    // `pendingFork` addition inside record values is the shipped instance.
+    it("accepts a required field added to record values, in both modes", () => {
+      const previous = fingerprint(
+        z.object({
+          chats: z.record(z.string(), z.object({ done: z.boolean() })),
+        }),
+      );
+      const next = fingerprint(
+        z.object({
+          chats: z.record(
+            z.string(),
+            z.object({ done: z.boolean(), pendingFork: z.boolean() }),
+          ),
+        }),
+      );
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "no-value-growth", null, null),
+      ).toBeNull();
+    });
+
+    it("flags a field removed from record values", () => {
+      const previous = fingerprint(
+        z.object({
+          chats: z.record(
+            z.string(),
+            z.object({ done: z.boolean(), stale: z.boolean() }),
+          ),
+        }),
+      );
+      const next = fingerprint(
+        z.object({
+          chats: z.record(z.string(), z.object({ done: z.boolean() })),
+        }),
+      );
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toEqual({
+        kind: "field",
+        detail: "chats.(record values).stale",
+      });
+    });
+
+    it("prices enum-key growth on a record by the caller's mode", () => {
+      const previous = fingerprint(
+        z.object({
+          matrix: z.record(z.enum(["failure"]), z.boolean()),
+        }),
+      );
+      const next = fingerprint(
+        z.object({
+          matrix: z.record(z.enum(["failure", "done"]), z.boolean()),
+        }),
+      );
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "no-value-growth", null, null),
+      ).toEqual({ kind: "enum-value-added", detail: "done" });
+    });
+
+    it("still flags a record replaced by a plain object as a kind change", () => {
+      const previous = fingerprint(
+        z.object({ chats: z.record(z.string(), z.boolean()) }),
+      );
+      const next = fingerprint(
+        z.object({ chats: z.object({ total: z.boolean() }) }),
+      );
+      const violation = findAdditivityViolation(
+        previous,
+        next,
+        "lenient",
+        null,
+        null,
+      );
+      expect(violation?.kind).toBe("schema-kind");
     });
   });
 
@@ -124,7 +230,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
         z.object({ id: z.string(), trim: z.boolean() }),
       );
       const next = fingerprint(z.object({ id: z.string() }));
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toEqual({
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toEqual({
         kind: "field",
         detail: "trim",
       });
@@ -144,7 +252,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
       // The array branch preserves the historical wrapping: violations
       // beneath an array surface as `array-items`, with the inner
       // violation (and its dotted path) in the description.
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toEqual({
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toEqual({
         kind: "array-items",
         detail: "drops field 'agents.items.model'",
         inner: { kind: "field", detail: "agents.items.model" },
@@ -158,7 +268,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
       const next = fingerprint(
         z.object({ settings: z.object({ role: z.enum(["owner"]) }) }),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toEqual({
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toEqual({
         kind: "enum-value",
         detail: "viewer",
       });
@@ -174,7 +286,13 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
       const next = fingerprint(
         z.union([z.object({ kind: z.literal("circle"), radius: z.number() })]),
       );
-      const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+      const violation = findAdditivityViolation(
+        previous,
+        next,
+        "lenient",
+        null,
+        null,
+      );
       expect(violation?.kind).toBe("union-variant");
     });
 
@@ -191,7 +309,13 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
           z.object({ kind: z.literal("b") }),
         ]),
       );
-      const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+      const violation = findAdditivityViolation(
+        previous,
+        next,
+        "lenient",
+        null,
+        null,
+      );
       expect(violation?.kind).toBe("union-variant");
     });
   });
@@ -212,7 +336,9 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
           ]),
         }),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("flags a widening that abandons the old form", () => {
@@ -227,7 +353,13 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
           ]),
         }),
       );
-      const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+      const violation = findAdditivityViolation(
+        previous,
+        next,
+        "lenient",
+        null,
+        null,
+      );
       expect(violation?.kind).toBe("union-variant");
     });
   });
@@ -236,7 +368,13 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
     it("flags a nested leaf type change", () => {
       const previous = fingerprint(z.object({ count: z.string() }));
       const next = fingerprint(z.object({ count: z.number() }));
-      const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+      const violation = findAdditivityViolation(
+        previous,
+        next,
+        "lenient",
+        null,
+        null,
+      );
       expect(violation?.kind).toBe("schema-kind");
       expect(violation?.detail).toContain("at 'count'");
     });
@@ -246,14 +384,22 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
         z.object({ mode: z.object({ id: z.string() }) }),
       );
       const next = fingerprint(z.object({ mode: z.enum(["fast", "slow"]) }));
-      const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+      const violation = findAdditivityViolation(
+        previous,
+        next,
+        "lenient",
+        null,
+        null,
+      );
       expect(violation?.kind).toBe("schema-kind");
     });
 
     it("still flags a root kind change", () => {
       const previous = fingerprint(z.object({ id: z.string() }));
       const next = fingerprint(z.array(z.object({ id: z.string() })));
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toEqual({
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toEqual({
         kind: "schema-kind",
         detail: "object -> array",
       });
@@ -264,24 +410,32 @@ describe("findAdditivityViolation - projection-feasibility semantics", () => {
     it("accepts unchanged nullable leaves (anyOf with null variant)", () => {
       const shape = z.object({ effort: z.string().nullable() });
       expect(
-        findAdditivityViolation(fingerprint(shape), fingerprint(shape), "lenient", null, null),
+        findAdditivityViolation(
+          fingerprint(shape),
+          fingerprint(shape),
+          "lenient",
+          null,
+          null,
+        ),
       ).toBeNull();
     });
 
     it("accepts adding a field beside an untouched nullable field", () => {
-      const previous = fingerprint(
-        z.object({ effort: z.string().nullable() }),
-      );
+      const previous = fingerprint(z.object({ effort: z.string().nullable() }));
       const next = fingerprint(
         z.object({ effort: z.string().nullable(), fast: z.boolean() }),
       );
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
 
     it("accepts widening a plain leaf to nullable (old form retained)", () => {
       const previous = fingerprint(z.object({ effort: z.string() }));
       const next = fingerprint(z.object({ effort: z.string().nullable() }));
-      expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+      expect(
+        findAdditivityViolation(previous, next, "lenient", null, null),
+      ).toBeNull();
     });
   });
 });
@@ -290,8 +444,12 @@ describe("findAdditivityViolation - no-value-growth mode (response lane)", () =>
   it("flags an enum-value addition that lenient mode accepts", () => {
     const previous = fingerprint(z.object({ role: z.enum(["owner"]) }));
     const next = fingerprint(z.object({ role: z.enum(["owner", "editor"]) }));
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
-    expect(findAdditivityViolation(previous, next, "no-value-growth", null, null)).toEqual({
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "no-value-growth", null, null),
+    ).toEqual({
       kind: "enum-value-added",
       detail: "editor",
     });
@@ -307,16 +465,32 @@ describe("findAdditivityViolation - no-value-growth mode (response lane)", () =>
         z.object({ kind: z.literal("b"), other: z.number() }),
       ]),
     );
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
-    const strict = findAdditivityViolation(previous, next, "no-value-growth", null, null);
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
+    const strict = findAdditivityViolation(
+      previous,
+      next,
+      "no-value-growth",
+      null,
+      null,
+    );
     expect(strict?.kind).toBe("union-variant-added");
   });
 
   it("flags widening a leaf to nullable (null is a value an old schema refuses)", () => {
     const previous = fingerprint(z.object({ effort: z.string() }));
     const next = fingerprint(z.object({ effort: z.string().nullable() }));
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
-    const strict = findAdditivityViolation(previous, next, "no-value-growth", null, null);
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
+    const strict = findAdditivityViolation(
+      previous,
+      next,
+      "no-value-growth",
+      null,
+      null,
+    );
     expect(strict?.kind).toBe("union-variant-added");
   });
 
@@ -374,8 +548,12 @@ describe("findAdditivityViolation - no-value-growth mode (response lane)", () =>
         z.object({ kind: z.literal("b") }),
       ]),
     );
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
-    expect(findAdditivityViolation(previous, next, "no-value-growth", null, null)).toEqual({
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "no-value-growth", null, null),
+    ).toEqual({
       kind: "enum-value-added",
       detail: "y",
     });
@@ -383,7 +561,9 @@ describe("findAdditivityViolation - no-value-growth mode (response lane)", () =>
 
   it("keeps enforcing structural safety identically in strict mode", () => {
     const previous = fingerprint(
-      z.object({ agents: z.array(z.object({ id: z.string(), m: z.string() })) }),
+      z.object({
+        agents: z.array(z.object({ id: z.string(), m: z.string() })),
+      }),
     );
     const next = fingerprint(
       z.object({ agents: z.array(z.object({ id: z.string() })) }),
@@ -411,14 +591,22 @@ describe("findAdditivityViolation - review-hardening cases", () => {
         z.object({ kind: z.literal("a"), value: z.string().optional() }),
       ]),
     );
-    const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+    const violation = findAdditivityViolation(
+      previous,
+      next,
+      "lenient",
+      null,
+      null,
+    );
     expect(violation?.kind).toBe("union-variant");
   });
 
   it("flags relaxing a required field to optional on a plain object", () => {
     const previous = fingerprint(z.object({ id: z.string() }));
     const next = fingerprint(z.object({ id: z.string().optional() }));
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toEqual({
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toEqual({
       kind: "required-field",
       detail: "id",
     });
@@ -433,37 +621,54 @@ describe("findAdditivityViolation - review-hardening cases", () => {
     const next = fingerprint(
       z.object({ id: z.string().default("x").describe("the id") }),
     );
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
     expect(
       findAdditivityViolation(previous, next, "no-value-growth", null, null),
     ).toBeNull();
   });
 
-
   it("accepts narrowing a scalar constraint", () => {
     // Every value the newer schema emits is still accepted by the older one.
     const previous = fingerprint(z.object({ s: z.string().max(10) }));
     const next = fingerprint(z.object({ s: z.string().max(5) }));
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
   });
 
   it("accepts adding a bound the older side did not have", () => {
     const previous = fingerprint(z.object({ s: z.string() }));
     const next = fingerprint(z.object({ s: z.string().max(5) }));
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
   });
 
   it("rejects widening a scalar constraint", () => {
     const previous = fingerprint(z.object({ s: z.string().max(5) }));
     const next = fingerprint(z.object({ s: z.string().max(10) }));
-    const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+    const violation = findAdditivityViolation(
+      previous,
+      next,
+      "lenient",
+      null,
+      null,
+    );
     expect(violation?.kind).toBe("schema-kind");
   });
 
   it("rejects dropping a bound the older side enforced", () => {
     const previous = fingerprint(z.object({ s: z.string().min(3) }));
     const next = fingerprint(z.object({ s: z.string() }));
-    const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+    const violation = findAdditivityViolation(
+      previous,
+      next,
+      "lenient",
+      null,
+      null,
+    );
     expect(violation?.kind).toBe("schema-kind");
   });
 
@@ -471,7 +676,9 @@ describe("findAdditivityViolation - review-hardening cases", () => {
     const previous = fingerprint(z.object({ n: z.number().min(1) }));
     const wider = fingerprint(z.object({ n: z.number().min(0) }));
     const narrower = fingerprint(z.object({ n: z.number().min(5) }));
-    expect(findAdditivityViolation(previous, narrower, "lenient", null, null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, narrower, "lenient", null, null),
+    ).toBeNull();
     expect(
       findAdditivityViolation(previous, wider, "lenient", null, null),
     ).not.toBeNull();
@@ -480,7 +687,13 @@ describe("findAdditivityViolation - review-hardening cases", () => {
   it("still flags a constraining leaf change", () => {
     const previous = fingerprint(z.object({ id: z.string() }));
     const next = fingerprint(z.object({ id: z.number() }));
-    const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+    const violation = findAdditivityViolation(
+      previous,
+      next,
+      "lenient",
+      null,
+      null,
+    );
     expect(violation?.kind).toBe("schema-kind");
   });
 
@@ -496,8 +709,16 @@ describe("findAdditivityViolation - review-hardening cases", () => {
         z.object({ kind: z.literal("a"), mode: z.enum(["x", "y"]) }),
       ]),
     );
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
-    const strict = findAdditivityViolation(previous, next, "no-value-growth", null, null);
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
+    const strict = findAdditivityViolation(
+      previous,
+      next,
+      "no-value-growth",
+      null,
+      null,
+    );
     expect(strict?.kind).toBe("union-variant-added");
   });
 
@@ -516,7 +737,9 @@ describe("findAdditivityViolation - review-hardening cases", () => {
     const next = fingerprint(
       z.object({ id: z.string(), kind: z.enum(["a", "b"]) }),
     );
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
   });
 
   it("flags a union collapse that abandons an arm", () => {
@@ -529,7 +752,13 @@ describe("findAdditivityViolation - review-hardening cases", () => {
     const next = fingerprint(
       z.object({ kind: z.literal("a"), value: z.string() }),
     );
-    const violation = findAdditivityViolation(previous, next, "lenient", null, null);
+    const violation = findAdditivityViolation(
+      previous,
+      next,
+      "lenient",
+      null,
+      null,
+    );
     expect(violation?.kind).toBe("union-variant");
   });
 
@@ -542,7 +771,13 @@ describe("findAdditivityViolation - review-hardening cases", () => {
         rows: z.array(z.object({ status: z.enum(["queued", "running"]) })),
       }),
     );
-    const violation = findAdditivityViolation(previous, next, "no-value-growth", null, null);
+    const violation = findAdditivityViolation(
+      previous,
+      next,
+      "no-value-growth",
+      null,
+      null,
+    );
     expect(violation?.kind).toBe("array-items");
     expect(
       violation !== null && violation.kind === "array-items"
@@ -551,7 +786,6 @@ describe("findAdditivityViolation - review-hardening cases", () => {
     ).toEqual({ kind: "enum-value-added", detail: "running" });
   });
 });
-
 
 describe("strict objects reject growth", () => {
   it("flags adding a field when the older object is strict", () => {
@@ -609,11 +843,10 @@ describe("strict objects reject growth", () => {
       next,
       "lenient",
       toUnknownKeyTree(previousSchema),
-        null,
+      null,
     );
     expect(violation).not.toBeNull();
   });
-
 
   it("allows growth of the STRIPPING arm of a mixed union", () => {
     const previousSchema = z.union([
@@ -697,7 +930,7 @@ describe("strict objects reject growth", () => {
       next,
       "lenient",
       toUnknownKeyTree(previousSchema),
-        null,
+      null,
     );
     expect(violation?.kind).toBe("strict-object-growth");
   });
@@ -770,13 +1003,17 @@ describe("findBreakingChange - major-justification interplay", () => {
     const next = fingerprint(
       z.object({ agents: z.array(z.object({ harness: z.enum(["a", "b"]) })) }),
     );
-    expect(findAdditivityViolation(previous, next, "lenient", null, null)).toBeNull();
+    expect(
+      findAdditivityViolation(previous, next, "lenient", null, null),
+    ).toBeNull();
     expect(findBreakingChange(previous, next, null, null)).not.toBeNull();
   });
 
   it("reports a nested removal as a removed-field breaking change", () => {
     const previous = fingerprint(
-      z.object({ agents: z.array(z.object({ id: z.string(), m: z.string() })) }),
+      z.object({
+        agents: z.array(z.object({ id: z.string(), m: z.string() })),
+      }),
     );
     const next = fingerprint(
       z.object({ agents: z.array(z.object({ id: z.string() })) }),

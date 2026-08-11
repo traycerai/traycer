@@ -3,6 +3,11 @@ import {
   defineVersionedRecordRegistry,
   type RecordValue,
 } from "@traycer/protocol/framework/index";
+import {
+  chatHeadRecordSchema,
+  chatShardRecordSchema,
+} from "@traycer/protocol/persistence/_internal/chat-sync-schemas";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { epicSchema } from "@traycer/protocol/persistence/_internal/epic-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
 
@@ -19,6 +24,12 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
  * - `room-metadata` - Tiptap Cloud Yjs room metadata stored at
  *   `doc.getMap("meta")`. Lives independently of the epic record because
  *   clients read it before interpreting the rest of the room.
+ * - `chat-head` / `chat-shard` - a published chat: a small mutable head on the
+ *   chat's cloud row plus the immutable, content-addressed shards it names.
+ *   Not Yjs shapes - the owning host serializes them and readers on other
+ *   release cadences (cloud renderers, clone targets) assemble them. They share
+ *   ONE version line (`chat-sync/version.ts`), because a shard embeds the
+ *   sub-schemas the head's core is built from.
  *
  * Cloud-catalog / task-ref / workspace-association caches are owned by
  * the cloud data client (internal, not in this repo) and are NOT versioned
@@ -39,6 +50,24 @@ export const roomMetadataRecordV100 = defineRecordContract({
   name: "room-metadata",
   schemaVersion: { major: 1, minor: 0 } as const,
   schema: roomMetadataSchema,
+});
+
+// Both bind the SAME `CHAT_SYNC_SCHEMA_VERSION` object the payload schemas are
+// pinned to - identity, not a repeated literal. `defineRecordContract` returns
+// its input and never compares the contract's version against the one its
+// schema embeds, so a copied `{ major: 1, minor: 0 }` here would let a future
+// bump register 1.1 while the payload schema and the writers stayed on 1.0.
+
+export const chatHeadRecordV100 = defineRecordContract({
+  name: "chat-head",
+  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
+  schema: chatHeadRecordSchema,
+});
+
+export const chatShardRecordV100 = defineRecordContract({
+  name: "chat-shard",
+  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
+  schema: chatShardRecordSchema,
 });
 
 export const persistenceRecordRegistry = defineVersionedRecordRegistry({
@@ -63,6 +92,24 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
       downgradePathsFromLatest: {},
     },
   },
+  "chat-head": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatHeadRecordV100, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "chat-shard": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatShardRecordV100, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 });
 
 export type PersistenceRecordRegistry = typeof persistenceRecordRegistry;
@@ -74,3 +121,5 @@ export type RoomMetadata = RecordValue<
   PersistenceRecordRegistry,
   "room-metadata"
 >;
+export type ChatHead = RecordValue<PersistenceRecordRegistry, "chat-head">;
+export type ChatShard = RecordValue<PersistenceRecordRegistry, "chat-shard">;

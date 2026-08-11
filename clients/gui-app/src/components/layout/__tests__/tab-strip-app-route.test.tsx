@@ -65,6 +65,13 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
+// The app shell mounts the fork-episode poll (it feeds the `pendingFork`
+// indicator's open/close edge). Stubbed like every other host-runtime consumer
+// in this file: these tests own tab-strip layout and navigation, and the real
+// hook would need a host client this tree deliberately does not build.
+vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
+  useChatForkEventQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),
 }));

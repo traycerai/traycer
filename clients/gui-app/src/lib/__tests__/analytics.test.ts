@@ -89,6 +89,40 @@ describe("analytics", () => {
     ).toEqual({ harness: "codex" });
   });
 
+  it("accepts every settings section the type union declares", async () => {
+    // The runtime allowlist is what `section` is validated against, and a
+    // union member missing from it drops the event with no error anywhere -
+    // `devices` and `usage` had both gone missing exactly that way.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const sections = [
+      "agents",
+      "appearance",
+      "devices",
+      "diagnostics",
+      "general",
+      "host",
+      "keybindings",
+      "notifications",
+      "providers",
+      "shell",
+      "usage",
+      "worktrees",
+    ];
+    // `source` alongside `section`, matching what the sidebars actually emit -
+    // the sanitizer requires every expected key to be present, so omitting it
+    // would reject all twelve and prove nothing.
+    const rejected = sections.filter(
+      (section) =>
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
+          source: "direct_ui",
+          section,
+        }) === null,
+    );
+    expect(rejected).toEqual([]);
+  });
+
   it("rejects an allowed key with a value outside its event taxonomy", async () => {
     const { AnalyticsEvent, sanitizeAnalyticsProperties } =
       await import("@/lib/analytics");

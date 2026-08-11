@@ -9,6 +9,7 @@ import { useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
 import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skeleton";
@@ -120,6 +121,7 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
     >
       {props.snapshotLoaded ? (
         <>
+          <EpicUsageEntryPoint epicId={props.epicId} />
           <EpicConnectionPill />
           <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
         </>

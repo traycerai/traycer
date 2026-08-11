@@ -4,6 +4,7 @@
 @import "@fontsource-variable/figtree";
 @import "./editor-core/styles/editor.css";
 @import "./styles/terminal-themes.css";
+@import "./styles/usage-analytics-chart.css";
 
 @custom-variant dark (&:is(.dark *));
 /* Window Controls Overlay: active only when Chromium reports the

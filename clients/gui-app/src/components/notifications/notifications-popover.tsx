@@ -1,11 +1,19 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  m,
+  useReducedMotion,
+} from "motion/react";
 import { BellOff, CheckCheck, Settings, Trash2 } from "lucide-react";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { Button } from "@/components/ui/button";
@@ -469,52 +477,19 @@ export function NotificationsPopover(
             </button>
           )}
           <NotificationsFeedContent isEmpty={isEmpty} presentation={feedStatus}>
-            <>
-              {isAttentionSectionVisible({
-                loadedAttentionCount: attentionIds.length,
-                canLoadMoreAttention: actions.canLoadMoreAttention,
-              }) ? (
-                <section className="px-4 pt-3">
-                  <SectionLabel>Needs attention</SectionLabel>
-                  {/* -mx-4 breaks the row list out of the section's inset so
-                  each row's bottom divider reaches the popover's true edges;
-                  rows restore the same visual inset as their own content
-                  padding (see notification-row.tsx). */}
-                  <ul className="-mx-4 flex flex-col">
-                    {attentionIds.map((id) => (
-                      <NotificationRow
-                        key={id}
-                        feedId={id}
-                        onActivate={handleActivate}
-                        onAcknowledge={handleAcknowledge}
-                        onResolve={handleResolve}
-                      />
-                    ))}
-                  </ul>
-                  {actions.canLoadMoreAttention ? (
-                    <LoadMoreButton
-                      label="Load more attention"
-                      isLoading={actions.isLoadingMoreAttention}
-                      hasError={actions.hasAttentionLoadError}
-                      onClick={() => actions.loadMoreAttention()}
-                      testId="notifications-load-more-attention"
-                    />
-                  ) : null}
-                </section>
-              ) : null}
-
-              <section className="px-4 pt-3 pb-2">
-                <SectionLabel>Recent activity</SectionLabel>
-                <RecentSectionBody
-                  recentIds={recentIds}
-                  isFilteredEmpty={isRecentFilteredEmpty}
-                  onActivate={handleActivate}
-                  onAcknowledge={handleAcknowledge}
-                  onResolve={handleResolve}
-                  onResetFilters={resetFilters}
-                />
-              </section>
-            </>
+            <NotificationsFeedSections
+              attentionIds={attentionIds}
+              recentIds={recentIds}
+              canLoadMoreAttention={actions.canLoadMoreAttention}
+              isLoadingMoreAttention={actions.isLoadingMoreAttention}
+              hasAttentionLoadError={actions.hasAttentionLoadError}
+              isRecentFilteredEmpty={isRecentFilteredEmpty}
+              onLoadMoreAttention={() => actions.loadMoreAttention()}
+              onActivate={handleActivate}
+              onAcknowledge={handleAcknowledge}
+              onResolve={handleResolve}
+              onResetFilters={resetFilters}
+            />
           </NotificationsFeedContent>
         </div>
 
@@ -541,6 +516,94 @@ export function NotificationsPopover(
         onConfirm={handleConfirmClearAll}
       />
     </TooltipProvider>
+  );
+}
+
+interface NotificationsFeedSectionsProps {
+  readonly attentionIds: ReadonlyArray<string>;
+  readonly recentIds: ReadonlyArray<string>;
+  readonly canLoadMoreAttention: boolean;
+  readonly isLoadingMoreAttention: boolean;
+  readonly hasAttentionLoadError: boolean;
+  readonly isRecentFilteredEmpty: boolean;
+  readonly onLoadMoreAttention: () => void;
+  readonly onActivate: (row: MergedNotificationRow) => void;
+  readonly onAcknowledge: (row: MergedNotificationRow) => void;
+  readonly onResolve: (row: MergedNotificationRow) => void;
+  readonly onResetFilters: () => void;
+}
+
+function NotificationsFeedSections(
+  props: NotificationsFeedSectionsProps,
+): ReactNode {
+  const relocatedIds = useRelocatedNotificationIds(
+    props.attentionIds,
+    props.recentIds,
+  );
+  const shouldReduceMotion = useReducedMotion() === true;
+  return (
+    <LayoutGroup id="notifications-feed">
+      <AnimatePresence initial={false}>
+        {isAttentionSectionVisible({
+          loadedAttentionCount: props.attentionIds.length,
+          canLoadMoreAttention: props.canLoadMoreAttention,
+        }) ? (
+          <m.section
+            key="attention-section"
+            layout={shouldReduceMotion ? false : "position"}
+            exit={shouldReduceMotion ? undefined : { height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden px-4 pt-3"
+          >
+            <SectionLabel>Needs attention</SectionLabel>
+            {/* -mx-4 breaks the row list out of the section's inset so each
+            row's bottom divider reaches the popover's true edges; rows
+            restore the same visual inset as their own content padding (see
+            notification-row.tsx). */}
+            <ul className="-mx-4 flex flex-col">
+              <AnimatePresence initial={false}>
+                {props.attentionIds.map((id) => (
+                  <NotificationRow
+                    key={id}
+                    feedId={id}
+                    highlightRelocation={false}
+                    onActivate={props.onActivate}
+                    onAcknowledge={props.onAcknowledge}
+                    onResolve={props.onResolve}
+                  />
+                ))}
+              </AnimatePresence>
+            </ul>
+            {props.canLoadMoreAttention ? (
+              <LoadMoreButton
+                label="Load more attention"
+                isLoading={props.isLoadingMoreAttention}
+                hasError={props.hasAttentionLoadError}
+                onClick={props.onLoadMoreAttention}
+                testId="notifications-load-more-attention"
+              />
+            ) : null}
+          </m.section>
+        ) : null}
+      </AnimatePresence>
+
+      <m.section
+        layout={shouldReduceMotion ? false : "position"}
+        transition={{ layout: { duration: 0.24, ease: "easeOut" } }}
+        className="px-4 pt-3 pb-2"
+      >
+        <SectionLabel>Recent activity</SectionLabel>
+        <RecentSectionBody
+          recentIds={props.recentIds}
+          relocatedIds={relocatedIds}
+          isFilteredEmpty={props.isRecentFilteredEmpty}
+          onActivate={props.onActivate}
+          onAcknowledge={props.onAcknowledge}
+          onResolve={props.onResolve}
+          onResetFilters={props.onResetFilters}
+        />
+      </m.section>
+    </LayoutGroup>
   );
 }
 
@@ -829,6 +892,7 @@ function OriginUnavailableBanner(): ReactNode {
 
 interface RecentSectionBodyProps {
   readonly recentIds: ReadonlyArray<string>;
+  readonly relocatedIds: ReadonlySet<string>;
   readonly isFilteredEmpty: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
@@ -841,6 +905,7 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
     return (
       <RecentRowList
         ids={props.recentIds}
+        relocatedIds={props.relocatedIds}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
         onResolve={props.onResolve}
@@ -862,6 +927,7 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
 
 interface RecentRowListProps {
   readonly ids: ReadonlyArray<string>;
+  readonly relocatedIds: ReadonlySet<string>;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   readonly onResolve: (row: MergedNotificationRow) => void;
@@ -880,6 +946,7 @@ function RecentRowList(props: RecentRowListProps): ReactNode {
         <RecentRow
           key={id}
           feedId={id}
+          highlightRelocation={props.relocatedIds.has(id)}
           previousFeedId={index === 0 ? null : props.ids[index - 1]}
           now={now}
           onActivate={props.onActivate}
@@ -893,6 +960,7 @@ function RecentRowList(props: RecentRowListProps): ReactNode {
 
 interface RecentRowProps {
   readonly feedId: string;
+  readonly highlightRelocation: boolean;
   readonly previousFeedId: string | null;
   readonly now: number;
   readonly onActivate: (row: MergedNotificationRow) => void;
@@ -921,12 +989,36 @@ function RecentRow(props: RecentRowProps): ReactNode {
       )}
       <NotificationRow
         feedId={props.feedId}
+        highlightRelocation={props.highlightRelocation}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
         onResolve={props.onResolve}
       />
     </>
   );
+}
+
+function useRelocatedNotificationIds(
+  attentionIds: ReadonlyArray<string>,
+  recentIds: ReadonlyArray<string>,
+): ReadonlySet<string> {
+  const previousAttentionIds = useRef(attentionIds);
+  const [relocatedIds, setRelocatedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    const currentAttentionIds = new Set(attentionIds);
+    const currentRecentIds = new Set(recentIds);
+    setRelocatedIds(
+      new Set(
+        previousAttentionIds.current.filter(
+          (id) => !currentAttentionIds.has(id) && currentRecentIds.has(id),
+        ),
+      ),
+    );
+    previousAttentionIds.current = attentionIds;
+  }, [attentionIds, recentIds]);
+  return relocatedIds;
 }
 
 function SectionLabel(props: { readonly children: ReactNode }): ReactNode {

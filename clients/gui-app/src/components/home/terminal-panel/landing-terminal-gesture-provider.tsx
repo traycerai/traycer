@@ -6,7 +6,10 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
+} from "@/stores/home/landing-terminal-store";
 import {
   LandingTerminalGestureContext,
   type LandingTerminalGestureValue,
@@ -25,9 +28,9 @@ const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
  * accidentally read instead of the captured target — the terminal-gesture leak
  * class is closed by construction.
  *
- * While a gesture pins the panel the target is frozen to the captured
- * host/folder/client/availability; otherwise it is live focus, so ordinary
- * (non-gesture) operation is unchanged.
+ * While a gesture pins the panel, host/client/availability stay captured while
+ * the workspace source remains live for that captured draft. Otherwise the
+ * target is live focus, so ordinary (non-gesture) operation is unchanged.
  */
 export function LandingTerminalGestureProvider(props: {
   readonly draftId: string | null;
@@ -43,8 +46,6 @@ export function LandingTerminalGestureProvider(props: {
     probe.data,
     probe.error,
   );
-  const panelOpen = useLandingTerminalStore((state) => state.panelOpen);
-
   const [pendingGesture, setPendingGesture] =
     useState<LandingTerminalTarget | null>(null);
   const gestureGenerationRef = useRef(0);
@@ -54,9 +55,18 @@ export function LandingTerminalGestureProvider(props: {
   // is state rather than a render-read ref.
   const [openEpisodeDraftId, setOpenEpisodeDraftId] = useState(draftId);
 
-  // A gesture only pins while the panel is open; a closed panel projects live
-  // focus even if a stale gesture lingers.
-  const openGesture = panelOpen ? pendingGesture : null;
+  const capturedLandingPageId =
+    pendingGesture?.draftId ?? "unbound-landing-page";
+  const capturedPanelOpen = useLandingTerminalStore((state) =>
+    pendingGesture === null
+      ? false
+      : landingTerminalLayoutFor(state, capturedLandingPageId).panelOpen,
+  );
+
+  // A gesture only pins while the page it opened is still open. Its terminal
+  // reconciliation can therefore complete after focus moves to another start
+  // page, whose visible panel may be collapsed and independently laid out.
+  const openGesture = capturedPanelOpen ? pendingGesture : null;
 
   // The workspace source follows the EFFECTIVE draft (the captured draft while a
   // gesture pins), so the folder picker writes the captured draft's workspace,
@@ -68,6 +78,7 @@ export function LandingTerminalGestureProvider(props: {
   );
   const workspace = useHomeWorkspaceSource(stagingKey, null);
   const liveWorkspacePath = workspace.primaryWorkspacePath;
+  const liveWorkspacePaths = workspace.folders;
 
   // Downgrade memory: keep the pending gesture's availability in step with the
   // captured host's LATEST observed verdict while that host stays selected. A
@@ -98,6 +109,8 @@ export function LandingTerminalGestureProvider(props: {
       draftId,
       hostId: activeHostId,
       primaryWorkspacePath: liveWorkspacePath,
+      workspacePaths: [...liveWorkspacePaths],
+      launchWorkspacePath: liveWorkspacePath,
       availability,
       generation: gestureGenerationRef.current + 1,
       client: pinnedClient,
@@ -113,7 +126,30 @@ export function LandingTerminalGestureProvider(props: {
     draftId,
     hostDirectory,
     liveWorkspacePath,
+    liveWorkspacePaths,
   ]);
+
+  const selectWorkspacePath = useCallback(
+    (workspacePath: string): LandingTerminalTarget | null => {
+      if (
+        pendingGesture === null ||
+        !liveWorkspacePaths.includes(workspacePath)
+      ) {
+        return null;
+      }
+      const next: LandingTerminalTarget = {
+        ...pendingGesture,
+        primaryWorkspacePath: liveWorkspacePath,
+        workspacePaths: [...liveWorkspacePaths],
+        launchWorkspacePath: workspacePath,
+        generation: gestureGenerationRef.current + 1,
+      };
+      gestureGenerationRef.current = next.generation;
+      setPendingGesture(next);
+      return next;
+    },
+    [liveWorkspacePath, liveWorkspacePaths, pendingGesture],
+  );
 
   const clearPending = useCallback(() => {
     setPendingGesture(null);
@@ -121,7 +157,8 @@ export function LandingTerminalGestureProvider(props: {
 
   // While no gesture pins, the target is live focus (default client, generation
   // 0) so nothing outside a gesture changes. While a gesture pins, it is the
-  // frozen snapshot with a pinned-or-null client.
+  // captured routing snapshot with a pinned-or-null client; the chooser reads
+  // current folder metadata separately from `workspace` above.
   const target = useMemo<LandingTerminalTarget>(
     () =>
       openGesture === null
@@ -129,6 +166,8 @@ export function LandingTerminalGestureProvider(props: {
             draftId,
             hostId: activeHostId,
             primaryWorkspacePath: liveWorkspacePath,
+            workspacePaths: liveWorkspacePaths,
+            launchWorkspacePath: liveWorkspacePath,
             availability,
             generation: 0,
             client: defaultClient,
@@ -140,21 +179,33 @@ export function LandingTerminalGestureProvider(props: {
       defaultClient,
       draftId,
       liveWorkspacePath,
+      liveWorkspacePaths,
       openGesture,
     ],
   );
 
   const value = useMemo<LandingTerminalGestureValue>(
     () => ({
+      focusedLandingPageId: draftId,
       target,
       pending: openGesture !== null,
       pendingGeneration: openGesture === null ? null : openGesture.generation,
       openEpisodeDraftId,
       workspace,
       capture,
+      selectWorkspacePath,
       clearPending,
     }),
-    [capture, clearPending, openEpisodeDraftId, openGesture, target, workspace],
+    [
+      capture,
+      clearPending,
+      draftId,
+      openEpisodeDraftId,
+      openGesture,
+      selectWorkspacePath,
+      target,
+      workspace,
+    ],
   );
 
   return (

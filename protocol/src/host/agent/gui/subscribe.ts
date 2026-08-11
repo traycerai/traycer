@@ -70,6 +70,7 @@ import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
   worktreeBindingSchema,
   worktreeIntentSchema,
+  worktreeIntentSchemaV10,
 } from "@traycer/protocol/host/worktree-schemas";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 
@@ -984,7 +985,7 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
     // rides with the send so the host creates it at turn-start before
     // gating on setup - mirroring how the landing page bundles the intent
     // with `epic.create`. `null` for an ordinary send.
-    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
   }),
   z.object({
     kind: z.literal("deleteMessageSuffix"),
@@ -1005,7 +1006,7 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
     // Editing and resending a stopped message is another turn-start path. A
     // worktree staged in the composer must ride on this frame just as it does
     // on a normal send, otherwise it is not created until the next message.
-    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
     // When true, revert all file changes made by the edited message's turn
     // and every turn after it (cumulative, to the state before this message)
     // before trimming history and starting the new turn. Set by the
@@ -1169,8 +1170,22 @@ export const chatSubscribeClientFrameSchemaBeforeV14 = z.discriminatedUnion(
   chatSubscribeClientFrameSchemaBeforeV14Options,
 );
 
+const [
+  ,
+  deleteMessageSuffixClientFrameSchema,
+  ,
+  ...chatSubscribeClientFrameSchemaRestOptions
+] = chatSubscribeClientFrameSchemaBeforeV14Options;
+
 const chatSubscribeClientFrameSchemaOptions = [
-  ...chatSubscribeClientFrameSchemaBeforeV14Options,
+  chatSubscribeClientFrameSchemaBeforeV13Options[0].extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  deleteMessageSuffixClientFrameSchema,
+  chatSubscribeClientFrameSchemaBeforeV13Options[2].extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  ...chatSubscribeClientFrameSchemaRestOptions,
   activeProfileUpdateClientFrameSchema,
 ] as const;
 
@@ -1181,6 +1196,13 @@ export const chatSubscribeClientFrameSchema = z.discriminatedUnion(
 export type ChatSubscribeClientFrame = z.infer<
   typeof chatSubscribeClientFrameSchema
 >;
+
+// `1.4` through `1.6` are released lines. Keep their client frames on the
+// pre-collision intent shape while the live `1.7` line uses the current one.
+const chatSubscribeClientFrameSchemaV14ToV16 = z.discriminatedUnion(
+  "kind",
+  [...chatSubscribeClientFrameSchemaBeforeV14Options, activeProfileUpdateClientFrameSchema],
+);
 
 // ─── Frozen `chat.subscribe@1.0` shape (host-v1.0.0, as shipped) ──────────
 //
@@ -1384,7 +1406,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     settings: chatRunSettingsSchema,
     accountContext: accountContextSchema,
     deliveryPolicy: chatQueueDeliveryPolicySchema.default("auto"),
-    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
   }),
   z.object({
     kind: z.literal("deleteMessageSuffix"),
@@ -1748,7 +1770,7 @@ export const chatSubscribeV14 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV14,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
 });
 
 // ─── Frozen `chat.subscribe@1.5` shape (`archivedAt` + steering capability) ─
@@ -1802,7 +1824,7 @@ export const chatSubscribeV15 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 5 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV15,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
 });
 
 // ─── Frozen `chat.subscribe@1.6` shape (the managed-command surface, pre-image) ─
@@ -1870,7 +1892,7 @@ export const chatSubscribeV16 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 6 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV16,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV16,
 });
 
 // ─── Live `chat.subscribe@1.7` contract (image generation + rendering) ─────

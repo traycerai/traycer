@@ -202,6 +202,23 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               // through to normal text/markdown paste below.
               if (hasClaimableFileTransfer(clipboardData)) return true;
 
+              // Inside a code block, every textual flavor degrades to the
+              // clipboard's literal plain text — the in-code paste behavior
+              // ProseMirror itself would apply if this handler didn't claim
+              // the event. The branches below parse the paste into block
+              // nodes (markdown/HTML), and `replaceSelection` can fit only
+              // the first line's text inside the code block; the remaining
+              // blocks get hoisted out below it.
+              if (view.state.selection.$from.parent.type.spec.code === true) {
+                const codeText = clipboardData.getData("text/plain");
+                if (codeText.length === 0) return false;
+                const tr = view.state.tr.insertText(
+                  codeText.replace(/\r\n?/g, "\n"),
+                );
+                view.dispatch(tr.scrollIntoView());
+                return true;
+              }
+
               const composerContent =
                 readComposerContentFromClipboardData(clipboardData);
               if (composerContent !== null) {

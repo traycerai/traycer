@@ -207,6 +207,8 @@ describe("new chat command actions", () => {
       source: "direct_ui",
       worktreeIntent: null,
       settings: null,
+      forkSource: null,
+      onCreateError: () => undefined,
       createChat: createChat.createChat,
       openWhenProjected: opened.openWhenProjected,
     });
@@ -246,6 +248,8 @@ describe("new chat command actions", () => {
       source: "direct_ui",
       worktreeIntent: SEEDED_WORKTREE_INTENT,
       settings: null,
+      forkSource: null,
+      onCreateError: () => undefined,
       createChat: createChat.createChat,
       openWhenProjected: opened.openWhenProjected,
     });
@@ -398,6 +402,8 @@ describe("new chat command actions", () => {
         source: "direct_ui",
         worktreeIntent: null,
         settings: null,
+        forkSource: null,
+        onCreateError: () => undefined,
         createChat: createChat.createChat,
         openWhenProjected: openCreatedChatWhenProjected,
       });
@@ -420,6 +426,8 @@ describe("new chat command actions", () => {
         source: "direct_ui",
         worktreeIntent: null,
         settings: null,
+        forkSource: null,
+        onCreateError: () => undefined,
         createChat: createChat.createChat,
         openWhenProjected: openCreatedChatWhenProjected,
       });

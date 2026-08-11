@@ -29,8 +29,24 @@ export const claudePendingWakeSchema = z.object({
   scheduledFor: z.number(),
   prompt: z.string(),
   reason: z.string(),
+  retryDeadlineStartedAt: z.number().nullable().optional(),
+  // A due wake can be parked behind a detached interview while a later
+  // history rewrite temporarily clears the chat's active chain. Preserve the
+  // validated chain with the wake so host hydration can restore it instead of
+  // pruning the wake after a restart during that handoff.
+  heldChain: activeSessionChainSchema.nullable().optional(),
 });
 export type ClaudePendingWake = z.infer<typeof claudePendingWakeSchema>;
+
+// `claudePendingWakeSchema` is persisted state. The chat.subscribe snapshots
+// below are frozen wire contracts, so they retain this pre-deadline shape.
+const claudePendingWakeSchemaPreRetryDeadline = z.object({
+  sessionId: z.string(),
+  toolUseId: z.string(),
+  scheduledFor: z.number(),
+  prompt: z.string(),
+  reason: z.string(),
+});
 
 /**
  * Top-level chat record. On disk, `messages` is a yjs-backed Y.Array;
@@ -116,7 +132,9 @@ export const chatSchemaPreInReplyTo = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
   messages: z.array(messageSchemaPreInReplyTo),
   events: z.array(chatEventSchemaPreInReplyTo).default([]),
 });
@@ -137,7 +155,9 @@ export const chatSchemaV14 = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
   // Pre-image freeze (see `messageSchemaPreImage`): this released line must
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
@@ -162,7 +182,9 @@ export const chatSchemaV15 = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
   // Pre-image freeze (see `messageSchemaPreImage`): this released line must
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
@@ -193,7 +215,9 @@ export const chatSchemaPreImage = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
   messages: z.array(messageSchemaPreImage),
   events: z.array(chatEventSchema).default([]),
   archivedAt: z.number().nullable().default(null),
