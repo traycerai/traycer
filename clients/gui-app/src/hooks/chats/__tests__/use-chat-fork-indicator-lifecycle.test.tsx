@@ -139,7 +139,6 @@ describe("fork lifecycle notification-indicator refresh", () => {
       ),
     ).toHaveLength(3);
   });
-
 });
 
 function createHarness(initialEvent: ChatForkEvent | null): Harness {

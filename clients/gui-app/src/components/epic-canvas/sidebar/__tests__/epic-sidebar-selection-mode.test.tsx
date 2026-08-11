@@ -2606,9 +2606,7 @@ describe("unreachable-owner chat rows (tree lock + published-copy routing)", () 
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(
-      screen.getByTestId("epic-sidebar-tree-lock-chat-root"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("epic-sidebar-tree-lock-chat-root")).toBeTruthy();
   });
 
   it("keeps reachable-owner rows lock-free", () => {
@@ -2618,9 +2616,7 @@ describe("unreachable-owner chat rows (tree lock + published-copy routing)", () 
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(
-      screen.queryByTestId("epic-sidebar-tree-lock-chat-root"),
-    ).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-tree-lock-chat-root")).toBeNull();
   });
 
   it("routes an unreachable-owner row's click to the PUBLISHED COPY, not a live tab", () => {
