@@ -58,6 +58,19 @@ vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-rail", () => ({
   ),
 }));
 
+// The column's own chrome, stubbed for the same reason as the two above: it
+// resolves the Epic session's host through `useHostClientForHostId`, which
+// THROWS outside a `<HostRuntimeProvider>` this layout-only suite has no
+// reason to mount. Nothing here asserts on backup health.
+vi.mock(
+  "@/components/epic-canvas/sidebar/epic-backup-status-indicator",
+  () => ({
+    EpicBackupStatusIndicator: (props: { readonly epicId: string }) => (
+      <div data-testid="epic-backup-status-stub" data-epic-id={props.epicId} />
+    ),
+  }),
+);
+
 // The snapshot scope reads session-bound selectors; stub them so the live
 // branch renders against the fake handle without a full projector store.
 vi.mock("@/lib/epic-selectors", () => ({

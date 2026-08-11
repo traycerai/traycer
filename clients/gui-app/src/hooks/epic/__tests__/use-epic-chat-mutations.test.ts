@@ -157,12 +157,69 @@ describe("useEpicCreateChat", () => {
     } satisfies CreateChatRequest);
   });
 
+  const nonForkVariables: CreateChatMutationInput = {
+    epicId: "e",
+    chatId: "c",
+    parentId: null,
+    title: "t",
+  };
+
   it("shows fallback on error", () => {
     renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
     const opts = getCapturedMutation("epic.createChat").options as {
-      onError: (e: HostRpcError) => void;
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
     };
-    opts.onError(makeError("RPC_ERROR"));
+    opts.onError(makeError("RPC_ERROR"), nonForkVariables);
+    expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
+  });
+
+  it("suppresses the fallback toast for a checkpoint-unavailable latest-boundary fork failure", () => {
+    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+    opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
+      ...nonForkVariables,
+      forkSource: {
+        boundary: "latest",
+        sourceChatId: "chat-source",
+        sourceOwnerUserId: null,
+      },
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the fallback toast for a downgrade-unsupported latest-boundary fork failure", () => {
+    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+    opts.onError(makeError("DOWNGRADE_UNSUPPORTED"), {
+      ...nonForkVariables,
+      forkSource: {
+        boundary: "latest",
+        sourceChatId: "chat-source",
+        sourceOwnerUserId: null,
+      },
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("still shows the fallback toast for a checkpoint-unavailable failure on a precise-boundary fork", () => {
+    renderHook(() => useEpicCreateChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.createChat").options as {
+      onError: (e: HostRpcError, variables: CreateChatMutationInput) => void;
+    };
+    opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
+      ...nonForkVariables,
+      forkSource: {
+        boundary: "assistantMessage",
+        sourceChatId: "chat-source",
+        assistantMessageId: "assistant-1",
+        interviewBlockId: null,
+        carriedInterviews: null,
+      },
+    });
     expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
   });
 });

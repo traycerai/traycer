@@ -210,6 +210,7 @@ import {
   managedCommandSubscribeOutputV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
+import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -237,7 +238,9 @@ import {
   epicBatchDeleteV10,
   epicBatchUpdateRolesV10,
   epicCreateArtifactV10,
+  epicCreateChatUpgradeV10ToV11,
   epicCreateChatV10,
+  epicCreateChatV11,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -250,8 +253,16 @@ import {
   epicEditCommentV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
+  epicChatBackupStatusV10,
+  epicChatReplicaReadV10,
+  epicListChatPublicationTargetsV10,
+  epicListCloudChatPayloadsV10,
+  epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicReadCloudChatPartV10,
+  epicReadCloudChatPayloadV10,
+  epicResolveCloudChatHeadV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -334,6 +345,8 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
+  hostNotificationsIndicatorStateUpgradeV10ToV11,
+  hostNotificationsIndicatorStateV10,
   hostNotificationsListDowngradeV21ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
@@ -3110,7 +3123,6 @@ export const workspacePrepareFoldersUpgradeV10ToV11 = defineUpgradePath<
     recentWorkspaces: null,
   }),
 });
-
 // Additive upgrade from v1.0: a peer on the frozen v1.0 line predates fork
 // provenance entirely, so its creates carry no fork source. The newer side
 // runs this when bridging a v1.0 peer up to canonical (host: inbound v1.0
@@ -3516,11 +3528,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.notifications.indicatorState": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: hostNotificationsIndicatorState,
+          contract: hostNotificationsIndicatorStateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsIndicatorState,
+          upgradeFromPreviousVersion:
+            hostNotificationsIndicatorStateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -3582,6 +3599,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: snapshotsClearLocalSnapshotsV10,
           upgradeFromPreviousVersion: null,
         },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.chatFork.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
@@ -4626,11 +4653,17 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createChat": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCreateChatV10,
           upgradeFromPreviousVersion: null,
+        },
+        // v1.1: `forkSource` widened to name a latest-checkpoint boundary
+        // alongside the existing precise one (chat-sync-v2 ticket 34B1).
+        1: {
+          contract: epicCreateChatV11,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -4942,6 +4975,132 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicSearchArtifactsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) cloud-chat READ surface: the host is a byte pipe and
+  // the client does every interpretation. See `epic/cloud-chat.ts` for the whole
+  // argument; the short version is that the head is opaque to the server AND to
+  // the host, so gating, digest verification, assembly and caching all belong to
+  // the only party that parses it.
+  //
+  // All five degrade `unsupported` together, and the client hides the cloud-chat
+  // surface rather than rendering a failure - a host that predates the surface
+  // has nothing a user can do about except update it.,
+  "epic.listCloudChats": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListCloudChatsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.resolveCloudChatHead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicResolveCloudChatHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.readCloudChatPart": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadCloudChatPartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.listCloudChatPayloads": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListCloudChatPayloadsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.readCloudChatPayload": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicReadCloudChatPayloadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor), and deliberately NOT part of the byte-pipe set above:
+  // this one reads the host's OWN fork-redirect rows, so it exists only where a
+  // chat-sync publisher is installed and has to degrade on its own. A client
+  // without it folds a task's cloud list on `chatId` equality, which is exactly
+  // right until a chat forks and exactly wrong afterwards - see
+  // `epic/chat-publication-identity.ts`.
+  "epic.listChatPublicationTargets": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListChatPublicationTargetsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional local observability. Older hosts omit the quiet sidebar signal;
+  // there is no cloud fallback because publication lag belongs to the machine
+  // whose durable store and publisher are being compared.
+  "epic.chatBackupStatus": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicChatBackupStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Doc-replica fallback for the unreachable-owner view (chat-sync-v2 ticket
+  // 34A). Local-only, same reasoning as `epic.chatBackupStatus` immediately
+  // above: an older host omits it and the client keeps the notice it already
+  // renders.
+  "epic.chatReplicaRead": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicChatReplicaReadV10,
           upgradeFromPreviousVersion: null,
         },
       },

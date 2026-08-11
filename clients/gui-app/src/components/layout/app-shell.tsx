@@ -14,6 +14,7 @@ import { MigrationRunController } from "@/components/migration/migration-run-con
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
+import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 
@@ -29,6 +30,13 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   const { children } = props;
   const activeHostId = useReactiveActiveHostId();
+  // Observed, never rendered. A publication fork resolves itself now - the
+  // banner and the dialog that used to read this query are gone - but the
+  // per-chat `pendingFork` indicator is derived from an open fork episode and
+  // its own query has no push channel for the moment one opens or closes. One
+  // app-wide mount supplies that edge, because an episode is a HOST fact and
+  // not a property of any open tab.
+  useChatForkEventQuery();
 
   return (
     <PrimaryFocusCoordinatorProvider>

@@ -721,6 +721,56 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  // The cloud-chat READ surface. All five are reads, so `latest` - and the two
+  // properties that follow from the coordinator keying on PARAMS are exactly
+  // what this fan-out wants: a read of part A never supersedes a concurrent
+  // read of part B (different params, different queue), while two readers
+  // asking for the SAME digest at the same time coalesce onto one request.
+  // `fifo` would serialize a p99 chat's ~165 parts behind each other for no
+  // property gained, since none of these writes anything.
+  //
+  // No polling. A published head changes only when its owning host publishes
+  // again, and this reader has no signal for that; an interval would spend
+  // requests on an answer that is almost always identical. A newer head is
+  // picked up by reopening.
+  "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
+  "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
+  "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // Not polled, and this is a deliberate freshness choice rather than a copy of
+  // the row above it. The answer is "which cloud row does this local chat
+  // publish into", which changes exactly once in a chat's life - when a fork
+  // sends its lineage into a clone row - and never again. A cadence would spend
+  // a request per interval per open sidebar to re-learn a constant.
+  //
+  // What it costs: between a fork's auto-resolution and the next refetch, one
+  // sidebar row can be stale - the chat's OLD publication row briefly shows as
+  // a separate entry. That is a duplicate-looking row for a moment, not wrong
+  // content: the transcript a locked row renders comes from the head read, not
+  // from this mapping, so nothing a user is reading goes stale with it. The
+  // fork's own notification is the signal that something changed, and a
+  // reopened task picks the new mapping up.
+  "epic.listChatPublicationTargets": { ...LATEST_SCHEDULING, poll: null },
+  // One-shot read: the doc content of an unreachable owner's chat cannot
+  // change while its owner is away.
+  "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
+  // The publisher's own convergence sweep is 30s, so a 45s local read is
+  // responsive without asking faster than the underlying state can change.
+  "epic.chatBackupStatus": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
+  // Polled: no host-pushed invalidation channel exists for this event today
+  // (see the implementation report), so without a cadence a fork detected
+  // after this query first cached would never surface. 45s sits between the
+  // publisher's own ~30s detection sweep and "expensive enough to matter" -
+  // the point of a fork prompt is time-to-resolution, not zero-latency, and
+  // this is a single small unary call.
+  "host.chatFork.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {

@@ -126,15 +126,49 @@ export function useEpicArtifactRecords(
  * open-Epic session registry. Sharing this predicate keeps the "record-
  * backed + pending-create-exempt" decision itself from drifting between the
  * two - only the presence lookup differs.
+ *
+ * `isCloudKnown` is the same shape, added for the SAME-host counterpart of
+ * the cross-host exemption above (chat-sync-v2 ticket 36): a chat can be
+ * bound to THIS device's active host and still have no local record - a
+ * leased identity that never adopted its rows - which is a different chat
+ * than one this host's registry has genuinely tombstoned. `epic.listCloudChats`
+ * already excludes locally-tombstoned rows (the host-side filter is the
+ * source of truth for "deleted"; this predicate does not re-derive it), so
+ * "still cloud-known" is sufficient here without a separate local-tombstone
+ * check.
  */
+export interface TileRefLivenessCheck {
+  readonly hasLiveRecord: (id: string) => boolean;
+  readonly isCloudKnown: (id: string) => boolean;
+}
+
 export function isTileRefRecordLive(
   ref: EpicCanvasTileRef,
   pendingCreateArtifactIds: ReadonlySet<string>,
-  hasLiveRecord: (id: string) => boolean,
+  liveness: TileRefLivenessCheck,
+  projectionHostId: string | null,
 ): boolean {
+  const { hasLiveRecord, isCloudKnown } = liveness;
   if (!isTileRefRecordBacked(ref)) return true;
+  // A chat ref bound to ANOTHER host is not policed by this device's
+  // projection. Chat records are HOST-AUTHORITATIVE (each host's own chat
+  // registry), so a cross-host live tab - a reachable owner's chat opened
+  // from the unified sidebar - legitimately has no local record, and reaping
+  // it here is what turned those clicks into silent no-ops. Scoped to
+  // `chat` alone: artifact and terminal-agent records live in the SHARED
+  // epic doc, so their absence still means deleted, whatever host the ref
+  // is bound to. Cross-host chat tiles are closed by the user, never by
+  // record sync - this device cannot see the owner's registry to know more.
+  if (
+    ref.type === "chat" &&
+    projectionHostId !== null &&
+    ref.hostId !== projectionHostId
+  ) {
+    return true;
+  }
   if (pendingCreateArtifactIds.has(ref.id)) return true;
-  return hasLiveRecord(ref.id);
+  if (hasLiveRecord(ref.id)) return true;
+  return ref.type === "chat" && isCloudKnown(ref.id);
 }
 
 export function makeSelectEpicCanvas(tabId: string | undefined) {

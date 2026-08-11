@@ -935,6 +935,75 @@ export const createChatForkSourceSchema = z.object({
 });
 export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
 
+/**
+ * v1.1 fork source: the same precise-boundary shape as v1.0, tagged with an
+ * explicit `boundary` discriminant so it can sit in a union beside the new
+ * latest-checkpoint variant below. NOT a replacement for
+ * {@link createChatForkSourceSchema} - that name stays byte-identical
+ * forever, since `epic.createChat@1.0` is already in released hosts (see
+ * `epicCreateChatV11`'s own doc in `contracts.ts` for why this is a new
+ * minor rather than an in-place edit).
+ */
+export const createChatForkSourceAssistantBoundarySchema = z.object({
+  boundary: z.literal("assistantMessage"),
+  sourceChatId: z.string(),
+  assistantMessageId: z.string(),
+  interviewBlockId: z.string().nullish(),
+  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
+});
+export type CreateChatForkSourceAssistantBoundary = z.infer<
+  typeof createChatForkSourceAssistantBoundarySchema
+>;
+
+/**
+ * v1.1's other fork source: fork through the source chat's LATEST available
+ * assistant checkpoint, naming only the chat. Exists because a client that
+ * cannot READ the source (an unreachable-owner chat viewed through the
+ * doc-replica fallback, ticket 34A) cannot name a specific
+ * `assistantMessageId` the way the precise-boundary variant requires - it
+ * can only say "this chat, whatever it last landed on". The host resolves the
+ * boundary itself via `buildLatestCheckpointForkSeed` against the
+ * best-available transcript (store first, doc second - see `chat-fork-seed.ts`).
+ */
+export const createChatForkSourceLatestCheckpointBoundarySchema = z.object({
+  boundary: z.literal("latest"),
+  sourceChatId: z.string(),
+  /**
+   * The owner the CLIENT was showing for this chat when the user clicked
+   * Clone (chat-sync-v2 ticket 37).
+   *
+   * The clone's cloud tier refuses to seed unless the host can check the
+   * resolved publication's owner against an expectation it holds locally -
+   * the anti-squatting guard from ticket 34 B2, which stops a caller
+   * naming somebody else's `chatId` and being handed their transcript.
+   * When local registry facts are absent (a post-restart swept chat, a
+   * fresh identity) the guard refuses correctly and the clone degrades to
+   * settings-only, losing the history. But the client knew the owner all
+   * along: it is on the sidebar row / published ref it just rendered.
+   *
+   * A HINT, never an authority. The host prefers its own registry facts and
+   * REFUSES the cloud tier outright when the two disagree - the registry
+   * outranks the client, and a disagreement is suspicious rather than a
+   * tiebreak to resolve. See `chat-fork-cloud-source.ts`.
+   *
+   * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the
+   * honest value for "the client genuinely does not know who owns this" -
+   * which must never be fabricated into a guess the host would then trust.
+   */
+  sourceOwnerUserId: z.string().min(1).nullable(),
+});
+export type CreateChatForkSourceLatestCheckpointBoundary = z.infer<
+  typeof createChatForkSourceLatestCheckpointBoundarySchema
+>;
+
+export const createChatForkSourceSchemaV11 = z.discriminatedUnion("boundary", [
+  createChatForkSourceAssistantBoundarySchema,
+  createChatForkSourceLatestCheckpointBoundarySchema,
+]);
+export type CreateChatForkSourceV11 = z.infer<
+  typeof createChatForkSourceSchemaV11
+>;
+
 export const createChatRequestSchema = z.object({
   epicId: z.string(),
   parentId: z.string().nullable(),
@@ -966,6 +1035,16 @@ export const createChatRequestSchema = z.object({
   forkSource: createChatForkSourceSchema.nullable().optional(),
 });
 export type CreateChatRequest = z.infer<typeof createChatRequestSchema>;
+
+/**
+ * v1.1 request: `forkSource` widened to the discriminated union above so a
+ * caller can name a latest-checkpoint fork alongside the existing precise
+ * boundary. Every other field is identical to v1.0.
+ */
+export const createChatRequestSchemaV11 = createChatRequestSchema.extend({
+  forkSource: createChatForkSourceSchemaV11.nullable().optional(),
+});
+export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
 
 export const createChatResponseSchema = z.object({
   chatId: z.string(),

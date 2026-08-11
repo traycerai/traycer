@@ -159,7 +159,7 @@ const EMPTY_HOST_RESPONSE: HostNotificationsIndicatorStateResponse = {
   chats: {},
 };
 
-/** Serializes the four flags so an assertion names the exact indicator the
+/** Serializes the flags so an assertion names the exact indicator the
  * user sees rather than a boolean in isolation. */
 function IndicatorProbe(props: {
   readonly entity: HostNotificationsEntityRef;
@@ -167,6 +167,7 @@ function IndicatorProbe(props: {
 }): ReactNode {
   const state = useSurfaceNotificationIndicatorState(props.entity);
   const lit = [
+    state.pendingFork ? "pendingFork" : null,
     state.pendingApproval ? "pendingApproval" : null,
     state.pendingInterview ? "pendingInterview" : null,
     state.unreadFailure ? "unreadFailure" : null,
@@ -372,9 +373,9 @@ describe("cloud-derived notification indicators", () => {
       expect(indicatorText("chat")).toBe("unreadDone");
     });
     // The entry never entered this host's SQLite, so the v1 path could not
-    // have produced this - and it is not even consulted in cloud mode.
+    // have produced this. Cloud mode consults the host only for pendingFork.
     expect(OTHER_HOST_ID).not.toBe(CONNECTED_HOST_ID);
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
   });
 
   it("rolls a foreign-host chat entry up into its epic indicator", async () => {
@@ -399,7 +400,7 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("epic")).toBe("pendingApproval");
     });
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
   });
 
   it("stops lighting an approval once the cloud row carries resolvedAt", async () => {
@@ -478,7 +479,52 @@ describe("cloud-derived notification indicators", () => {
     });
     expect(indicatorText("row-read")).toBe("read");
     expect(harness.cloudMarkRead.calls).toEqual(["entry-b"]);
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
+  });
+
+  it("keeps a host-derived pending fork lit when its cloud row is marked read", async () => {
+    const harness = createHarness({
+      epics: {},
+      chats: {
+        [CHAT_ID]: {
+          unreadFailure: false,
+          pendingFork: true,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadDone: false,
+        },
+      },
+    });
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-b",
+          originHostId: OTHER_HOST_ID,
+          readAt: null,
+        }),
+      ],
+      1,
+    );
+
+    renderSurface(harness, {
+      epicIds: [],
+      chatIds: [CHAT_ID],
+      children: (
+        <>
+          <IndicatorProbe entity={ENTITY} testId="chat" />
+          <MarkReadButton entryId="entry-b" />
+        </>
+      ),
+    });
+    await waitFor(() => {
+      expect(indicatorText("chat")).toBe("pendingFork,unreadDone");
+    });
+
+    screen.getByRole("button", { name: "Mark read" }).click();
+
+    await waitFor(() => {
+      expect(indicatorText("chat")).toBe("pendingFork");
+    });
   });
 
   it("keeps a degraded mark-read's icon agreeing with its retained row, then reconverges on the next snapshot", async () => {
@@ -555,7 +601,7 @@ describe("cloud-derived notification indicators", () => {
     await waitFor(() => {
       expect(indicatorText("chat")).toBe("unreadFailure");
     });
-    expect(harness.hostIndicators.requestCount.value).toBe(0);
+    expect(harness.hostIndicators.requestCount.value).toBeGreaterThan(0);
   });
 });
 
@@ -567,6 +613,7 @@ describe("local-mode notification indicators", () => {
       chats: {
         [CHAT_ID]: {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: true,
           pendingInterview: false,
           unreadDone: false,
@@ -605,6 +652,7 @@ describe("local-mode notification indicators", () => {
       chats: {
         [CHAT_ID]: {
           unreadFailure: false,
+          pendingFork: false,
           pendingApproval: false,
           pendingInterview: false,
           unreadDone: true,

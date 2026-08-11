@@ -32,8 +32,10 @@ describe("seeded protocol registries", () => {
     ).not.toThrow();
   });
 
-  it("persistence owns the V200 epic record and the V100 room-metadata record", () => {
+  it("persistence owns the epic, room-metadata and chat-sync records", () => {
     expect(Object.keys(persistenceRecordRegistry).sort()).toEqual([
+      "chat-head",
+      "chat-shard",
       "epic",
       "room-metadata",
     ]);
@@ -41,6 +43,23 @@ describe("seeded protocol registries", () => {
     expect(
       Object.keys(persistenceRecordRegistry["room-metadata"]).sort(),
     ).toEqual(["1"]);
+    expect(Object.keys(persistenceRecordRegistry["chat-head"]).sort()).toEqual([
+      "1",
+    ]);
+    expect(Object.keys(persistenceRecordRegistry["chat-shard"]).sort()).toEqual([
+      "1",
+    ]);
+  });
+
+  it("registers both chat-sync records on one version line", () => {
+    // A shard embeds the sub-schemas the head's core is built from, so every
+    // change that moves one moves the other. Bound to the SAME constant object,
+    // not two equal literals - see `chat-sync/version.ts`.
+    expect(persistenceRecordRegistry["chat-head"][1].versions[0].contract
+      .schemaVersion).toBe(
+      persistenceRecordRegistry["chat-shard"][1].versions[0].contract
+        .schemaVersion,
+    );
   });
 
   it("local epic record at `2.0.0` / V200 captures on-disk-only fields", () => {

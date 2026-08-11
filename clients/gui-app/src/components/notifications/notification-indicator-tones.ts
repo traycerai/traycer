@@ -1,4 +1,5 @@
 import {
+  GitFork,
   MessageSquareCheck,
   MessageSquareWarning,
   MessageSquareX,
@@ -16,11 +17,12 @@ import type {
  * per-row `NotificationIndicatorIcon` and the chat tree's descendant-status
  * rollup badge derive their glyph and color from these, so the two surfaces
  * cannot drift apart. `attentionTone` also encodes the attention-tier
- * precedence (failure > interview > approval); the running and unread-done
+ * precedence (failure > fork > interview > approval); the running and unread-done
  * tiers slot in below it at each consumer per its activity signal.
  */
 export type NotificationStatusKind =
   | "failure"
+  | "fork"
   | "interview"
   | "interview-resolved"
   | "approval"
@@ -57,6 +59,16 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
     className: "text-destructive",
     Icon: MessageSquareX,
   },
+  fork: {
+    testId: "fork",
+    // States the temporary condition, and nothing else. The dialog and the
+    // resolve RPC this copy used to point at are gone: the host submits the
+    // deterministic decision itself and files a notification afterwards, so
+    // there is no choice for a user to go looking for.
+    title: "Chat publishing paused while a fork is resolved",
+    className: "text-warning-foreground",
+    Icon: GitFork,
+  },
   interview: {
     testId: "interview",
     title: "Task waiting for your interview response",
@@ -85,6 +97,7 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
 
 export const DONE_TONE = NOTIFICATION_STATUS_TONES.done;
 export const FAILURE_TONE = NOTIFICATION_STATUS_TONES.failure;
+export const FORK_TONE = NOTIFICATION_STATUS_TONES.fork;
 export const INTERVIEW_TONE = NOTIFICATION_STATUS_TONES.interview;
 export const APPROVAL_TONE = NOTIFICATION_STATUS_TONES.approval;
 export const RESOLVED_INTERVIEW_TONE =
@@ -96,6 +109,7 @@ export function attentionTone(
   state: NotificationIndicatorState,
 ): IndicatorTone | null {
   if (state.unreadFailure) return FAILURE_TONE;
+  if (state.pendingFork) return FORK_TONE;
   if (state.pendingInterview) return INTERVIEW_TONE;
   if (state.pendingApproval) return APPROVAL_TONE;
   return null;
