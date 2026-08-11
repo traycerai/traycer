@@ -232,12 +232,12 @@ describe("<UntrustedSvgLightbox /> sanitized routing", () => {
     ).toBeTruthy();
   });
 
-  it("surfaces a safe failure when the SVG cannot be sanitized", async () => {
+  it("falls back to a raster img at the same src when the SVG cannot be sanitized", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
         Promise.resolve(
-          new Response("<!DOCTYPE svg><svg></svg>", { status: 200 }),
+          new Response("<html><body>nope</body></html>", { status: 200 }),
         ),
       ),
     );
@@ -250,10 +250,11 @@ describe("<UntrustedSvgLightbox /> sanitized routing", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByText("SVG could not be displayed safely"),
-      ).toBeTruthy();
+      expect(screen.queryByLabelText("Loading SVG")).toBeNull();
     });
+    const img = screen.getByAltText("bad svg");
+    expect(img.tagName).toBe("IMG");
+    expect(img.getAttribute("src")).toBe("blob:http://localhost/bad.svg");
     expect(trustedMarkupSpy).not.toHaveBeenCalled();
   });
 });

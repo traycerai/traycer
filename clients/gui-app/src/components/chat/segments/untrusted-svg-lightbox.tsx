@@ -1,5 +1,4 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ImageOff } from "lucide-react";
 import { PanZoomSvgViewer } from "@/editor-core/nodes/mermaid/pan-zoom-svg-viewer";
 import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 
@@ -49,13 +48,11 @@ export function UntrustedSvgLightbox(
   }
   if (state.status === "error") {
     return (
-      <div
-        className="flex size-full flex-col items-center justify-center gap-2 text-muted-foreground"
-        role="status"
-      >
-        <ImageOff className="size-8" aria-hidden />
-        <span className="text-ui-sm">SVG could not be displayed safely</span>
-      </div>
+      <img
+        src={props.src}
+        alt={props.alt}
+        className="size-full rounded-lg object-contain"
+      />
     );
   }
   return (

@@ -65,10 +65,24 @@ describe("sanitizeUntrustedSvg malicious fixtures", () => {
     expect(cleaned).not.toMatch(/evil\.example/i);
   });
 
-  it("rejects DOCTYPE declarations", () => {
+  it("sanitizes a bare DOCTYPE declaration", () => {
+    expect(() =>
+      sanitizeUntrustedSvg(`<!DOCTYPE svg>${svg("<rect/>", "")}`),
+    ).not.toThrow();
+  });
+
+  it("sanitizes a bare PUBLIC DOCTYPE declaration", () => {
     expect(() =>
       sanitizeUntrustedSvg(
         `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">${svg("<rect/>", "")}`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects DOCTYPE declarations with an internal subset", () => {
+    expect(() =>
+      sanitizeUntrustedSvg(
+        `<!DOCTYPE svg [<!ENTITY xxe "pwned">]>${svg("<rect/>", "")}`,
       ),
     ).toThrow(/declarations/i);
   });
