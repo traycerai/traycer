@@ -155,6 +155,21 @@ describe("landing terminal lifecycle", () => {
     });
   });
 
+  it("collapses every open layout when the shared terminal set becomes empty", () => {
+    const store = useLandingTerminalStore.getState();
+    store.setPanelOpen("draft-a", true);
+    store.setPanelOpen("draft-b", true);
+    store.addTab(
+      tab({ instanceId: "only", sessionId: "s-only", hostId: HOST_A }),
+    );
+
+    store.closeTab("draft-b", "only");
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(false);
+    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(false);
+  });
+
   it("preserves a v1 layout without coupling later page changes", () => {
     const restored = parsePersistedLandingTerminalState({
       tabs: [],

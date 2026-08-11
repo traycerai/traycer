@@ -1440,7 +1440,7 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
     });
     expect(layoutFor("draft-a").panelOpen).toBe(false);
-    expect(layoutFor("draft-b").panelOpen).toBe(true);
+    expect(layoutFor("draft-b").panelOpen).toBe(false);
   });
 
   it("preserves a folderless opening gesture when focus switches to a foldered draft", async () => {

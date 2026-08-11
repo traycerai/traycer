@@ -254,7 +254,7 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
           };
         });
       },
-      closeTab: (landingPageId, instanceId) => {
+      closeTab: (_landingPageId, instanceId) => {
         const closed = get().tabs.find(
           (entry) => entry.instanceId === instanceId,
         );
@@ -281,16 +281,13 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
             ),
             pendingKills,
             ...(tabs.length === 0
-              ? updateLandingTerminalLayout(state, landingPageId, {
-                  ...landingTerminalLayoutFor(state, landingPageId),
-                  panelOpen: false,
-                })
+              ? collapseLayoutsForEmptyTerminalSet(state)
               : {}),
           };
         });
         return closed;
       },
-      closeAllTabs: (landingPageId) => {
+      closeAllTabs: (_landingPageId) => {
         const closed = get().tabs;
         if (closed.length === 0) return [];
         set((state) => ({
@@ -306,14 +303,11 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
                   ],
             state.pendingKills,
           ),
-          ...updateLandingTerminalLayout(state, landingPageId, {
-            ...landingTerminalLayoutFor(state, landingPageId),
-            panelOpen: false,
-          }),
+          ...collapseLayoutsForEmptyTerminalSet(state),
         }));
         return closed;
       },
-      removeExitedTab: (landingPageId, instanceId) =>
+      removeExitedTab: (_landingPageId, instanceId) =>
         set((state) => {
           const tabs = state.tabs.filter(
             (tab) => tab.instanceId !== instanceId,
@@ -326,15 +320,12 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               state.activeInstanceId,
             ),
             ...(tabs.length === 0
-              ? updateLandingTerminalLayout(state, landingPageId, {
-                  ...landingTerminalLayoutFor(state, landingPageId),
-                  panelOpen: false,
-                })
+              ? collapseLayoutsForEmptyTerminalSet(state)
               : {}),
           };
         }),
       applyReconciliation: (
-        landingPageId,
+        _landingPageId,
         tabs,
         activeInstanceId,
         collapseWhenEmpty,
@@ -343,10 +334,7 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
           tabs,
           activeInstanceId: parseActiveInstanceId(activeInstanceId, tabs),
           ...(collapseWhenEmpty && tabs.length === 0
-            ? updateLandingTerminalLayout(state, landingPageId, {
-                ...landingTerminalLayoutFor(state, landingPageId),
-                panelOpen: false,
-              })
+            ? collapseLayoutsForEmptyTerminalSet(state)
             : {}),
         })),
       clearPendingKill: (hostId, sessionId) =>
@@ -392,6 +380,40 @@ function updateLandingTerminalLayout(
       ...state.layoutsByLandingPageId,
       [landingPageId]: layout,
     },
+  };
+}
+
+/**
+ * Tabs are shared across landing pages. Once none remain, no page can keep an
+ * open terminal surface: that would display a permanently empty panel whose
+ * prior opening gesture cannot settle. This is intentionally narrower than a
+ * user collapse, width adjustment, or fullscreen toggle, which remain scoped.
+ */
+function collapseLayoutsForEmptyTerminalSet(
+  state: Pick<
+    LandingTerminalStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
+): Pick<
+  LandingTerminalStoreState,
+  "layoutsByLandingPageId" | "fallbackLayout"
+> {
+  const layoutsByLandingPageId: Partial<Record<string, LandingTerminalLayout>> =
+    {};
+  for (const [landingPageId, layout] of Object.entries(
+    state.layoutsByLandingPageId,
+  )) {
+    if (layout !== undefined) {
+      layoutsByLandingPageId[landingPageId] = { ...layout, panelOpen: false };
+    }
+  }
+
+  return {
+    layoutsByLandingPageId,
+    fallbackLayout:
+      state.fallbackLayout === null
+        ? null
+        : { ...state.fallbackLayout, panelOpen: false },
   };
 }
 
