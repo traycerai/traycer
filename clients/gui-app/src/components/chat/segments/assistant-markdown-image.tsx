@@ -13,6 +13,7 @@ import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
 } from "@/stores/composer/chat-store";
+import { ImageLightbox } from "./image-lightbox";
 
 const MAX_INLINE_IMAGE_BYTES = 30 * 1024 * 1024;
 const RASTER_DATA_URL_PATTERN =
@@ -139,7 +140,16 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     return <DeduplicatedImageChip alt={props.alt} />;
   }
   if (source.kind === "https" || source.kind === "data-raster") {
-    return <LoadableImage key={source.src} src={source.src} alt={props.alt} />;
+    return (
+      <LoadableImage
+        key={source.src}
+        src={source.src}
+        alt={props.alt}
+        mediaType={
+          source.kind === "data-raster" ? dataMediaType(source.src) : null
+        }
+      />
+    );
   }
   if (source.kind === "data-svg") {
     return (
@@ -245,12 +255,20 @@ function ResolvedImage(props: {
   if (image.status !== "ready") {
     return <ImageLoadingSkeleton label="Waiting for image sync" />;
   }
-  return <LoadableImage key={image.src} src={image.src} alt={props.alt} />;
+  return (
+    <LoadableImage
+      key={image.src}
+      src={image.src}
+      alt={props.alt}
+      mediaType={props.mediaType}
+    />
+  );
 }
 
 function LoadableImage(props: {
   readonly alt: string;
   readonly src: string;
+  readonly mediaType: string | null;
 }): ReactNode {
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -265,24 +283,37 @@ function LoadableImage(props: {
     );
   }
   return (
-    <span className="relative my-3 block w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
+    <div className="relative my-3 w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
       {status === "loading" ? (
         <ImageLoadingSkeleton label="Loading image" />
       ) : null}
-      <img
+      <ImageLightbox
         src={props.src}
         alt={props.alt}
-        className={cn(
-          status === "loading"
-            ? "absolute inset-0 size-full object-contain opacity-0"
-            : "block max-h-[70vh] max-w-full object-contain",
-        )}
-        draggable={false}
-        onLoad={() => setStatus("ready")}
-        onError={() => setStatus("error")}
-      />
-    </span>
+        mediaType={props.mediaType}
+        suggestedName={null}
+        className={status === "loading" ? "absolute inset-0" : undefined}
+      >
+        <img
+          src={props.src}
+          alt={props.alt}
+          className={cn(
+            status === "loading"
+              ? "size-full object-contain opacity-0"
+              : "block max-h-[70vh] max-w-full object-contain",
+          )}
+          draggable={false}
+          onLoad={() => setStatus("ready")}
+          onError={() => setStatus("error")}
+        />
+      </ImageLightbox>
+    </div>
   );
+}
+
+function dataMediaType(src: string): string | null {
+  const match = /^data:([^;,]+)/i.exec(src);
+  return match?.[1] ?? null;
 }
 
 function ImageLoadingSkeleton(props: { readonly label: string }): ReactNode {

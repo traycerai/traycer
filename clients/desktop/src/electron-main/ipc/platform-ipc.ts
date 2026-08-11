@@ -54,6 +54,7 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  nativeImage,
   type ProxyConfig,
 } from "electron";
 import { randomUUID } from "node:crypto";
@@ -148,6 +149,19 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
       if (result.canceled || !result.filePath) return null;
       await writeFile(result.filePath, Buffer.from(new Uint8Array(file.bytes)));
       return path.basename(result.filePath);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.clipboardWriteImage,
+    (_event, input: unknown): void => {
+      const image = parseClipboardImageInput(input);
+      const native = nativeImage.createFromBuffer(
+        Buffer.from(new Uint8Array(image.bytes)),
+      );
+      if (native.isEmpty())
+        throw new Error("clipboard image bytes are invalid");
+      clipboard.writeImage(native);
     },
   );
 
@@ -520,6 +534,26 @@ function parseFileSaveInput(input: unknown): FileSaveInput {
     throw new Error("file.save requires ArrayBuffer bytes");
   }
   return { name, type, bytes };
+}
+
+interface ClipboardImageInput {
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
+function parseClipboardImageInput(input: unknown): ClipboardImageInput {
+  if (!isRecord(input)) {
+    throw new Error("clipboard.writeImage requires an object payload");
+  }
+  const type = input.type;
+  if (typeof type !== "string" || !type.startsWith("image/")) {
+    throw new Error("clipboard.writeImage requires an image MIME type");
+  }
+  const bytes = input.bytes;
+  if (!(bytes instanceof ArrayBuffer) || bytes.byteLength > 30 * 1024 * 1024) {
+    throw new Error("clipboard.writeImage requires image bytes under 30 MB");
+  }
+  return { type, bytes };
 }
 
 function parseCopyDroppedFileInput(input: unknown): readonly string[] {

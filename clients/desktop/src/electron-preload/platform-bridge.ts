@@ -32,6 +32,12 @@ export type {
 } from "../ipc-contracts/platform-types";
 
 export interface PlatformBridgeSurface {
+  clipboard: {
+    writeImage(input: {
+      readonly type: string;
+      readonly bytes: ArrayBuffer;
+    }): Promise<void>;
+  };
   recentDocuments: {
     add(path: string): Promise<void>;
   };
@@ -124,6 +130,10 @@ export interface PlatformBridgeSurface {
 
 export function buildPlatformBridge(): PlatformBridgeSurface {
   return {
+    clipboard: {
+      writeImage: (input) =>
+        ipcRenderer.invoke(RunnerHostInvoke.clipboardWriteImage, input),
+    },
     recentDocuments: {
       add: (path) =>
         ipcRenderer.invoke(RunnerHostInvoke.recentDocumentAdd, path),

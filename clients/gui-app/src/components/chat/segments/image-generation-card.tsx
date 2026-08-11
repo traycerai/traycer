@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { cn } from "@/lib/utils";
+import { ImageLightbox } from "./image-lightbox";
 
 interface ImageGenerationCardProps {
   readonly id: string;
@@ -196,21 +197,26 @@ function GeneratedImage(props: {
   }
 
   return (
-    <figure
-      className="relative w-full overflow-hidden bg-muted/30"
-      style={{ aspectRatio }}
-    >
-      <GenerationPending aspectRatio={aspectRatio} active={false} />
-      <img
+    <figure className="relative w-full bg-muted/30" style={{ aspectRatio }}>
+      <ImageLightbox
         src={image.src}
         alt={alt.length > 0 ? alt : "Generated image"}
-        className={cn(
-          "absolute inset-0 size-full object-contain transition-opacity duration-500 motion-reduce:transition-none",
-          loaded ? "opacity-100" : "opacity-0",
-        )}
-        draggable={false}
-        onLoad={() => setLoaded(true)}
-      />
+        mediaType={props.result.mediaType}
+        suggestedName={generatedImageName(props.result)}
+        className="size-full overflow-hidden"
+      >
+        <GenerationPending aspectRatio={aspectRatio} active={false} />
+        <img
+          src={image.src}
+          alt={alt.length > 0 ? alt : "Generated image"}
+          className={cn(
+            "absolute inset-0 size-full object-contain transition-opacity duration-500 motion-reduce:transition-none",
+            loaded ? "opacity-100" : "opacity-0",
+          )}
+          draggable={false}
+          onLoad={() => setLoaded(true)}
+        />
+      </ImageLightbox>
       {props.result.width !== null && props.result.height !== null ? (
         <span className="absolute bottom-2 right-2 rounded-md border border-white/20 bg-black/65 px-1.5 py-0.5 text-[0.6875rem] font-medium tabular-nums text-white shadow-sm backdrop-blur-sm">
           {props.result.width} × {props.result.height}
@@ -218,6 +224,12 @@ function GeneratedImage(props: {
       ) : null}
     </figure>
   );
+}
+
+function generatedImageName(result: ImageGenerationResult): string | null {
+  if (result.filePath === null) return null;
+  const name = result.filePath.split(/[\\/]/).at(-1);
+  return name === undefined || name.length === 0 ? null : name;
 }
 
 function GenerationError(props: {
