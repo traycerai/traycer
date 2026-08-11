@@ -1,7 +1,10 @@
 import { useCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { create } from "zustand";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
+} from "@/stores/home/landing-terminal-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   selectHostActiveSurfaceRefs,
@@ -76,7 +79,11 @@ export function LandingTerminalHost() {
         ?.id ?? null
     );
   });
-  const panelOpen = useLandingTerminalStore((state) => state.panelOpen);
+  const panelOpen = useLandingTerminalStore((state) =>
+    draftId === null
+      ? false
+      : landingTerminalLayoutFor(state, draftId).panelOpen,
+  );
   const anchor = useLandingPaneAnchorStore((state) =>
     draftId === null ? null : (state.anchors.get(draftId) ?? null),
   );

@@ -39,6 +39,7 @@ import {
   DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
   MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
   MIN_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+  landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
@@ -92,6 +93,7 @@ function terminalForTarget(
  */
 export function LandingTerminalPanel(): ReactNode {
   const {
+    focusedLandingPageId,
     target,
     pending,
     pendingGeneration,
@@ -99,17 +101,31 @@ export function LandingTerminalPanel(): ReactNode {
     capture,
     clearPending,
   } = useLandingTerminalGesture();
+  // Layout belongs to the focused start page. This is deliberately independent
+  // of `target`: a pending gesture may retain an earlier page's host/folder
+  // routing while focus has already moved to another page.
+  const landingPageId = focusedLandingPageId ?? "unbound-landing-page";
+  const targetLandingPageId = target.draftId ?? "unbound-landing-page";
   const tabs = useLandingTerminalStore((state) => state.tabs);
   const activeInstanceId = useLandingTerminalStore(
     (state) => state.activeInstanceId,
   );
-  const panelOpen = useLandingTerminalStore((state) => state.panelOpen);
-  const panelWidthFraction = useLandingTerminalStore(
-    (state) => state.panelWidthFraction,
+  const layout = useLandingTerminalStore((state) =>
+    landingTerminalLayoutFor(state, landingPageId),
   );
-  const setPanelOpen = useLandingTerminalStore((state) => state.setPanelOpen);
-  const setPanelWidthFraction = useLandingTerminalStore(
+  const panelOpen = layout.panelOpen;
+  const targetPanelOpen = useLandingTerminalStore(
+    (state) => landingTerminalLayoutFor(state, targetLandingPageId).panelOpen,
+  );
+  const panelWidthFraction = layout.panelWidthFraction;
+  const setPanelOpenForPage = useLandingTerminalStore(
+    (state) => state.setPanelOpen,
+  );
+  const setPanelWidthFractionForPage = useLandingTerminalStore(
     (state) => state.setPanelWidthFraction,
+  );
+  const setPanelMaximizedForPage = useLandingTerminalStore(
+    (state) => state.setPanelMaximized,
   );
   const addTab = useLandingTerminalStore((state) => state.addTab);
   const activateTab = useLandingTerminalStore((state) => state.activateTab);
@@ -119,11 +135,22 @@ export function LandingTerminalPanel(): ReactNode {
   const kill = useLandingTerminalKill();
   const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
-  const [maximized, setMaximized] = useState(false);
   // Last settled generation's host context. Manual create uses it only when
   // `hostId` still equals the active host; auto-spawn never reads this alone.
   const [reconciledContext, setReconciledContext] =
     useState<LandingTerminalHostContext | null>(null);
+  const setPanelOpen = useCallback(
+    (open: boolean) => setPanelOpenForPage(landingPageId, open),
+    [landingPageId, setPanelOpenForPage],
+  );
+  const setPanelWidthFraction = useCallback(
+    (fraction: number) => setPanelWidthFractionForPage(landingPageId, fraction),
+    [landingPageId, setPanelWidthFractionForPage],
+  );
+  const setMaximized = useCallback(
+    (maximized: boolean) => setPanelMaximizedForPage(landingPageId, maximized),
+    [landingPageId, setPanelMaximizedForPage],
+  );
 
   const addTerminalTab = useCallback(
     (hostId: string, cwd: string): string => {
@@ -216,10 +243,15 @@ export function LandingTerminalPanel(): ReactNode {
   // page that mounts with the panel already open (new tab, tab switch back)
   // must leave focus with the composer. Opening also arms the launch-cwd
   // intent that reconciliation consumes once the host's session list settles.
-  const prevPanelOpenRef = useRef(panelOpen);
+  const previousPanelLayoutRef = useRef({ landingPageId, panelOpen });
   useEffect(() => {
-    const wasOpen = prevPanelOpenRef.current;
-    prevPanelOpenRef.current = panelOpen;
+    const previous = previousPanelLayoutRef.current;
+    previousPanelLayoutRef.current = { landingPageId, panelOpen };
+    if (previous.landingPageId !== landingPageId) {
+      clearPendingTerminalFocus();
+      return;
+    }
+    const wasOpen = previous.panelOpen;
     if (wasOpen === panelOpen) return;
     if (panelOpen) {
       if (!pending) capture();
@@ -235,7 +267,7 @@ export function LandingTerminalPanel(): ReactNode {
     // All of them should hand the keyboard back to the composer.
     clearPendingTerminalFocus();
     focusActiveComposer();
-  }, [capture, panelOpen, pending]);
+  }, [capture, landingPageId, panelOpen, pending]);
   useEffect(
     () => () => {
       clearPendingTerminalFocus();
@@ -263,7 +295,7 @@ export function LandingTerminalPanel(): ReactNode {
       const clearIfPending = (): void => {
         if (pending) clearPending();
       };
-      if (!state.panelOpen) {
+      if (!landingTerminalLayoutFor(state, targetLandingPageId).panelOpen) {
         clearIfPending();
         return;
       }
@@ -323,13 +355,15 @@ export function LandingTerminalPanel(): ReactNode {
       pending,
       pendingGeneration,
       target,
+      targetLandingPageId,
     ],
   );
 
   useLandingTerminalReconciliation({
+    landingPageId: targetLandingPageId,
     activeHostId: target.hostId,
     availability: target.availability,
-    panelOpen,
+    panelOpen: targetPanelOpen,
     primaryWorkspacePath: target.primaryWorkspacePath,
     generation: target.generation,
     client: target.client,
@@ -343,28 +377,31 @@ export function LandingTerminalPanel(): ReactNode {
       clearPending();
       // `closeTab` is the atomic tombstone-first durable write. Dispatch the
       // host mutation only after that state transition has completed.
-      const closed = closeTab(tab.instanceId);
+      const closed = closeTab(landingPageId, tab.instanceId);
       if (closed === null) return;
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The last-tab case collapses the panel, and
       // the open-transition effect hands focus back to the composer instead.
       const state = useLandingTerminalStore.getState();
-      if (state.panelOpen && state.activeInstanceId !== null) {
+      if (
+        landingTerminalLayoutFor(state, landingPageId).panelOpen &&
+        state.activeInstanceId !== null
+      ) {
         focusTerminalInstance(state.activeInstanceId);
       }
     },
-    [clearPending, closeTab, killTerminal],
+    [clearPending, closeTab, killTerminal, landingPageId],
   );
 
   const closeAllTerminalTabs = useCallback(() => {
     // Same tombstone-first ordering as a single close, batched: every ref is
     // durably tombstoned in one write before the first kill is dispatched.
     clearPending();
-    closeAllTabs().forEach((closed) => {
+    closeAllTabs(landingPageId).forEach((closed) => {
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
     });
-  }, [clearPending, closeAllTabs, killTerminal]);
+  }, [clearPending, closeAllTabs, killTerminal, landingPageId]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
@@ -375,7 +412,7 @@ export function LandingTerminalPanel(): ReactNode {
     }
     capture();
     setPanelOpen(true);
-  }, [capture, clearPending, panelOpen, setPanelOpen]);
+  }, [capture, clearPending, panelOpen, setMaximized, setPanelOpen]);
 
   const openPanel = useCallback(() => {
     capture();
@@ -407,6 +444,7 @@ export function LandingTerminalPanel(): ReactNode {
 
   return (
     <LandingTerminalPanelContents
+      landingPageId={landingPageId}
       tabs={tabs}
       activeInstanceId={activeInstanceId}
       availability={target.availability}
@@ -417,10 +455,10 @@ export function LandingTerminalPanel(): ReactNode {
       createEnabled={createEnabled}
       createDisabledReason={createDisabledReason}
       reconciledContext={reconciledContext}
-      maximized={maximized}
+      maximized={layout.maximized}
       onTogglePanel={togglePanel}
       onOpenPanel={openPanel}
-      onToggleMaximized={() => setMaximized((value) => !value)}
+      onToggleMaximized={() => setMaximized(!layout.maximized)}
       onSetPanelWidthFraction={setPanelWidthFraction}
       onCreateTerminal={createTerminalTabFocused}
       onRevealAndCreate={revealAndCreateTerminal}
@@ -433,6 +471,7 @@ export function LandingTerminalPanel(): ReactNode {
 }
 
 interface LandingTerminalPanelContentsProps {
+  readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
@@ -471,6 +510,7 @@ function LandingTerminalPanelContents(
   });
 
   useLandingTerminalShortcuts({
+    landingPageId: props.landingPageId,
     panelOpen: props.panelOpen,
     maximized: props.maximized,
     onTogglePanel: props.onTogglePanel,
@@ -573,6 +613,7 @@ function LandingTerminalPanelContents(
           onRename={props.onRenameTab}
         />
         <LandingTerminalPanelBody
+          landingPageId={props.landingPageId}
           tabs={props.tabs}
           activeInstanceId={props.activeInstanceId}
           availability={props.availability}
@@ -684,6 +725,7 @@ function systemTabOverlayActive(): boolean {
  * registrations shadow nothing.
  */
 function useLandingTerminalShortcuts(args: {
+  readonly landingPageId: string;
   readonly panelOpen: boolean;
   readonly maximized: boolean;
   readonly onTogglePanel: () => void;
@@ -695,6 +737,7 @@ function useLandingTerminalShortcuts(args: {
   readonly onCloseAllTabs: () => void;
 }): void {
   const {
+    landingPageId,
     panelOpen,
     maximized,
     onTogglePanel,
@@ -744,30 +787,40 @@ function useLandingTerminalShortcuts(args: {
       registerDynamicActionHandler("tab.close", () => {
         if (systemTabOverlayActive()) return;
         const state = useLandingTerminalStore.getState();
-        if (!state.panelOpen) return;
+        if (!landingTerminalLayoutFor(state, landingPageId).panelOpen) return;
         const active = state.tabs.find(
           (tab) => tab.instanceId === state.activeInstanceId,
         );
         if (active === undefined) return;
         onCloseTab(active);
       }),
-    [onCloseTab],
+    [landingPageId, onCloseTab],
   );
   useEffect(
     () =>
       registerDynamicActionHandler("tab.close-all", () => {
         if (systemTabOverlayActive()) return;
         const state = useLandingTerminalStore.getState();
-        if (!state.panelOpen || state.tabs.length === 0) return;
+        if (
+          !landingTerminalLayoutFor(state, landingPageId).panelOpen ||
+          state.tabs.length === 0
+        ) {
+          return;
+        }
         onCloseAllTabs();
       }),
-    [onCloseAllTabs],
+    [landingPageId, onCloseAllTabs],
   );
   const activateAdjacentTab = useCallback(
     (delta: 1 | -1) => {
       if (systemTabOverlayActive()) return;
       const state = useLandingTerminalStore.getState();
-      if (!state.panelOpen || state.tabs.length < 2) return;
+      if (
+        !landingTerminalLayoutFor(state, landingPageId).panelOpen ||
+        state.tabs.length < 2
+      ) {
+        return;
+      }
       const index = state.tabs.findIndex(
         (tab) => tab.instanceId === state.activeInstanceId,
       );
@@ -775,7 +828,7 @@ function useLandingTerminalShortcuts(args: {
       const next = state.tabs[(Math.max(index, 0) + delta + count) % count];
       onActivateTab(next.instanceId);
     },
-    [onActivateTab],
+    [landingPageId, onActivateTab],
   );
   useEffect(
     () =>
@@ -797,7 +850,7 @@ function useLandingTerminalShortcuts(args: {
             isActive: () => {
               const state = useLandingTerminalStore.getState();
               return (
-                state.panelOpen &&
+                landingTerminalLayoutFor(state, landingPageId).panelOpen &&
                 state.tabs.length > 0 &&
                 !systemTabOverlayActive()
               );
@@ -816,7 +869,7 @@ function useLandingTerminalShortcuts(args: {
           },
         ],
       }),
-    [onActivateTab],
+    [landingPageId, onActivateTab],
   );
 }
 
@@ -887,6 +940,7 @@ function LandingTerminalPanelHeader(props: {
 }
 
 function LandingTerminalPanelBody(props: {
+  readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
@@ -926,6 +980,7 @@ function LandingTerminalPanelBody(props: {
             )}
           >
             <LandingTerminalTile
+              landingPageId={props.landingPageId}
               tab={tab}
               active={tab.instanceId === props.activeInstanceId}
               createEnabled={Boolean(

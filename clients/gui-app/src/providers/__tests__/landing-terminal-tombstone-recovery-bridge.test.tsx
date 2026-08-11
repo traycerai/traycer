@@ -50,7 +50,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("closed-tab");
+    useLandingTerminalStore.getState().closeTab("landing-page", "closed-tab");
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
 
     expect(mocks.kill).not.toHaveBeenCalled();

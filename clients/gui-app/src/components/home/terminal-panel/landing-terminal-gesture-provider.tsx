@@ -6,7 +6,10 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
+} from "@/stores/home/landing-terminal-store";
 import {
   LandingTerminalGestureContext,
   type LandingTerminalGestureValue,
@@ -43,8 +46,6 @@ export function LandingTerminalGestureProvider(props: {
     probe.data,
     probe.error,
   );
-  const panelOpen = useLandingTerminalStore((state) => state.panelOpen);
-
   const [pendingGesture, setPendingGesture] =
     useState<LandingTerminalTarget | null>(null);
   const gestureGenerationRef = useRef(0);
@@ -54,9 +55,18 @@ export function LandingTerminalGestureProvider(props: {
   // is state rather than a render-read ref.
   const [openEpisodeDraftId, setOpenEpisodeDraftId] = useState(draftId);
 
-  // A gesture only pins while the panel is open; a closed panel projects live
-  // focus even if a stale gesture lingers.
-  const openGesture = panelOpen ? pendingGesture : null;
+  const capturedLandingPageId =
+    pendingGesture?.draftId ?? "unbound-landing-page";
+  const capturedPanelOpen = useLandingTerminalStore((state) =>
+    pendingGesture === null
+      ? false
+      : landingTerminalLayoutFor(state, capturedLandingPageId).panelOpen,
+  );
+
+  // A gesture only pins while the page it opened is still open. Its terminal
+  // reconciliation can therefore complete after focus moves to another start
+  // page, whose visible panel may be collapsed and independently laid out.
+  const openGesture = capturedPanelOpen ? pendingGesture : null;
 
   // The workspace source follows the EFFECTIVE draft (the captured draft while a
   // gesture pins), so the folder picker writes the captured draft's workspace,
@@ -146,6 +156,7 @@ export function LandingTerminalGestureProvider(props: {
 
   const value = useMemo<LandingTerminalGestureValue>(
     () => ({
+      focusedLandingPageId: draftId,
       target,
       pending: openGesture !== null,
       pendingGeneration: openGesture === null ? null : openGesture.generation,
@@ -154,7 +165,15 @@ export function LandingTerminalGestureProvider(props: {
       capture,
       clearPending,
     }),
-    [capture, clearPending, openEpisodeDraftId, openGesture, target, workspace],
+    [
+      capture,
+      clearPending,
+      draftId,
+      openEpisodeDraftId,
+      openGesture,
+      target,
+      workspace,
+    ],
   );
 
   return (
