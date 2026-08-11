@@ -290,6 +290,30 @@ describe("<UsageSummaryPanel /> host scope", () => {
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
   });
 
+  it("offers hosts that only the year-long activity read knows about", async () => {
+    // The calendar spans a year; the picker's own read spans 30 days. A
+    // host active months ago, absent from the directory, showed up in the
+    // All-hosts calendar with no way to isolate it.
+    const user = userEvent.setup();
+    renderPanel({
+      response: (request) =>
+        response({
+          servedBy: "cloud",
+          hostBuckets:
+            request.windowDays === 365
+              ? [hostBucket("host-a", 3), hostBucket("host-dormant", 9)]
+              : [hostBucket("host-a", 3)],
+        }),
+      hostNames: new Map(),
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    await user.click(await screen.findByTestId("usage-host-filter"));
+    expect(
+      await screen.findByTestId("usage-host-filter-option-host-dormant"),
+    ).toBeTruthy();
+  });
+
   it("keeps every discovered host in the picker after narrowing to one", async () => {
     // The shared aggregator filters facts by `hostId` BEFORE grouping, so a
     // filtered response's `hostBuckets` names only the selected host. With an

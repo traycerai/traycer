@@ -153,10 +153,20 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   if (pinnedToHostName !== null && hostId !== null) {
     setHostId(null);
   }
+  // Hosts named by EITHER read. The activity calendar spans a year while
+  // the picker's own read spans 7/30/90 days, so a host that was active
+  // months ago - and that the local directory can no longer name - shows up
+  // in the All-hosts calendar with no way to isolate it. Both responses are
+  // evidence about which hosts exist, so both feed the filter.
   const responseHostIds = useMemo(
     () =>
-      (query.data?.summary.hostBuckets ?? []).map((bucket) => bucket.hostId),
-    [query.data],
+      unionHostIds(
+        (query.data?.summary.hostBuckets ?? []).map((bucket) => bucket.hostId),
+        (activityQuery.data?.summary.hostBuckets ?? []).map(
+          (bucket) => bucket.hostId,
+        ),
+      ),
+    [query.data, activityQuery.data],
   );
   // Host ids learned from the last UNFILTERED response.
   //
@@ -217,6 +227,21 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         }
       />
     </div>
+  );
+}
+
+/**
+ * Merged host ids from the two reads, sorted so the result is a function of
+ * WHICH hosts appeared rather than of which response happened to arrive
+ * first - {@link sameHostIds} compares position-wise, and an unsorted union
+ * would flip-flop as the two queries settle.
+ */
+function unionHostIds(
+  a: readonly string[],
+  b: readonly string[],
+): readonly string[] {
+  return [...new Set([...a, ...b])].sort((left, right) =>
+    left.localeCompare(right),
   );
 }
 
