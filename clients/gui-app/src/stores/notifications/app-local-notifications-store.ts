@@ -877,7 +877,18 @@ export function emitChatStreamErrorNotification(input: {
   readonly chatId: string;
   readonly details: FatalErrorDetails;
 }): void {
-  useAppLocalNotificationsStore.getState().upsertRecurringFailure({
+  useAppLocalNotificationsStore
+    .getState()
+    .upsertRecurringFailure(chatStreamErrorNotification(input));
+}
+
+export function chatStreamErrorNotification(input: {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly details: FatalErrorDetails;
+}): AppLocalNotificationInput {
+  return {
     id: `stream.transport.error:${input.hostId}:${input.chatId}:${input.details.code}`,
     originHostId: input.hostId,
     updatedAt: Date.now(),
@@ -891,7 +902,7 @@ export function emitChatStreamErrorNotification(input: {
     },
     message: "Agent stream closed unexpectedly.",
     detail: input.details.reason,
-  });
+  };
 }
 
 export function emitHostErrorNotification(input: {

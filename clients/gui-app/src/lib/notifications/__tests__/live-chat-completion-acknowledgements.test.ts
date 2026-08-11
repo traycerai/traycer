@@ -3,7 +3,10 @@ import {
   createLiveChatCompletionAcknowledgementTransport,
   liveChatCompletionAcknowledgementMatches,
 } from "@/lib/notifications/live-chat-completion-acknowledgements";
+import { createChatSessionStoreWithNotificationDependencies } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { createAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 
 class FakeBroadcastChannel {
   static readonly channels = new Map<string, Set<FakeBroadcastChannel>>();
@@ -57,63 +60,44 @@ describe("live chat completion acknowledgements", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     FakeBroadcastChannel.reset();
     window.localStorage.clear();
   });
 
-  it("reconciles an earlier failure in an independent renderer store", () => {
-    const rendererA =
-      createLiveChatCompletionAcknowledgementTransport("renderer-a");
-    const rendererB =
-      createLiveChatCompletionAcknowledgementTransport("renderer-b");
-    const storeA = createAppLocalNotificationsStore("renderer-a-store");
-    const storeB = createAppLocalNotificationsStore("renderer-b-store");
-    storeA.getState().activateIdentity("user-1");
-    storeB.getState().activateIdentity("user-1");
-    storeA.getState().upsert(streamFailure(10));
-    storeB.getState().upsert(streamFailure(10));
+  it("reconciles a failed renderer after activeTurn is cleared", () => {
+    vi.useFakeTimers();
+    const rendererA = createChatRenderer("renderer-a");
+    const rendererB = createChatRenderer("renderer-b");
+    rendererA.notifications.getState().activateIdentity("user-1");
+    rendererB.notifications.getState().activateIdentity("user-1");
+    startTurn(rendererA.callbacks(), "turn-1");
+    startTurn(rendererB.callbacks(), "turn-1");
 
-    const unsubscribeB = rendererB.subscribe((acknowledgement) => {
-      if (
-        !liveChatCompletionAcknowledgementMatches(acknowledgement, {
-          userId: "user-1",
-          originHostId: "host-1",
-          epicId: "epic-1",
-          chatId: "chat-1",
-          activeTurnId: "turn-1",
-        })
-      ) {
-        return;
-      }
-      storeB
-        .getState()
-        .markEntityAsReadBefore(
-          "host-1",
-          { epicId: "epic-1", chatId: "chat-1" },
-          21,
-          acknowledgement.observedAt,
-        );
-    });
+    vi.setSystemTime(10);
+    rendererB.callbacks().onConnectionStatus("closed", fatalCloseReason());
+    expect(rendererB.handle.store.getState().activeTurn).toBeNull();
+    expect(
+      rendererB.notifications.getState().byId[FAILURE_ID].readAt,
+    ).toBeNull();
 
-    storeA
-      .getState()
-      .markEntityAsRead("host-1", { epicId: "epic-1", chatId: "chat-1" }, 20);
-    rendererA.publish({
-      userId: "user-1",
-      originHostId: "host-1",
-      epicId: "epic-1",
-      chatId: "chat-1",
-      turnId: "turn-1",
-      observedAt: 20,
-    });
+    vi.setSystemTime(20);
+    completeTurn(rendererA.callbacks(), "turn-1");
+    expect(rendererB.notifications.getState().byId[FAILURE_ID].readAt).toBe(20);
 
-    expect(storeA.getState().byId.failure.readAt).toBe(20);
-    expect(storeB.getState().byId.failure.readAt).toBe(21);
+    rendererB.handle.store.getState().retry();
+    startTurn(rendererB.callbacks(), "turn-1");
+    vi.setSystemTime(30);
+    rendererB.callbacks().onConnectionStatus("closed", fatalCloseReason());
+    expect(
+      rendererB.notifications.getState().byId[FAILURE_ID].readAt,
+    ).toBeNull();
 
-    unsubscribeB();
-    rendererA.dispose();
-    rendererB.dispose();
+    rendererA.handle.store.getState().dispose();
+    rendererB.handle.store.getState().dispose();
+    rendererA.transport.dispose();
+    rendererB.transport.dispose();
   });
 
   it("keeps different turns and failures newer than the completion unread", () => {
@@ -131,7 +115,7 @@ describe("live chat completion acknowledgements", () => {
           originHostId: "host-1",
           epicId: "epic-1",
           chatId: "chat-1",
-          activeTurnId: "turn-2",
+          recoverableTurnId: "turn-2",
         })
       ) {
         return;
@@ -183,5 +167,97 @@ function streamFailure(updatedAt: number) {
     payload: { kind: "chat" as const, epicId: "epic-1", chatId: "chat-1" },
     message: "Agent stream closed unexpectedly.",
     detail: "Connection lost",
+  };
+}
+
+const FAILURE_ID = "stream.transport.error:host-1:chat-1:CONNECTION_LOST";
+
+function createChatRenderer(originId: string) {
+  const transport = createLiveChatCompletionAcknowledgementTransport(originId);
+  const notifications = createAppLocalNotificationsStore(`${originId}-store`);
+  const callbackHistory: ChatStreamCallbacks[] = [];
+  const handle = createChatSessionStoreWithNotificationDependencies(
+    {
+      hostId: "host-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      userId: "user-1",
+      onAuthError: null,
+      onProviderAuthError: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, callbacks) => {
+        callbackHistory.push(callbacks);
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          close: () => undefined,
+        };
+      },
+    },
+    {
+      completionAcknowledgements: transport,
+      appLocalNotifications: notifications,
+    },
+  );
+  return {
+    transport,
+    notifications,
+    handle,
+    callbacks: (): ChatStreamCallbacks => {
+      const callbacks = callbackHistory.at(-1);
+      if (callbacks === undefined) throw new Error("Expected chat callbacks");
+      return callbacks;
+    },
+  };
+}
+
+function startTurn(callbacks: ChatStreamCallbacks, turnId: string): void {
+  callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    runStatus: "running",
+    activeTurn: {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId,
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 1,
+      updatedAt: 1,
+      reasoningEffort: null,
+      serviceTier: null,
+    },
+  });
+}
+
+function completeTurn(callbacks: ChatStreamCallbacks, turnId: string): void {
+  callbacks.onBlockDelta({
+    kind: "blockDelta",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    event: {
+      type: "turn.completed",
+      blockId: turnId,
+      timestamp: Date.now(),
+      turnId,
+    },
+  });
+}
+
+function fatalCloseReason() {
+  return {
+    kind: "fatalError" as const,
+    details: {
+      code: "CONNECTION_LOST",
+      reason: "Connection lost",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
   };
 }

@@ -29,7 +29,7 @@ export interface LiveChatCompletionAcknowledgementTarget {
   readonly originHostId: string;
   readonly epicId: string;
   readonly chatId: string;
-  readonly activeTurnId: string | null;
+  readonly recoverableTurnId: string | null;
 }
 
 type LiveChatCompletionAcknowledgementListener = (
@@ -57,7 +57,7 @@ export function liveChatCompletionAcknowledgementMatches(
     acknowledgement.originHostId === target.originHostId &&
     acknowledgement.epicId === target.epicId &&
     acknowledgement.chatId === target.chatId &&
-    acknowledgement.turnId === target.activeTurnId
+    acknowledgement.turnId === target.recoverableTurnId
   );
 }
 

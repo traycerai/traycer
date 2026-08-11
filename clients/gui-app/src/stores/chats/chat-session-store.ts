@@ -23,12 +23,13 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
-  emitChatStreamErrorNotification,
+  chatStreamErrorNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 import {
   liveChatCompletionAcknowledgementMatches,
   liveChatCompletionAcknowledgements,
+  type LiveChatCompletionAcknowledgementTransport,
 } from "@/lib/notifications/live-chat-completion-acknowledgements";
 import {
   readStagedWorktreeIntent,
@@ -747,6 +748,24 @@ function restoreStagedWorktreeIntentForPending(
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
 ): ChatSessionStoreHandle {
+  return createChatSessionStoreWithNotificationDependencies(options, {
+    completionAcknowledgements: liveChatCompletionAcknowledgements,
+    appLocalNotifications: useAppLocalNotificationsStore,
+  });
+}
+
+export interface ChatSessionNotificationDependencies {
+  readonly completionAcknowledgements: LiveChatCompletionAcknowledgementTransport;
+  readonly appLocalNotifications: Pick<
+    typeof useAppLocalNotificationsStore,
+    "getState"
+  >;
+}
+
+export function createChatSessionStoreWithNotificationDependencies(
+  options: ChatSessionStoreOptions,
+  notificationDependencies: ChatSessionNotificationDependencies,
+): ChatSessionStoreHandle {
   const notificationUserId = options.userId;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
@@ -755,6 +774,11 @@ export function createChatSessionStore(
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
   let fatalCloseNotificationGeneration: number | null = null;
+  // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
+  // turn that produced that close so another renderer's later live completion
+  // can still acknowledge this renderer's matching failure. A subsequent
+  // active turn or fatal close supersedes this slot.
+  let fatalCloseTurnId: string | null = null;
   let unsubscribeLiveCompletionAcknowledgements = (): void => undefined;
   // Bumped whenever the connection the pendings were dispatched on is gone: a
   // transport `reconnecting`/`closed` status, or a stream-client replacement
@@ -1346,11 +1370,11 @@ export function createChatSessionStore(
           frame.event.type === "turn.completed" &&
           get().activeTurn?.turnId === frame.event.turnId &&
           notificationUserId !== null &&
-          useAppLocalNotificationsStore.getState().activeUserId ===
-            notificationUserId
+          notificationDependencies.appLocalNotifications.getState()
+            .activeUserId === notificationUserId
         ) {
           const observedAt = Date.now();
-          useAppLocalNotificationsStore
+          notificationDependencies.appLocalNotifications
             .getState()
             .markEntityAsRead(
               options.hostId,
@@ -1362,7 +1386,7 @@ export function createChatSessionStore(
           // stream died can acknowledge its copy of the earlier failure too.
           // This is deliberately ephemeral: replaying a retained completion
           // could consume a failure from a later connection lifecycle.
-          liveChatCompletionAcknowledgements.publish({
+          notificationDependencies.completionAcknowledgements.publish({
             userId: notificationUserId,
             originHostId: options.hostId,
             epicId: options.epicId,
@@ -1633,6 +1657,10 @@ export function createChatSessionStore(
       onSnapshot: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onSnapshot(frame);
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+          fatalCloseTurnId = null;
+        }
       },
       onWorktreeStateChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
@@ -1657,6 +1685,10 @@ export function createChatSessionStore(
       onTurnStateChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onTurnStateChanged(frame);
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+          fatalCloseTurnId = null;
+        }
       },
       onBlockDelta: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
@@ -1718,12 +1750,17 @@ export function createChatSessionStore(
           fatalCloseNotificationGeneration !== streamGeneration
         ) {
           fatalCloseNotificationGeneration = streamGeneration;
-          emitChatStreamErrorNotification({
-            hostId: options.hostId,
-            epicId: options.epicId,
-            chatId: options.chatId,
-            details: reason.details,
-          });
+          fatalCloseTurnId = get().activeTurn?.turnId ?? null;
+          notificationDependencies.appLocalNotifications
+            .getState()
+            .upsertRecurringFailure(
+              chatStreamErrorNotification({
+                hostId: options.hostId,
+                epicId: options.epicId,
+                chatId: options.chatId,
+                details: reason.details,
+              }),
+            );
         }
         callbacks.onConnectionStatus(status, reason);
       },
@@ -2637,30 +2674,36 @@ export function createChatSessionStore(
 
   if (notificationUserId !== null) {
     unsubscribeLiveCompletionAcknowledgements =
-      liveChatCompletionAcknowledgements.subscribe((acknowledgement) => {
-        if (
-          !liveChatCompletionAcknowledgementMatches(acknowledgement, {
-            userId: notificationUserId,
-            originHostId: options.hostId,
-            epicId: options.epicId,
-            chatId: options.chatId,
-            activeTurnId: store.getState().activeTurn?.turnId ?? null,
-          })
-        ) {
-          return;
-        }
-        const notifications = useAppLocalNotificationsStore.getState();
-        if (notifications.activeUserId !== notificationUserId) return;
-        // Renderer clocks share one machine clock. Preserve timestamp ties
-        // and anything later so an ambiguous or genuinely newer disconnect
-        // remains red; only clearly older failures are superseded.
-        notifications.markEntityAsReadBefore(
-          options.hostId,
-          { epicId: options.epicId, chatId: options.chatId },
-          Date.now(),
-          acknowledgement.observedAt,
-        );
-      });
+      notificationDependencies.completionAcknowledgements.subscribe(
+        (acknowledgement) => {
+          const activeTurnId = store.getState().activeTurn?.turnId ?? null;
+          const recoverableTurnId = activeTurnId ?? fatalCloseTurnId;
+          if (
+            !liveChatCompletionAcknowledgementMatches(acknowledgement, {
+              userId: notificationUserId,
+              originHostId: options.hostId,
+              epicId: options.epicId,
+              chatId: options.chatId,
+              recoverableTurnId,
+            })
+          ) {
+            return;
+          }
+          const notifications =
+            notificationDependencies.appLocalNotifications.getState();
+          if (notifications.activeUserId !== notificationUserId) return;
+          // Renderer clocks share one machine clock. Preserve timestamp ties
+          // and anything later so an ambiguous or genuinely newer disconnect
+          // remains red; only clearly older failures are superseded.
+          notifications.markEntityAsReadBefore(
+            options.hostId,
+            { epicId: options.epicId, chatId: options.chatId },
+            Date.now(),
+            acknowledgement.observedAt,
+          );
+          if (activeTurnId === null) fatalCloseTurnId = null;
+        },
+      );
   }
 
   return {
