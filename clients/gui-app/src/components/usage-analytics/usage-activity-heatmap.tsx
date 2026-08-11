@@ -69,8 +69,11 @@ export function UsageActivityHeatmap(props: {
       className="flex w-full flex-col gap-3"
       data-testid="usage-activity-heatmap"
     >
+      {/* The grid is decorative for assistive tech - the data table below
+          carries the same values in a navigable form. */}
       <div
         ref={scrollerRef}
+        aria-hidden
         className="w-full overflow-x-auto"
         data-testid="usage-activity-scroller"
       >
@@ -94,6 +97,7 @@ export function UsageActivityHeatmap(props: {
           </div>
         </div>
       </div>
+      <UsageActivityDataTable calendar={calendar} metric={metric} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ActivityStats stats={calendar.stats} />
         <LevelLegend />
@@ -139,6 +143,16 @@ function WeekdayLabelColumn(): ReactNode {
   );
 }
 
+/**
+ * A tile is a MARK, not a control: it carries no action, and making each
+ * of 365 a tab stop turned the calendar into a keyboard trap - the first
+ * Tab landed on an off-screen date a year back (the DOM is oldest-first,
+ * the scroller is anchored right), yanked the scroll position with it, and
+ * reaching the stats below took hundreds more presses. So the grid is
+ * hidden from assistive tech entirely and {@link UsageActivityDataTable}
+ * carries the same values in a form that is actually navigable. The
+ * tooltip stays for pointer users.
+ */
 function DayTile(props: {
   readonly cell: UsageActivityCell;
   readonly metric: UsageMetric;
@@ -149,13 +163,11 @@ function DayTile(props: {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={`${cell.day}: ${valueLabel}`}
+        <span
           data-testid="usage-activity-day"
           data-day={cell.day}
           data-level={cell.level}
-          className="size-2.5 rounded-[2px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="size-2.5 rounded-[2px]"
           style={{ backgroundColor: `var(--usage-heat-${String(cell.level)})` }}
         />
       </TooltipTrigger>
@@ -167,6 +179,40 @@ function DayTile(props: {
         </p>
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * The calendar's values for anyone not using a pointer: one row per day
+ * that had usage. Days with none are omitted - a year of "No usage" rows
+ * is noise, and their absence is itself the information.
+ */
+function UsageActivityDataTable(props: {
+  readonly calendar: UsageActivityCalendar;
+  readonly metric: UsageMetric;
+}): ReactNode {
+  const active = props.calendar.weeks
+    .flatMap((week) => week.cells)
+    .filter((cell) => cell !== null)
+    .filter((cell) => cell.value > 0);
+  return (
+    <table className="sr-only" data-testid="usage-activity-data-table">
+      <caption>Daily usage</caption>
+      <thead>
+        <tr>
+          <th scope="col">Day</th>
+          <th scope="col">Usage</th>
+        </tr>
+      </thead>
+      <tbody>
+        {active.map((cell) => (
+          <tr key={cell.day}>
+            <th scope="row">{cell.day}</th>
+            <td>{formatMetricValue(cell.value, props.metric)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

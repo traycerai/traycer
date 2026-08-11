@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
@@ -74,27 +74,41 @@ describe("<UsageActivityHeatmap />", () => {
     "cost",
   );
 
-  it("renders one focusable tile per day with its intensity level", () => {
+  it("renders one tile per day at its intensity level", () => {
     render(
       <TooltipProvider>
         <UsageActivityHeatmap calendar={calendar} metric="cost" />
       </TooltipProvider>,
     );
-    // Role query, not a test id: each tile is a real button whose
-    // accessible name carries the day and its value.
-    const tiles = screen.getAllByRole("button");
+    const tiles = screen.getAllByTestId("usage-activity-day");
     expect(tiles).toHaveLength(7);
     const active = tiles.find(
       (tile) => tile.getAttribute("data-day") === "2026-08-03",
     );
     expect(active?.getAttribute("data-level")).toBe("4");
-    // Identity is not color-alone: every tile names its day and exact value.
-    expect(active?.getAttribute("aria-label")).toBe("2026-08-03: $5.00");
     const empty = tiles.find(
       (tile) => tile.getAttribute("data-day") === "2026-08-02",
     );
     expect(empty?.getAttribute("data-level")).toBe("0");
-    expect(empty?.getAttribute("aria-label")).toBe("2026-08-02: No usage");
+  });
+
+  it("keeps 365 marks out of the tab order and states the values in a table instead", () => {
+    // Each tile as a tab stop made the calendar a keyboard trap: the first
+    // Tab landed a year back (DOM is oldest-first, the scroller is anchored
+    // right), dragged the scroll position with it, and the stats below were
+    // hundreds of presses away.
+    render(
+      <TooltipProvider>
+        <UsageActivityHeatmap calendar={calendar} metric="cost" />
+      </TooltipProvider>,
+    );
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    const table = screen.getByTestId("usage-activity-data-table");
+    // Only days WITH usage earn a row - a year of "No usage" is noise.
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("2026-08-03");
+    expect(rows[0]?.textContent).toContain("$5.00");
   });
 
   it("opens on the most recent weeks, not the oldest", () => {
