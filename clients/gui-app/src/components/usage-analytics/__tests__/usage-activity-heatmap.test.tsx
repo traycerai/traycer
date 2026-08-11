@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
@@ -50,7 +50,9 @@ describe("<UsageActivityHeatmap />", () => {
         <UsageActivityHeatmap calendar={calendar} metric="cost" />
       </TooltipProvider>,
     );
-    const tiles = screen.getAllByTestId("usage-activity-day");
+    // Role query, not a test id: each tile is a real button whose
+    // accessible name carries the day and its value.
+    const tiles = screen.getAllByRole("button");
     expect(tiles).toHaveLength(7);
     const active = tiles.find(
       (tile) => tile.getAttribute("data-day") === "2026-08-03",
@@ -71,8 +73,7 @@ describe("<UsageActivityHeatmap />", () => {
         <UsageActivityHeatmap calendar={calendar} metric="cost" />
       </TooltipProvider>,
     );
-    const stats = screen.getByTestId("usage-activity-stats");
-    expect(within(stats).getByText("Aug 3, 2026")).toBeTruthy();
-    expect(within(stats).getByText("Aug 2026")).toBeTruthy();
+    expect(screen.getByText("Aug 3, 2026")).toBeTruthy();
+    expect(screen.getByText("Aug 2026")).toBeTruthy();
   });
 });

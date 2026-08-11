@@ -95,9 +95,10 @@ function MonthLabelRow(props: {
   );
   return (
     // Same 12px column rhythm as the tile grid (10px tile + 2px gap), and
-    // the same leading gutter as the weekday label column, so each label
-    // lands exactly over its month's first week.
-    <div className="flex gap-0.5 pl-[1.375rem] text-ui-xs text-muted-foreground">
+    // the same leading gutter the grid itself sits behind - the 10px
+    // weekday column plus the 6px gap between it and the tiles, i.e. 16px
+    // - so each label lands exactly over its month's first week.
+    <div className="flex gap-0.5 pl-4 text-ui-xs text-muted-foreground">
       {weeks.map((week, weekIndex) => (
         <span key={week.firstDay} className="w-2.5 shrink-0 overflow-visible">
           <span className="block w-8">{byWeek.get(weekIndex) ?? ""}</span>
