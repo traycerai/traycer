@@ -355,6 +355,31 @@ describe("chat assembly fails closed", () => {
     expect(result.reason).toBe("malformed-json");
   });
 
+  it("refuses a verified part whose bytes do not decode as text", async () => {
+    // The renderer's `readText` is a FATAL `TextDecoder`, so a digest-valid
+    // shard holding invalid UTF-8 rejects instead of returning a string. That
+    // is a property of the stored bytes, not of the transfer: escaping as a
+    // rejection would tell the caller to retry an immutable object forever.
+    const bytes = published.bytesByPart.get(
+      published.head.messageShards[0].sha256,
+    );
+    if (bytes === undefined) throw new Error("missing part");
+    const undecodable: StagedChatPart = {
+      ...stageFromText(bytes),
+      readText: () => Promise.reject(new TypeError("The encoded data was not valid UTF-8")),
+    };
+
+    const result = await assemble(
+      published,
+      fetchWithTamperedPart(0, undecodable),
+    );
+
+    expect(result.status).toBe("corrupt");
+    if (result.status !== "corrupt") return;
+    expect(result.reason).toBe("malformed-json");
+    expect(result.diagnostic).toContain("did not decode as text");
+  });
+
   it("refuses a part that belongs to another chat", async () => {
     // Content addressing proves the bytes are the ones the head named; this
     // proves they MEAN what the head assumed.

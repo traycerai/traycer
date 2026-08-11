@@ -352,7 +352,21 @@ export async function verifyStagedChatPart(
     );
   }
 
-  const text = await staged.readText();
+  // Decoding is part of "can these verified bytes be read", not part of the
+  // transport. A reader whose `readText` is fatal on invalid UTF-8 rejects
+  // here, and letting that rejection escape would classify an immutable,
+  // digest-valid shard as a transient fetch failure - so the caller retries
+  // forever against bytes that can never parse. Same outcome as unparseable
+  // JSON, because it is the same fact one layer down.
+  let text: string;
+  try {
+    text = await staged.readText();
+  } catch (error) {
+    return corrupt(
+      "malformed-json",
+      `Chat ${label} verified against the head but did not decode as text: ${describeError(error)}`,
+    );
+  }
 
   let payload: unknown;
   try {
