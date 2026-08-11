@@ -160,6 +160,49 @@ function renderPanel(input: {
   return { requests };
 }
 
+describe("<UsageSummaryPanel /> activity section", () => {
+  it("surfaces a failed activity read with its own retry, never a silent gap", async () => {
+    // The 365-day activity read is a SECOND request. When only it fails,
+    // the page's own Retry refetches the window query alone - so dropping
+    // this error left the section silently absent with no way back.
+    let activityAttempts = 0;
+    const { requests } = renderPanel({
+      response: (request) => {
+        if (request.windowDays === 365) {
+          activityAttempts += 1;
+          throw new Error("activity read failed");
+        }
+        return response({
+          servedBy: "cloud",
+          hostBuckets: [hostBucket("host-a", 3)],
+        });
+      },
+      hostNames: new Map([["host-a", "Studio Mac"]]),
+    });
+
+    // The dashboard itself still renders - one failed section must not
+    // blank a working page.
+    await screen.findByTestId("usage-cost-figure");
+    const section = await screen.findByTestId("usage-activity-section");
+    const card = within(section).getByTestId("usage-error-card");
+    expect(card).toBeTruthy();
+    expect(screen.queryByTestId("usage-activity-heatmap")).toBeNull();
+
+    // And its Retry refetches the ACTIVITY query, not the window one.
+    const attemptsBefore = activityAttempts;
+    const windowRequestsBefore = requests.filter(
+      (request) => request.windowDays !== 365,
+    ).length;
+    await userEvent.click(within(card).getByRole("button", { name: /retry/i }));
+    await waitFor(() => {
+      expect(activityAttempts).toBeGreaterThan(attemptsBefore);
+    });
+    expect(
+      requests.filter((request) => request.windowDays !== 365).length,
+    ).toBe(windowRequestsBefore);
+  });
+});
+
 describe("<UsageSummaryPanel /> host scope", () => {
   it("defaults to All hosts - the request carries no host filter at all", async () => {
     const { requests } = renderPanel({

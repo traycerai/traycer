@@ -206,7 +206,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       </div>
       <UsageSummaryPanelBody
         query={query}
-        activityData={activityQuery.data}
+        activityQuery={activityQuery}
         metric={metric}
         days={days}
         breakdownGroupBy={breakdownGroupBy}
@@ -276,12 +276,13 @@ function daysForResponse(
 function UsageSummaryPanelBody(props: {
   readonly query: UsageSummaryQueryResult;
   /**
-   * The fixed-year activity read, already unwrapped: this section is
-   * SECONDARY, so it renders only once data exists and simply stays absent
-   * while loading or errored - the page's loading/error surfaces belong to
-   * the primary window query alone.
+   * The fixed-year activity read. The WHOLE result, not just its data: the
+   * page-level Retry refetches the primary window query only, so handing
+   * this one's `data` alone would drop a failed activity read on the floor
+   * - the section would silently vanish with no explanation and no way
+   * back. It stays SECONDARY (its own inline error, never the page's).
    */
-  readonly activityData: UsageSummaryResponse | undefined;
+  readonly activityQuery: UsageSummaryQueryResult;
   readonly metric: UsageMetric;
   readonly days: readonly string[];
   readonly breakdownGroupBy: UsageBreakdownGroupBy;
@@ -292,7 +293,7 @@ function UsageSummaryPanelBody(props: {
 }): ReactNode {
   const {
     query,
-    activityData,
+    activityQuery,
     metric,
     days,
     breakdownGroupBy,
@@ -383,23 +384,7 @@ function UsageSummaryPanelBody(props: {
         )}
       </div>
       <UsageDailyChart columns={columns} scale={scale} metric={metric} />
-      {activityData === undefined ? null : (
-        <div className="flex flex-col gap-2">
-          <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
-          <UsageActivityHeatmap
-            calendar={buildUsageActivityCalendar(
-              lastNCalendarDays(
-                USAGE_ACTIVITY_WINDOW_DAYS,
-                activityData.summary.window.timezone,
-                activityData.summary.window.endAtExclusive - 1,
-              ),
-              activityData.summary.buckets,
-              metric,
-            )}
-            metric={metric}
-          />
-        </div>
-      )}
+      <UsageActivitySection query={activityQuery} metric={metric} />
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-ui-sm font-medium text-foreground">Breakdown</h3>
@@ -418,6 +403,54 @@ function UsageSummaryPanelBody(props: {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The activity calendar and its own loading/error handling.
+ *
+ * Deliberately NOT folded into the page's loading and error states: this
+ * read is a second, independent request, and a failed year-long calendar
+ * must not blank a working dashboard. But it must not vanish silently
+ * either - the page's Retry only refetches the primary window query, so
+ * this section carries its own error card and its own refetch.
+ */
+function UsageActivitySection(props: {
+  readonly query: UsageSummaryQueryResult;
+  readonly metric: UsageMetric;
+}): ReactNode {
+  const { query, metric } = props;
+  if (query.error !== null) {
+    return (
+      <div className="flex flex-col gap-2" data-testid="usage-activity-section">
+        <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
+        <UsageErrorCard
+          error={query.error}
+          onRetry={() => {
+            void query.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+  if (query.data === undefined) return null;
+  const { window, buckets } = query.data.summary;
+  return (
+    <div className="flex flex-col gap-2" data-testid="usage-activity-section">
+      <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
+      <UsageActivityHeatmap
+        calendar={buildUsageActivityCalendar(
+          lastNCalendarDays(
+            USAGE_ACTIVITY_WINDOW_DAYS,
+            window.timezone,
+            window.endAtExclusive - 1,
+          ),
+          buckets,
+          metric,
+        )}
+        metric={metric}
+      />
     </div>
   );
 }
