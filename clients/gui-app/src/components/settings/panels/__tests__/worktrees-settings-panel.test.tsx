@@ -4078,13 +4078,14 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       }),
     );
 
-    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
 
     screen.getByRole("button", { name: "Delete worktree feat-landed" });
     expect(screen.queryByText("feat-review")).toBeNull();
-    expect(
-      screen.getByTestId("worktrees-filter-resolution-status").textContent,
-    ).toContain("Status unavailable for 1 worktree.");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Status unavailable for 1 worktree.",
+    );
   });
 
   it("upgrades an errored row in place once a later refetch succeeds", () => {

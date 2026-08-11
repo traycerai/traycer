@@ -875,7 +875,7 @@ export function useWorktreeActivityEnrichment(
   // numerator must use that same scope. `erroredPaths` is intentionally
   // host-wide for UI state and can include failures from the background sweep.
   const viewportErroredCount = results.filter(
-    (result) => result.data === undefined && result.isError,
+    (result) => result.isError,
   ).length;
   // Gated perf telemetry for the enrichment leg (invisible before - only the base
   // leg was tracked, so a wholesale enrichment failure left no trace). Emits once
