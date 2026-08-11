@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostNotificationsCloudFeedRow } from "@traycer/protocol/host/notifications/contracts";
 import {
+  mergeHostPendingForkIntoCloudIndicators,
   selectCloudNotificationIndicators,
   selectNotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
@@ -29,6 +30,7 @@ describe("notification indicator state", () => {
         chats: {
           "chat-1": {
             unreadFailure: false,
+            pendingFork: true,
             pendingApproval: true,
             pendingInterview: false,
             unreadDone: true,
@@ -39,6 +41,7 @@ describe("notification indicator state", () => {
 
     expect(state).toEqual({
       unreadFailure: true,
+      pendingFork: true,
       pendingApproval: true,
       pendingInterview: false,
       unreadDone: true,
@@ -164,6 +167,7 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"]).toEqual({
       pendingApproval: false,
       pendingInterview: false,
+      pendingFork: false,
       unreadFailure: true,
       unreadDone: true,
     });
@@ -219,6 +223,7 @@ describe("cloud notification indicator derivation", () => {
     expect(result.chats["chat-1"]).toEqual({
       pendingApproval: false,
       pendingInterview: true,
+      pendingFork: false,
       unreadFailure: false,
       unreadDone: false,
     });
@@ -242,5 +247,55 @@ describe("cloud notification indicator derivation", () => {
     );
 
     expect(result.chats).toEqual({});
+  });
+});
+
+describe("cloud notification indicator authority", () => {
+  it("merges only the connected host's pending fork bit into cloud flags", () => {
+    const cloud = {
+      epics: {
+        "epic-1": {
+          pendingApproval: false,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone: true,
+        },
+      },
+      chats: {
+        "chat-1": {
+          pendingApproval: true,
+          pendingInterview: false,
+          pendingFork: false,
+          unreadFailure: false,
+          unreadDone: false,
+        },
+      },
+    };
+    const host = {
+      epics: {},
+      chats: {
+        "chat-1": {
+          pendingApproval: false,
+          pendingInterview: true,
+          pendingFork: true,
+          unreadFailure: true,
+          unreadDone: true,
+        },
+      },
+    };
+
+    expect(mergeHostPendingForkIntoCloudIndicators(cloud, host)).toEqual({
+      epics: cloud.epics,
+      chats: {
+        "chat-1": {
+          pendingApproval: true,
+          pendingInterview: false,
+          pendingFork: true,
+          unreadFailure: false,
+          unreadDone: false,
+        },
+      },
+    });
   });
 });

@@ -9,10 +9,14 @@ import {
   parseNestedFocusTargetFromHref,
   resolveNestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  useEpicCanvasStore,
+  type ClosedTilePayload,
+} from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -111,6 +115,42 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
  *    - accepted: the stale restore that can follow is loop-safe (route sync
  *    closes it and canonicalizes once its session loads).
  */
+/**
+ * Whether a preserved closed-tile payload still names a record worth
+ * restoring. Lifted out of {@link reopenClosedTilePreview}, whose guard
+ * sequence was over this repo's complexity ceiling; the checks and their order
+ * are unchanged.
+ */
+function preservedTileRecordIsLive(
+  preserved: ClosedTilePayload,
+  epicId: string,
+  pendingCreateArtifactIds: ReadonlySet<string>,
+): boolean {
+  if (preserved.pendingCreate) return true;
+  const epicHandle = getOpenEpicRegistry().peek(epicId);
+  const hasLiveRecord =
+    epicHandle !== null && epicHandle.store.getState().snapshotLoaded
+      ? (id: string) =>
+          Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
+      : () => true;
+  return isTileRefRecordLive(
+    preserved.node,
+    pendingCreateArtifactIds,
+    {
+      hasLiveRecord,
+      // No cloud-known exemption on this imperative, non-React path
+      // (chat-sync-v2 ticket 36 scoped the fix to the route-sync reap
+      // and the tab-group-view substitution, both React-hook-driven).
+      // `() => false` preserves exactly today's behavior here - a
+      // same-host, never-adopted chat restored from browser
+      // back/forward still closes rather than substituting, same as
+      // before this ticket.
+      isCloudKnown: () => false,
+    },
+    getHostBindingSnapshot()?.hostClient.getActiveHostId() ?? null,
+  );
+}
+
 function reopenClosedTilePreview(href: string): void {
   const epicTab = parseEpicTabHref(href);
   if (epicTab === null) {
@@ -142,18 +182,11 @@ function reopenClosedTilePreview(href: string): void {
     state.discardClosedTilePayload(epicTab.tabId, nestedTarget.tileInstanceId);
     return;
   }
-  const epicHandle = getOpenEpicRegistry().peek(epicTab.epicId);
-  const hasLiveRecord =
-    epicHandle !== null && epicHandle.store.getState().snapshotLoaded
-      ? (id: string) =>
-          Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
-      : () => true;
   if (
-    !preserved.pendingCreate &&
-    !isTileRefRecordLive(
-      preserved.node,
+    !preservedTileRecordIsLive(
+      preserved,
+      epicTab.epicId,
       state.pendingCreateArtifactIds,
-      hasLiveRecord,
     )
   ) {
     state.discardClosedTilePayload(epicTab.tabId, nestedTarget.tileInstanceId);

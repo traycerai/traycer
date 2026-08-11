@@ -110,6 +110,7 @@ type UnknownKeySchemaNode = {
   readonly type?: unknown;
   readonly properties?: Record<string, unknown>;
   readonly additionalProperties?: unknown;
+  readonly propertyNames?: unknown;
   readonly anyOf?: readonly unknown[];
   readonly oneOf?: readonly unknown[];
   readonly items?: unknown;
@@ -159,7 +160,6 @@ function unknownKeyPolicy(node: unknown): UnknownKeyPolicy {
   return { kind: "strip" };
 }
 
-
 /** Input-tree counterpart of an object property, for lockstep descent. */
 function inputProperty(previousInput: unknown, field: string): unknown {
   const shape = asSchemaNode(previousInput);
@@ -173,6 +173,23 @@ function inputProperty(previousInput: unknown, field: string): unknown {
 function inputItems(previousInput: unknown): unknown {
   const shape = asSchemaNode(previousInput);
   return shape === null ? null : (shape.items ?? null);
+}
+
+/** Input-tree counterpart of a record's value schema, for lockstep descent. */
+function inputRecordValues(previousInput: unknown): unknown {
+  const shape = asSchemaNode(previousInput);
+  if (shape === null || shape.properties !== undefined) return null;
+  const additional = shape.additionalProperties;
+  return typeof additional === "object" && additional !== null
+    ? additional
+    : null;
+}
+
+/** Input-tree counterpart of a record's key schema, for lockstep descent. */
+function inputRecordKeys(previousInput: unknown): unknown {
+  const shape = asSchemaNode(previousInput);
+  if (shape === null || shape.properties !== undefined) return null;
+  return shape.propertyNames ?? null;
 }
 
 /**
@@ -578,6 +595,13 @@ type ClassifiedSchemaNode =
       readonly required: readonly string[];
     }
   | {
+      readonly kind: "record";
+      /** `propertyNames` subtree, `null` for a plain string key space. */
+      readonly keys: unknown;
+      /** `additionalProperties` subtree — the per-key value schema. */
+      readonly values: unknown;
+    }
+  | {
       readonly kind: "enum";
       readonly representation: EnumJsonSchema["representation"];
       readonly values: readonly (string | number | boolean)[];
@@ -594,6 +618,8 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
   const shape = node as {
     type?: unknown;
     properties?: Record<string, unknown>;
+    additionalProperties?: unknown;
+    propertyNames?: unknown;
     required?: unknown;
     values?: unknown;
     representation?: unknown;
@@ -604,7 +630,9 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     items?: unknown;
   };
   const requiredFields = Array.isArray(shape.required)
-    ? shape.required.filter((field): field is string => typeof field === "string")
+    ? shape.required.filter(
+        (field): field is string => typeof field === "string",
+      )
     : [];
 
   // Normalized-fingerprint forms first: `type: "enum"` / `type: "anyOf"`
@@ -633,6 +661,24 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
       kind: "object",
       properties: shape.properties,
       required: requiredFields,
+    };
+  }
+  // A record (`z.record`): object-typed with one value schema for every key
+  // and no declared properties. Walked like an object's properties rather
+  // than compared as an opaque leaf — a value-schema field addition strips
+  // under an old peer's reparse exactly as a nested object addition does,
+  // and the opaque comparison was pricing every record-value evolution as a
+  // schema-kind change.
+  if (
+    shape.type === "object" &&
+    shape.properties === undefined &&
+    typeof shape.additionalProperties === "object" &&
+    shape.additionalProperties !== null
+  ) {
+    return {
+      kind: "record",
+      keys: shape.propertyNames ?? null,
+      values: shape.additionalProperties,
     };
   }
   if (Array.isArray(shape.enum)) {
@@ -784,14 +830,17 @@ function constrainingRecord(node: unknown): Record<string, unknown> | null {
 }
 
 function constrainingShape(node: unknown): string {
-  if (typeof node !== "object" || node === null) return JSON.stringify(node) ?? String(node);
+  if (typeof node !== "object" || node === null)
+    return JSON.stringify(node) ?? String(node);
   if (Array.isArray(node)) {
     return `[${node.map(constrainingShape).join(",")}]`;
   }
   const entries = Object.entries(node as Record<string, unknown>)
     .filter(([key]) => !NON_CONSTRAINING_SCHEMA_KEYS.has(key))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([key, value]) => `${JSON.stringify(key)}:${constrainingShape(value)}`);
+    .map(
+      ([key, value]) => `${JSON.stringify(key)}:${constrainingShape(value)}`,
+    );
   return `{${entries.join(",")}}`;
 }
 
@@ -935,7 +984,11 @@ function findNodeAdditivityViolation(
     // the policies themselves catches it - and the newer schema then emits
     // undeclared keys the older one rejects.
     const nextPolicy = unknownKeyPolicy(nextInput);
-    const policyViolation = unknownKeyPolicyRelaxation(policy, nextPolicy, path);
+    const policyViolation = unknownKeyPolicyRelaxation(
+      policy,
+      nextPolicy,
+      path,
+    );
     if (policyViolation !== null) return policyViolation;
     // Relaxing required -> optional is not additive: the newer peer may omit
     // the field, and the older schema rejects the payload outright.
@@ -1087,6 +1140,30 @@ function findNodeAdditivityViolation(
       };
     }
     return null;
+  }
+
+  if (previousNode.kind === "record" && nextNode.kind === "record") {
+    // Key schemas evolve under the same rules as any other node: a plain
+    // string key space classifies opaque-equal on both sides, while an
+    // enum-keyed record growing a key is value growth the old peer's key
+    // schema refuses — priced by the mode exactly like any other growth.
+    const keysViolation = findNodeAdditivityViolation(
+      previousNode.keys,
+      nextNode.keys,
+      [...path, "(record keys)"],
+      mode,
+      inputRecordKeys(previousInput),
+      inputRecordKeys(nextInput),
+    );
+    if (keysViolation !== null) return keysViolation;
+    return findNodeAdditivityViolation(
+      previousNode.values,
+      nextNode.values,
+      [...path, "(record values)"],
+      mode,
+      inputRecordValues(previousInput),
+      inputRecordValues(nextInput),
+    );
   }
 
   if (previousNode.kind === "opaque" && nextNode.kind === "opaque") {
