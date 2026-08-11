@@ -980,9 +980,11 @@ describe("providers.modelProviderAuth actions", () => {
       "gpt-4o-mini",
       "gpt-4o",
     ]);
-    // Defaulted, so "none" has one spelling rather than absent-or-empty.
+    // `headers` defaults to `[]` - two states, so "none" gets one spelling.
     expect(parsed.headers).toEqual([]);
-    expect(parsed.env).toEqual([]);
+    // `env` defaults to NULL, not `[]`. Omitting it must mean "leave the env
+    // declaration alone", never "clear it" - see the three-state test below.
+    expect(parsed.env).toBeNull();
     expect(parsed.key).toBeNull();
   });
 
@@ -1219,6 +1221,69 @@ describe("providers.modelProviderAuth actions", () => {
         baseUrl,
       ).toBe(false);
     }
+  });
+
+  /** Parse and narrow to the `createCustom` arm, so field reads type-check. */
+  function parseCreateCustom(input: unknown) {
+    const parsed = modelProviderAuthActionSchema.parse(input);
+    if (parsed.action !== "createCustom") {
+      throw new Error(`expected createCustom, got ${parsed.action}`);
+    }
+    return parsed;
+  }
+
+  it("keeps omitted, cleared and replaced env declarations distinct", () => {
+    // Three states, and the gap between the first two is the reason this field
+    // is nullable while `headers` is defaulted. Deleting the block's `env` key
+    // server-side needs an explicit null, so "clear" has to be sendable - but
+    // if ABSENT also meant clear, every client that simply does not populate
+    // the field would submit a silent wipe. An update changing the display
+    // name would delete how the provider reads its key.
+    const base = {
+      action: "createCustom" as const,
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+    };
+    // Absent and explicit null are the SAME state after parsing - one spelling
+    // of "untouched" downstream - and both differ from `[]`.
+    expect(parseCreateCustom(base).env).toBeNull();
+    expect(
+      parseCreateCustom({ ...base, env: null }).env,
+    ).toBeNull();
+    expect(parseCreateCustom({ ...base, env: [] }).env).toEqual([]);
+    expect(
+      parseCreateCustom({
+        ...base,
+        env: ["MY_ENDPOINT_KEY", "FALLBACK_KEY"],
+      }).env,
+    ).toEqual(["MY_ENDPOINT_KEY", "FALLBACK_KEY"]);
+    // The assertion the wipe hazard turns on: omission must not arrive as the
+    // clear signal.
+    expect(parseCreateCustom(base).env).not.toEqual([]);
+  });
+
+  it("still gives headers one spelling of none, because it has no clear state", () => {
+    // A header set is fully described by what the form submits, so omitted and
+    // empty mean the same thing and nothing is destroyed by treating them
+    // alike. Removal is refused rather than expressed, which is why the
+    // three-state shape would buy nothing here.
+    const base = {
+      action: "createCustom" as const,
+      modelProviderId: "my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://api.example.com/v1",
+      models: [{ id: "gpt-4o", name: "GPT-4o" }],
+    };
+    expect(parseCreateCustom(base).headers).toEqual([]);
+    expect(
+      parseCreateCustom({ ...base, headers: [] }).headers,
+    ).toEqual([]);
+    expect(
+      modelProviderAuthActionSchema.safeParse({ ...base, headers: null })
+        .success,
+    ).toBe(false);
   });
 
   it("carries headers, an in-form key and parsed env names", () => {
@@ -1658,15 +1723,16 @@ describe("attempt lifecycle is encodable end to end", () => {
     }
   });
 
-  // One condition is spelled the same in both vocabularies, on purpose. The
-  // shared enum rides RELEASED carriers and cannot be widened, so the two
-  // could never have been merged - and giving one condition two names across
-  // them would only make consumers handle whichever they met first.
+  // EMPTY, and it is worth leaving here empty. This list held
+  // `config_unreadable` for exactly one round - the two vocabularies really
+  // did need the same word for the same condition - until a probe showed this
+  // surface cannot produce that condition at all. The member went, and the
+  // allowlist emptied itself.
   //
-  // Named here rather than dropping the guard: an intentional overlap that has
-  // to be written down stays intentional, while a deleted test lets the next
-  // accidental one through silently.
-  const DELIBERATELY_SHARED_CODES: readonly string[] = ["config_unreadable"];
+  // Kept as the seam a future deliberate overlap has to pass through. An
+  // intentional overlap that must be written down stays intentional; deleting
+  // the mechanism would let the next accidental one read as approved.
+  const DELIBERATELY_SHARED_CODES: readonly string[] = [];
 
   it("shares exactly the codes it means to with the native vocabulary", () => {
     const ours = new Set<string>([
@@ -1708,20 +1774,22 @@ describe("attempt lifecycle is encodable end to end", () => {
     }
   });
 
-  it("reports a broken config as itself on both the list and the auth path", () => {
-    // The mislabel this closes: a config typo used to have to answer
-    // `server_unavailable`, which sends the user to retry a healthy server
-    // instead of to the file they can actually fix.
+  it("cannot say config_unreadable, because nothing here can observe it", () => {
+    // The member this surface briefly had. Every config read and write goes
+    // through the managed server, so a config the server cannot parse is a
+    // server that never boots: there is no GET or PATCH left to fail, and the
+    // condition can only arrive as a failed lease.
+    //
+    // An enum member no producer can emit is worse than a missing one -
+    // consumers write handling for it that never runs, and reviewers weigh a
+    // case that cannot happen. Rejected on both arms so it cannot drift back.
     expect(
       modelProvidersListResultSchema.safeParse({
         ok: false,
         code: "config_unreadable",
         detail: "opencode.json: unexpected token at line 12",
       }).success,
-    ).toBe(true);
-    // On the auth path too, because `createCustom` / `updateCustom` / a
-    // config-declared `disconnect` all WRITE that file, and a
-    // read-modify-write cannot start from a file it cannot read.
+    ).toBe(false);
     for (const response of [
       providersModelProviderAuthResponseSchema,
       providersAwaitModelProviderAuthResponseSchema,
@@ -1730,8 +1798,37 @@ describe("attempt lifecycle is encodable end to end", () => {
         response.safeParse({
           result: { kind: "error", code: "config_unreadable", detail: null },
         }).success,
-      ).toBe(true);
+      ).toBe(false);
     }
+  });
+
+  it("says it as server_unavailable instead, with the parser's own message", () => {
+    // Strictly more actionable than the typed code was: `detail` carries the
+    // redacted stderr tail, which names the file, the line and the column.
+    expect(
+      modelProvidersListResultSchema.safeParse({
+        ok: false,
+        code: "server_unavailable",
+        detail: "opencode.json:12:5 unexpected token",
+      }).success,
+    ).toBe(true);
+    expect(
+      providersModelProviderAuthResponseSchema.safeParse({
+        result: {
+          kind: "error",
+          code: "server_unavailable",
+          detail: "opencode.json:12:5 unexpected token",
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps the code alive on the native vocabulary, which does read files", () => {
+    // Not a deprecation. The MCP surface reads provider config files directly,
+    // so it genuinely produces this condition and keeps the word for it.
+    expect(
+      providerNativeErrorCodeSchema.safeParse("config_unreadable").success,
+    ).toBe(true);
   });
 });
 

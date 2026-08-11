@@ -1434,13 +1434,11 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
 /**
  * Failure vocabulary for this surface. Deliberately its OWN enums rather than
  * `providerNativeErrorCodeSchema`.
+
  *
- * `config_unreadable` appears here AND on that shared enum, spelled the same
- * because it means the same thing. That is a deliberate overlap rather than
- * the leak the disjointness test otherwise guards: the shared enum rides
- * released carriers and cannot be widened, so the two vocabularies could never
- * have been merged - and giving one condition two names across them would only
- * make consumers handle whichever they happened to meet first.
+ * The two vocabularies are disjoint, and nothing here is spelled the way the
+ * shared enum spells it. `config_unreadable` briefly was, until a probe showed
+ * this surface cannot produce it - see the list enum below.
  *
  * That enum describes editing provider CONFIG FILES - `duplicate_name`,
  * `external_drift`, `rollback_failed`, `no_change_detected`. None of it
@@ -1466,19 +1464,24 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
  *   retry. This is the list result's counterpart of the auth methods'
  *   `unsupported` arm.
  * - `server_unavailable` — the managed server could not be started or leased.
- * - `config_unreadable` — the user's own OpenCode config could not be read or
- *   parsed, so the host can establish neither the truth nor the absence of a
- *   provider declaration and the catalog answer is unknowable. Deliberately
- *   NOT `server_unavailable`: the server is fine, and telling a user to retry
- *   a broken JSON file sends them away from the one thing they can fix. Also
- *   not an empty catalog, which reads as "you have configured nothing" -
- *   indistinguishable from the truth, and the reason a parse failure must
- *   surface as itself rather than as silence.
+ *   This is also how a MALFORMED USER CONFIG arrives, and there is no separate
+ *   code for that on purpose. Every config read and write on this surface goes
+ *   through the managed server, and a config the server cannot parse is a
+ *   server that never boots - so no GET or PATCH exists to fail, and the
+ *   condition can only present as a failed lease. The `detail` carries the
+ *   redacted stderr tail (parse error, line, column), which points at the file
+ *   and the character more precisely than a typed code could.
+ *
+ *   `config_unreadable` lived here for one round before a probe against the
+ *   real binary established the above. An enum member no producer can emit is
+ *   worse than a missing one: consumers write handling for it, reviewers weigh
+ *   it, and none of it is ever reached. The code survives in
+ *   `providerNativeErrorCodeSchema`, where the MCP surface reads config files
+ *   directly and genuinely produces it.
  */
 export const modelProviderListErrorCodeSchema = z.enum([
   "capability_unavailable",
   "server_unavailable",
-  "config_unreadable",
 ]);
 export type ModelProviderListErrorCode = z.infer<
   typeof modelProviderListErrorCodeSchema
@@ -1504,23 +1507,19 @@ export type ModelProviderListErrorCode = z.infer<
  *   validation. Re-show the form with the detail.
  * - `provider_auth_failed` — the provider refused the credential, or the OAuth
  *   callback failed. Show the detail; retrying is the user's call.
- * - `config_unreadable` — the user's own OpenCode config could not be read or
- *   parsed. Not only a listing condition: `createCustom`, `updateCustom` and a
- *   config-declared provider's `disconnect` all WRITE that file, and a
- *   read-modify-write cannot start from a file it cannot read. Excluding it
- *   here would force the write path to re-mislabel the exact condition the
- *   read path stopped mislabeling - as `server_unavailable` (the server is
- *   fine) or `invalid_input` (the form was fine). Its remediation is its own:
- *   open the config file and fix the syntax.
+ * A malformed user config is NOT a member here either, for the same reason it
+ * is not one on the list enum: `createCustom`, `updateCustom` and a
+ * config-declared `disconnect` all reach the file through the managed server,
+ * and a config that cannot be parsed is a server that never starts. The write
+ * path meets it as `server_unavailable` with the parser's own message in
+ * `detail`, exactly as the read path does.
  *
- * No `capability_unavailable`: the auth result carries an `unsupported` arm
- * for exactly that condition, and two ways to say one thing is how consumers
- * end up handling only one of them. `config_unreadable` has no such arm, which
- * is why it earns a code here and `capability_unavailable` does not.
+ * No `capability_unavailable` either: the auth result carries an `unsupported`
+ * arm for exactly that condition, and two ways to say one thing is how
+ * consumers end up handling only one of them.
  */
 export const modelProviderAuthErrorCodeSchema = z.enum([
   "server_unavailable",
-  "config_unreadable",
   "provider_not_found",
   "attempt_not_found",
   "attempt_superseded",
@@ -1718,10 +1717,16 @@ const customProviderShape = {
    */
   models: z.array(customProviderModelSchema).min(1),
   /**
-   * Literal headers for `options.headers`. Defaulted rather than optional so
-   * "no headers" has exactly one spelling on the wire; the host omits the
-   * config key entirely when this is empty, which is where absence belongs -
-   * in the file it writes, not in two possible payloads.
+   * Literal headers for `options.headers`. Defaulted rather than nullable
+   * because this field has only TWO states to express - some headers, or none
+   * - and a default gives "none" exactly one spelling. The host omits the
+   * config key when the list is empty, which is where absence belongs: in the
+   * file it writes, not in two possible payloads.
+   *
+   * Contrast `env` below, which needs three. The difference is not style: a
+   * header set is always fully described by what the form submits, so an
+   * omitted field and an empty one mean the same thing. Nothing is destroyed
+   * by treating them alike.
    */
   headers: z.array(customProviderHeaderSchema).default([]),
   /**
@@ -1739,10 +1744,25 @@ const customProviderShape = {
    * Upstream's form accepts `{env:VAR}` in its key field and resolves it
    * client-side; this wire carries the parsed result, so the syntax stays a
    * presentation detail of whichever client offers it and the host is handed
-   * names rather than a template to re-parse. A client that does not offer the
-   * syntax simply sends none.
+   * names rather than a template to re-parse.
+   *
+   * THREE states, which is why this one is nullable where `headers` is
+   * defaulted:
+   *
+   * - `null` (or absent) — leave whatever the block already declares alone.
+   * - `[]` — clear the declaration. Deleting the key server-side needs an
+   *   explicit `env: null` at the block level, so "clear" has to be a value a
+   *   client can actually send.
+   * - non-empty — replace the declaration with these names.
+   *
+   * Absent must NOT mean clear, and that is the whole reason for the shape. A
+   * defaulted `[]` would make every client that simply does not populate this
+   * field submit a silent wipe of the user's env declaration - an update that
+   * asked to change the display name would delete how the provider reads its
+   * key. Clearing is a thing someone has to ask for; not mentioning it is not
+   * asking.
    */
-  env: z.array(z.string().min(1)).default([]),
+  env: z.array(z.string().min(1)).nullable().default(null),
 };
 
 export const modelProviderAuthActionSchema = z.discriminatedUnion("action", [
