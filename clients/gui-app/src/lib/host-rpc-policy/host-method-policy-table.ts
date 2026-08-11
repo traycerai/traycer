@@ -1051,6 +1051,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bounded read over settled facts (Usage page + epic cost badge). The
+  // Settings panel controls its own refetch (window/metric change, manual
+  // retry) and opts out of polling; the ambient epic cost badge opts in
+  // (matching `host.getRateLimitUsage`'s cadence below) so it self-heals
+  // within a bounded time from a silently-reverted fetch instead of staying
+  // stuck pending forever with no other trigger (ticket-7 fixup-01).
+  "host.usage.summary": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
+  },
 } satisfies HostMethodPolicyTable;
 
 const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;

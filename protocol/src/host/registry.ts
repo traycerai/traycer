@@ -210,6 +210,7 @@ import {
   managedCommandSubscribeOutputV10,
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
+import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
@@ -568,6 +569,7 @@ import {
 
 export { hostGetRuntimeCapabilitiesV10 };
 export { hostGetRateLimitUsageV10 };
+export { hostUsageSummaryV10 };
 
 /**
  * Traycer 3.0 host RPC protocol.
@@ -3139,6 +3141,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostStatusV11,
           upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.usage.summary": {
+    // Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` -
+    // this whole usage-summary surface is unreleased), registered like
+    // `snapshots.getLocalStorageSize` above: an old host simply lacks it,
+    // and the client feature-detects at handshake and hides the usage
+    // surface instead of hitting a fatal mismatch.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUsageSummaryV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

@@ -13,6 +13,7 @@ import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnosti
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
+import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 export interface SettingsModalContentProps {
@@ -73,5 +74,7 @@ export function SettingsPanelForSection(props: {
       return <DevicesSessionsPanel />;
     case "diagnostics":
       return <DiagnosticsSettingsPanel />;
+    case "usage":
+      return <UsageSettingsPanel />;
   }
 }

@@ -91,6 +91,21 @@ export const hostQueryKeys = {
       epicKey,
     ] as const,
   /**
+   * Named alias for `host.usage.summary` (Usage page + epic cost badge).
+   * Keyed on the full request (`timezone`/`windowDays`/`epicId`), so the
+   * window picker, metric toggle's underlying data, and the epic-scoped
+   * badge each land on their own cache slot without hand-building the key.
+   */
+  usageSummary: (
+    hostId: string | null,
+    params: RequestOfMethod<HostRpcRegistry, "host.usage.summary">,
+  ) =>
+    hostQueryKeys.method<HostRpcRegistry, "host.usage.summary">(
+      hostId,
+      "host.usage.summary",
+      params,
+    ),
+  /**
    * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
    * what `useHostQuery` / `useHostQueries` produce for that method with
    * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.
