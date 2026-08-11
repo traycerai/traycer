@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HostNotificationsCloudFeedRow } from "@traycer/protocol/host/notifications/contracts";
 import {
   mergeHostPendingForkIntoCloudIndicators,
+  selectCloudNotificationIndicatorProjection,
   selectCloudNotificationIndicators,
   selectNotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
@@ -366,6 +367,56 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
+  it("keeps per-origin feed indicators separate for host-bound tabs", () => {
+    const failure = stoppedAt({
+      entryId: "failure-unread",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 100,
+      chatId: "chat-1",
+    });
+    const done = stoppedAt({
+      entryId: "done-unread",
+      severity: "done",
+      readAt: null,
+      updatedAt: 200,
+      chatId: "chat-1",
+    });
+    const projection = selectCloudNotificationIndicatorProjection(
+      rowsById([
+        { ...failure, originHostId: "host-a" },
+        { ...done, originHostId: "host-b" },
+      ]),
+      [],
+      ["chat-1"],
+    );
+    const indicators = {
+      ...projection.aggregate,
+      byOriginHostId: projection.byOriginHostId,
+    };
+    const local = { byId: {} };
+    const entity = { epicId: "epic-1", chatId: "chat-1" };
+
+    expect(
+      selectNotificationIndicatorState(local, entity, null, indicators),
+    ).toMatchObject({ unreadFailure: true, unreadDone: true });
+    expect(
+      selectNotificationIndicatorState(local, entity, "host-a", indicators),
+    ).toMatchObject({ unreadFailure: true, unreadDone: false });
+    expect(
+      selectNotificationIndicatorState(local, entity, "host-b", indicators),
+    ).toMatchObject({ unreadFailure: false, unreadDone: true });
+    expect(
+      selectNotificationIndicatorState(local, entity, "host-c", indicators),
+    ).toEqual({
+      pendingApproval: false,
+      pendingFork: false,
+      pendingInterview: false,
+      unreadDone: false,
+      unreadFailure: false,
+    });
+  });
+
   it("does not let one chat's completion hide a sibling failure", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
@@ -534,7 +585,7 @@ describe("cloud notification indicator authority", () => {
       },
     };
 
-    expect(mergeHostPendingForkIntoCloudIndicators(cloud, host)).toEqual({
+    expect(mergeHostPendingForkIntoCloudIndicators(cloud, host, null)).toEqual({
       epics: cloud.epics,
       chats: {
         "chat-1": {

@@ -22,6 +22,18 @@ export interface NotificationIndicatorState {
   readonly unreadDone: boolean;
 }
 
+/**
+ * GUI-only enrichment of the released host response. Aggregate surfaces read
+ * `epics` / `chats` exactly as before; host-bound tabs use the per-origin
+ * projection so another host's same-id lineage cannot decorate the tab.
+ */
+export type SurfaceNotificationIndicators =
+  HostNotificationsIndicatorStateResponse & {
+    readonly byOriginHostId?: Readonly<
+      Record<string, HostNotificationsIndicatorStateResponse>
+    >;
+  };
+
 export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadFailure: false,
   pendingFork: false,
@@ -36,12 +48,9 @@ export function selectNotificationIndicatorState(
   state: Pick<AppLocalNotificationsState, "byId">,
   entity: HostNotificationsEntityRef,
   originHostId: string | null,
-  indicators: HostNotificationsIndicatorStateResponse,
+  indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
-  const hostState =
-    entity.chatId === undefined
-      ? (indicators.epics[entity.epicId] ?? EMPTY_HOST_INDICATOR_STATE)
-      : (indicators.chats[entity.chatId] ?? EMPTY_HOST_INDICATOR_STATE);
+  const hostState = selectHostIndicatorState(indicators, entity, originHostId);
   const unreadLocalFailure = Object.values(state.byId).some(
     (entry) =>
       entry.readAt === null &&
@@ -65,7 +74,7 @@ export function selectNotificationIndicatorState(
 export function useNotificationIndicatorState(
   entity: HostNotificationsEntityRef,
   originHostId: string | null,
-  indicators: HostNotificationsIndicatorStateResponse,
+  indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
   const byId = useAppLocalNotificationsStore((state) => state.byId);
   return selectNotificationIndicatorState(
@@ -78,6 +87,21 @@ export function useNotificationIndicatorState(
 
 export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResponse =
   { epics: {}, chats: {} };
+
+function selectHostIndicatorState(
+  indicators: SurfaceNotificationIndicators,
+  entity: HostNotificationsEntityRef,
+  originHostId: string | null,
+): HostNotificationsIndicatorState {
+  const byOriginHostId = indicators.byOriginHostId;
+  const response =
+    originHostId === null || byOriginHostId === undefined
+      ? indicators
+      : (byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE);
+  return entity.chatId === undefined
+    ? (response.epics[entity.epicId] ?? EMPTY_HOST_INDICATOR_STATE)
+    : (response.chats[entity.chatId] ?? EMPTY_HOST_INDICATOR_STATE);
+}
 
 /**
  * The cloud-mode counterpart of the host's `indicatorState` RPC, computed from
@@ -107,27 +131,96 @@ export function selectCloudNotificationIndicators(
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
 ): HostNotificationsIndicatorStateResponse {
+  return selectCloudNotificationIndicatorProjection(rows, epicIds, chatIds)
+    .aggregate;
+}
+
+export interface CloudNotificationIndicatorProjection {
+  readonly aggregate: HostNotificationsIndicatorStateResponse;
+  readonly byOriginHostId: Readonly<
+    Record<string, HostNotificationsIndicatorStateResponse>
+  >;
+}
+
+export function selectCloudNotificationIndicatorProjection(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
+  epicIds: ReadonlyArray<string>,
+  chatIds: ReadonlyArray<string>,
+): CloudNotificationIndicatorProjection {
   const wantedEpicIds = new Set(epicIds);
   const wantedChatIds = new Set(chatIds);
   if (wantedEpicIds.size === 0 && wantedChatIds.size === 0) {
-    return EMPTY_INDICATOR_STATE_RESPONSE;
+    return {
+      aggregate: EMPTY_INDICATOR_STATE_RESPONSE,
+      byOriginHostId: {},
+    };
   }
-  const epics: Record<string, HostNotificationsIndicatorState> = {};
-  const chats: Record<string, HostNotificationsIndicatorState> = {};
-  const epicTerminalWinners = new Map<string, CloudTerminalWinners>();
-  const chatTerminalWinners: CloudTerminalWinners = new Map();
-  const accumulator: CloudIndicatorAccumulator = {
+  const accumulator = createCloudIndicatorAccumulator(
     wantedEpicIds,
     wantedChatIds,
-    epics,
-    chats,
-    epicTerminalWinners,
-    chatTerminalWinners,
-  };
+  );
+  const originAccumulators = new Map<string, CloudIndicatorAccumulator>();
   for (const row of Object.values(rows)) {
-    if (row === undefined) continue;
+    if (
+      row === undefined ||
+      !cloudIndicatorEntryIsWanted(row, wantedEpicIds, wantedChatIds)
+    ) {
+      continue;
+    }
     collectCloudIndicatorEntry(accumulator, row);
+    const originAccumulator =
+      originAccumulators.get(row.originHostId) ??
+      createCloudIndicatorAccumulator(wantedEpicIds, wantedChatIds);
+    if (!originAccumulators.has(row.originHostId)) {
+      originAccumulators.set(row.originHostId, originAccumulator);
+    }
+    collectCloudIndicatorEntry(originAccumulator, row);
   }
+  const byOriginHostId: Record<
+    string,
+    HostNotificationsIndicatorStateResponse
+  > = {};
+  for (const [originHostId, originAccumulator] of originAccumulators) {
+    byOriginHostId[originHostId] =
+      finalizeCloudIndicatorAccumulator(originAccumulator);
+  }
+  return {
+    aggregate: finalizeCloudIndicatorAccumulator(accumulator),
+    byOriginHostId,
+  };
+}
+
+function cloudIndicatorEntryIsWanted(
+  row: HostNotificationsCloudFeedRow,
+  wantedEpicIds: ReadonlySet<string>,
+  wantedChatIds: ReadonlySet<string>,
+): boolean {
+  const { epicId, chatId } = row.entry;
+  return (
+    (epicId !== null && wantedEpicIds.has(epicId)) ||
+    (chatId !== null && wantedChatIds.has(chatId))
+  );
+}
+
+function createCloudIndicatorAccumulator(
+  wantedEpicIds: ReadonlySet<string>,
+  wantedChatIds: ReadonlySet<string>,
+): CloudIndicatorAccumulator {
+  return {
+    wantedEpicIds,
+    wantedChatIds,
+    epics: {},
+    chats: {},
+    epicTerminalWinners: new Map(),
+    chatTerminalWinners: new Map(),
+  };
+}
+
+function finalizeCloudIndicatorAccumulator(
+  accumulator: CloudIndicatorAccumulator,
+): HostNotificationsIndicatorStateResponse {
+  const { epics, chats, epicTerminalWinners, chatTerminalWinners } =
+    accumulator;
   for (const [epicId, terminalWinners] of epicTerminalWinners) {
     const merged = mergeTerminalContributions(
       epics[epicId],
@@ -354,19 +447,41 @@ function mergeIndicatorFlags(
  * bit so local SQLite read markers can never override the cloud feed view.
  */
 export function mergeHostPendingForkIntoCloudIndicators(
-  cloud: HostNotificationsIndicatorStateResponse,
+  cloud: SurfaceNotificationIndicators,
   host: HostNotificationsIndicatorStateResponse,
-): HostNotificationsIndicatorStateResponse {
+  originHostId: string | null,
+): SurfaceNotificationIndicators {
   const pendingChats = Object.entries(host.chats).filter(
     ([, state]) => state.pendingFork,
   );
   if (pendingChats.length === 0) return cloud;
-  const chats = { ...cloud.chats };
+  const aggregate = mergePendingForkChats(cloud, pendingChats);
+  if (originHostId === null || cloud.byOriginHostId === undefined) {
+    return { ...aggregate, byOriginHostId: cloud.byOriginHostId };
+  }
+  const scoped =
+    cloud.byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE;
+  return {
+    ...aggregate,
+    byOriginHostId: {
+      ...cloud.byOriginHostId,
+      [originHostId]: mergePendingForkChats(scoped, pendingChats),
+    },
+  };
+}
+
+function mergePendingForkChats(
+  response: HostNotificationsIndicatorStateResponse,
+  pendingChats: ReadonlyArray<
+    readonly [string, HostNotificationsIndicatorState]
+  >,
+): HostNotificationsIndicatorStateResponse {
+  const chats = { ...response.chats };
   for (const [chatId] of pendingChats) {
     chats[chatId] = {
       ...(chats[chatId] ?? EMPTY_NOTIFICATION_INDICATOR_STATE),
       pendingFork: true,
     };
   }
-  return { epics: cloud.epics, chats };
+  return { epics: response.epics, chats };
 }
