@@ -128,6 +128,12 @@ export interface AppLocalNotificationsState {
     entity: HostNotificationsEntityRef,
     readAt: number,
   ) => void;
+  markEntityAsReadBefore: (
+    originHostId: string,
+    entity: HostNotificationsEntityRef,
+    readAt: number,
+    beforeUpdatedAt: number,
+  ) => void;
   observeCompletion: (
     originHostId: string,
     completion: CompletionOccurrence,
@@ -552,6 +558,37 @@ export function createAppLocalNotificationsStore(initialName: string) {
                 entry.readAt === null &&
                 (originHostId === null ||
                   (entry.originHostId ?? null) === originHostId) &&
+                notificationPayloadBelongsToEntity(entry.payload, entity),
+            );
+            if (unreadEntries.length === 0) return state;
+            const byId = {
+              ...state.byId,
+              ...Object.fromEntries(
+                unreadEntries.map((entry) => [entry.id, { ...entry, readAt }]),
+              ),
+            };
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
+        markEntityAsReadBefore: (
+          originHostId,
+          entity,
+          readAt,
+          beforeUpdatedAt,
+        ) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const unreadEntries = Object.values(state.byId).filter(
+              (entry) =>
+                entry.readAt === null &&
+                (entry.originHostId ?? null) === originHostId &&
+                entry.updatedAt < beforeUpdatedAt &&
                 notificationPayloadBelongsToEntity(entry.payload, entity),
             );
             if (unreadEntries.length === 0) return state;

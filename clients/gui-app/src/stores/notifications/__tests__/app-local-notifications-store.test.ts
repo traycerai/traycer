@@ -276,6 +276,34 @@ describe("app-local notifications store", () => {
     expect(store.getState().byId["host-b-failure"].readAt).toBeNull();
   });
 
+  it("consumes only exact-entity failures older than a live completion", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("older-match", 10, null));
+    store.getState().upsert(entry("tie-match", 20, null));
+    store.getState().upsert(entry("newer-match", 30, null));
+    store.getState().upsert({
+      ...entry("other-host", 5, null),
+      originHostId: "host-b",
+    });
+
+    store
+      .getState()
+      .markEntityAsReadBefore(
+        "host-a",
+        { epicId: "epic-1", chatId: "chat-1" },
+        40,
+        20,
+      );
+
+    expect(store.getState().byId["older-match"].readAt).toBe(40);
+    expect(store.getState().byId["tie-match"].readAt).toBeNull();
+    expect(store.getState().byId["newer-match"].readAt).toBeNull();
+    expect(store.getState().byId["other-host"].readAt).toBeNull();
+  });
+
   it("consumes failures already observed for the exact completed entity", () => {
     const store = createAppLocalNotificationsStore(
       appLocalNotificationsKey("user-a"),

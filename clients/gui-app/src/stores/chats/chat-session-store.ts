@@ -27,6 +27,10 @@ import {
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 import {
+  liveChatCompletionAcknowledgementMatches,
+  liveChatCompletionAcknowledgements,
+} from "@/lib/notifications/live-chat-completion-acknowledgements";
+import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
   stagedWorktreeIntentIsSuspended,
@@ -743,6 +747,7 @@ function restoreStagedWorktreeIntentForPending(
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
 ): ChatSessionStoreHandle {
+  const notificationUserId = options.userId;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
   // Assigned synchronously inside the `create()` initializer below, where the
@@ -750,6 +755,7 @@ export function createChatSessionStore(
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
   let fatalCloseNotificationGeneration: number | null = null;
+  let unsubscribeLiveCompletionAcknowledgements = (): void => undefined;
   // Bumped whenever the connection the pendings were dispatched on is gone: a
   // transport `reconnecting`/`closed` status, or a stream-client replacement
   // (`retry`). Pending actions are stamped with this at dispatch, and the
@@ -1338,15 +1344,32 @@ export function createChatSessionStore(
         // failure write below flips the row unread again.
         if (
           frame.event.type === "turn.completed" &&
-          get().activeTurn?.turnId === frame.event.turnId
+          get().activeTurn?.turnId === frame.event.turnId &&
+          notificationUserId !== null &&
+          useAppLocalNotificationsStore.getState().activeUserId ===
+            notificationUserId
         ) {
+          const observedAt = Date.now();
           useAppLocalNotificationsStore
             .getState()
             .markEntityAsRead(
               options.hostId,
               { epicId: options.epicId, chatId: options.chatId },
-              Date.now(),
+              observedAt,
             );
+          // Every renderer has its own app-local Zustand store. Broadcast the
+          // same live, causally-qualified proof so a sibling window whose
+          // stream died can acknowledge its copy of the earlier failure too.
+          // This is deliberately ephemeral: replaying a retained completion
+          // could consume a failure from a later connection lifecycle.
+          liveChatCompletionAcknowledgements.publish({
+            userId: notificationUserId,
+            originHostId: options.hostId,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            turnId: frame.event.turnId,
+            observedAt,
+          });
         }
         bufferedDeltas.push(frame.event);
         lease.requestFlush();
@@ -2604,12 +2627,41 @@ export function createChatSessionStore(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
         closeStreamClient();
       },
     };
   });
+
+  if (notificationUserId !== null) {
+    unsubscribeLiveCompletionAcknowledgements =
+      liveChatCompletionAcknowledgements.subscribe((acknowledgement) => {
+        if (
+          !liveChatCompletionAcknowledgementMatches(acknowledgement, {
+            userId: notificationUserId,
+            originHostId: options.hostId,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            activeTurnId: store.getState().activeTurn?.turnId ?? null,
+          })
+        ) {
+          return;
+        }
+        const notifications = useAppLocalNotificationsStore.getState();
+        if (notifications.activeUserId !== notificationUserId) return;
+        // Renderer clocks share one machine clock. Preserve timestamp ties
+        // and anything later so an ambiguous or genuinely newer disconnect
+        // remains red; only clearly older failures are superseded.
+        notifications.markEntityAsReadBefore(
+          options.hostId,
+          { epicId: options.epicId, chatId: options.chatId },
+          Date.now(),
+          acknowledgement.observedAt,
+        );
+      });
+  }
 
   return {
     epicId: options.epicId,

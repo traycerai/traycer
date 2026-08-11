@@ -316,6 +316,12 @@ export const PERSIST_STORES = [
     leaf: "deleted-epic-events:v1",
     kind: "channel",
   },
+  // Ephemeral exact-turn completion acks shared across renderer windows.
+  {
+    camelName: "liveChatCompletionAcknowledgementsChannel",
+    leaf: "live-chat-completion-acknowledgements:v1",
+    kind: "channel",
+  },
   // One monotonic key per displayed app-local notification version. Separate
   // keys prevent an unrelated full-snapshot Zustand write in another window
   // from erasing a receipt.
