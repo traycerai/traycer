@@ -1,12 +1,18 @@
 # Thanos Traycer
 
-**Thanos Traycer** is a fork of [Traycer](https://github.com/traycerai/traycer).
+**Thanos Traycer** is a personal **test fork** of
+[Traycer](https://github.com/traycerai/traycer) — a sandbox where
+[@gavasques](https://github.com/gavasques) experiments with product ideas
+before proposing them to the official Traycer. It is not a product and not a
+rival fork: experiments that work are meant to be upstreamed (see
+[traycerai/traycer#1112](https://github.com/traycerai/traycer/issues/1112) and
+[#1113](https://github.com/traycerai/traycer/issues/1113)).
 
 It keeps the original Traycer base — desktop shell, host lifecycle, CLI, BYOA
-agent integrations, and agent-to-agent communication — and adds local product
-layers for multi-project work and team templates.
+agent integrations, and agent-to-agent communication — and adds experimental
+local layers for multi-project work and team templates.
 
-## What this fork adds
+## What this fork adds (experiments)
 
 - **Multi Profile** — isolate projects/workspaces so tabs, drafts, and context
   stay on the active profile (no cross-project leakage).
