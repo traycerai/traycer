@@ -2702,13 +2702,10 @@ export function upgradeProviderMutationCliStateV20ToLatest(
   });
 }
 
-// The `providers.list` counterparts of the mutation upgrade above used to live
-// here as `upgradeProviderCliStateToLatest` / `...ListToLatest`. They were the
-// v6 -> v7 hop's fill, and "latest" is the wrong anchor for a per-hop bridge:
-// the day a major opens above v7.0, that name silently means a shape v7.0
-// cannot carry.
-// `upgradeProviderCliStateToV70` / `...ListToV70` above name their target line
-// instead, which is the only thing a bridge is ever allowed to aim at.
+// The `providers.list` counterparts of the mutation upgrade above are
+// `upgradeProviderCliStateToV70` / `...ListToV70`, named for their TARGET LINE
+// rather than for "latest". A bridge aims at a line: the day a major opens
+// above v7.0, a fill named "latest" silently means a shape v7.0 cannot carry.
 
 // Upgrades a v1.0 state to the frozen major-2 mutation-response shape - used
 // by every provider.* state-echo mutation's v1.0 -> v2.0 bridge

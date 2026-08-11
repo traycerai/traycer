@@ -1449,9 +1449,8 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
  * `providerNativeErrorCodeSchema`.
 
  *
- * The two vocabularies are disjoint, and nothing here is spelled the way the
- * shared enum spells it. `config_unreadable` briefly was, until a probe showed
- * this surface cannot produce it - see the list enum below.
+ * The two vocabularies are disjoint: no member here is spelled the way the
+ * shared enum spells one of its own.
  *
  * That enum describes editing provider CONFIG FILES - `duplicate_name`,
  * `external_drift`, `rollback_failed`, `no_change_detected`. None of it
@@ -1478,19 +1477,17 @@ export type ModelProviderEntry = z.infer<typeof modelProviderEntrySchema>;
  *   `unsupported` arm.
  * - `server_unavailable` — the managed server could not be started or leased.
  *   This is also how a MALFORMED USER CONFIG arrives, and there is no separate
- *   code for that on purpose. Every config read and write on this surface goes
- *   through the managed server, and a config the server cannot parse is a
- *   server that never boots - so no GET or PATCH exists to fail, and the
- *   condition can only present as a failed lease. The `detail` carries the
- *   redacted stderr tail (parse error, line, column), which points at the file
- *   and the character more precisely than a typed code could.
+ *   code for that. Every config read and write on this surface goes through
+ *   the managed server, and a config the server cannot parse is a server that
+ *   never boots - so no GET or PATCH exists to fail, and the condition can
+ *   only present as a failed lease. The `detail` carries the redacted stderr
+ *   tail (parse error, line, column), which points at the file and the
+ *   character more precisely than a typed code could.
  *
- *   `config_unreadable` lived here for one round before a probe against the
- *   real binary established the above. An enum member no producer can emit is
- *   worse than a missing one: consumers write handling for it, reviewers weigh
- *   it, and none of it is ever reached. The code survives in
- *   `providerNativeErrorCodeSchema`, where the MCP surface reads config files
- *   directly and genuinely produces it.
+ *   `providerNativeErrorCodeSchema` does name that condition, because the MCP
+ *   surface reads provider config files directly and can observe it. Nothing
+ *   here can, and a code no producer can emit is worse than a missing one: it
+ *   gets handled, weighed, and never reached.
  */
 export const modelProviderListErrorCodeSchema = z.enum([
   "capability_unavailable",
@@ -1602,13 +1599,11 @@ export type ModelProviderAuthInputs = z.infer<
  * `ApiAuth.metadata`. The name is upstream's and it reads like an identifier,
  * which it is not; nothing on this wire identifies a credential by name.
  *
- * An earlier shape carried the models.dev `env[]` member the value should be
- * stored under, because the host validated the submitted key against that
- * array. Upstream does no such thing: when `/provider/auth` offers no methods
- * it SYNTHESIZES a generic API-key method and submits the value alone. The
- * name was validated and then discarded, so it is gone from the wire entirely
- * - and a plain-key connect is now legal for every provider rather than only
- * those whose env member the host could resolve.
+ * No env-var NAME appears anywhere on this wire. When `/provider/auth` offers
+ * no methods, a generic API-key method is synthesized and the value is
+ * submitted alone - the name the value ends up stored under is never asked
+ * for, so a plain-key connect is legal for every provider rather than only
+ * those whose env member could be resolved.
  *
  * `methodIndex: null` therefore means "the client chose no advertised method",
  * which the host serves with that same synthesized generic method. A host that
@@ -1911,20 +1906,18 @@ export type ModelProviderAuthResult = z.infer<
 // newer major opens above it; until then an equality guard in
 // `provider-model-providers-compat.test.ts` holds them identical.
 //
-// Cut early on purpose, and the early cut is the whole value: v5.0 and v6.0
-// were each still pointing at the live schemas on the day a release shipped
-// them, and both grew a released line before anyone noticed. A snapshot
-// written in advance makes the eventual pin a one-line change against a copy
-// that is already correct, instead of an archaeology exercise at release time.
-// It does not stop growth - growth on an unreleased line is legal - it only
-// requires writing that growth in both places.
+// Cut before it is needed, on purpose. A line still pointing at live schemas
+// on the day a release ships it grows a released contract silently, because
+// nothing marks the moment the schemas stopped being free to change. A
+// snapshot written in advance makes the eventual pin a one-line change against
+// a copy that is already correct. It does not stop growth - growth on an
+// unreleased line is legal - it only requires writing that growth twice.
 //
 // Two consequences follow, and they pull in opposite directions:
 //
 //  - Until the first non-RC release ships 7.0, there is no peer in the field
 //    decoding these shapes, so a genuine v7.0-line addition is mirrored here
-//    rather than projected away. `config_unreadable`, `huggingface` and the
-//    `modelProviders` tab member are the worked examples.
+//    rather than projected away.
 //  - From that release onward, the rule hardens: an addition to a live
 //    counterpart must NOT be mirrored here, and the bridge down from the next
 //    major has to say explicitly what a v7.0 peer sees instead.
@@ -1951,29 +1944,20 @@ export type ProviderNativeScopeV70 = z.infer<
 >;
 
 /**
- * `config_unreadable` IS on this frozen copy, and the reason is worth writing
- * down because it reads like a mistake.
+ * Mirrors the live shared enum member for member, `config_unreadable`
+ * included, and that is what a v7.0 snapshot should say while v7.0 is
+ * unreleased.
  *
- * It reached the live enum after this line was cut, and the reflex answer -
- * "the frozen copy predates it, so project it away" - is wrong here. No released tag ships `providers.list@7.0` at all: every non-RC
- * `host-v*`/`cli-v*`/`desktop-v*` tag tops out below it. v7.0 is UNRELEASED,
- * so growing it in place was legitimate - exactly as
- * `providerManagedInstallStateSchema` grew v6.0 while no release shipped it,
- * and exactly as `providersSetEnabledRequestSchemaV21` widens an unreleased
- * minor rather than minting a new one.
+ * Versions exist to protect peers in the field. No non-RC
+ * `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract, so there is
+ * no peer that negotiated v7.0 and cannot decode this member - the release
+ * that first ships v7.0 ships it too. Omitting it would describe a v7.0 that
+ * never existed and mint a projection protecting nobody.
  *
- * Versions exist to protect peers in the field. There is no peer that
- * negotiated v7.0 and cannot decode `config_unreadable` - the release that
- * first ships v7.0 will ship it too. Projecting it away would mint a bridge
- * protecting nobody, and would leave this snapshot describing a v7.0 that
- * never existed.
- *
- * The freeze still stands: v7.0 is pinned as of the freeze cut, and
- * that moment includes this member. What does NOT follow is that later growth
- * is free - once a NON-RC release ships a major-7 contract, this line has
- * peers in the field and an addition to the live enum must be projected on the
- * bridge down from the next major instead of mirrored here. Same activation
- * point the section header above describes.
+ * What does NOT follow is that later growth is free. Once a non-RC release
+ * ships a major-7 contract, this line has peers, and an addition to the live
+ * enum must be projected on the bridge down from the next major rather than
+ * mirrored here. Same activation point the section header describes.
  */
 export const providerNativeErrorCodeSchemaV70 = z.enum([
   "duplicate_name",

@@ -62,17 +62,13 @@ export const providerIdSchemaV20 = z.enum([
 export type ProviderIdV20 = z.infer<typeof providerIdSchemaV20>;
 
 /**
- * Frozen provider id set as shipped in protocol v7.0 (identical to v6.0's -
- * v7.0 opened for `terminalLogin` and the `native` list carrier, not for a
- * provider).
+ * The provider id set `providers.list@7.0` carries.
  *
- * Frozen at the integration cut, rather than left pointing at the live enum,
- * because that pointer is precisely how `omp` first tried to ride v5.0 and how
- * the provider-pack-registry fields grew v6.0: a line stays correct only until
- * the next thing lands on the live schema. A new provider extends
- * `providerIdSchema` reaches v7.0 clients only through the bridge that the
- * next major above v7.0 will have to carry - this enum is what it will drop
- * against.
+ * A copy rather than a pointer at the live enum: a line pointing at live ids
+ * stays correct only until the next id lands there, and nothing marks the
+ * moment that stops being safe. A provider added to `providerIdSchema` after
+ * v7.0 is released reaches v7.0 clients only through the bridge the next major
+ * carries - and this enum is what that bridge drops against.
  *
  * Lives here rather than beside the v3.0-v6.0 snapshots in
  * `provider-schemas.ts` because the frozen v7.0 NATIVE payloads
@@ -98,17 +94,16 @@ export const providerIdSchemaV70 = z.enum([
   "pi",
   "hermes",
   "omp",
-  // `huggingface` is ON this line, not projected away from it. It reached the
-  // live enum after the freeze cut, and v7.0 is unreleased - no non-RC
-  // `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract - so
-  // growing v7.0 in place was legitimate, exactly as `config_unreadable` was.
-  // `downgradeProviderCliStateListToV60` says the same thing from the other
-  // side: it exists to "drop post-v6.0 providers (currently `huggingface`)",
-  // which is only true if huggingface belongs to v7.0.
+  // `huggingface` belongs to this line, which is why it is named here rather
+  // than projected away from it. v7.0 is unreleased - no non-RC
+  // `host-v*`/`cli-v*`/`desktop-v*` tag carries a major-7 contract - so this
+  // enum mirrors the live one. `downgradeProviderCliStateListToV60` reads the
+  // same boundary from the other side: it drops post-v6.0 providers, of which
+  // `huggingface` is one.
   //
-  // Same expiry as everywhere else in this transition: once a release ships a
-  // major-7 contract, a provider added to the live enum must be projected away
-  // by the bridge down from the next major instead of mirrored here.
+  // Once a non-RC release ships a major-7 contract, a provider added to the
+  // live enum must be projected away by the bridge down from the next major
+  // rather than mirrored here.
   "huggingface",
 ]);
 export type ProviderIdV70 = z.infer<typeof providerIdSchemaV70>;

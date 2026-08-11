@@ -74,7 +74,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
- * Model Providers protocol ticket coverage (T1).
+ * Model Providers wire contract.
  *
  * The load-bearing claim this file exists to hold: the `modelProviders` tab id
  * can only reach a decoder that knows it.
@@ -955,10 +955,9 @@ describe("providers.modelProviderAuth actions", () => {
   it("carries the credential VALUE and nothing that names it", () => {
     // The shape this surface settled on after auditing upstream: `key` is the
     // pasted secret (upstream's `ApiAuth.key`), `inputs` are prompt answers
-    // (its `metadata`). An earlier draft carried the models.dev `env[]` member
-    // the value would be stored under, because the host validated the key
-    // against that array - a name it then discarded. Upstream never asks for
-    // it, so it is not on the wire.
+    // (its `metadata`). No env-var NAME is on this wire: the name the value
+    // ends up stored under is never asked for, so there is nothing for a
+    // client to guess at or get wrong.
     const parsed = modelProviderAuthActionSchema.parse({
       action: "connect",
       modelProviderId: "azure",
@@ -1133,11 +1132,10 @@ describe("providers.modelProviderAuth actions", () => {
   });
 
   it("lets updateCustom address a block the naming rule would reject", () => {
-    // The regression: the naming rule reached `updateCustom` through the
-    // shared shape, so `wafer.ai` could be neither created NOR updated - and
-    // update is the one verb that could have renamed it. `My.Gateway` is the
-    // hand-written `opencode.json` case; the catalog's `wafer.ai` is the case
-    // nobody chose at all.
+    // Update is the one verb that could rename a block, so a naming rule
+    // applied here would strand exactly the ids that need renaming.
+    // `My.Gateway` is the hand-written `opencode.json` case; `wafer.ai` is a
+    // catalog id nobody chose at all.
     const base = {
       name: "My Endpoint",
       baseUrl: "https://api.example.com/v1",
@@ -1736,15 +1734,10 @@ describe("attempt lifecycle is encodable end to end", () => {
     }
   });
 
-  // EMPTY, and it is worth leaving here empty. This list held
-  // `config_unreadable` for exactly one round - the two vocabularies really
-  // did need the same word for the same condition - until a probe showed this
-  // surface cannot produce that condition at all. The member went, and the
-  // allowlist emptied itself.
-  //
-  // Kept as the seam a future deliberate overlap has to pass through. An
-  // intentional overlap that must be written down stays intentional; deleting
-  // the mechanism would let the next accidental one read as approved.
+  // EMPTY, and kept empty rather than removed. It is the seam a deliberate
+  // overlap between the two vocabularies has to pass through: an overlap that
+  // must be written down here stays intentional, while deleting the mechanism
+  // would let the next accidental one read as approved.
   const DELIBERATELY_SHARED_CODES: readonly string[] = [];
 
   it("shares exactly the codes it means to with the native vocabulary", () => {
@@ -1788,14 +1781,13 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("cannot say config_unreadable, because nothing here can observe it", () => {
-    // The member this surface briefly had. Every config read and write goes
-    // through the managed server, so a config the server cannot parse is a
-    // server that never boots: there is no GET or PATCH left to fail, and the
-    // condition can only arrive as a failed lease.
+    // Every config read and write goes through the managed server, so a config
+    // the server cannot parse is a server that never boots: there is no GET or
+    // PATCH left to fail, and the condition can only arrive as a failed lease.
     //
-    // An enum member no producer can emit is worse than a missing one -
-    // consumers write handling for it that never runs, and reviewers weigh a
-    // case that cannot happen. Rejected on both arms so it cannot drift back.
+    // A code no producer can emit is worse than a missing one - it gets
+    // handled, weighed, and never reached. Rejected on both arms so it cannot
+    // drift in.
     expect(
       modelProvidersListResultSchema.safeParse({
         ok: false,
@@ -2084,8 +2076,8 @@ describe("the v7.0 freeze goes all the way down", () => {
       providerEnvOverrideScopeSchemaV70,
     ],
     // The two that now carry `modelProviders` on both sides. They are the
-    // reason this transition needed no new major: mirrored while unreleased,
-    // and held identical here so the mirror cannot rot.
+    // reason no new major was needed: mirrored while unreleased, and held
+    // identical here so the mirror cannot rot.
     ["settings tab ids", providerSettingsTabSchema, providerSettingsTabSchemaV70],
     [
       "model-providers capabilities",
@@ -2109,26 +2101,15 @@ describe("the v7.0 freeze goes all the way down", () => {
   );
 
   it("carries config_unreadable on the v7.0 native result - v7.0 is unreleased", () => {
-    // The decision this test exists to RECORD, because the equality guard
-    // above fired to force it (in CI, on the merge preview - the tripwire
-    // proving itself in the wild).
+    // Versions protect peers in the FIELD. No non-RC host/cli/desktop tag
+    // ships `providers.list@7.0`, so there is no peer that negotiated v7.0 and
+    // cannot read this code - the release that first ships v7.0 ships it too.
+    // The v7.0 snapshot therefore mirrors the live enum, and a projection here
+    // would protect nobody.
     //
-    // `config_unreadable` reached the LIVE native error enum after this line
-    // was cut. The reflex answer - frozen copy predates it, so project it away
-    // - is wrong here: NO released tag ships
-    // `providers.list@7.0`. Every non-RC host/cli/desktop tag tops out below
-    // it, so v7.0 is unreleased and growing it in place was legitimate,
-    // exactly as the registry fields grew v6.0 before `cli-v1.1.9` shipped
-    // it.
-    //
-    // Versions protect peers in the FIELD. There is no peer that negotiated
-    // v7.0 and cannot read this code - the release that first ships v7.0 ships
-    // it too. So the bridge needs no projection, and the frozen snapshot is
-    // "v7.0 as of the moment the freeze was cut", which includes this member.
-    //
-    // This stops being true the day a release ships v7.0. After that, a code
-    // added to the live enum needs a real projection decision, and the
-    // equality guard will ask for one again.
+    // That stops holding the day a release ships v7.0. After it, a code added
+    // to the live enum needs a projection decision, and the equality guard is
+    // what asks for one.
     expect(
       nativeListResultSchemaV70.safeParse({
         ok: false,
