@@ -255,6 +255,7 @@ function jpegPixelCount(bytes: Uint8Array): number | null {
     if (
       marker === 0xd8 ||
       marker === 0xd9 ||
+      marker === 0x01 ||
       (marker >= 0xd0 && marker <= 0xd7)
     ) {
       continue;

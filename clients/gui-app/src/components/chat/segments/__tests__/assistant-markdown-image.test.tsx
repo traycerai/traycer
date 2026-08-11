@@ -70,6 +70,17 @@ const JPEG_SOF_AFTER_PREFIX_DATA_URL = (() => {
   );
   return `data:image/jpeg;base64,${btoa(binary)}`;
 })();
+const JPEG_TEM_DATA_URL = (() => {
+  const bytes = new Uint8Array(32);
+  bytes.set(
+    [
+      0xff, 0xd8, 0xff, 0x01, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x20, 0x00,
+      0x20, 0x00, 0x01, 0x01, 0x11, 0x00,
+    ],
+    0,
+  );
+  return `data:image/jpeg;base64,${btoa(String.fromCharCode(...bytes))}`;
+})();
 
 const EMPTY_DEDUP_TARGETS: ReadonlyMap<string, AssistantMarkdownImageTarget> =
   new Map();
@@ -622,6 +633,17 @@ describe("AssistantMarkdownImage source classification matrix", () => {
       document.querySelector("[data-assistant-image-failure]")?.textContent,
     ).toBe("This image is too large to show here.");
     expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("accepts JPEGs with a standalone TEM marker before SOF", () => {
+    renderImage({
+      src: JPEG_TEM_DATA_URL,
+      alt: "tem jpeg",
+      context: undefined,
+    });
+
+    expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
+    expect(screen.getByRole("img", { name: "tem jpeg" })).toBeTruthy();
   });
 
   it("uses quiet generic copy for invalid raster data URLs", () => {
