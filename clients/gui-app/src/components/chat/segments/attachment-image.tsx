@@ -1,7 +1,62 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { ImageLightbox } from "./image-lightbox";
+
+type SvgSanitizationState = {
+  readonly source: string;
+  readonly status: "ready" | "error";
+  readonly src: string | null;
+};
+
+function useSanitizedSvg(
+  src: string,
+  enabled: boolean,
+): {
+  readonly status: "loading" | "ready" | "error";
+  readonly src: string | null;
+} {
+  const [state, setState] = useState<SvgSanitizationState | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    let active = true;
+    void fetch(src, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`SVG fetch failed (${response.status})`);
+        }
+        return response.text();
+      })
+      .then((source) => {
+        if (active) {
+          setState({
+            source: src,
+            status: "ready",
+            src: svgDataUrl(sanitizeUntrustedSvg(source)),
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (
+          active &&
+          !(error instanceof DOMException && error.name === "AbortError")
+        ) {
+          setState({ source: src, status: "error", src: null });
+        }
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [src, enabled]);
+
+  if (!enabled) return { status: "ready", src: null };
+  const current = state?.source === src ? state : null;
+  return current ?? { status: "loading", src: null };
+}
 
 export function AttachmentImageLoading(props: {
   readonly label: string;
@@ -46,7 +101,12 @@ export function AttachmentImage(props: {
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
-  if (status === "error") {
+  const shouldSanitizeSvg =
+    props.mediaType === "image/svg+xml" && !props.src.startsWith("data:");
+  const sanitizedSvg = useSanitizedSvg(props.src, shouldSanitizeSvg);
+  const effectiveStatus = shouldSanitizeSvg ? sanitizedSvg.status : status;
+
+  if (effectiveStatus === "error") {
     return (
       <span className="inline-flex max-w-full items-center gap-2">
         <AttachmentImageFailure
@@ -72,7 +132,7 @@ export function AttachmentImage(props: {
           : { maxWidth: `min(100%, ${CHAT_IMAGE_MAX_EDGE})` }
       }
     >
-      {status === "loading" ? (
+      {effectiveStatus === "loading" ? (
         <span
           className="absolute inset-0 z-10 flex items-center justify-center bg-muted/60 text-ui-sm text-muted-foreground"
           role="status"
@@ -80,34 +140,43 @@ export function AttachmentImage(props: {
           Loading image
         </span>
       ) : null}
-      <ImageLightbox
-        src={props.src}
-        alt={props.alt}
-        mediaType={props.mediaType}
-        suggestedName={props.suggestedName}
-        className={props.fullWidth ? "w-full" : "w-fit max-w-full"}
-      >
-        <img
+      {shouldSanitizeSvg && sanitizedSvg.src === null ? null : (
+        <ImageLightbox
           src={props.src}
           alt={props.alt}
-          className={cn(
-            "block h-auto object-contain",
-            props.fullWidth ? "w-full" : "w-auto max-w-full",
-            status === "loading" && "opacity-0",
-          )}
-          style={
-            props.fullWidth
-              ? undefined
-              : {
-                  maxHeight: CHAT_IMAGE_MAX_EDGE,
-                  maxWidth: `min(100%, ${CHAT_IMAGE_MAX_EDGE})`,
-                }
-          }
-          draggable={false}
-          onLoad={() => setStatus("ready")}
-          onError={() => setStatus("error")}
-        />
-      </ImageLightbox>
+          mediaType={props.mediaType}
+          suggestedName={props.suggestedName}
+          className={props.fullWidth ? "w-full" : "w-fit max-w-full"}
+        >
+          <img
+            src={shouldSanitizeSvg ? (sanitizedSvg.src ?? "") : props.src}
+            alt={props.alt}
+            className={cn(
+              "block h-auto object-contain",
+              props.fullWidth ? "w-full" : "w-auto max-w-full",
+              effectiveStatus === "loading" && "opacity-0",
+            )}
+            style={
+              props.fullWidth
+                ? undefined
+                : {
+                    maxHeight: CHAT_IMAGE_MAX_EDGE,
+                    maxWidth: `min(100%, ${CHAT_IMAGE_MAX_EDGE})`,
+                  }
+            }
+            draggable={false}
+            onLoad={() => setStatus("ready")}
+            onError={() => setStatus("error")}
+          />
+        </ImageLightbox>
+      )}
     </span>
   );
+}
+
+function svgDataUrl(source: string): string {
+  const bytes = new TextEncoder().encode(source);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `data:image/svg+xml;base64,${btoa(binary)}`;
 }

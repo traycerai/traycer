@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -185,6 +186,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("AssistantMarkdownImage source classification matrix", () => {
@@ -297,6 +299,48 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(img.getAttribute("src")).toBe(
       "blob:http://localhost/resolved-local",
     );
+  });
+
+  it("sanitizes attachment-backed SVGs before rendering the thumbnail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(atob(UNSAFE_SVG_DATA_URL.split(",")[1]), {
+            status: 200,
+            headers: { "Content-Type": "image/svg+xml" },
+          }),
+        ),
+      ),
+    );
+    blobSrcState.value = {
+      status: "ready",
+      src: "blob:http://localhost/resolved-svg",
+    };
+    renderImage({
+      src: "/workspace/shots/diagram.svg",
+      alt: undefined,
+      context: {
+        ...BASE_CONTEXT,
+        resolutions: [
+          resolution(
+            resolvedEntry("/workspace/shots/diagram.svg", {
+              mediaType: "image/svg+xml",
+            }),
+            "msg-1",
+          ),
+        ],
+      },
+    });
+
+    const img = await screen.findByRole("img", { name: "diagram" });
+    await waitFor(() => {
+      const renderedSource = img.getAttribute("src") ?? "";
+      expect(renderedSource).toContain("data:image/svg+xml;base64,");
+      expect(atob(renderedSource.split(",")[1] ?? "")).not.toContain(
+        "<script>",
+      );
+    });
   });
 
   it("shows the remote-host waiting skeleton when the hash is known but the blob is still pending", () => {
