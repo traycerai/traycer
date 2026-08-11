@@ -76,6 +76,18 @@ export interface ChatLowerRuntimeState {
 export interface ChatLowerAccessState {
   readonly isViewer: boolean;
   readonly canAct: boolean;
+  /**
+   * Why this surface cannot be typed into, when the reason is not the ordinary
+   * one. Null means the ordinary one - a viewer's permission - and the notice
+   * says so itself.
+   *
+   * A reason rather than a second boolean because the states are not
+   * alternatives to each other: "you may only watch this chat" and "this chat
+   * lives on a machine that is asleep, and you are reading its last backup"
+   * are both read-only, and telling a user the first when the second is true
+   * sends them looking for a permission to ask for.
+   */
+  readonly readOnlyNotice: string | null;
 }
 
 /**
@@ -86,6 +98,7 @@ export interface ChatLowerAccessState {
  */
 function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
   if (access.canAct) return null;
+  if (access.readOnlyNotice !== null) return access.readOnlyNotice;
   if (access.isViewer) return "You have view-only access to this chat";
   return "Reconnecting to the host — sending is paused";
 }
@@ -464,13 +477,24 @@ function ComposerSurface(props: {
     return null;
   }
   if (model.access.isViewer) {
+    // The workspace row is LIVE: its selector targets the reading host and this
+    // surface's chat id, and both create/re-bind and remove are real mutations.
+    // For a viewer of a live chat that is the chat's own workspace and the row
+    // is informative. For a COPY (`readOnlyNotice` is set only by the published
+    // and doc-replica surfaces) the binding shown is `null` and the chat id is
+    // the one the OWNER minted, so acting on the row would commit a workspace
+    // change against whatever local lineage happens to hold that id here.
+    // A copy has no live workspace to show, so it shows none.
+    const isCopy = model.access.readOnlyNotice !== null;
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
         <div className="flex flex-col gap-3">
-          <ReadOnlyComposerNotice />
-          <ComposerReadonlyWorkspaceModeRow
-            workspaceSlot={model.composer.workspaceControls}
-          />
+          <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
+          {isCopy ? null : (
+            <ComposerReadonlyWorkspaceModeRow
+              workspaceSlot={model.composer.workspaceControls}
+            />
+          )}
         </div>
       </ComposerSlotShell>
     );
@@ -613,10 +637,11 @@ function ComposerSlotShell(props: {
   );
 }
 
-function ReadOnlyComposerNotice() {
+function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
   return (
     <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      Read-only viewer. The agent owner can send prompts and manage this queue.
+      {props.notice ??
+        "Read-only viewer. The agent owner can send prompts and manage this queue."}
     </div>
   );
 }

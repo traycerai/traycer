@@ -337,6 +337,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: true,
             pendingInterview: false,
+            pendingFork: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -368,6 +369,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: false,
             pendingInterview: true,
+            pendingFork: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -399,6 +401,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: false,
             pendingInterview: false,
+            pendingFork: false,
             unreadFailure: true,
             unreadDone: false,
           },
@@ -430,6 +433,7 @@ describe("TabStrip title", () => {
           [CHAT_ID]: {
             pendingApproval: false,
             pendingInterview: false,
+            pendingFork: false,
             unreadFailure: false,
             unreadDone: true,
           },

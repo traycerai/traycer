@@ -2,7 +2,13 @@ import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   useDiffClickToEdit,
   type DiffEditActivationResult,
@@ -121,7 +127,16 @@ describe("<WorkspaceFileRenderer /> cacheKey lifecycle", () => {
     state.capture.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: "Click source" }));
-    await screen.findByRole("button", { name: "Type" });
+    // Wait for the re-render this click causes, not for a button that is
+    // already on screen: activation is async (`onActivate` awaits
+    // `editorReady` before `setEditing`), and the "Type" button is rendered
+    // unconditionally, so `findByRole` on it resolves without that chain
+    // having settled. The assertion below then reads an untouched mock and
+    // fails on a FAST machine - the slower the host, the more likely the
+    // stray microtasks let it through.
+    await waitFor(() => {
+      expect(state.capture).toHaveBeenCalled();
+    });
     const firstSessionKeys = state.capture.mock.calls.map((call) => call[0]);
     expect(firstSessionKeys.length).toBeGreaterThan(0);
     // Every call for this activation carries the SAME key (generation 1) -

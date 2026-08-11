@@ -122,6 +122,7 @@ import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
 import { useChatById } from "@/lib/epic-selectors";
+import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
@@ -1584,6 +1585,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const sourceChatRecord = useChatById(
     surface.kind === "chat" ? surface.ownerId : null,
   );
+  // Ticket 37: the owner this surface is showing for the chat it would clone,
+  // resolved through the same hook the dead-tile banner uses. Read off the
+  // app-wide binding rather than `props.hostClient` so it shares the cloud
+  // list already fetched elsewhere in the app.
+  const sourceOwnerUserId = useCloneSourceOwnerUserId({
+    client: binding?.hostClient ?? null,
+    epicId: surface.epicId,
+    chatId: surface.kind === "chat" ? surface.ownerId : null,
+  });
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
@@ -1957,11 +1967,22 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   }, []);
 
   const handleConfirmClone = (): void => {
-    if (pendingCloneHostId === null || binding === null) return;
+    // `clone-on-switch` mode (and therefore this handler) is only offered
+    // for a chat surface - see the `HostWorkspaceSelector` render below - so
+    // `surface.ownerId` is the source chat's id whenever this actually runs.
+    if (
+      pendingCloneHostId === null ||
+      binding === null ||
+      surface.kind !== "chat"
+    ) {
+      return;
+    }
     if (cloneCancelRef.current !== null) cloneCancelRef.current();
     cloneCancelRef.current = cloneChatOnHostSwitch({
       epicId: surface.epicId,
       tabId: surface.tabId,
+      sourceChatId: surface.ownerId,
+      sourceOwnerUserId,
       sourceHostId: surface.hostId,
       targetHostId: pendingCloneHostId,
       directory: binding.directory,
@@ -1972,10 +1993,23 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           "Continuing on the Terminal account - your profile isn't available on this host.",
         );
       },
+      onHistoryUnavailable: (reason) => {
+        toast(
+          reason === "no-checkpoint"
+            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
+            : "This device can't send this agent's history to that host version - continuing with settings only.",
+        );
+      },
+      // No local "in flight" state to clear here - the confirm dialog
+      // already closes unconditionally below, before the async result is
+      // known. `useEpicCreateChat`'s own `onError` still toasts a terminal
+      // failure.
+      onCloneFailed: () => undefined,
       navigateNestedFocus,
       createChat: (request, callbacks) => {
         createChat.mutate(request, {
           onSuccess: callbacks.onSuccess,
+          onError: callbacks.onError,
         });
       },
     });

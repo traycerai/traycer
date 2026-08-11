@@ -326,15 +326,58 @@ export function ChatHostStartingBanner(
   );
 }
 
+/**
+ * Two distinct causes land on this ONE banner (chat-sync-v2 ticket 35): the
+ * bound host is genuinely unreachable, or the host answered but this chat's
+ * row isn't there (`chat.subscribe` terminated with `CHAT_NOT_VISIBLE` -
+ * ticket 35's view-arm). "is offline" is false for the second cause, so the
+ * copy branches on `reason` rather than always naming the host as down.
+ */
+export type ChatDeadTileBannerReason = "host-offline" | "chat-not-visible";
+
 export interface ChatDeadTileBannerProps {
   readonly hostLabel: string;
+  readonly reason: ChatDeadTileBannerReason;
   readonly onClone: () => void;
   readonly cloning: boolean;
   readonly className: string | undefined;
   readonly testId: string;
 }
 
+const CHAT_DEAD_TILE_BANNER_COPY: Record<
+  ChatDeadTileBannerReason,
+  {
+    readonly message: (hostLabel: string) => ReactNode;
+    readonly reportTitle: string;
+    readonly reportMessage: string;
+  }
+> = {
+  "host-offline": {
+    message: (hostLabel) => (
+      <>
+        Bound host &quot;{hostLabel}&quot; is offline. Continuing here creates a
+        new agent on the active host; this one stays bound to &quot;
+        {hostLabel}&quot;.
+      </>
+    ),
+    reportTitle: "Agent host is offline",
+    reportMessage: "The agent's bound host is offline.",
+  },
+  "chat-not-visible": {
+    message: (hostLabel) => (
+      <>
+        This agent&apos;s history isn&apos;t available on &quot;{hostLabel}
+        &quot;. Continuing here creates a new agent on the active host; this one
+        stays bound to &quot;{hostLabel}&quot;.
+      </>
+    ),
+    reportTitle: "Agent history unavailable",
+    reportMessage: "The agent's history could not be found on its bound host.",
+  },
+};
+
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
+  const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
   return (
     <div
       data-testid={props.testId}
@@ -343,11 +386,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
         props.className,
       )}
     >
-      <span className="min-w-0 flex-1">
-        Bound host &quot;{props.hostLabel}&quot; is offline. Continuing here
-        creates a new agent on the active host; this one stays bound to &quot;
-        {props.hostLabel}&quot;.
-      </span>
+      <span className="min-w-0 flex-1">{copy.message(props.hostLabel)}</span>
       <Button
         type="button"
         variant="outline"
@@ -359,8 +398,8 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       </Button>
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Agent host is offline",
-          message: "The agent's bound host is offline.",
+          title: copy.reportTitle,
+          message: copy.reportMessage,
           code: null,
           source: "Agent",
         })}

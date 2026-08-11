@@ -20,7 +20,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { ChatSurfaceNode } from "./chat-tile-types";
 import {
   hasUndoableFileEditsFromMessage,
   scopedArtifactCountFromMessage,
@@ -62,7 +62,7 @@ export interface ChatMessageActionsInput {
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
-  readonly node: EpicNodeRef;
+  readonly node: ChatSurfaceNode;
   readonly chatTitle: string | null;
   readonly chatParentId: string | null;
   readonly messages: ChatSessionState["messages"];
