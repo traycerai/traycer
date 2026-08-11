@@ -180,7 +180,11 @@ describe("useEpicCreateChat", () => {
     };
     opts.onError(makeError("E_FORK_CHECKPOINT_UNAVAILABLE"), {
       ...nonForkVariables,
-      forkSource: { boundary: "latest", sourceChatId: "chat-source" },
+      forkSource: {
+        boundary: "latest",
+        sourceChatId: "chat-source",
+        sourceOwnerUserId: null,
+      },
     });
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -192,7 +196,11 @@ describe("useEpicCreateChat", () => {
     };
     opts.onError(makeError("DOWNGRADE_UNSUPPORTED"), {
       ...nonForkVariables,
-      forkSource: { boundary: "latest", sourceChatId: "chat-source" },
+      forkSource: {
+        boundary: "latest",
+        sourceChatId: "chat-source",
+        sourceOwnerUserId: null,
+      },
     });
     expect(toast.error).not.toHaveBeenCalled();
   });

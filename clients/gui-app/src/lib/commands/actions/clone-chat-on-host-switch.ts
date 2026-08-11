@@ -74,6 +74,17 @@ export interface CloneChatOnHostSwitchArgs {
   readonly tabId: string;
   /** The chat being cloned - the fork source on the target host. */
   readonly sourceChatId: string;
+  /**
+   * The owner this surface was SHOWING for that chat, or `null` when it
+   * genuinely does not know (chat-sync-v2 ticket 37).
+   *
+   * Only ever what was actually rendered - the published ref's `ownerUserId`,
+   * or the owner the dead-tile fallback already derived from the live
+   * artifact. Never inferred, never defaulted to the current user: the host
+   * uses this as the expectation its anti-squatting check runs against when
+   * it holds no registry facts, so a fabricated value would be trusted.
+   */
+  readonly sourceOwnerUserId: string | null;
   readonly sourceHostId: string;
   readonly targetHostId: string;
   readonly directory: IHostDirectoryService;
@@ -175,6 +186,14 @@ export function cloneChatOnHostSwitch(
     openWithForkSource(settings, {
       boundary: "latest",
       sourceChatId: args.sourceChatId,
+      // Ticket 37: whatever owner this surface was ACTUALLY rendering, so the
+      // host's cloud tier has an expectation to check when it holds no local
+      // registry facts of its own (a post-restart swept chat, a fresh
+      // identity) - without it the clone silently degrades to settings-only
+      // and loses the history. Passed straight through from the caller and
+      // `null` when that caller genuinely does not know: a fabricated guess
+      // is worse than none, because the host would trust it.
+      sourceOwnerUserId: args.sourceOwnerUserId,
     });
   });
 

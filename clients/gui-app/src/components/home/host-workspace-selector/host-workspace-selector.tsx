@@ -121,6 +121,7 @@ import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { settingsHostOptionLabel } from "@/components/settings/panels/settings-host-labels";
 import { useChatById } from "@/lib/epic-selectors";
+import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
@@ -1583,6 +1584,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const sourceChatRecord = useChatById(
     surface.kind === "chat" ? surface.ownerId : null,
   );
+  // Ticket 37: the owner this surface is showing for the chat it would clone,
+  // resolved through the same hook the dead-tile banner uses. Read off the
+  // app-wide binding rather than `props.hostClient` so it shares the cloud
+  // list already fetched elsewhere in the app.
+  const sourceOwnerUserId = useCloneSourceOwnerUserId({
+    client: binding?.hostClient ?? null,
+    epicId: surface.epicId,
+    chatId: surface.kind === "chat" ? surface.ownerId : null,
+  });
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const [editor, dispatchEditor] = useReducer(folderEditorReducer, {
     dirtyPathsSinceResume: new Set<string>(),
@@ -1971,6 +1981,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       epicId: surface.epicId,
       tabId: surface.tabId,
       sourceChatId: surface.ownerId,
+      sourceOwnerUserId,
       sourceHostId: surface.hostId,
       targetHostId: pendingCloneHostId,
       directory: binding.directory,

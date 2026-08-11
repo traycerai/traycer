@@ -968,6 +968,29 @@ export type CreateChatForkSourceAssistantBoundary = z.infer<
 export const createChatForkSourceLatestCheckpointBoundarySchema = z.object({
   boundary: z.literal("latest"),
   sourceChatId: z.string(),
+  /**
+   * The owner the CLIENT was showing for this chat when the user clicked
+   * Clone (chat-sync-v2 ticket 37).
+   *
+   * The clone's cloud tier refuses to seed unless the host can check the
+   * resolved publication's owner against an expectation it holds locally -
+   * the anti-squatting guard from ticket 34 B2, which stops a caller
+   * naming somebody else's `chatId` and being handed their transcript.
+   * When local registry facts are absent (a post-restart swept chat, a
+   * fresh identity) the guard refuses correctly and the clone degrades to
+   * settings-only, losing the history. But the client knew the owner all
+   * along: it is on the sidebar row / published ref it just rendered.
+   *
+   * A HINT, never an authority. The host prefers its own registry facts and
+   * REFUSES the cloud tier outright when the two disagree - the registry
+   * outranks the client, and a disagreement is suspicious rather than a
+   * tiebreak to resolve. See `chat-fork-cloud-source.ts`.
+   *
+   * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the
+   * honest value for "the client genuinely does not know who owns this" -
+   * which must never be fabricated into a guess the host would then trust.
+   */
+  sourceOwnerUserId: z.string().min(1).nullable(),
 });
 export type CreateChatForkSourceLatestCheckpointBoundary = z.infer<
   typeof createChatForkSourceLatestCheckpointBoundarySchema

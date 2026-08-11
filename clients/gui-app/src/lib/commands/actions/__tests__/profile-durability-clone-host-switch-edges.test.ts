@@ -23,6 +23,7 @@ import {
   mapProfileIdAcrossHosts,
   resolveClonedChatSettings,
 } from "@/lib/commands/actions/resolve-cloned-chat-settings";
+import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -219,6 +220,9 @@ function baseCloneArgs(
     epicId: "epic-1",
     tabId: "tab-1",
     sourceChatId: "source-chat-1",
+    // Ticket 37: these edge cases are about orchestration, not the owner hint,
+    // so they answer it the way a surface that does not know does.
+    sourceOwnerUserId: null,
     sourceHostId: "source-host",
     targetHostId: "target-host",
     directory: fakeDirectory([]),
@@ -340,6 +344,71 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     expect(request.settings).toBeNull();
   });
 
+  it("carries the owner the surface resolved into the outgoing request - the no-local-record, cloud-row-only clone (ticket 37)", async () => {
+    const createChat = vi.fn<CreateChatCommand>();
+    const directory = fakeDirectory([
+      {
+        hostId: "target-host",
+        label: "Target",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:0/target",
+        version: "0.0.0-mock",
+        status: "available",
+      },
+    ]);
+
+    // What `useCloneSourceOwnerUserId` answers for a chat this device holds no
+    // record of but whose cloud row it just rendered the tile from - the exact
+    // case the host's cloud tier refused before this ticket, degrading the
+    // clone to settings-only.
+    const resolvedOwner = resolveCloneSourceOwnerUserId({
+      chatId: "source-chat-1",
+      localRecordOwnerUserId: null,
+      cloudChats: [
+        {
+          identity: {
+            taskId: "epic-1",
+            chatId: "source-chat-1",
+            ownerUserId: "owner-9",
+          },
+          ownerHostId: "owner-host",
+          createdAt: 1,
+          visibility: "task",
+          title: null,
+          isTitleEditedByUser: false,
+          parentChatId: null,
+          isArchived: false,
+          runSettingsSummary: null,
+          metadataUpdatedAt: 1,
+          headSha256: null,
+          publishedAt: null,
+          throughRecordSeq: null,
+          isOwnedByViewer: false,
+        },
+      ],
+    });
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory,
+        createChat,
+        sourceSettings: null,
+        sourceOwnerUserId: resolvedOwner,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    const [request] = createChat.mock.calls[0];
+    expect(request.forkSource).toEqual({
+      boundary: "latest",
+      sourceChatId: "source-chat-1",
+      sourceOwnerUserId: "owner-9",
+    });
+  });
+
   it("the returned cancel function suppresses the deferred open even after the target resolves - no crash, no stray chat creation attempt beyond the one already dispatched", async () => {
     const createChat = vi.fn<CreateChatCommand>();
     const directory = fakeDirectory([
@@ -433,6 +502,9 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     expect(request.forkSource).toEqual({
       boundary: "latest",
       sourceChatId: "source-chat-1",
+      // `baseCloneArgs` is a surface that does not know the owner (ticket 37);
+      // the request still states that explicitly rather than omitting it.
+      sourceOwnerUserId: null,
     });
   });
 
@@ -465,7 +537,11 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     // retry - never a third: the retry's own request carries no
     // `forkSource`, so it cannot produce this same refusal to retry on.
     expect(calls).toEqual([
-      { boundary: "latest", sourceChatId: "source-chat-1" },
+      {
+        boundary: "latest",
+        sourceChatId: "source-chat-1",
+        sourceOwnerUserId: null,
+      },
       null,
     ]);
     expect(onHistoryUnavailable).toHaveBeenCalledTimes(1);
@@ -538,7 +614,11 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     await Promise.resolve();
 
     expect(calls).toEqual([
-      { boundary: "latest", sourceChatId: "source-chat-1" },
+      {
+        boundary: "latest",
+        sourceChatId: "source-chat-1",
+        sourceOwnerUserId: null,
+      },
       null,
     ]);
     expect(onHistoryUnavailable).toHaveBeenCalledTimes(1);

@@ -126,6 +126,7 @@ import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
+import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handoff-store";
 import { contentBlocksText } from "@/lib/chat/content-block-text";
@@ -394,12 +395,22 @@ export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
+  const bannerBinding = useHostBinding();
+  // Ticket 37: both banner render sites (this tile's unreachable-host arm and
+  // the canvas substitution) resolve the source owner through the one hook, so
+  // a chat with no local record still carries its history across the clone.
+  const sourceOwnerUserId = useCloneSourceOwnerUserId({
+    client: bannerBinding?.hostClient ?? null,
+    epicId: props.epicId,
+    chatId: props.chatId,
+  });
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
     chatId: props.chatId,
     sourceHostId: props.sourceHostId,
     sourceSettings: chatRecord?.settings ?? null,
+    sourceOwnerUserId,
   });
   return (
     <ChatDeadTileBanner
@@ -419,6 +430,8 @@ interface UseChatCloneOnHostSwitchArgs {
   readonly chatId: string;
   readonly sourceHostId: string;
   readonly sourceSettings: ChatRunSettings | null;
+  /** The owner this banner was showing, or `null` when it does not know. */
+  readonly sourceOwnerUserId: string | null;
 }
 
 /**
@@ -459,6 +472,7 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
       epicId: args.epicId,
       tabId: args.tabId,
       sourceChatId: args.chatId,
+      sourceOwnerUserId: args.sourceOwnerUserId,
       sourceHostId: args.sourceHostId,
       targetHostId: target.hostId,
       directory: binding.directory,
@@ -494,6 +508,10 @@ function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     args.epicId,
     args.tabId,
     args.chatId,
+    // The cloud list can resolve AFTER this banner first renders, so the
+    // callback must be rebuilt when the owner lands - otherwise a click still
+    // sends the `null` this closed over on the first pass (ticket 37).
+    args.sourceOwnerUserId,
     args.sourceHostId,
     args.sourceSettings,
   ]);
