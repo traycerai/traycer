@@ -129,16 +129,35 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   if (pinnedToHostName !== null && hostId !== null) {
     setHostId(null);
   }
+  const responseHostIds = useMemo(
+    () =>
+      (query.data?.summary.hostBuckets ?? []).map((bucket) => bucket.hostId),
+    [query.data],
+  );
+  // Host ids learned from the last UNFILTERED response.
+  //
+  // The shared aggregator applies the `hostId` filter to the FACTS before it
+  // groups them, so a filtered response's `hostBuckets` holds only the host
+  // that was asked for. Rebuilding the picker from the current response alone
+  // therefore collapsed it the moment a host was chosen: every other host the
+  // account has usage for but the directory cannot name vanished from the
+  // list, and reaching one of them meant going back to All hosts and waiting
+  // for a second round trip. Only an unfiltered response is evidence about
+  // hosts OTHER than the selected one, so only that one updates this.
+  const [discoveredHostIds, setDiscoveredHostIds] = useState<readonly string[]>(
+    [],
+  );
+  if (hostId === null && !sameHostIds(responseHostIds, discoveredHostIds)) {
+    setDiscoveredHostIds(responseHostIds);
+  }
   const hostOptions = useMemo(
     () =>
       buildUsageHostFilterOptions({
         hostNames: props.hostNames,
-        hostIdsWithUsage: (query.data?.summary.hostBuckets ?? []).map(
-          (bucket) => bucket.hostId,
-        ),
+        hostIdsWithUsage: [...discoveredHostIds, ...responseHostIds],
         selectedHostId: hostId,
       }),
-    [props.hostNames, query.data, hostId],
+    [props.hostNames, discoveredHostIds, responseHostIds, hostId],
   );
 
   return (
@@ -174,6 +193,15 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       />
     </div>
   );
+}
+
+/**
+ * Both lists come from `hostBuckets`, which the wire sorts by `hostId`, so
+ * position-wise comparison is enough - and it is only ever asked about a
+ * handful of hosts.
+ */
+function sameHostIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 /**

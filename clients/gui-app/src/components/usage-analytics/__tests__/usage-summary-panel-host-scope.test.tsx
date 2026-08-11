@@ -1,4 +1,11 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -107,7 +114,10 @@ function response(input: {
 }
 
 function renderPanel(input: {
-  readonly response: UsageSummaryResponse;
+  /** A function receives the request, so a test can answer a FILTERED query differently. */
+  readonly response:
+    | UsageSummaryResponse
+    | ((request: UsageSummaryRequest) => UsageSummaryResponse);
   readonly hostNames: ReadonlyMap<string, string>;
 }): { readonly requests: UsageSummaryRequest[] } {
   const requests: UsageSummaryRequest[] = [];
@@ -120,7 +130,9 @@ function renderPanel(input: {
       handlers: {
         "host.usage.summary": (params) => {
           requests.push(params);
-          return input.response;
+          return typeof input.response === "function"
+            ? input.response(params)
+            : input.response;
         },
       },
     }),
@@ -233,5 +245,44 @@ describe("<UsageSummaryPanel /> host scope", () => {
     // scope note would be noise - the qualifier appears only once the read
     // is narrowed.
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
+  });
+
+  it("keeps every discovered host in the picker after narrowing to one", async () => {
+    // The shared aggregator filters facts by `hostId` BEFORE grouping, so a
+    // filtered response's `hostBuckets` names only the selected host. With an
+    // empty directory - hosts that have usage but the client cannot name -
+    // rebuilding the options from the current response alone left no way to
+    // move from one such host straight to another.
+    const user = userEvent.setup();
+    renderPanel({
+      response: (request) =>
+        response({
+          servedBy: "cloud",
+          hostBuckets:
+            request.hostId === undefined || request.hostId === null
+              ? [hostBucket("host-a", 3), hostBucket("host-b", 1)]
+              : [hostBucket(request.hostId, 3)],
+        }),
+      hostNames: new Map(),
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    await user.click(screen.getByTestId("usage-host-filter"));
+    await user.click(
+      await screen.findByTestId("usage-host-filter-option-host-a"),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-host-filter").textContent).not.toContain(
+        "All hosts",
+      );
+    });
+
+    await user.click(screen.getByTestId("usage-host-filter"));
+    // host-b is absent from THIS response's buckets and from the directory -
+    // it survives only because the unfiltered response was remembered.
+    expect(
+      await screen.findByTestId("usage-host-filter-option-host-b"),
+    ).toBeTruthy();
   });
 });
