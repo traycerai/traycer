@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { StrictMode, useEffect, type ReactNode } from "react";
+import { StrictMode, useEffect, useLayoutEffect, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -1051,6 +1051,65 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
+      expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
+    });
+
+    it("ignores a refresh completion from an obsolete same-host scope", async () => {
+      vi.useFakeTimers();
+      const entries = new Map([["/wt/a", enrichedEntry("/wt/a", "feat-a")]]);
+      const requests: string[] = [];
+      const queryClient = createAppQueryClient();
+      const first = createFixture(
+        entries,
+        (path) => requests.push(path),
+        null,
+        queryClient,
+      );
+      type RefreshScopeProps = {
+        readonly client: HostClient<HostRpcRegistry>;
+        readonly reachable: boolean;
+        readonly completeRefresh: (() => void) | null;
+      };
+      const initialProps: RefreshScopeProps = {
+        client: first.client,
+        reachable: true,
+        completeRefresh: null,
+      };
+      const { result, rerender } = renderHook(
+        (props: RefreshScopeProps) => {
+          const { completeRefresh } = props;
+          const enrichment = useWorktreeActivityEnrichment(
+            props.client,
+            props.reachable,
+            HOST_ID,
+            ["/wt/a"],
+          );
+          useLayoutEffect(() => {
+            completeRefresh?.();
+          }, [completeRefresh]);
+          return enrichment;
+        },
+        {
+          initialProps,
+          wrapper: first.Wrapper,
+        },
+      );
+
+      for (let window = 0; window < 16; window += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(15_000);
+        });
+      }
+      expect(requests).toHaveLength(10);
+      expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
+
+      const staleCompletion = result.current.prepareEnrichmentRefresh();
+      rerender({
+        client: first.client,
+        reachable: false,
+        completeRefresh: staleCompletion,
+      });
+
       expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
     });
   });

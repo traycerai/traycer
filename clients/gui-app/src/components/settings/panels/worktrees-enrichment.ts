@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -572,6 +573,10 @@ export function useWorktreeActivityEnrichment(
     () => ({ client, hostId, reachable }),
     [client, hostId, reachable],
   );
+  const activeScopeTokenRef = useRef(scopeToken);
+  useLayoutEffect(() => {
+    activeScopeTokenRef.current = scopeToken;
+  }, [scopeToken]);
   const [requestedPathsState, setRequestedPathsState] = useState<{
     readonly scopeToken: typeof scopeToken | null;
     readonly paths: readonly string[];
@@ -898,8 +903,13 @@ export function useWorktreeActivityEnrichment(
     const refreshHostId = hostId;
     const refreshLedger = sweepLedgerRef.current;
     const refreshViewportStore = viewportRetryStore;
+    const refreshScopeToken = refreshViewportStore.scopeToken;
     return () => {
-      if (refreshHostId === null || sweepLedgerRef.current !== refreshLedger) {
+      if (
+        refreshScopeToken !== activeScopeTokenRef.current ||
+        refreshHostId === null ||
+        sweepLedgerRef.current !== refreshLedger
+      ) {
         return;
       }
       for (const state of refreshViewportStore.getSnapshot().values()) {
