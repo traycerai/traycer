@@ -117,6 +117,7 @@ function usageSummaryResponse(): UsageSummaryResponse {
           costProvenance: "providerReported",
         },
       ],
+      hostBuckets: [],
       distinctEpicCount: 1,
       distinctChatCount: 1,
       outcomeBreakdown: {

@@ -39,9 +39,31 @@ import { UsageHarnessSplit } from "@/components/usage-analytics/usage-harness-sp
 import { UsageStatTiles } from "@/components/usage-analytics/usage-stat-tiles";
 import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure";
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
+import { UsageHostFilter } from "@/components/usage-analytics/usage-host-filter";
+import { UsageHostSplit } from "@/components/usage-analytics/usage-host-split";
+import {
+  buildUsageHostFilterOptions,
+  buildUsageHostSplitRows,
+  resolveUsageHostName,
+} from "@/lib/usage-analytics/usage-host-split";
 
 export interface UsageSummaryPanelProps {
   readonly client: HostClient<HostRpcRegistry> | null;
+  /**
+   * `hostId` -> display name for every host this client knows about.
+   * Injected rather than read here, so this panel stays placement-agnostic:
+   * the host directory is a Settings-shell concern, and the only thing this
+   * surface needs from it is a name to put beside an id. An id absent from
+   * the map is a host the client cannot name, not an error - see
+   * `resolveUsageHostName`.
+   */
+  readonly hostNames: ReadonlyMap<string, string>;
+  /**
+   * The host this panel's client is bound to. Names the machine in the
+   * pinned filter on `servedBy: "local"`; `null` when the client has no
+   * resolved host yet.
+   */
+  readonly currentHostId: string | null;
 }
 
 type UsageSummaryQueryResult = UseQueryResult<
@@ -63,10 +85,15 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const [metric, setMetric] = useState<UsageMetric>("cost");
   const [breakdownGroupBy, setBreakdownGroupBy] =
     useState<UsageBreakdownGroupBy>("model");
+  // Defaults to "All hosts" - the whole point of ONE dashboard with a host
+  // filter rather than a second per-host surface (ticket 13, user ruling
+  // 2026-08-10). Kept in this component rather than in the request memo so
+  // switching hosts is a normal query-key change, not a remount.
+  const [hostId, setHostId] = useState<string | null>(null);
 
   const request = useMemo(
-    () => buildUsageSummaryRequest({ windowDays, epicId: null }),
-    [windowDays],
+    () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId }),
+    [windowDays, hostId],
   );
   // Enabled unconditionally: this panel only mounts once its caller has
   // already confirmed `host.usage.summary` is supported (see
@@ -77,11 +104,38 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const days = useMemo(() => daysForResponse(query.data), [query.data]);
   const dateRangeLabel = formatDateRangeLabel(days);
 
+  // The local plane only ever holds this machine's own executions, so there
+  // is nothing to filter BETWEEN there - the control states the scope
+  // instead of offering a choice it cannot honor. Read off the RESPONSE's
+  // `servedBy`, never guessed from connectivity: which plane answers is the
+  // host's decision (see the replication-and-read-path artifact).
+  const pinnedToHostName =
+    query.data?.servedBy === "local"
+      ? localPlaneHostName(props.currentHostId, props.hostNames)
+      : null;
+  const hostOptions = useMemo(
+    () =>
+      buildUsageHostFilterOptions({
+        hostNames: props.hostNames,
+        hostIdsWithUsage: (query.data?.summary.hostBuckets ?? []).map(
+          (bucket) => bucket.hostId,
+        ),
+        selectedHostId: hostId,
+      }),
+    [props.hostNames, query.data, hostId],
+  );
+
   return (
     <div className="flex w-full max-w-4xl flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <UsageWindowPicker windowDays={windowDays} onChange={setWindowDays} />
+          <UsageHostFilter
+            options={hostOptions}
+            hostId={hostId}
+            onChange={setHostId}
+            pinnedToHostName={pinnedToHostName}
+          />
           <span
             className="text-ui-xs text-muted-foreground"
             data-testid="usage-date-range-label"
@@ -97,9 +151,27 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
         days={days}
         breakdownGroupBy={breakdownGroupBy}
         onBreakdownGroupByChange={setBreakdownGroupBy}
+        hostNames={props.hostNames}
+        hostScopeName={
+          hostId === null ? null : resolveUsageHostName(hostId, props.hostNames)
+        }
       />
     </div>
   );
+}
+
+/**
+ * What the pinned filter calls the machine on `servedBy: "local"`. A client
+ * with no resolved host id yet still has a scope to state - the read is
+ * this-machine-only either way - so it falls back to naming the machine
+ * generically rather than rendering nothing.
+ */
+function localPlaneHostName(
+  currentHostId: string | null,
+  hostNames: ReadonlyMap<string, string>,
+): string {
+  if (currentHostId === null) return "This machine";
+  return resolveUsageHostName(currentHostId, hostNames);
 }
 
 /**
@@ -138,9 +210,19 @@ function UsageSummaryPanelBody(props: {
   readonly days: readonly string[];
   readonly breakdownGroupBy: UsageBreakdownGroupBy;
   readonly onBreakdownGroupByChange: (groupBy: UsageBreakdownGroupBy) => void;
+  readonly hostNames: ReadonlyMap<string, string>;
+  /** The picked host's display name, or `null` for the All-hosts default. */
+  readonly hostScopeName: string | null;
 }): ReactNode {
-  const { query, metric, days, breakdownGroupBy, onBreakdownGroupByChange } =
-    props;
+  const {
+    query,
+    metric,
+    days,
+    breakdownGroupBy,
+    onBreakdownGroupByChange,
+    hostNames,
+    hostScopeName,
+  } = props;
 
   if (query.isLoading) {
     return (
@@ -177,6 +259,7 @@ function UsageSummaryPanelBody(props: {
   const scale = buildUsageSeriesScaleForBuckets(summary.buckets);
   const columns = buildUsageChartColumns(days, summary.buckets, scale, metric);
   const harnessRows = buildUsageHarnessSplitRows(summary.buckets);
+  const hostRows = buildUsageHostSplitRows(summary.hostBuckets, hostNames);
   const statTiles = buildUsageStatTiles(summary.totals, summary.buckets);
   const absentNote = usageCompletenessAbsentNote(
     summary.usageCompletenessBreakdown,
@@ -189,10 +272,21 @@ function UsageSummaryPanelBody(props: {
           totals={summary.totals}
           coverage={coverage}
           servedBy={servedBy}
+          hostScopeName={hostScopeName}
           size="default"
         />
         <UsageHarnessSplit rows={harnessRows} scale={scale} />
       </div>
+      {/* Only worth a section once there is more than one host to compare:
+          a single-row "By host" list under an All-hosts filter says nothing
+          the filter did not already say, and on the local plane there can
+          never be a second row at all. */}
+      {hostRows.length > 1 ? (
+        <div className="flex flex-col gap-2">
+          <h3 className="text-ui-sm font-medium text-foreground">By host</h3>
+          <UsageHostSplit rows={hostRows} />
+        </div>
+      ) : null}
       <div className="flex flex-col gap-1.5">
         <UsageStatTiles tiles={statTiles} />
         {absentNote === null ? null : (

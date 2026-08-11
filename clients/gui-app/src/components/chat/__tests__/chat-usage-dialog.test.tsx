@@ -83,6 +83,7 @@ function usageSummaryResponse(): UsageSummaryResponse {
       },
       buckets: [],
       chatBuckets: [],
+      hostBuckets: [],
       distinctEpicCount: 1,
       distinctChatCount: 1,
       outcomeBreakdown: {

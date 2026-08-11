@@ -164,6 +164,9 @@ function EpicUsageDialogBody(props: {
         totals={summary.totals}
         coverage={coverage}
         servedBy={servedBy}
+        // The host dimension is irrelevant at this scope: an epic's (or a
+        // chat's) work is the same work wherever it ran.
+        hostScopeName={null}
         size="default"
       />
       {summary.totals.factCount === 0 ? null : (

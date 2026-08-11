@@ -76,10 +76,19 @@ Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
 load-bearing rather than cosmetic.
 
 - **Application** - General, Appearance, Keybindings.
-- **Account** - Sessions.
+- **Account** - Sessions, Usage.
 - **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
   Everything under it - Overview, Providers, Worktrees, Notifications, Agent
   selection, Shell, Diagnostics - is scoped by that one selection.
+
+Usage sits in **Account**, not Host (ticket 13). What it reports is the
+ACCOUNT's token and cost spend, with the host as one filter INSIDE the page
+that defaults to all of them - so it does not vary by host, which is the rule
+the groups encode. Under the sidebar's picker it would have put two competing
+host scopes on one screen, with the outer one unable to describe the number
+the inner one produced. It still reads through a host CLIENT, as every RPC
+does; that is a transport fact, the same distinction `requiresLocalHost`
+draws below.
 
 Application and Account lead because they are short, fixed and never re-shaped;
 the host group goes last because it is the only one whose contents depend on a
@@ -1280,10 +1289,13 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     silently going blank. A has-bridge-but-zero-logs response similarly gets
     an explicit "No log files found." message in the Recent logs card rather
     than rendering empty.
-- `Usage` (`usage-settings-panel.tsx`, appended LAST in `settings-sections.ts`
-  rather than slotted beside its RPC-backed siblings, so it never renumbers
-  an existing section's leader-digit shortcut - it is simply the digit-less
-  12th entry, the same way Diagnostics is the 11th). All reading
+- `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
+  Sessions - see "Scope: the organising idea" above for why it is not under
+  the host picker. Groups must stay contiguous in `settings-sections.ts`, so
+  landing it there pushed Shell past `SINGLE_DIGIT_LEADER_INDEX_LIMIT`: Shell
+  and Diagnostics are now the two digit-less entries, which are the right two
+  to lose - both are `requiresLocalHost` support surfaces and the rarest
+  destinations here). All reading
   `host.usage.summary` through `UsageSummaryPanel`
   (`components/usage-analytics/`), placement-agnostic. `host.usage.summary`
   is an OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol
@@ -1334,6 +1346,31 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     `EpicUsageDialog` (headline, small trend chart, by-chat/agent breakdown,
     window options including "entire epic") on click - see that panel's own
     doc comments, not this file, since it is not a Settings surface.
+  - **Ticket 13 made this ONE cross-host dashboard, not a per-host page.**
+    The cloud plane was already per-user and cross-host (its reader filters by
+    user + time); what was missing was the host DIMENSION, not another view.
+    So `host.usage.summary` gained an optional `hostId` filter and a
+    `hostBuckets` grouping alongside `chatBuckets`, and the page gained:
+    - a **host filter defaulting to "All hosts"** (`usage-host-filter.tsx`).
+      On `servedBy: "local"` it is not a disabled dropdown but a plain
+      readout naming this machine - that plane can only ever see the machine
+      it runs on, so there is nothing to choose BETWEEN, and a greyed-out
+      picker would say "you may not choose" instead. A foreign `hostId`
+      against the local plane returns an EMPTY summary, never an error,
+      mirroring the zero-rows shape a foreign `epicId`/`chatId` already has.
+    - a **by-host breakdown** (`usage-host-split.tsx`), shown only once there
+      is more than one host, with the same column anatomy as the harness
+      split. Deliberately NOT keyed to the daily chart's series scale: that
+      scale colors harnesses, and reusing it would paint a host and a harness
+      the same hue in one view.
+    - **names joined client-side** from `useHostScope().hosts` (the merged
+      directory + registry model - see "One host model"). No host name rides
+      the wire: a name is directory state that changes without the fact
+      changing, and only the client knows a host it can no longer reach. An
+      id nothing can name renders as a TRUNCATED ID, never a blank cell.
+    - **scope copy that follows the filter** - `servedByScopeNote` now takes
+      the picked host's name and qualifies the headline whenever the figure
+      covers less than the account.
   - **Fixup-01 (tickets 11/12) rewrote cost presentation to t3code's density**
     (user ruling 2026-08-10, three rounds, final - superseded the ticket 11
     "priced subtotal + N unpriced turns" phrasing and deleted ticket 11's

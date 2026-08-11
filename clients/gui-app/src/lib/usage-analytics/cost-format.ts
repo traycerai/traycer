@@ -99,13 +99,27 @@ export function usageCostTooltip(
 }
 
 /**
- * `servedBy: "local"` means this read is a bounded local-plane query over
- * facts captured on THIS machine only - a single-host history must never
- * read as the account's cross-device total (the comm-graph fallback bug the
- * replication-and-read-path artifact names explicitly). `null` for
- * `"cloud"`, where the read already spans every device.
+ * What this figure actually covers, whenever that is narrower than "your
+ * account". A total that spans one machine, or one machine's worth of an
+ * account, must never read as the cross-device total (the comm-graph
+ * fallback bug the replication-and-read-path artifact names explicitly).
+ *
+ * Two independent narrowings, and the copy names whichever applies:
+ *
+ * - `servedBy: "local"` - a bounded local-plane query over facts captured on
+ *   THIS machine. Not a choice the reader made, and not one they can undo
+ *   here, so it leads with what the number is rather than with a host name.
+ * - `hostScopeName` - the reader picked one host out of the account on the
+ *   cloud plane. `null` = no host filter (the "All hosts" default), which is
+ *   the one case that needs no note at all.
  */
-export function servedByScopeNote(servedBy: UsageServedBy): string | null {
-  if (servedBy === "cloud") return null;
-  return "This machine's usage only — not synced across your other devices.";
+export function servedByScopeNote(
+  servedBy: UsageServedBy,
+  hostScopeName: string | null,
+): string | null {
+  if (servedBy === "local") {
+    return "This machine's usage only — not synced across your other devices.";
+  }
+  if (hostScopeName === null) return null;
+  return `${hostScopeName} only — your other hosts aren't included.`;
 }

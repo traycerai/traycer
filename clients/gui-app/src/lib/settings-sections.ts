@@ -93,8 +93,10 @@ export interface SettingsSection {
  * heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`); Diagnostics is the eleventh and goes
- * without, which is the right one to lose — it is the rarest destination here.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`); Shell and Diagnostics are the
+ * eleventh and twelfth and go without, which are the right two to lose —
+ * both are `requiresLocalHost` support surfaces and the rarest destinations
+ * here.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal switch, the command palette and remembered tab paths all key
@@ -126,6 +128,27 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
+    group: "account",
+    requiresLocalHost: false,
+  },
+  // Account, not Host: what this reports is the ACCOUNT's token and cost
+  // spend, with the host as one filter INSIDE the page (defaulting to all of
+  // them). Under the sidebar's host picker it would have put two competing
+  // host scopes on one screen, with the outer one unable to describe the
+  // number the inner one produced. It still reads through a host client -
+  // every RPC does - but that is a transport fact, not a scope one, the same
+  // distinction `requiresLocalHost` draws for Shell and Diagnostics.
+  //
+  // Moving it here cost Shell its leader digit: the group must stay
+  // contiguous (see this array's doc comment), so Usage had to land beside
+  // Sessions rather than stay appended, and that pushes Shell past
+  // `SINGLE_DIGIT_LEADER_INDEX_LIMIT` into the digit-less tail with
+  // Diagnostics. Shell is the right one to lose it to - Diagnostics was
+  // already there, and Usage is a far more frequent destination than either.
+  {
+    id: "usage",
+    label: "Usage",
+    icon: LineChart,
     group: "account",
     requiresLocalHost: false,
   },
@@ -183,17 +206,6 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Activity,
     group: "host",
     requiresLocalHost: true,
-  },
-  // Appended last, not slotted alongside its RPC-backed siblings above, so
-  // adding it never renumbers an existing section's leader-digit shortcut -
-  // it simply becomes the (digit-less) 12th entry, same as Diagnostics did
-  // as the 11th.
-  {
-    id: "usage",
-    label: "Usage",
-    icon: LineChart,
-    group: "host",
-    requiresLocalHost: false,
   },
 ];
 

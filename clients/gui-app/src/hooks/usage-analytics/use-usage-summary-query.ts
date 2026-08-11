@@ -33,12 +33,21 @@ export function buildUsageSummaryRequest(input: {
    * window kind.
    */
   readonly window?: "epic";
+  /**
+   * Ticket 13 addition. `null`/absent = every host on the account - the
+   * global dashboard's "All hosts" default. Only the dashboard sets it; the
+   * epic- and chat-scoped dialogs leave it alone, because at those scopes
+   * the host dimension answers a question nobody asked (an epic's work is
+   * an epic's work wherever it ran).
+   */
+  readonly hostId?: string | null;
 }): UsageSummaryRequest {
   return {
     timezone: getViewerTimeZone(),
     windowDays: input.windowDays,
     epicId: input.epicId,
     chatId: input.chatId ?? undefined,
+    hostId: input.hostId ?? undefined,
     window: input.window,
   };
 }

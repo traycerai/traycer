@@ -14,6 +14,13 @@ export interface UsageCostFigureProps {
   readonly totals: UsageSummaryTotals;
   readonly coverage: UsageCostCoverage;
   readonly servedBy: UsageServedBy;
+  /**
+   * The host this figure was narrowed to, when the reader picked one -
+   * `null` for an unfiltered read AND for every surface where the host
+   * dimension does not apply (the epic- and chat-scoped dialogs, whose
+   * subject is the same work wherever it ran).
+   */
+  readonly hostScopeName: string | null;
   readonly size: "compact" | "default";
 }
 
@@ -30,11 +37,11 @@ export interface UsageCostFigureProps {
  * presentation so the rule can't fragment across surfaces.
  */
 export function UsageCostFigure(props: UsageCostFigureProps): ReactNode {
-  const { totals, coverage, servedBy, size } = props;
+  const { totals, coverage, servedBy, hostScopeName, size } = props;
   const { amount, footnote } = describeCostHeadline(totals, coverage);
   const tooltip =
     totals.factCount === 0 ? null : usageCostTooltip(totals, coverage);
-  const scopeNote = servedByScopeNote(servedBy);
+  const scopeNote = servedByScopeNote(servedBy, hostScopeName);
   const compact = size === "compact";
   const amountClassName = cn(
     "font-semibold tabular-nums text-foreground",

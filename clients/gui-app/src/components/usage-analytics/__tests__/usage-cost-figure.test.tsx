@@ -47,6 +47,7 @@ function renderFigure(props: {
   readonly totals: Totals;
   readonly coverage: Coverage;
   readonly servedBy: UsageSummaryResponse["servedBy"];
+  readonly hostScopeName: string | null;
 }): void {
   render(
     <TooltipProvider>
@@ -54,6 +55,7 @@ function renderFigure(props: {
         totals={props.totals}
         coverage={props.coverage}
         servedBy={props.servedBy}
+        hostScopeName={props.hostScopeName}
         size="default"
       />
     </TooltipProvider>,
@@ -66,6 +68,7 @@ describe("UsageCostFigure", () => {
       totals: totals({ knownCostUsd: 10 }),
       coverage: coverage({}),
       servedBy: "cloud",
+      hostScopeName: null,
     });
     expect(screen.getByText("$10.00*")).not.toBeNull();
     expect(screen.getByTestId("usage-cost-footnote").textContent).toBe(
@@ -78,6 +81,7 @@ describe("UsageCostFigure", () => {
       totals: totals({ factCount: 4, knownCostUsd: 10 }),
       coverage: coverage({ pricedFactCount: 1, unpricedFactCount: 3 }),
       servedBy: "cloud",
+      hostScopeName: null,
     });
     expect(screen.getByText("$10.00*")).not.toBeNull();
     expect(screen.getByTestId("usage-cost-footnote").textContent).toBe(
@@ -99,6 +103,7 @@ describe("UsageCostFigure", () => {
       }),
       coverage: coverage({ unpricedFactCount: 1 }),
       servedBy: "cloud",
+      hostScopeName: null,
     });
     expect(screen.queryByRole("tooltip")).toBeNull();
 
@@ -119,6 +124,7 @@ describe("UsageCostFigure", () => {
       totals: totals({}),
       coverage: coverage({}),
       servedBy: "local",
+      hostScopeName: null,
     });
     expect(
       screen.getByTestId("usage-served-by-local-note").textContent,
@@ -130,6 +136,7 @@ describe("UsageCostFigure", () => {
       totals: totals({}),
       coverage: coverage({}),
       servedBy: "cloud",
+      hostScopeName: null,
     });
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
   });
@@ -139,6 +146,7 @@ describe("UsageCostFigure", () => {
       totals: totals({ factCount: 0, knownCostUsd: 0 }),
       coverage: coverage({ pricedFactCount: 0 }),
       servedBy: "cloud",
+      hostScopeName: null,
     });
     expect(screen.getByText("No usage in this window")).not.toBeNull();
     expect(screen.queryByTestId("usage-cost-footnote")).toBeNull();
@@ -149,6 +157,7 @@ describe("UsageCostFigure", () => {
       totals: totals({}),
       coverage: coverage({}),
       servedBy: "cloud",
+      hostScopeName: null,
     });
     expect(screen.queryByTestId("usage-cost-quality-panel")).toBeNull();
     expect(screen.queryByText(/provenance/i)).toBeNull();

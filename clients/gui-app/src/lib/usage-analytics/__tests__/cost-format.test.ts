@@ -139,14 +139,29 @@ describe("usageCostTooltip", () => {
 });
 
 describe("servedByScopeNote", () => {
-  it("is null for a cloud-served response", () => {
-    expect(servedByScopeNote("cloud")).toBeNull();
+  it("is null for an unfiltered cloud-served response - the account total needs no qualifier", () => {
+    expect(servedByScopeNote("cloud", null)).toBeNull();
+  });
+
+  it("names the picked host when a cloud-served response was filtered to one", () => {
+    const note = servedByScopeNote("cloud", "Studio Mac");
+    expect(note).not.toBeNull();
+    expect(note).toMatch(/Studio Mac/);
+    expect(note).toMatch(/other hosts/i);
   });
 
   it("states the this-machine-only scope for a local-served response", () => {
-    const note = servedByScopeNote("local");
+    const note = servedByScopeNote("local", null);
     expect(note).not.toBeNull();
     expect(note).toMatch(/this machine/i);
+  });
+
+  it("keeps the local-plane wording even under a host filter - the plane, not the pick, is what bounds it", () => {
+    // On the local plane the filter is pinned rather than chosen, and what
+    // limits the number is that the plane cannot see another machine at all.
+    // Saying "other hosts aren't included" there would imply a cross-device
+    // read that was merely narrowed.
+    expect(servedByScopeNote("local", "Studio Mac")).toMatch(/this machine/i);
   });
 });
 

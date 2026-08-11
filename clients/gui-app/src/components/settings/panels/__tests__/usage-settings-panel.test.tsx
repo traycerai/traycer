@@ -85,6 +85,7 @@ function makeUsageSummaryResponse(): UsageSummaryResponse {
         },
       ],
       chatBuckets: [],
+      hostBuckets: [],
       distinctEpicCount: 1,
       distinctChatCount: 1,
       outcomeBreakdown: {

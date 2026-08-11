@@ -105,6 +105,27 @@ export const usageSummaryChatBucketSchema = z.object({
   costProvenance: usageSummaryCostProvenanceSchema,
 });
 
+/**
+ * One host's totals within the window - the per-host grouping alongside
+ * `chatBuckets`, same shape discipline (identity key + the four "known" sums
+ * + weakest-wins provenance).
+ *
+ * No host NAME rides the wire. A display name is directory state that
+ * changes without the fact changing, and only the client holds the directory
+ * - so the client joins names by `hostId` and renders a truncated id for one
+ * it does not recognize, rather than the host guessing at a name.
+ */
+export const usageSummaryHostBucketSchema = z.object({
+  /** Matches `usageAnalyticsIngestFactV1Schema.hostId`'s bound, not the 191-char identifier bound. */
+  hostId: z.string().min(1).max(36),
+  factCount: nonNegativeIntSchema,
+  tokens: usageSummaryTokenTotalsSchema,
+  knownCostUsd: z.number().finite(),
+  knownCacheSavingsUsd: z.number().finite(),
+  knownReasoningTokens: nonNegativeIntSchema,
+  costProvenance: usageSummaryCostProvenanceSchema,
+});
+
 /** One logical-execution fact, shaped for the chat-scoped per-turn drill-down. */
 export const usageTurnRowSchema = z.object({
   factId: z.string().min(1).max(191),
@@ -147,6 +168,13 @@ export const usageSummarySchema = z.object({
   buckets: z.array(usageSummaryBucketSchema),
   /** Sorted by `chatId`. Groups BY chat regardless of whether the request filtered to one chat. */
   chatBuckets: z.array(usageSummaryChatBucketSchema),
+  /**
+   * Sorted by `hostId`. Groups BY host regardless of whether the request
+   * filtered to one, exactly like `chatBuckets`. `servedBy: "local"` always
+   * answers with at most a single self-entry - that plane holds only its own
+   * host's facts.
+   */
+  hostBuckets: z.array(usageSummaryHostBucketSchema),
   distinctEpicCount: nonNegativeIntSchema,
   distinctChatCount: nonNegativeIntSchema,
   outcomeBreakdown: usageSummaryOutcomeBreakdownSchema,
@@ -193,6 +221,15 @@ export const hostUsageSummaryRequestSchemaV10 = z
      * query.
      */
     window: z.enum(["epic"]).optional(),
+    /**
+     * Ticket 13 addition, same `.optional()` compatibility reasoning as
+     * `chatId`. Absent or `null` = every host on the account - the global
+     * dashboard's "All hosts" default. Only ever a NARROWING: the host
+     * resolves the plane and the owner itself, so this cannot widen a read
+     * past the authenticated caller, and on the local plane a host id other
+     * than that host's own simply matches zero facts.
+     */
+    hostId: z.string().min(1).max(36).nullable().optional(),
   })
   .strict();
 export type HostUsageSummaryRequestV10 = z.infer<
