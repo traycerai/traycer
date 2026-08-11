@@ -6,6 +6,11 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
+  imageDimensionSchema,
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
+import {
   agentSenderSchema,
   agentSenderSchemaPreInReplyTo,
   chatSessionAnchorSchema,
@@ -88,8 +93,8 @@ export type ImageResolutionState = z.infer<typeof imageResolutionStateSchema>;
 const imageResolutionEntryBaseFields = {
   source: z.string(),
   canonicalSource: z.string(),
-  width: z.number().nullable().default(null),
-  height: z.number().nullable().default(null),
+  width: imageDimensionSchema.default(null),
+  height: imageDimensionSchema.default(null),
 } as const;
 
 const nonResolvedImageResolutionStateSchema = z.enum([
@@ -120,8 +125,8 @@ export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
   z.object({
     ...imageResolutionEntryBaseFields,
     state: z.literal("resolved"),
-    attachmentHash: z.string(),
-    mediaType: z.string(),
+    attachmentHash: imageSha256HexSchema,
+    mediaType: supportedImageMediaTypeSchema,
   }),
   z.object({
     ...imageResolutionEntryBaseFields,

@@ -37,6 +37,10 @@ import {
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
+import {
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
 
 export const LatestEpicArtifactKindSchema = getRecordSchema(
   commonRecordRegistry,
@@ -1119,19 +1123,12 @@ const artifactImageIngestErrorStateSchema = z.enum([
   "budget-exceeded",
   "io-error",
 ]);
-const artifactImageMediaTypeSchema = z.enum([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-]);
 export const prepareArtifactImageResponseSchema = z.discriminatedUnion("ok", [
   z.object({
     ok: z.literal(true),
     operationId: z.string(),
-    attachmentHash: z.string(),
-    mediaType: artifactImageMediaTypeSchema,
+    attachmentHash: imageSha256HexSchema,
+    mediaType: supportedImageMediaTypeSchema,
     src: z.string(),
   }),
   z.object({

@@ -3268,19 +3268,31 @@ export const epicSchemaSurfaceBaseline = {
                                     "type": "object",
                                     "properties": {
                                       "attachmentHash": {
-                                        "type": "string"
+                                        "type": "string",
+                                        "pattern": "^[0-9a-f]{64}$"
                                       },
                                       "mediaType": {
-                                        "type": "string"
+                                        "type": "string",
+                                        "enum": [
+                                          "image/png",
+                                          "image/jpeg",
+                                          "image/gif",
+                                          "image/webp",
+                                          "image/svg+xml"
+                                        ]
                                       },
                                       "byteLength": {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
                                       },
                                       "width": {
                                         "default": null,
                                         "anyOf": [
                                           {
-                                            "type": "number"
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
                                           },
                                           {
                                             "type": "null"
@@ -3291,7 +3303,9 @@ export const epicSchemaSurfaceBaseline = {
                                         "default": null,
                                         "anyOf": [
                                           {
-                                            "type": "number"
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
                                           },
                                           {
                                             "type": "null"
@@ -5312,7 +5326,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -5323,7 +5339,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -5335,10 +5353,18 @@ export const epicSchemaSurfaceBaseline = {
                                   "const": "resolved"
                                 },
                                 "attachmentHash": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
                                 },
                                 "mediaType": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "enum": [
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/gif",
+                                    "image/webp",
+                                    "image/svg+xml"
+                                  ]
                                 }
                               },
                               "required": [
@@ -5362,7 +5388,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -5373,7 +5401,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -10546,19 +10576,31 @@ export const epicSchemaSurfaceBaseline = {
                                     "type": "object",
                                     "properties": {
                                       "attachmentHash": {
-                                        "type": "string"
+                                        "type": "string",
+                                        "pattern": "^[0-9a-f]{64}$"
                                       },
                                       "mediaType": {
-                                        "type": "string"
+                                        "type": "string",
+                                        "enum": [
+                                          "image/png",
+                                          "image/jpeg",
+                                          "image/gif",
+                                          "image/webp",
+                                          "image/svg+xml"
+                                        ]
                                       },
                                       "byteLength": {
-                                        "type": "number"
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
                                       },
                                       "width": {
                                         "default": null,
                                         "anyOf": [
                                           {
-                                            "type": "number"
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
                                           },
                                           {
                                             "type": "null"
@@ -10569,7 +10611,9 @@ export const epicSchemaSurfaceBaseline = {
                                         "default": null,
                                         "anyOf": [
                                           {
-                                            "type": "number"
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
                                           },
                                           {
                                             "type": "null"
@@ -12627,7 +12671,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -12638,7 +12684,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -12650,10 +12698,18 @@ export const epicSchemaSurfaceBaseline = {
                                   "const": "resolved"
                                 },
                                 "attachmentHash": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
                                 },
                                 "mediaType": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "enum": [
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/gif",
+                                    "image/webp",
+                                    "image/svg+xml"
+                                  ]
                                 }
                               },
                               "required": [
@@ -12680,7 +12736,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"
@@ -12691,7 +12749,9 @@ export const epicSchemaSurfaceBaseline = {
                                   "default": null,
                                   "anyOf": [
                                     {
-                                      "type": "number"
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     {
                                       "type": "null"

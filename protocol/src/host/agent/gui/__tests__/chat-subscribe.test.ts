@@ -1834,9 +1834,12 @@ describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
 // pre-image freeze so additive image fields cannot leak onto a released wire
 // line (the bug this ticket closed).
 describe("chat.subscribe@1.7 (image generation)", () => {
+  const imageHashA = "a".repeat(64);
+  const imageHashB = "b".repeat(64);
+  const resolutionHash = "c".repeat(64);
   const imageResultA = {
-    attachmentHash: "sha256-image-a",
-    mediaType: "image/png",
+    attachmentHash: imageHashA,
+    mediaType: "image/png" as const,
     byteLength: 1024,
     width: 64,
     height: 48,
@@ -1846,8 +1849,8 @@ describe("chat.subscribe@1.7 (image generation)", () => {
   };
 
   const imageResultB = {
-    attachmentHash: "sha256-image-b",
-    mediaType: "image/jpeg",
+    attachmentHash: imageHashB,
+    mediaType: "image/jpeg" as const,
     byteLength: 2048,
     width: null,
     height: null,
@@ -1890,7 +1893,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
         source,
         canonicalSource,
         state,
-        attachmentHash: `hash-${index}`,
+        attachmentHash: (index + 1).toString(16).repeat(64),
         mediaType: "image/png",
         width: 100,
         height: 80,
@@ -1990,7 +1993,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     expect(parsed.imageResults).toHaveLength(2);
     expect(parsed.imageResults[0]).toMatchObject(imageResultA);
     expect(parsed.imageResults[1]).toMatchObject({
-      attachmentHash: "sha256-image-b",
+      attachmentHash: imageHashB,
       mediaType: "image/jpeg",
       byteLength: 2048,
       width: null,
@@ -2010,12 +2013,12 @@ describe("chat.subscribe@1.7 (image generation)", () => {
   it("defaults omitted imageGenerationResult optionals to null", () => {
     expect(
       imageGenerationResultSchema.parse({
-        attachmentHash: "h",
+        attachmentHash: imageHashA,
         mediaType: "image/png",
         byteLength: 1,
       }),
     ).toEqual({
-      attachmentHash: "h",
+      attachmentHash: imageHashA,
       mediaType: "image/png",
       byteLength: 1,
       width: null,
@@ -2041,8 +2044,8 @@ describe("chat.subscribe@1.7 (image generation)", () => {
       event: {
         type: "tool_call.completed",
         imageResults: [
-          expect.objectContaining({ attachmentHash: "sha256-image-a" }),
-          expect.objectContaining({ attachmentHash: "sha256-image-b" }),
+          expect.objectContaining({ attachmentHash: imageHashA }),
+          expect.objectContaining({ attachmentHash: imageHashB }),
         ],
       },
     });
@@ -2069,11 +2072,11 @@ describe("chat.subscribe@1.7 (image generation)", () => {
           source: "https://example.com/a.png",
           canonicalSource: "https://example.com/a.png",
           state,
-          attachmentHash: "hash-a",
+          attachmentHash: resolutionHash,
           mediaType: "image/png",
         });
         expect(parsed.state).toBe("resolved");
-        expect(parsed.attachmentHash).toBe("hash-a");
+        expect(parsed.attachmentHash).toBe(resolutionHash);
         expect(parsed.mediaType).toBe("image/png");
         expect(parsed.width).toBeNull();
         expect(parsed.height).toBeNull();
@@ -2110,7 +2113,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
           source: "https://example.com/a.png",
           canonicalSource: "https://example.com/a.png",
           state,
-          attachmentHash: "hash-a",
+          attachmentHash: resolutionHash,
           mediaType: "image/png",
         }).success,
         state,

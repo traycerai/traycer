@@ -2,6 +2,12 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
+import {
+  imageByteLengthSchema,
+  imageDimensionSchema,
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
 
 /**
  * Discriminated union of content blocks rendered inside an assistant
@@ -241,11 +247,11 @@ export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
 // display-only metadata, never the render source. Array from day one - a
 // single tool call can produce more than one image.
 export const imageGenerationResultSchema = z.object({
-  attachmentHash: z.string(),
-  mediaType: z.string(),
-  byteLength: z.number(),
-  width: z.number().nullable().default(null),
-  height: z.number().nullable().default(null),
+  attachmentHash: imageSha256HexSchema,
+  mediaType: supportedImageMediaTypeSchema,
+  byteLength: imageByteLengthSchema,
+  width: imageDimensionSchema.default(null),
+  height: imageDimensionSchema.default(null),
   alt: z.string().nullable().default(null),
   revisedPrompt: z.string().nullable().default(null),
   filePath: z.string().nullable().default(null),
