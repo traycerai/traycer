@@ -200,7 +200,7 @@ describe("sanitizeUntrustedSvg style attribute forbid + serialize/reparse", () =
     expect(imported.getAttribute("style")).toBeNull();
   });
 
-  it("strips network-capable refs from feImage/use/data href and animation vectors", () => {
+  it("strips network-capable refs from feImage/use/data href and drops animate/set", () => {
     const source = `<svg ${SVG_NS} xmlns:xlink="http://www.w3.org/1999/xlink">
       <defs>
         <filter id="f">
@@ -224,23 +224,101 @@ describe("sanitizeUntrustedSvg style attribute forbid + serialize/reparse", () =
     expect(imported.outerHTML).not.toMatch(/attacker\.example/i);
     expect(imported.outerHTML).not.toMatch(/data:image\/png/i);
     expect(imported.outerHTML).not.toMatch(/\bhref\s*=/i);
-    for (const element of [
-      imported,
-      ...imported.querySelectorAll("*"),
-    ] as Element[]) {
+    for (const element of [imported, ...imported.querySelectorAll("*")]) {
       for (const attribute of [...element.attributes]) {
         expect(attribute.localName.toLowerCase()).not.toBe("href");
         expect(attribute.value).not.toMatch(/attacker\.example/i);
-        expect(attribute.value).not.toMatch(/url\s*\(/i);
       }
     }
-    // Pin current DOMPurify profile only when it actually drops animate/set.
-    if (!cleaned.toLowerCase().includes("<animate")) {
-      expect(imported.querySelector("animate")).toBeNull();
+    // Real pins: DOMPurify svg profile drops animate/set.
+    expect(imported.querySelector("animate")).toBeNull();
+    expect(imported.querySelector("set")).toBeNull();
+    expect(cleaned.toLowerCase()).not.toContain("<animate");
+    expect(cleaned.toLowerCase()).not.toMatch(/<set[\s>]/);
+  });
+
+  it("strips network-capable presentation attrs (mask/fill/stroke/filter/clip-path/marker-*)", () => {
+    const presentationAttrs = [
+      "fill",
+      "stroke",
+      "filter",
+      "mask",
+      "clip-path",
+      "marker-start",
+      "marker-mid",
+      "marker-end",
+    ] as const;
+    // XML-safe fixtures: entity-encode quotes so DOMParser accepts the source.
+    const imageSet = "image-set(&quot;https://attacker.example/p.png&quot; 1x)";
+    // CSS escape \75 → 'u', so this is a disguised url() network beacon.
+    const escapedUrl = "\\75 rl(https://attacker.example/p.png)";
+
+    for (const attr of presentationAttrs) {
+      for (const [label, value] of [
+        ["image-set", imageSet],
+        ["css-escaped-url", escapedUrl],
+      ] as const) {
+        const source = svg(
+          `<rect ${attr}="${value}" width="10" height="10"/>`,
+          "",
+        );
+        const cleaned = sanitizeUntrustedSvg(source);
+        expect(cleaned, `${attr}/${label}`).not.toMatch(/attacker\.example/i);
+        expect(cleaned, `${attr}/${label}`).not.toMatch(/image-set/i);
+        const imported = reparseImport(cleaned);
+        const rect = imported.querySelector("rect");
+        expect(rect, `${attr}/${label}`).not.toBeNull();
+        // Attr removed or neutralized: no attacker URL survives reparse.
+        expect(rect?.getAttribute(attr) ?? "", `${attr}/${label}`).not.toMatch(
+          /attacker\.example/i,
+        );
+        expect(imported.outerHTML, `${attr}/${label}`).not.toMatch(
+          /attacker\.example/i,
+        );
+      }
     }
-    if (!/<set[\s>]/i.test(cleaned)) {
-      expect(imported.querySelector("set")).toBeNull();
-    }
+  });
+
+  it("strips CSS filter shorthands (blur and chained drop-shadow) on presentation attrs", () => {
+    const source = svg(
+      '<rect filter="blur(9999px) drop-shadow(0 0 8px red)" width="10" height="10"/>',
+      "",
+    );
+    const cleaned = sanitizeUntrustedSvg(source);
+    expect(cleaned).not.toMatch(/blur\(/i);
+    expect(cleaned).not.toMatch(/drop-shadow/i);
+    expect(cleaned).not.toMatch(/9999/);
+    const imported = reparseImport(cleaned);
+    const rect = imported.querySelector("rect");
+    expect(rect).not.toBeNull();
+    const filter = rect?.getAttribute("filter") ?? "";
+    expect(filter).not.toMatch(/blur\(/i);
+    expect(filter).not.toMatch(/drop-shadow/i);
+    expect(imported.outerHTML).not.toMatch(/blur\(/i);
+  });
+
+  it("preserves valid local url(#gradient) presentation refs through sanitize/reparse", () => {
+    // De-vacuum: local fragment paint servers must survive the presentation
+    // predicate that strips network-capable url()/image-set values.
+    const source = svg(
+      [
+        "<defs>",
+        '<linearGradient id="gradient">',
+        '<stop offset="0" stop-color="#0f0"/>',
+        '<stop offset="1" stop-color="#00f"/>',
+        "</linearGradient>",
+        "</defs>",
+        '<rect fill="url(#gradient)" width="10" height="10"/>',
+      ].join(""),
+      'width="32" height="32"',
+    );
+    const cleaned = sanitizeUntrustedSvg(source);
+    expect(cleaned).toMatch(/url\(#gradient\)/i);
+    const imported = reparseImport(cleaned);
+    expect(imported.querySelector("rect")?.getAttribute("fill")).toBe(
+      "url(#gradient)",
+    );
+    expect(imported.querySelector("linearGradient")).not.toBeNull();
   });
 
   it("keeps presentation attributes on a safe SVG after serialize/reparse", () => {

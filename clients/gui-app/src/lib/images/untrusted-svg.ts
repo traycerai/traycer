@@ -8,6 +8,17 @@ const MAX_FILTERS = 16;
 const MAX_FILTER_PRIMITIVES = 128;
 const FORBIDDEN_DECLARATION = /<!\s*(?:doctype|entity)\b/i;
 const CSS_URL = /url\s*\(/i;
+const LOCAL_FRAGMENT_URL = /^url\(#[\w.:-]+\)$/;
+const URL_PRESENTATION_ATTRIBUTES = new Set([
+  "fill",
+  "stroke",
+  "filter",
+  "mask",
+  "clip-path",
+  "marker-start",
+  "marker-mid",
+  "marker-end",
+]);
 const NUMERIC_DIMENSION = /^\s*(\d+(?:\.\d+)?)(?:px)?\s*$/i;
 
 export function sanitizeUntrustedSvg(source: string): string {
@@ -101,9 +112,17 @@ function stripNetworkReferences(root: Element): void {
   const elements: Element[] = [root, ...root.querySelectorAll("*")];
   for (const element of elements) {
     for (const attribute of [...element.attributes]) {
+      const name = attribute.localName.toLowerCase();
+      const value = attribute.value.trim();
+      const presentationUrl = URL_PRESENTATION_ATTRIBUTES.has(name);
+      const unsafePresentationUrl =
+        presentationUrl &&
+        !LOCAL_FRAGMENT_URL.test(value) &&
+        (value.includes("\\") || value.includes("("));
       if (
-        attribute.localName.toLowerCase() === "href" ||
-        CSS_URL.test(attribute.value)
+        name === "href" ||
+        unsafePresentationUrl ||
+        (!presentationUrl && CSS_URL.test(value))
       ) {
         element.removeAttributeNode(attribute);
       }

@@ -187,6 +187,48 @@ function webpVp8xWithDimensions(width: number, height: number): ArrayBuffer {
   return bytes.buffer;
 }
 
+/** WebP VP8 lossy frame header with 14-bit dimensions. */
+function webpVp8WithDimensions(width: number, height: number): ArrayBuffer {
+  const payloadLen = 10;
+  const bytes = new Uint8Array(20 + payloadLen);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
+  view.setUint32(4, 12 + payloadLen, true);
+  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
+  bytes.set([0x56, 0x50, 0x38, 0x20], 12); // "VP8 "
+  view.setUint32(16, payloadLen, true);
+  bytes[20] = 0x00;
+  bytes[21] = 0x00;
+  bytes[22] = 0x00;
+  bytes[23] = 0x9d;
+  bytes[24] = 0x01;
+  bytes[25] = 0x2a;
+  view.setUint16(26, width & 0x3fff, true);
+  view.setUint16(28, height & 0x3fff, true);
+  return bytes.buffer;
+}
+
+/** WebP VP8L lossless header with encoded dimensions. */
+function webpVp8lWithDimensions(width: number, height: number): ArrayBuffer {
+  const payloadLen = 5;
+  const bytes = new Uint8Array(20 + payloadLen);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
+  view.setUint32(4, 12 + payloadLen, true);
+  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
+  bytes.set([0x56, 0x50, 0x38, 0x4c], 12); // "VP8L"
+  view.setUint32(16, payloadLen, true);
+  bytes[20] = 0x2f;
+  const w = width - 1;
+  const h = height - 1;
+  const bits = w | (h << 14);
+  bytes[21] = bits & 0xff;
+  bytes[22] = (bits >> 8) & 0xff;
+  bytes[23] = (bits >> 16) & 0xff;
+  bytes[24] = (bits >> 24) & 0xff;
+  return bytes.buffer;
+}
+
 const ALLOWLISTED_IMAGE_CASES: ReadonlyArray<{
   readonly type: AllowlistedMime;
   readonly bytes: ArrayBuffer;
@@ -209,8 +251,13 @@ const ALLOWLISTED_IMAGE_CASES: ReadonlyArray<{
   },
   {
     type: "image/webp",
-    bytes: webpVp8xWithDimensions(32, 24),
-    label: "WebP VP8X",
+    bytes: webpVp8WithDimensions(32, 24),
+    label: "WebP VP8",
+  },
+  {
+    type: "image/webp",
+    bytes: webpVp8lWithDimensions(32, 24),
+    label: "WebP VP8L",
   },
 ];
 
@@ -350,6 +397,70 @@ describe("platform IPC clipboard.writeImage validation", () => {
         }),
       ),
     ).rejects.toThrow(/64 MP|valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+    expect(writeImageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized JPEG and GIF dimensions before createFromBuffer", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+
+    // JPEG SOF0: 10000x10000 exceeds 64 MP.
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/jpeg",
+          bytes: jpegWithDimensions(10_000, 10_000),
+        }),
+      ),
+    ).rejects.toThrow(/64 MP|valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+
+    // GIF logical screen: same ceiling.
+    createFromBufferMock.mockClear();
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/gif",
+          bytes: gifWithDimensions(10_000, 10_000),
+        }),
+      ),
+    ).rejects.toThrow(/64 MP|valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts plain VP8 and VP8L WebP, rejects VP8X before createFromBuffer", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+
+    await handler?.(IPC_EVENT, {
+      type: "image/webp",
+      bytes: webpVp8WithDimensions(64, 48),
+    });
+    expect(createFromBufferMock).toHaveBeenCalledTimes(1);
+    expect(writeImageMock).toHaveBeenCalledTimes(1);
+
+    createFromBufferMock.mockClear();
+    writeImageMock.mockClear();
+    await handler?.(IPC_EVENT, {
+      type: "image/webp",
+      bytes: webpVp8lWithDimensions(64, 48),
+    });
+    expect(createFromBufferMock).toHaveBeenCalledTimes(1);
+    expect(writeImageMock).toHaveBeenCalledTimes(1);
+
+    // VP8X is no longer accepted at the clipboard boundary (extended WebP
+    // features are out of scope for the pre-decode sniff).
+    createFromBufferMock.mockClear();
+    writeImageMock.mockClear();
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/webp",
+          bytes: webpVp8xWithDimensions(64, 48),
+        }),
+      ),
+    ).rejects.toThrow(/valid PNG, JPEG, GIF, or WebP/i);
     expect(createFromBufferMock).not.toHaveBeenCalled();
     expect(writeImageMock).not.toHaveBeenCalled();
   });

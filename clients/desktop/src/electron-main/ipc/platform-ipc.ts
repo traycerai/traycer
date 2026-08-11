@@ -698,10 +698,6 @@ function gifDimensions(bytes: Uint8Array): RasterDimensions | null {
   );
 }
 
-function readUint24LE(bytes: Uint8Array, offset: number): number {
-  return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
-}
-
 function webpDimensions(bytes: Uint8Array): RasterDimensions | null {
   if (
     bytes.length < 20 ||
@@ -736,13 +732,8 @@ function webpDimensions(bytes: Uint8Array): RasterDimensions | null {
       1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
     );
   }
-  if (chunkType === "VP8X") {
-    if (chunkLength < 10) return null;
-    return safeRasterDimensions(
-      1 + readUint24LE(bytes, 24),
-      1 + readUint24LE(bytes, 27),
-    );
-  }
+  // A small VP8X canvas can wrap an oversized VP8/VP8L keyframe. Reject the
+  // extended container until every inner image chunk is bounded before decode.
   return null;
 }
 
