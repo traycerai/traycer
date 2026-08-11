@@ -40,6 +40,13 @@ export interface CredentialsMutationPaths {
  * Injected single-attempt refresh. Mirrors the shared `AuthTokenRefreshResult`
  * shape; never throws (every failure maps to a kind). The store calls it as the
  * last fallible-remote step under the lock, honoring the abort signal.
+ *
+ * The refresh ENDPOINT is deliberately absent from these args: the store knows
+ * only the file, and the file carries no authn URL — the injected fn must close
+ * over the caller's own configured authn base URL. That inversion is what keeps
+ * a pair minted by one dev-desktop slot refreshable from every other slot (each
+ * refreshes against its own live local authn), instead of every process chasing
+ * whichever stack happened to sign in last.
  */
 export type RefreshResult =
   | {
@@ -51,7 +58,6 @@ export type RefreshResult =
   | { readonly kind: "network-error" };
 
 export type RefreshFn = (args: {
-  readonly authnBaseUrl: string;
   readonly token: string;
   readonly refreshToken: string;
   readonly signal: AbortSignal | null;
@@ -149,7 +155,6 @@ export interface CredentialsMutationStore {
     readonly candidate: {
       readonly token: string;
       readonly refreshToken: string;
-      readonly authnBaseUrl: string;
     };
     readonly identity: StoredCredentials["user"];
     readonly expectedFile: StoredCredentials | null;
@@ -423,7 +428,6 @@ export function createCredentialsMutationStore(
         }
         const refreshToken = args.refreshTokenOverride ?? file.refreshToken;
         const refreshed = await refresh({
-          authnBaseUrl: file.authnBaseUrl,
           token: file.token,
           refreshToken,
           signal: args.signal,
@@ -437,7 +441,6 @@ export function createCredentialsMutationStore(
         const next: StoredCredentials = {
           token: refreshed.token,
           refreshToken: refreshed.refreshToken,
-          authnBaseUrl: file.authnBaseUrl,
           savedAt: nowIso(),
           user: file.user,
         };
@@ -601,7 +604,6 @@ export function createCredentialsMutationStore(
     readonly candidate: {
       readonly token: string;
       readonly refreshToken: string;
-      readonly authnBaseUrl: string;
     };
     readonly identity: StoredCredentials["user"];
     readonly expectedFile: StoredCredentials | null;
@@ -629,7 +631,6 @@ export function createCredentialsMutationStore(
         // rejected candidate is the migration's `terminal-dead` signal; a network
         // failure spent nothing (the caller re-enters).
         const refreshed = await refresh({
-          authnBaseUrl: args.candidate.authnBaseUrl,
           token: args.candidate.token,
           refreshToken: args.candidate.refreshToken,
           signal: args.signal,
@@ -642,11 +643,10 @@ export function createCredentialsMutationStore(
         }
         // Identity comes from the caller's pre-lock non-spending `/user` probe
         // (invariant 2): the refresh response carries only the pair, so it cannot
-        // supply identity. `authnBaseUrl` is the candidate's (main's config).
+        // supply identity.
         const next: StoredCredentials = {
           token: refreshed.token,
           refreshToken: refreshed.refreshToken,
-          authnBaseUrl: args.candidate.authnBaseUrl,
           savedAt: nowIso(),
           user: args.identity,
         };

@@ -429,7 +429,6 @@ function expectedStored(token: string, refreshToken: string) {
   return {
     token,
     refreshToken,
-    authnBaseUrl: "http://localhost:5005",
     // `expect.any(String)` is an `any`-typed matcher; type it as the field it
     // stands in for so the object literal stays free of unsafe `any` assignment.
     savedAt: expect.any(String) as string,
@@ -2671,7 +2670,6 @@ describe("AuthService", () => {
           pair: {
             token: "foreign-token",
             refreshToken: "foreign-refresh",
-            authnBaseUrl: "http://localhost:5005",
             savedAt: new Date().toISOString(),
             user: {
               id: "other-user",
@@ -2720,7 +2718,6 @@ describe("AuthService", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "external-rotated",
         refreshToken: "external-rotated-refresh",
-        authnBaseUrl: "http://localhost:5005",
         savedAt: new Date().toISOString(),
         user: {
           id: "user-1",
@@ -2778,7 +2775,6 @@ describe("AuthService", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "stale-external",
         refreshToken: "stale-external-refresh",
-        authnBaseUrl: "http://localhost:5005",
         savedAt: new Date().toISOString(),
         user: {
           id: "user-1",
@@ -2887,7 +2883,6 @@ describe("AuthService", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "file-newer-token",
         refreshToken: "file-newer-token-refresh",
-        authnBaseUrl: "http://localhost:5005",
         savedAt: new Date().toISOString(),
         user: {
           id: "user-1",

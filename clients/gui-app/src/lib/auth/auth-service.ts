@@ -1880,8 +1880,8 @@ export class AuthService {
       // re-apply the same token.
       this.clearActiveAttempt();
       // Interactive sign-in: write the freshly-minted pair + validated identity to
-      // the shared credentials file. `signIn` stamps `authnBaseUrl` + `savedAt` in
-      // main and rejects if the write cannot land. This is the file the host's
+      // the shared credentials file. `signIn` stamps `savedAt` in main and
+      // rejects if the write cannot land. This is the file the host's
       // owner gate reads, written BEFORE we flip signed-in (which enables host
       // RPCs) - so on a brand-new sign-in the owner is pinned before the first
       // connection, closing the UNAUTHORIZED race that would burn refresh tokens.
@@ -2438,8 +2438,8 @@ function rotatedLivePair(rotated: TokenRotateResult): StoredCredentials | null {
 
 /**
  * Projects the credentials-file identity block (`{ id, email, name }`) from a
- * validated `AuthenticatedUser`. The store stamps `authnBaseUrl` + `savedAt`;
- * only the user identity crosses the `signIn` seam.
+ * validated `AuthenticatedUser`. The store stamps `savedAt`; only the user
+ * identity crosses the `signIn` seam.
  */
 function identityFromUser(user: AuthenticatedUser): StoredCredentialsIdentity {
   // Single source of truth for the projection lives in shared auth-validation

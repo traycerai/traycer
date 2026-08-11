@@ -745,10 +745,10 @@ export interface StoredAuthTokens {
 }
 
 /**
- * The identity block a caller supplies on interactive sign-in. The `authnBaseUrl`
- * and `savedAt` are NOT supplied here — the main-process `FileTokenStore` stamps
- * them (env-scoped `authnBaseUrl` from its own config, `savedAt` at write time),
- * so the renderer can never write a mismatched authn origin into the shared file.
+ * The identity block a caller supplies on interactive sign-in. `savedAt` is NOT
+ * supplied here — the main-process `FileTokenStore` stamps it at write time.
+ * The file carries no authn URL at all: every refresh/probe targets the
+ * consuming process's own configured authn origin.
  */
 export type StoredCredentialsIdentity = StoredCredentials["user"];
 

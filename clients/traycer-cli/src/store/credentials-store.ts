@@ -14,7 +14,6 @@ import type {
   RevalidateOutcome,
 } from "../../../shared/auth/bearer-revalidator";
 import { config } from "../config";
-import { effectiveAuthnBaseUrl } from "./credentials";
 import { cliCredentialsPath } from "./paths";
 
 /**
@@ -50,17 +49,13 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
       metaPath: `${credentialsPath}.meta.json`,
       lockPath: `${credentialsPath}.lock`,
     },
-    // `rotate` refreshes against the file's stored `authnBaseUrl`. The shared
-    // dev credentials file can carry a *sibling* dev-desktop run's authn URL
-    // (its own local-stack port), so re-point the refresh at THIS run's
-    // effective URL — the exact override `resolveHostAuth` applies to the initial
-    // bearer. Production is a no-op (`effectiveAuthnBaseUrl` returns the stored
-    // value when not inside a dev-desktop slot); the persisted pair keeps the raw
-    // stored URL untouched (only this refresh call is re-pointed).
+    // The store hands over only the pair; the refresh endpoint is THIS build's
+    // configured authn (baked, with the dev-slot env override applied at module
+    // init). The file deliberately carries no URL - see `store/credentials.ts`.
     refresh: (args) =>
       refreshOnceAbortable({
         ...args,
-        authnBaseUrl: effectiveAuthnBaseUrl(args.authnBaseUrl),
+        authnBaseUrl: config.authnBaseUrl,
         clientKind: "cli",
       }),
     lockWaitMs: LOCK_WAIT_MS,

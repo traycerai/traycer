@@ -35,9 +35,10 @@ import { describeLogError, log } from "../app/logger";
  *
  * The path is ENV-scoped (never slot-scoped): all `make dev-desktop` slots and
  * the CLI share one file per environment, which is the whole point — sign in
- * once, signed in everywhere. `authnBaseUrl` is stamped here (from this
- * process's config) on interactive sign-in, so the renderer can never write a
- * mismatched authn origin into the shared file.
+ * once, signed in everywhere. The file carries no authn URL: every refresh and
+ * probe targets THIS process's configured `authnBaseUrl` (baked, with the
+ * dev-slot env override), so a pair written by one dev slot stays refreshable
+ * from every other slot instead of chasing the writer's (possibly dead) port.
  *
  * §4 owns the file watcher: directory watch + basename filter, debounced
  * revisioned `TokenStoreChange` fan-out (external writes AND self-writes).
@@ -112,7 +113,11 @@ export class FileTokenStore {
     this.store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
       refresh: (args) =>
-        refreshOnceAbortable({ ...args, clientKind: "desktop" }),
+        refreshOnceAbortable({
+          ...args,
+          authnBaseUrl: options.authnBaseUrl,
+          clientKind: "desktop",
+        }),
       lockWaitMs: LOCK_WAIT_MS,
       lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
       continuationRetryMs: CONTINUATION_RETRY_MS,
@@ -268,9 +273,9 @@ export class FileTokenStore {
   /**
    * Interactive create/replace — the device-flow sign-in. The renderer supplies
    * only the freshly-minted pair and the validated identity; this process stamps
-   * the env-scoped `authnBaseUrl` and `savedAt`. Rejects on a non-`applied`
-   * outcome (a persistent local failure) so the sign-in surfaces as failed
-   * rather than a signed-in state the next launch cannot rehydrate.
+   * `savedAt`. Rejects on a non-`applied` outcome (a persistent local failure)
+   * so the sign-in surfaces as failed rather than a signed-in state the next
+   * launch cannot rehydrate.
    */
   signIn(
     tokens: StoredAuthTokens,
@@ -280,7 +285,6 @@ export class FileTokenStore {
       const credentials: StoredCredentials = {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
-        authnBaseUrl: this.authnBaseUrl,
         savedAt: new Date().toISOString(),
         user: identity,
       };

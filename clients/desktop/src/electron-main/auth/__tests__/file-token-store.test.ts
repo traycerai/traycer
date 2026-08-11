@@ -174,7 +174,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(store).toBeDefined();
   });
 
-  it("signIn stamps authnBaseUrl + savedAt, get round-trips the full identity", async () => {
+  it("signIn stamps savedAt, get round-trips the full identity", async () => {
     const store = makeStore();
     await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
 
@@ -182,7 +182,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(got).toEqual({
       token: "tok-1",
       refreshToken: "rt-1",
-      authnBaseUrl: AUTHN_BASE_URL,
       savedAt: expect.any(String),
       user: { ...IDENTITY },
     });
@@ -190,7 +189,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const onDisk = JSON.parse(
       readFileSync(credentialsPath(), "utf8"),
     ) as StoredCredentials;
-    expect(onDisk.authnBaseUrl).toBe(AUTHN_BASE_URL);
     expect(onDisk.user).toEqual(IDENTITY);
   });
 
@@ -314,7 +312,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(await store.get()).toEqual({
       token: "tok-1",
       refreshToken: "rt-1",
-      authnBaseUrl: AUTHN_BASE_URL,
       savedAt: expect.any(String),
       user: { ...IDENTITY },
     });
@@ -518,7 +515,6 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const EXTERNAL: StoredCredentials = {
       token: "ext-token",
       refreshToken: "ext-refresh",
-      authnBaseUrl: AUTHN_BASE_URL,
       savedAt: "2026-01-01T00:00:00.000Z",
       user: { ...IDENTITY },
     };

@@ -24,7 +24,6 @@ import { writeSidecarState } from "../credentials-wal";
 const CREDS: StoredCredentials = {
   token: "tok-0",
   refreshToken: "rt-0",
-  authnBaseUrl: "http://localhost:21001",
   savedAt: "2026-01-01T00:00:00.000Z",
   user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
 };
@@ -421,7 +420,6 @@ describe("credentials mutation store", () => {
     const CANDIDATE = {
       token: "cand-tok",
       refreshToken: "cand-rt",
-      authnBaseUrl: "http://localhost:21001",
     };
 
     it("spends the candidate and first-writes the refreshed pair stamped with the probed identity (applied)", async () => {
@@ -439,7 +437,6 @@ describe("credentials mutation store", () => {
       expect(onDisk).toEqual({
         token: "cand-tok::r",
         refreshToken: "rt::cand-tok",
-        authnBaseUrl: CANDIDATE.authnBaseUrl,
         savedAt: expect.any(String),
         user: MIGRATED_IDENTITY,
       });
