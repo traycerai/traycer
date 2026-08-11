@@ -1,53 +1,22 @@
-import { Check, CircleAlert, RotateCcw } from "lucide-react";
+import { Check, CircleAlert } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
-import { cn } from "@/lib/utils";
-import { EASE_IN_OUT, EASE_OUT, SPRING_PRESS } from "./ease";
+import { EASE_IN_OUT, EASE_OUT } from "./ease";
 import { useHoverCapable } from "./use-hover-capable";
 
-export type ImageGenerationStatus =
-  "queued" | "generating" | "refining" | "complete" | "error";
+export type ImageGenerationStatus = "generating" | "complete" | "error";
 
-export interface ImageGenerationProps {
-  readonly children?: ReactNode;
-  readonly status?: ImageGenerationStatus;
-  readonly label?: string;
-  readonly prompt?: string;
-  readonly resolution?: string;
-  readonly aspectRatio?: CSSProperties["aspectRatio"];
-  readonly size?: "compact" | "fluid";
-  readonly interactive?: boolean;
-  readonly statusText?: string;
-  readonly showStatus?: boolean;
-  readonly onRetry?: () => void;
-  readonly className?: string;
-  readonly mediaClassName?: string;
-  readonly mediaStyle?: CSSProperties;
-  readonly statusClassName?: string;
-}
-
-interface NormalizedImageGenerationProps {
+interface ImageGenerationProps {
   readonly children: ReactNode;
   readonly status: ImageGenerationStatus;
-  readonly label: string | undefined;
-  readonly prompt: string | undefined;
+  readonly prompt: string;
   readonly resolution: string;
   readonly aspectRatio: CSSProperties["aspectRatio"];
-  readonly size: "compact" | "fluid";
-  readonly interactive: boolean;
-  readonly statusText: string | undefined;
-  readonly showStatus: boolean;
-  readonly onRetry: (() => void) | undefined;
-  readonly className: string | undefined;
-  readonly mediaClassName: string | undefined;
-  readonly mediaStyle: CSSProperties | undefined;
-  readonly statusClassName: string | undefined;
+  readonly mediaStyle: CSSProperties;
 }
 
 const STATUS_TEXT: Record<ImageGenerationStatus, string> = {
-  queued: "Waiting to generate",
   generating: "Generating image",
-  refining: "Refining details",
   complete: "Image ready",
   error: "Generation failed",
 };
@@ -56,21 +25,13 @@ const MEDIA_STATE: Record<
   ImageGenerationStatus,
   { filter: string; opacity: number; scale: number }
 > = {
-  queued: { filter: "blur(4px) saturate(0.75)", opacity: 0, scale: 1.02 },
   generating: { filter: "blur(3px) saturate(0.85)", opacity: 0, scale: 1.015 },
-  refining: {
-    filter: "blur(1.5px) saturate(0.95)",
-    opacity: 0.62,
-    scale: 1.005,
-  },
   complete: { filter: "blur(0px) saturate(1)", opacity: 1, scale: 1 },
   error: { filter: "blur(2px) saturate(0.5)", opacity: 0.28, scale: 1 },
 };
 
 const OVERLAY_OPACITY: Record<ImageGenerationStatus, number> = {
-  queued: 1,
   generating: 1,
-  refining: 0.48,
   complete: 0,
   error: 0,
 };
@@ -108,7 +69,6 @@ function DitherMark(props: {
 }
 
 function DitherField(props: {
-  readonly interactive: boolean;
   readonly reduce: boolean;
   readonly status: ImageGenerationStatus;
 }): ReactNode {
@@ -131,7 +91,7 @@ function DitherField(props: {
       targetY: 0,
       inside: false,
     };
-    const pointerEnabled = props.interactive && canHover && !props.reduce;
+    const pointerEnabled = canHover && !props.reduce;
 
     const resize = (): void => {
       const rect = canvas.getBoundingClientRect();
@@ -224,7 +184,7 @@ function DitherField(props: {
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerleave", handlePointerLeave);
     };
-  }, [canHover, props.interactive, props.reduce]);
+  }, [canHover, props.reduce]);
 
   return (
     <motion.div
@@ -243,68 +203,41 @@ function DitherField(props: {
 }
 
 export function ImageGeneration(props: ImageGenerationProps): ReactNode {
-  const normalized = normalizeImageGenerationProps(props);
   const reduce = useReducedMotion() ?? false;
-  const active = isActiveStatus(normalized.status);
-  const resolvedStatusText =
-    normalized.statusText ?? STATUS_TEXT[normalized.status];
-  const resolvedLabel =
-    normalized.label ??
-    (normalized.prompt
-      ? `${resolvedStatusText}: ${normalized.prompt}`
-      : resolvedStatusText);
+  const active = props.status === "generating";
+  const statusText = STATUS_TEXT[props.status];
+  const label = props.prompt ? `${statusText}: ${props.prompt}` : statusText;
 
   return (
     <div
       data-slot="image-generation"
-      data-state={normalized.status}
+      data-state={props.status}
       aria-busy={active}
-      className={cn(
-        normalized.size === "fluid" ? "w-fit max-w-full" : "w-full",
-        normalized.className,
-      )}
+      className="w-fit max-w-full"
     >
       <div
-        style={{ width: normalized.mediaStyle?.width }}
-        className={cn(
-          normalized.size === "compact"
-            ? "mx-auto w-full max-w-52"
-            : "w-fit max-w-full",
-        )}
+        style={{ width: props.mediaStyle.width }}
+        className="w-fit max-w-full"
       >
         <ImageGenerationMedia
-          props={normalized}
+          props={props}
           active={active}
           reduce={reduce}
-          label={resolvedLabel}
+          label={label}
         />
         <ImageGenerationDetails
-          status={normalized.status}
-          statusText={resolvedStatusText}
-          prompt={normalized.prompt}
-          showStatus={normalized.showStatus}
-          statusClassName={normalized.statusClassName}
+          status={props.status}
+          statusText={statusText}
+          prompt={props.prompt}
           reduce={reduce}
         />
-        {normalized.status === "error" && normalized.onRetry ? (
-          <motion.button
-            type="button"
-            onClick={normalized.onRetry}
-            whileTap={reduce ? undefined : { scale: 0.96 }}
-            transition={SPRING_PRESS}
-            className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-full px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <RotateCcw aria-hidden="true" className="size-4" />
-            Try again
-          </motion.button>
-        ) : null}
       </div>
     </div>
   );
 }
 
 function ImageGenerationMedia(props: {
-  readonly props: NormalizedImageGenerationProps;
+  readonly props: ImageGenerationProps;
   readonly active: boolean;
   readonly reduce: boolean;
   readonly label: string;
@@ -335,10 +268,7 @@ function ImageGenerationMedia(props: {
         transition={
           props.reduce ? { duration: 0 } : { duration: 0.4, ease: EASE_OUT }
         }
-        className={cn(
-          "absolute inset-0 [&>*]:size-full",
-          props.props.mediaClassName,
-        )}
+        className="absolute inset-0 [&>*]:size-full"
       >
         {props.props.children}
       </motion.div>
@@ -355,11 +285,7 @@ function ImageGenerationMedia(props: {
             }}
             className="absolute inset-0"
           >
-            <DitherField
-              interactive={props.props.interactive}
-              reduce={props.reduce}
-              status={props.props.status}
-            />
+            <DitherField reduce={props.reduce} status={props.props.status} />
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -375,73 +301,40 @@ function ImageGenerationMedia(props: {
 function ImageGenerationDetails(props: {
   readonly status: ImageGenerationStatus;
   readonly statusText: string;
-  readonly prompt: string | undefined;
-  readonly showStatus: boolean;
-  readonly statusClassName: string | undefined;
+  readonly prompt: string;
   readonly reduce: boolean;
 }): ReactNode {
-  if (!props.showStatus && !props.prompt) return null;
   return (
     <div className="mt-3 text-left">
-      {props.showStatus ? (
-        <div
-          aria-live="polite"
-          className={cn(
-            "flex min-h-5 items-center gap-2 text-sm font-medium text-foreground",
-            props.status === "error" && "text-destructive",
-            props.statusClassName,
-          )}
-        >
-          <DitherMark status={props.status} reduce={props.reduce} />
-          <AnimatePresence mode="popLayout" initial={false}>
-            <motion.span
-              key={props.statusText}
-              initial={props.reduce ? false : { opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={props.reduce ? undefined : { opacity: 0, y: -4 }}
-              transition={{
-                duration: props.reduce ? 0 : 0.15,
-                ease: EASE_OUT,
-              }}
-            >
-              {props.statusText}
-            </motion.span>
-          </AnimatePresence>
-        </div>
-      ) : null}
+      <div
+        aria-live="polite"
+        className={
+          props.status === "error"
+            ? "flex min-h-5 items-center gap-2 text-sm font-medium text-destructive"
+            : "flex min-h-5 items-center gap-2 text-sm font-medium text-foreground"
+        }
+      >
+        <DitherMark status={props.status} reduce={props.reduce} />
+        <AnimatePresence mode="popLayout" initial={false}>
+          <motion.span
+            key={props.statusText}
+            initial={props.reduce ? false : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={props.reduce ? undefined : { opacity: 0, y: -4 }}
+            transition={{
+              duration: props.reduce ? 0 : 0.15,
+              ease: EASE_OUT,
+            }}
+          >
+            {props.statusText}
+          </motion.span>
+        </AnimatePresence>
+      </div>
       {props.prompt ? (
         <p className="mt-0.5 truncate text-xs text-muted-foreground">
           “{props.prompt}”
         </p>
       ) : null}
     </div>
-  );
-}
-
-function normalizeImageGenerationProps(
-  props: ImageGenerationProps,
-): NormalizedImageGenerationProps {
-  return {
-    children: props.children ?? null,
-    status: props.status ?? "generating",
-    label: props.label,
-    prompt: props.prompt,
-    resolution: props.resolution ?? "1024 × 1024",
-    aspectRatio: props.aspectRatio ?? "1 / 1",
-    size: props.size ?? "compact",
-    interactive: props.interactive ?? true,
-    statusText: props.statusText,
-    showStatus: props.showStatus ?? true,
-    onRetry: props.onRetry,
-    className: props.className,
-    mediaClassName: props.mediaClassName,
-    mediaStyle: props.mediaStyle,
-    statusClassName: props.statusClassName,
-  };
-}
-
-function isActiveStatus(status: ImageGenerationStatus): boolean {
-  return (
-    status === "queued" || status === "generating" || status === "refining"
   );
 }

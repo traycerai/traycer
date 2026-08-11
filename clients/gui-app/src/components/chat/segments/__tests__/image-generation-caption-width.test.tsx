@@ -13,9 +13,11 @@ describe("<ImageGeneration /> caption width anchor", () => {
       .trim();
     const { container } = render(
       <ImageGeneration
+        children={null}
         status="complete"
         prompt={longPrompt}
-        size="fluid"
+        resolution=""
+        aspectRatio={1}
         mediaStyle={{ width: "22.5rem" }}
       />,
     );

@@ -5,7 +5,6 @@ import type {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AddImageToArtifactButton } from "@/components/artifacts/add-image-to-artifact-button";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
-import { cn } from "@/lib/utils";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import {
   ImageGeneration,
@@ -27,11 +26,6 @@ interface GenerationPresentation {
   readonly prompt: string;
 }
 
-interface KeyedImageResult {
-  readonly key: string;
-  readonly result: ImageGenerationResult;
-}
-
 export function ImageGenerationCard(
   props: ImageGenerationCardProps,
 ): ReactNode {
@@ -39,15 +33,13 @@ export function ImageGenerationCard(
     props.inputSummary,
     props.inputDetail,
   );
-  const caption =
-    props.imageResults.find((result) => result.revisedPrompt !== null)
-      ?.revisedPrompt ?? presentation.prompt;
+  const result = props.imageResults.at(0) ?? null;
+  const caption = result?.revisedPrompt ?? presentation.prompt;
   const status = generationStatus(
     props.error,
     props.isStreaming,
     props.imageResults.length,
   );
-  const results = keyedImageResults(props.imageResults);
 
   return (
     <section
@@ -56,31 +48,12 @@ export function ImageGenerationCard(
       className="w-fit max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="Image generation"
     >
-      <div
-        className={cn(
-          "grid w-fit max-w-full gap-4",
-          results.length > 1 && "sm:grid-cols-2",
-        )}
-      >
-        {results.length > 0 ? (
-          results.map(({ key, result }) => (
-            <GenerationCell
-              key={key}
-              result={result}
-              status={status}
-              prompt={caption}
-              fallbackAspectRatio={presentation.aspectRatio}
-            />
-          ))
-        ) : (
-          <GenerationCell
-            result={null}
-            status={status}
-            prompt={caption}
-            fallbackAspectRatio={presentation.aspectRatio}
-          />
-        )}
-      </div>
+      <GenerationCell
+        result={result}
+        status={status}
+        prompt={caption}
+        fallbackAspectRatio={presentation.aspectRatio}
+      />
     </section>
   );
 }
@@ -108,7 +81,6 @@ function GenerationCell(props: {
       prompt={props.prompt}
       resolution={resolution}
       aspectRatio={aspectRatio}
-      size="fluid"
       mediaStyle={generationFrameStyle(props.result, aspectRatio)}
     >
       {props.result === null ? null : (
@@ -129,20 +101,6 @@ function generationStatus(
   if (resultCount > 0) return "complete";
   if (error !== null || !isStreaming) return "error";
   return "generating";
-}
-
-function keyedImageResults(
-  results: ReadonlyArray<ImageGenerationResult>,
-): ReadonlyArray<KeyedImageResult> {
-  const occurrencesByHash = new Map<string, number>();
-  return results.map((result) => {
-    const occurrence = occurrencesByHash.get(result.attachmentHash) ?? 0;
-    occurrencesByHash.set(result.attachmentHash, occurrence + 1);
-    return {
-      key: `${result.attachmentHash}:${occurrence}`,
-      result,
-    };
-  });
 }
 
 function GeneratedImageContent(props: {

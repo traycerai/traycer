@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { Link } from "lucide-react";
+import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
@@ -16,7 +17,6 @@ import {
   AttachmentImageLoading,
 } from "./attachment-image";
 
-const MAX_INLINE_IMAGE_BYTES = 30 * 1024 * 1024;
 const RASTER_DATA_URL_PATTERN =
   /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z\d+/]+={0,2})$/i;
 const SVG_DATA_URL_PATTERN = /^data:image\/svg\+xml(?:[;,])/i;
@@ -75,7 +75,7 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
     }
     const byteLength = decodedBase64ByteLength(match[2]);
     if (byteLength === null) return { kind: "invalid-data", src: trimmed };
-    if (byteLength > MAX_INLINE_IMAGE_BYTES) {
+    if (byteLength > MAX_ARTIFACT_IMAGE_BYTES) {
       return { kind: "data-oversized", src: trimmed };
     }
     if (!hasRasterMagic(match[1], match[2])) {

@@ -233,7 +233,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(screen.getByRole("img", { name: "provider alt text" })).toBeTruthy();
   });
 
-  it("keeps the multi-image grid and duplicate results", () => {
+  it("renders only the first result until the live contract widens", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/multi",
@@ -256,15 +256,13 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     });
 
     expect(screen.getByRole("img", { name: "variant a" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "variant b" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "variant b" })).toBeNull();
     const card = screen.getByRole("region", { name: "Image generation" });
-    const bodyGrid = card.querySelector(".grid");
-    expect(bodyGrid?.className).toContain("sm:grid-cols-2");
     expect(
       card.querySelectorAll(
         '[data-slot="image-generation"][data-state="complete"]',
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   it("shows waiting-for-sync while the attachment blob is not ready, still ratio-reserved", () => {
