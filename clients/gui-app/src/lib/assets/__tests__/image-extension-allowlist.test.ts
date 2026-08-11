@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   candidateImageMediaType,
   isImageAssetPath,
+  isSvgAssetPath,
 } from "../image-extension-allowlist";
 
 describe("image extension allowlist", () => {
@@ -19,5 +20,12 @@ describe("image extension allowlist", () => {
     expect(candidateImageMediaType("no-extension")).toBeNull();
     expect(isImageAssetPath("README.md")).toBe(false);
     expect(isImageAssetPath("images/logo.jpg")).toBe(true);
+  });
+
+  it("recognizes SVG paths case-insensitively without treating other images as SVG", () => {
+    expect(isSvgAssetPath("icons/mark.svg")).toBe(true);
+    expect(isSvgAssetPath("icons/mark.SVG")).toBe(true);
+    expect(isSvgAssetPath("icons/mark.png")).toBe(false);
+    expect(isSvgAssetPath("icons/mark")).toBe(false);
   });
 });
