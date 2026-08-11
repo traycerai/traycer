@@ -61,6 +61,10 @@ import {
 } from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -557,6 +561,7 @@ describe("createChatSessionStore", () => {
   afterEach(() => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     useInterviewDraftStore.setState({ draftsByChat: {} });
+    __resetAppLocalNotificationsStoreForTests();
     window.localStorage.clear();
   });
 
@@ -593,6 +598,36 @@ describe("createChatSessionStore", () => {
       "CHAT_INVALID",
     );
     expect(harness.handle.store.getState().snapshotLoaded).toBe(false);
+  });
+
+  it("emits each actual fatal close once and resurfaces a later close", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity(OWNER_ID);
+    const harness = createHarness();
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "CONNECTION_LOST",
+        reason: "Connection lost",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+    const notificationId = "stream.transport.error:chat-1:CONNECTION_LOST";
+
+    harness.callbacks().onConnectionStatus("closed", reason);
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead(notificationId, Date.now());
+    harness.callbacks().onConnectionStatus("closed", reason);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).not.toBeNull();
+
+    harness.handle.store.getState().retry();
+    harness.callbacks().onConnectionStatus("closed", reason);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
   });
 
   it("retry re-subscribes and clears the fatal close", () => {

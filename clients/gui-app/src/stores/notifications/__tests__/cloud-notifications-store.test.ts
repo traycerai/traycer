@@ -560,6 +560,25 @@ describe("cloud notifications store", () => {
     close();
   });
 
+  it("reports baseline rows as a snapshot even when there are no arrivals", () => {
+    const client = new ControlledWsStreamClient();
+    const onSnapshot = vi.fn();
+    const close = openCloudNotificationsStream(client, null, null, onSnapshot);
+    const row = cloudRow("entry-a", 4, "host-a");
+
+    client.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 4,
+      rows: [row],
+      summary,
+    });
+
+    expect(onSnapshot).toHaveBeenCalledWith({ rows: [row], arrivals: [] });
+    close();
+  });
+
   it("ignores a snapshot from a relay controller whose ownership epoch was replaced", () => {
     const oldClient = new ControlledWsStreamClient();
     const closeOld = openCloudNotificationsStream(oldClient, null, null, null);

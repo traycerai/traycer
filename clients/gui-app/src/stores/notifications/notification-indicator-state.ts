@@ -80,11 +80,11 @@ export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResp
  * the entity columns, severity, kind and markers, so it can mirror the host's
  * derivation over rows from EVERY host rather than only the connected one.
  * Pending prompts are ORed normally. Terminal rows first resolve to the newest
- * outcome for each exact entity within one origin host, whose timestamps share
- * a clock domain. Those per-host winners are then rolled into epic state. This
- * lets a later success replace an earlier failure from one host without
- * comparing clocks across hosts or allowing another host/entity's success to
- * hide a real failure.
+ * outcome for each lifecycle group and exact entity within one origin host,
+ * whose timestamps share a clock domain. Those per-host winners are then
+ * rolled into epic state. This lets a later success replace an earlier failure
+ * from the same lifecycle without comparing clocks across hosts or allowing an
+ * independent lifecycle, host, or entity's success to hide a real failure.
  * `pendingFork` is always false here: fork truth is host-local and is merged
  * from the host response after this feed-row derivation, never inferred from a
  * retained cloud row.
@@ -121,22 +121,16 @@ export function selectCloudNotificationIndicators(
     collectCloudIndicatorEntry(accumulator, row);
   }
   for (const [epicId, terminalWinners] of epicTerminalWinners) {
-    for (const originWinners of terminalWinners.values()) {
-      for (const winner of originWinners.values()) {
-        const contribution = terminalIndicatorContribution(winner);
-        if (contribution !== null) {
-          epics[epicId] = mergeIndicatorFlags(epics[epicId], contribution);
-        }
-      }
-    }
+    epics[epicId] = mergeTerminalContributions(
+      epics[epicId],
+      terminalEntriesForEpic(terminalWinners),
+    );
   }
   for (const [chatId, originWinners] of chatTerminalWinners) {
-    for (const winner of originWinners.values()) {
-      const contribution = terminalIndicatorContribution(winner);
-      if (contribution !== null) {
-        chats[chatId] = mergeIndicatorFlags(chats[chatId], contribution);
-      }
-    }
+    chats[chatId] = mergeTerminalContributions(
+      chats[chatId],
+      terminalEntriesForOrigins(originWinners),
+    );
   }
   return { epics, chats };
 }
@@ -150,8 +144,13 @@ interface CloudIndicatorAccumulator {
   readonly chatTerminalWinners: CloudTerminalWinners;
 }
 
-/** Exact entity -> origin host -> latest terminal entry in that host's clock. */
-type CloudTerminalWinners = Map<string, Map<string, HostNotificationEntry>>;
+/** Exact entity -> origin host -> lifecycle group -> latest terminal entry in
+ * that host's clock. Independent lifecycle groups must never supersede one
+ * another merely because they address the same chat or epic. */
+type CloudTerminalWinners = Map<
+  string,
+  Map<string, Map<string, HostNotificationEntry>>
+>;
 
 function collectCloudIndicatorEntry(
   accumulator: CloudIndicatorAccumulator,
@@ -167,12 +166,13 @@ function collectCloudIndicatorEntry(
         contribution,
       );
     }
-    retainLatestTerminal(
-      terminalWinnersForEpic(accumulator.epicTerminalWinners, epicId),
-      chatId === null ? "epic" : `chat:${chatId}`,
+    retainLatestTerminal({
+      winners: terminalWinnersForEpic(accumulator.epicTerminalWinners, epicId),
+      entityId: chatId === null ? "epic" : `chat:${chatId}`,
       originHostId,
-      entry,
-    );
+      coalesceKey: row.coalesceKey,
+      candidate: entry,
+    });
   }
   if (chatId !== null && accumulator.wantedChatIds.has(chatId)) {
     if (contribution !== null) {
@@ -181,12 +181,13 @@ function collectCloudIndicatorEntry(
         contribution,
       );
     }
-    retainLatestTerminal(
-      accumulator.chatTerminalWinners,
-      chatId,
+    retainLatestTerminal({
+      winners: accumulator.chatTerminalWinners,
+      entityId: chatId,
       originHostId,
-      entry,
-    );
+      coalesceKey: row.coalesceKey,
+      candidate: entry,
+    });
   }
 }
 
@@ -222,28 +223,68 @@ function terminalWinnersForEpic(
   return created;
 }
 
-function retainLatestTerminal(
-  winners: CloudTerminalWinners,
-  entityId: string,
-  originHostId: string,
-  candidate: HostNotificationEntry,
-): void {
-  if (!isTerminalEntry(candidate)) return;
-  const originWinners = terminalWinnersForEntity(winners, entityId);
-  const current = originWinners.get(originHostId);
-  if (current === undefined || terminalEntryIsNewer(candidate, current)) {
-    originWinners.set(originHostId, candidate);
+function retainLatestTerminal(input: {
+  readonly winners: CloudTerminalWinners;
+  readonly entityId: string;
+  readonly originHostId: string;
+  readonly coalesceKey: string;
+  readonly candidate: HostNotificationEntry;
+}): void {
+  if (!isTerminalEntry(input.candidate)) return;
+  const originWinners = terminalWinnersForEntity(input.winners, input.entityId);
+  const groupWinners = terminalWinnersForOrigin(
+    originWinners,
+    input.originHostId,
+  );
+  const current = groupWinners.get(input.coalesceKey);
+  if (current === undefined || terminalEntryIsNewer(input.candidate, current)) {
+    groupWinners.set(input.coalesceKey, input.candidate);
   }
+}
+
+function terminalEntriesForEpic(
+  winners: CloudTerminalWinners,
+): ReadonlyArray<HostNotificationEntry> {
+  return [...winners.values()].flatMap(terminalEntriesForOrigins);
+}
+
+function terminalEntriesForOrigins(
+  winners: Map<string, Map<string, HostNotificationEntry>>,
+): ReadonlyArray<HostNotificationEntry> {
+  return [...winners.values()].flatMap((group) => [...group.values()]);
+}
+
+function mergeTerminalContributions(
+  current: HostNotificationsIndicatorState | undefined,
+  entries: ReadonlyArray<HostNotificationEntry>,
+): HostNotificationsIndicatorState {
+  return entries.reduce<HostNotificationsIndicatorState>((merged, entry) => {
+    const contribution = terminalIndicatorContribution(entry);
+    return contribution === null
+      ? merged
+      : mergeIndicatorFlags(merged, contribution);
+  }, current ?? EMPTY_HOST_INDICATOR_STATE);
 }
 
 function terminalWinnersForEntity(
   winners: CloudTerminalWinners,
   entityId: string,
-): Map<string, HostNotificationEntry> {
+): Map<string, Map<string, HostNotificationEntry>> {
   const existing = winners.get(entityId);
   if (existing !== undefined) return existing;
-  const created = new Map<string, HostNotificationEntry>();
+  const created = new Map<string, Map<string, HostNotificationEntry>>();
   winners.set(entityId, created);
+  return created;
+}
+
+function terminalWinnersForOrigin(
+  winners: Map<string, Map<string, HostNotificationEntry>>,
+  originHostId: string,
+): Map<string, HostNotificationEntry> {
+  const existing = winners.get(originHostId);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, HostNotificationEntry>();
+  winners.set(originHostId, created);
   return created;
 }
 

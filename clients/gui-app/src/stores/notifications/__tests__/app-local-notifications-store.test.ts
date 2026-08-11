@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appLocalNotificationsKey } from "@/lib/persist";
+import { appLocalNotificationCompletionReceiptPrefix } from "@/lib/persist";
 import {
   hasAppLocalDisplayReceipt,
   recordAppLocalDisplayReceipt,
 } from "@/lib/notifications/app-local-display-receipts";
 import {
   APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST,
+  APP_LOCAL_OBSERVED_COMPLETION_GLOBAL_CAP,
   APP_LOCAL_NOTIFICATIONS_ROW_CAP,
   __resetAppLocalNotificationsStoreForTests,
   createAppLocalNotificationsStore,
@@ -58,7 +60,6 @@ describe("app-local notifications store", () => {
       byId: { retained: entry("retained", 20, null) },
       orderedIds: ["retained"],
       unreadCount: 1,
-      observedCompletionsByHost: {},
     });
   });
 
@@ -307,6 +308,7 @@ describe("app-local notifications store", () => {
     ).not.toContainEqual({
       id: "completion-0",
       occurrenceKey: "completion-0@0",
+      observedAt: 0,
     });
 
     store.getState().removeObservedCompletions("host-a", ["completion-1"]);
@@ -315,7 +317,103 @@ describe("app-local notifications store", () => {
     ).not.toContainEqual({
       id: "completion-1",
       occurrenceKey: "completion-1@1",
+      observedAt: 1,
     });
+  });
+
+  it("bounds completion receipts across host churn", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    for (
+      let index = 0;
+      index < APP_LOCAL_OBSERVED_COMPLETION_GLOBAL_CAP + 1;
+      index++
+    ) {
+      store
+        .getState()
+        .seedCompletion(
+          `host-${index}`,
+          { id: `completion-${index}`, occurrenceKey: `completion@${index}` },
+          index,
+        );
+    }
+
+    expect(
+      Object.values(store.getState().observedCompletionsByHost).flat(),
+    ).toHaveLength(APP_LOCAL_OBSERVED_COMPLETION_GLOBAL_CAP);
+    expect(
+      storageKeys().filter((storageKey) =>
+        storageKey.startsWith(
+          `${appLocalNotificationCompletionReceiptPrefix("user-a")}:`,
+        ),
+      ),
+    ).toHaveLength(APP_LOCAL_OBSERVED_COMPLETION_GLOBAL_CAP);
+  });
+
+  it("seeds a baseline completion without consuming a persisted failure", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("persisted-failure", 20, null));
+
+    store
+      .getState()
+      .seedCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@10" },
+        30,
+      );
+    store
+      .getState()
+      .observeCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@10" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        40,
+      );
+
+    expect(store.getState().byId["persisted-failure"].readAt).toBeNull();
+  });
+
+  it("keeps a receipt when a stale renderer overwrites the Zustand blob", () => {
+    const key = appLocalNotificationsKey("user-a");
+    const firstWindow = createAppLocalNotificationsStore(key);
+    const staleWindow = createAppLocalNotificationsStore(key);
+    firstWindow.getState().activateIdentity("user-a");
+    staleWindow.getState().activateIdentity("user-a");
+    firstWindow
+      .getState()
+      .observeCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@10" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        10,
+      );
+    staleWindow.getState().upsert(entry("unrelated", 20, null));
+
+    const reloaded = createAppLocalNotificationsStore(key);
+    reloaded.getState().activateIdentity("user-a");
+    reloaded.getState().upsert(entry("later-failure", 30, null));
+    reloaded
+      .getState()
+      .observeCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@10" },
+        { epicId: "epic-1", chatId: "chat-1" },
+        40,
+      );
+
+    expect(reloaded.getState().byId["later-failure"].readAt).toBeNull();
+    expect(
+      storageKeys().filter((storageKey) =>
+        storageKey.startsWith(
+          `${appLocalNotificationCompletionReceiptPrefix("user-a")}:`,
+        ),
+      ),
+    ).toHaveLength(1);
   });
 
   it("consumes a later occurrence that reuses a semantic completion id", () => {
@@ -556,3 +654,12 @@ describe("app-local notifications store", () => {
     ]);
   });
 });
+
+function storageKeys(): ReadonlyArray<string> {
+  const keys: string[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (key !== null) keys.push(key);
+  }
+  return keys;
+}

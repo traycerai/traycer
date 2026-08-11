@@ -22,6 +22,7 @@ import type {
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
+import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
@@ -744,6 +745,7 @@ export function createChatSessionStore(
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
+  let fatalCloseNotificationGeneration: number | null = null;
   // Bumped whenever the connection the pendings were dispatched on is gone: a
   // transport `reconnecting`/`closed` status, or a stream-client replacement
   // (`retry`). Pending actions are stamped with this at dispatch, and the
@@ -1662,6 +1664,18 @@ export function createChatSessionStore(
       },
       onConnectionStatus: (status, reason) => {
         if (!isCurrentStream(streamGeneration)) return;
+        if (
+          status === "closed" &&
+          reason?.kind === "fatalError" &&
+          fatalCloseNotificationGeneration !== streamGeneration
+        ) {
+          fatalCloseNotificationGeneration = streamGeneration;
+          emitChatStreamErrorNotification({
+            epicId: options.epicId,
+            chatId: options.chatId,
+            details: reason.details,
+          });
+        }
         callbacks.onConnectionStatus(status, reason);
       },
     });

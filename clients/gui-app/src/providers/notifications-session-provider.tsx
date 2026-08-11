@@ -131,6 +131,7 @@ export function NotificationsSessionProvider(
   const previousStreamClientRef =
     useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(localStreamClient);
   const previousLocalHostIdRef = useRef<string | null>(localHostId);
+  const localSnapshotHostsRef = useRef(new Set<string>());
   // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
   const previousFeedModeRef = useRef<
@@ -146,24 +147,31 @@ export function NotificationsSessionProvider(
   // therefore the only causal boundary shared by both sources. The app-local
   // store remembers it durably so reconnect snapshots and provider/renderer
   // remounts cannot replay an old completion over a later failure.
-  const consumeObservedCompletion = useCallback(
-    (entry: HostNotificationEntryV21, originHostId: string): void => {
+  const recordCompletion = useCallback(
+    (
+      entry: HostNotificationEntryV21,
+      originHostId: string,
+      semanticId: string,
+      mode: "observe" | "seed",
+    ): void => {
       if (entry.severity !== "done") return;
       const entity = notificationEntityFromHostEntry(entry);
       if (entity === null) return;
-      useAppLocalNotificationsStore.getState().observeCompletion(
-        originHostId,
-        {
-          id: entry.id,
-          occurrenceKey: occurrenceKeyForNotification({
-            feedId: entry.id,
-            createdAt: entry.updatedAt,
-            sourceRef: entry.sourceRef,
-          }),
-        },
-        entity,
-        Date.now(),
-      );
+      const completion = {
+        id: semanticId,
+        occurrenceKey: occurrenceKeyForNotification({
+          feedId: semanticId,
+          createdAt: entry.updatedAt,
+          sourceRef: entry.sourceRef,
+        }),
+      };
+      const store = useAppLocalNotificationsStore.getState();
+      const observedAt = Date.now();
+      if (mode === "seed") {
+        store.seedCompletion(originHostId, completion, observedAt);
+        return;
+      }
+      store.observeCompletion(originHostId, completion, entity, observedAt);
     },
     [],
   );
@@ -253,12 +261,16 @@ export function NotificationsSessionProvider(
       if (localHostId !== hostId) return;
       if (frame.kind === "snapshot") {
         invalidateNotificationIndicators(queryClient, hostId, hostClient);
+        const mode = localSnapshotHostsRef.current.has(hostId)
+          ? "observe"
+          : "seed";
         for (const entry of [
           ...frame.attention.entries,
           ...frame.recent.entries,
         ]) {
-          consumeObservedCompletion(entry, hostId);
+          recordCompletion(entry, hostId, entry.id, mode);
         }
+        localSnapshotHostsRef.current.add(hostId);
         return;
       }
       if (frame.kind === "cleared" || frame.kind === "removed") {
@@ -298,7 +310,7 @@ export function NotificationsSessionProvider(
         );
       }
       if (entity === null) return;
-      consumeObservedCompletion(frame.entry, hostId);
+      recordCompletion(frame.entry, hostId, frame.entry.id, "observe");
       const activeEntity = activeEntityRef.current;
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
@@ -313,7 +325,7 @@ export function NotificationsSessionProvider(
     [
       localHostId,
       consumeEntity,
-      consumeObservedCompletion,
+      recordCompletion,
       removeObservedCompletions,
       hostClient,
       queryClient,
@@ -527,11 +539,17 @@ export function NotificationsSessionProvider(
         localStreamClient,
         onAuthError,
         onEntitlementDenied,
-        (entries) => {
-          for (const row of entries) {
-            consumeObservedCompletion(row.entry, row.originHostId);
+        ({ rows, arrivals }) => {
+          const arrivalIds = new Set(arrivals.map((row) => row.entryId));
+          for (const row of rows) {
+            recordCompletion(
+              row.entry,
+              row.originHostId,
+              row.coalesceKey,
+              arrivalIds.has(row.entryId) ? "observe" : "seed",
+            );
           }
-          displayCloudSnapshotArrivals(entries, {
+          displayCloudSnapshotArrivals(arrivals, {
             showNotification,
             playChime: playNotificationChime,
             onToastClick: (row) => onToastClickRef.current(row),
@@ -544,6 +562,11 @@ export function NotificationsSessionProvider(
       useCloudNotificationsStore.getState().setConnectionState("unavailable");
       return;
     }
+    // Every transport session starts with a baseline snapshot. Receipts make
+    // previously seen completions harmless, while seeding unseen baseline
+    // rows keeps a reconnect or same-host user switch from treating retained
+    // history as a new causal success.
+    localSnapshotHostsRef.current.delete(streamHostId);
     disposerRef.current = openNotificationsStream(
       createNotificationsStream,
       onAuthError,
@@ -579,7 +602,7 @@ export function NotificationsSessionProvider(
   }, [
     localStreamClient,
     authService,
-    consumeObservedCompletion,
+    recordCompletion,
     localHostId,
     windowId,
     showNotification,

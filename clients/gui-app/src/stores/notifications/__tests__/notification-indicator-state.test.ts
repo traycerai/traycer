@@ -232,6 +232,40 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
+  it("does not let an independent completion hide a failure on the same chat", () => {
+    const failure = stoppedAt({
+      entryId: "workspace-failure",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 1,
+      chatId: "chat-1",
+    });
+    const done = stoppedAt({
+      entryId: "agent-done",
+      severity: "done",
+      readAt: null,
+      updatedAt: 2,
+      chatId: "chat-1",
+    });
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        { ...failure, coalesceKey: "workspace.operation.failed:event-1" },
+        { ...done, coalesceKey: "agent.stopped:chat-1" },
+      ]),
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result.epics["epic-1"]).toMatchObject({
+      unreadFailure: true,
+      unreadDone: true,
+    });
+    expect(result.chats["chat-1"]).toMatchObject({
+      unreadFailure: true,
+      unreadDone: true,
+    });
+  });
+
   it("preserves an unread failure when terminal timestamps tie", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([

@@ -388,8 +388,12 @@ export function openCloudNotificationsStream(
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
-  onArrivals:
-    ((rows: ReadonlyArray<HostNotificationsCloudFeedRow>) => void) | null,
+  onSnapshot:
+    | ((input: {
+        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
+        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRow>;
+      }) => void)
+    | null,
 ): () => void {
   let disposed = false;
   let currentSession: IStreamSession | null = null;
@@ -442,7 +446,7 @@ export function openCloudNotificationsStream(
           const arrivals = useCloudNotificationsStore
             .getState()
             .applySnapshot(parsed.data);
-          if (arrivals.length > 0) onArrivals?.(arrivals);
+          onSnapshot?.({ rows: parsed.data.rows, arrivals });
           reopenScheduler.resetBackoff();
           return;
         }

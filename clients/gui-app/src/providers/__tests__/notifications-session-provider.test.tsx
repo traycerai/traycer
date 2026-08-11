@@ -907,6 +907,106 @@ describe("<NotificationsSessionProvider />", () => {
     expect(showNotificationMock).toHaveBeenCalledTimes(1);
   });
 
+  it("seeds cloud baselines without consuming failures, then consumes a new completion", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.cloudFeed.subscribe",
+      );
+    });
+    const baseline = cloudRow("cloud-entry-baseline", 10);
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 1,
+        rows: [baseline],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      });
+    });
+    const baselineObservation = await waitFor(() => {
+      const observation = useAppLocalNotificationsStore
+        .getState()
+        .observedCompletionsByHost[baseline.originHostId]?.find(
+          (completion) => completion.id === baseline.coalesceKey,
+        );
+      expect(observation).toBeDefined();
+      return observation;
+    });
+    if (baselineObservation === undefined) {
+      throw new Error("Expected the cloud baseline receipt");
+    }
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "cross-plane-later-failure",
+      updatedAt: 25,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+      },
+      message: "Later failure",
+      detail: null,
+    });
+    useAppLocalNotificationsStore.getState().observeCompletion(
+      baseline.originHostId,
+      {
+        id: baseline.coalesceKey,
+        occurrenceKey: baselineObservation.occurrenceKey,
+      },
+      { epicId: "epic-cloud", chatId: "chat-cloud" },
+      26,
+    );
+    expect(
+      useAppLocalNotificationsStore.getState().byId["cross-plane-later-failure"]
+        .readAt,
+    ).toBeNull();
+
+    const arrived = {
+      ...cloudRow("cloud-entry-arrived", 30),
+      coalesceKey: baseline.coalesceKey,
+    };
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 2,
+        rows: [baseline, arrived],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId[
+          "cross-plane-later-failure"
+        ].readAt,
+      ).not.toBeNull();
+    });
+  });
+
   it("drops a cloud snapshot across an A to null to A binding cycle", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
