@@ -265,6 +265,7 @@ export function ImageGeneration(props: ImageGenerationProps): ReactNode {
       )}
     >
       <div
+        style={{ width: normalized.mediaStyle?.width }}
         className={cn(
           normalized.size === "compact"
             ? "mx-auto w-full max-w-52"
