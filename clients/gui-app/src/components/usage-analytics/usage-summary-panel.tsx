@@ -113,6 +113,22 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     query.data?.servedBy === "local"
       ? localPlaneHostName(props.currentHostId, props.hostNames)
       : null;
+  // A host filter picked on the cloud plane is meaningless once the plane
+  // becomes local, and worse than meaningless when it names a DIFFERENT
+  // host: the request contract says a foreign host id matches zero facts
+  // there, so the page would claim "This machine only" over an empty summary
+  // while the picker had already been replaced by a pinned readout offering
+  // no way to clear the stale selection.
+  //
+  // Adjusted during render (React's documented "reset state when a prop
+  // changes" shape) rather than in an effect or by deriving the request:
+  // an effect is a cascading-render lint error here, and deriving would
+  // OSCILLATE, because the resulting query-key change drops `query.data` to
+  // `undefined` mid-refetch, which flips the derivation back to the stale id
+  // and flips the key again. A latch settles in one pass.
+  if (pinnedToHostName !== null && hostId !== null) {
+    setHostId(null);
+  }
   const hostOptions = useMemo(
     () =>
       buildUsageHostFilterOptions({
@@ -266,7 +282,14 @@ function UsageSummaryPanelBody(props: {
   );
 
   return (
-    <div className="flex flex-col gap-5">
+    // `usage-chart-root` carries the `--usage-series-*` palette, and it has
+    // to sit on the common ancestor rather than on the chart alone:
+    // `UsageHarnessSplit` is the chart's SIBLING here and colors its dots and
+    // bars from the same scale, so while the scope lived only on
+    // `UsageDailyChart` those `var(--usage-series-N)` reads resolved against
+    // nothing and the split rendered colorless. `UsageDailyChart` keeps its
+    // own copy of the class for the epic dialog, where it stands alone.
+    <div className="usage-chart-root flex flex-col gap-5">
       <div className="flex flex-col gap-3">
         <UsageCostFigure
           totals={summary.totals}

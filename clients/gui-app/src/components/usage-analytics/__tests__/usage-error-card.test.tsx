@@ -39,15 +39,18 @@ describe("UsageErrorCard", () => {
     expect(screen.getByText("Please sign in again.")).not.toBeNull();
   });
 
-  it("falls back to a generic cloud-unreachable headline for other failures", () => {
+  it("falls back to a plane-neutral headline, since a failed read never reveals which reader would have answered", () => {
     render(
       <UsageErrorCard
-        error={rpcError("RPC_ERROR", "network blip")}
+        error={rpcError("RPC_ERROR", "sqlite: database is locked")}
         onRetry={() => undefined}
       />,
     );
-    expect(
-      screen.getByText("Couldn't reach Traycer Cloud for usage data."),
-    ).not.toBeNull();
+    // Naming Traycer Cloud here would send a local-plane account chasing
+    // connectivity for a local-database failure.
+    expect(screen.getByText("Couldn't load usage data.")).not.toBeNull();
+    expect(screen.queryByText(/Traycer Cloud/)).toBeNull();
+    // The specific cause still reaches the reader through the message line.
+    expect(screen.getByText("sqlite: database is locked")).not.toBeNull();
   });
 });

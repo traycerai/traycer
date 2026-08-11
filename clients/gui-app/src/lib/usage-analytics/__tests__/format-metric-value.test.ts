@@ -45,6 +45,14 @@ describe("formatDateRangeLabel", () => {
     expect(formatDateRangeLabel(["2026-01-05"])).toBe("Jan 5 – Jan 5, 2026");
   });
 
+  it("names both years when the window straddles New Year", () => {
+    // A 30- or 90-day window crosses New Year every year, and reading the
+    // year off the last day alone stamped the wrong one on the first.
+    expect(formatDateRangeLabel(["2025-12-31", "2026-01-01"])).toBe(
+      "Dec 31, 2025 – Jan 1, 2026",
+    );
+  });
+
   it("renders nothing for an empty day list", () => {
     expect(formatDateRangeLabel([])).toBe("");
   });

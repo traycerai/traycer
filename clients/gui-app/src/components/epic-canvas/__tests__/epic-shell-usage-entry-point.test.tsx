@@ -10,7 +10,10 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -39,6 +42,10 @@ const HOST_ID = mockLocalHostEntry.hostId;
 const EPIC_ID = "epic-usage-entry-point-live";
 const TAB_ID = "epic-usage-entry-point-live-tab";
 
+type UsageSummaryRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "host.usage.summary"
+>;
 type UsageSummaryResponse = ResponseOfMethod<
   HostRpcRegistry,
   "host.usage.summary"
@@ -127,6 +134,8 @@ function emptyWorktreeListResponse(): WorktreeListResponse {
 }
 
 const usageSummaryCallCount = { current: 0 };
+/** Every `host.usage.summary` request payload this suite has seen, in order. */
+const usageSummaryRequests: UsageSummaryRequest[] = [];
 
 const liveHostClient = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
@@ -135,8 +144,9 @@ const liveHostClient = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `req-${Math.random().toString(36).slice(2, 8)}`,
     handlers: {
-      "host.usage.summary": () => {
+      "host.usage.summary": (request: UsageSummaryRequest) => {
         usageSummaryCallCount.current += 1;
+        usageSummaryRequests.push(request);
         return pricedUsageSummaryResponse();
       },
       "worktree.listAllForHost": () => emptyWorktreeListResponse(),
@@ -291,6 +301,7 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
     __getOpenEpicRegistryForTests().disposeAll();
     __setEpicStreamClientFactoryForTests(null);
     usageSummaryCallCount.current = 0;
+    usageSummaryRequests.length = 0;
   });
 
   afterEach(() => {
@@ -385,6 +396,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
     const costFigure = await screen.findByTestId("usage-cost-figure");
     expect(costFigure.textContent).toContain("$0.11");
     expect(usageSummaryCallCount.current).toBeGreaterThan(0);
+    // Scope, not just traffic: a host-wide request would answer with every
+    // epic's usage and this panel would show it under one epic's name.
+    expect(usageSummaryRequests.at(0)).toMatchObject({ epicId: EPIC_ID });
 
     queryClient.clear();
   });

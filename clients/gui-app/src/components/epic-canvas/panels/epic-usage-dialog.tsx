@@ -170,7 +170,21 @@ function EpicUsageDialogBody(props: {
         size="default"
       />
       {summary.totals.factCount === 0 ? null : (
-        <UsageDailyChart columns={columns} scale={scale} metric="cost" />
+        <div className="flex flex-col gap-1">
+          <UsageDailyChart columns={columns} scale={scale} metric="cost" />
+          {/* Never cap silently: when the epic outruns the trend's ceiling
+              the chart covers less ground than the figure above it, and the
+              reader has to be told which is which. */}
+          {summary.window.windowDays > days.length ? (
+            <p
+              className="text-ui-xs text-muted-foreground/80"
+              data-testid="epic-usage-trend-capped-note"
+            >
+              Trend shows the last {days.length} days; the total covers the
+              whole epic.
+            </p>
+          ) : null}
+        </div>
       )}
       <div>
         <h3 className="mb-2 text-ui-sm font-medium text-foreground">
@@ -181,6 +195,21 @@ function EpicUsageDialogBody(props: {
     </div>
   );
 }
+
+/**
+ * Hard ceiling on the columns the trend may generate. `window: "epic"`
+ * resolves `windowDays` from the epic's OWN fact span, which is unbounded
+ * from this component's point of view: a long-lived epic - or a single fact
+ * carrying a skewed or near-epoch `occurredAt`, which the wire accepts as
+ * any non-negative integer - yields thousands to tens of thousands of days,
+ * and every day is a `Tooltip`-wrapped button with a segment span per
+ * harness. That is enough DOM to stall the dialog outright.
+ *
+ * 90 also happens to be the widest fixed window the picker offers, so a
+ * capped epic trend is never denser than a chart this component already
+ * renders comfortably.
+ */
+const MAX_TREND_DAYS = 90;
 
 /**
  * The trend chart's x-axis, anchored on the RESPONSE's own window rather
@@ -198,13 +227,18 @@ function EpicUsageDialogBody(props: {
  * while staying closed - so opening it after a local midnight built columns
  * ending on the previous day and dropped the newest buckets the query had
  * just returned.
+ *
+ * The cap trims from the OLD end, keeping the most recent days, and the
+ * totals above the chart are untouched by it - so a trimmed trend is
+ * narrower than its own headline, which is why the caller says so in
+ * standing text rather than letting the two silently disagree.
  */
 function daysForSummaryWindow(
   summary: UsageSummaryResponse["summary"],
 ): readonly string[] {
   if (summary.totals.factCount === 0) return [];
   return lastNCalendarDays(
-    summary.window.windowDays,
+    Math.min(summary.window.windowDays, MAX_TREND_DAYS),
     summary.window.timezone,
     summary.window.endAtExclusive - 1,
   );

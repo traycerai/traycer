@@ -18,13 +18,20 @@ type UsageSummaryResponse = ResponseOfMethod<
   "host.usage.summary"
 >;
 
+const usageSummaryCallCount = { current: 0 };
+
 const liveHostClient = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
   invalidator: { invalidateHostScope: () => undefined },
   messenger: new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `req-${Math.random().toString(36).slice(2, 8)}`,
-    handlers: { "host.usage.summary": () => handlerHolder.current() },
+    handlers: {
+      "host.usage.summary": () => {
+        usageSummaryCallCount.current += 1;
+        return handlerHolder.current();
+      },
+    },
   }),
 });
 liveHostClient.bind(mockLocalHostEntry);
@@ -139,9 +146,27 @@ function renderWithClient(): void {
 }
 
 describe("<ChatUsageDialog />", () => {
-  it("renders nothing while the store target is null - cost is on-demand", () => {
+  it("renders nothing while the store target is null - cost is on-demand", async () => {
+    usageSummaryCallCount.current = 0;
     renderWithClient();
     expect(screen.queryByTestId("chat-usage-dialog")).toBeNull();
+    // "On-demand" is about the REQUEST, not just the markup: this dialog is
+    // mounted for the whole session, so an ungated query here would price
+    // every chat in the background. `enabled` is what has to hold.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(usageSummaryCallCount.current).toBe(0);
+
+    act(() => {
+      useChatUsageDialogStore.getState().open({
+        hostId: mockLocalHostEntry.hostId,
+        chatId: "chat-1",
+        chatTitle: "Fix the flaky test",
+      });
+    });
+    await screen.findByTestId("usage-cost-figure");
+    expect(usageSummaryCallCount.current).toBeGreaterThan(0);
   });
 
   it("opens on a store target and renders the chat's headline + title", async () => {

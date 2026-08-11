@@ -19,9 +19,9 @@ function row(overrides: Partial<UsageDayBreakdownRow>): UsageDayBreakdownRow {
 describe("UsageDayBreakdownTable", () => {
   it("renders every value reachable without hovering", () => {
     render(<UsageDayBreakdownTable rows={[row({})]} />);
-    expect(screen.getByText("Aug 9")).not.toBeNull();
-    expect(screen.getByText("$1.23")).not.toBeNull();
-    expect(screen.getByText("1,000")).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "Aug 9" })).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "$1.23" })).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "1,000" })).not.toBeNull();
   });
 
   it("fixup-01: never renders a provenance badge or column, regardless of the row's provenance", () => {

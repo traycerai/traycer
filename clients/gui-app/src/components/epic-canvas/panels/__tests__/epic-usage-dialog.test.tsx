@@ -213,7 +213,10 @@ describe("<EpicUsageDialog />", () => {
     await screen.findByTestId("usage-cost-figure");
     // The default window must NOT already be scoping to the epic lifetime,
     // or the assertion below would pass on a repeat of the first request.
-    expect(handler.mock.calls.at(0)?.at(0)?.window).toBeUndefined();
+    expect(handler.mock.calls.at(0)?.at(0)).toMatchObject({
+      window: undefined,
+      epicId: "epic-1",
+    });
     handler.mockClear();
 
     await user.click(screen.getByTestId("epic-usage-window-epic"));
@@ -225,6 +228,41 @@ describe("<EpicUsageDialog />", () => {
       window: "epic",
       epicId: "epic-1",
     });
+  });
+
+  it("bounds the trend for a long-lived epic, and says so rather than capping silently", async () => {
+    // `window: "epic"` resolves `windowDays` from the epic's own fact span,
+    // so a near-epoch `occurredAt` (a valid non-negative integer on the
+    // wire) asks for ~20k columns - each a tooltip-wrapped button.
+    renderDialog(() => {
+      const response = usageSummaryResponse();
+      return {
+        ...response,
+        summary: {
+          ...response.summary,
+          window: { ...response.summary.window, windowDays: 20_000 },
+        },
+      };
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
+    });
+    expect(screen.getAllByTestId("usage-daily-chart-column")).toHaveLength(90);
+    expect(
+      screen.getByTestId("epic-usage-trend-capped-note").textContent,
+    ).toContain("Trend shows the last 90 days");
+  });
+
+  it("leaves an in-range trend uncapped and unannotated", async () => {
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-daily-chart")).toBeTruthy();
+    });
+    expect(screen.getAllByTestId("usage-daily-chart-column")).toHaveLength(30);
+    expect(screen.queryByTestId("epic-usage-trend-capped-note")).toBeNull();
   });
 
   it("renders a retryable error card, never a silent fallback, when the RPC fails", async () => {

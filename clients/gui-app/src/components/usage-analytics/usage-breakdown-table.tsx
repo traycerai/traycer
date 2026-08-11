@@ -58,8 +58,18 @@ export function UsageBreakdownTable(
             key={JSON.stringify([row.harnessId, row.model])}
             className="border-b border-border/40 last:border-b-0"
           >
-            <td className="py-1.5 pr-3 text-foreground">{row.harnessId}</td>
-            <td className="py-1.5 pr-3 text-muted-foreground">{row.model}</td>
+            {/* `wrap-anywhere` on the two identifier cells: the wire allows
+                64/255 characters, and one unbroken model id would otherwise
+                set the auto-layout table's minimum width and push Turns,
+                Tokens and Cost out of a Settings modal that hides horizontal
+                overflow. Wrapping keeps every value on screen; truncating
+                would hide the identifier instead. */}
+            <td className="py-1.5 pr-3 wrap-anywhere text-foreground">
+              {row.harnessId}
+            </td>
+            <td className="py-1.5 pr-3 wrap-anywhere text-muted-foreground">
+              {row.model}
+            </td>
             <td className="py-1.5 pr-3 text-right tabular-nums text-foreground">
               {row.factCount}
             </td>

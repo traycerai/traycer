@@ -44,6 +44,15 @@ export function UsageErrorCard(props: UsageErrorCardProps): ReactNode {
   );
 }
 
+/**
+ * The fallback is deliberately plane-NEUTRAL. Which reader answers is the
+ * host's decision and is only ever revealed by a successful response's
+ * `servedBy`, so at the moment a request fails the plane is genuinely
+ * unknown - naming Traycer Cloud there sends a local-plane account chasing
+ * connectivity for what was a host-transport or local-database failure. The
+ * specific cause is not lost: the card renders `error.message` underneath,
+ * and the host's cloud-unavailable path says so in that message.
+ */
 function errorHeadline(error: Error): string {
   if (error instanceof HostRpcError) {
     if (error.code === "UNAUTHORIZED") return "Please sign in again.";
@@ -51,5 +60,5 @@ function errorHeadline(error: Error): string {
       return "You don't have permission to view usage for this host.";
     }
   }
-  return "Couldn't reach Traycer Cloud for usage data.";
+  return "Couldn't load usage data.";
 }

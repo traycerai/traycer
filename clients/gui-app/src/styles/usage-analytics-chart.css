@@ -1,8 +1,13 @@
 /**
- * Categorical palette for the Usage page's per-day chart (harness
- * breakdown). Scoped locally under `.usage-chart-root` rather than on
- * `:root` - these eight hues carry ONE meaning (harness identity in this
- * chart) and must not leak into the app's general token space.
+ * Categorical palette for the Usage surfaces' harness breakdown. Scoped
+ * locally under `.usage-chart-root` rather than on `:root` - these eight
+ * hues carry ONE meaning (harness identity) and must not leak into the
+ * app's general token space.
+ *
+ * Every consumer of `UsageSeriesScale.colorVar` must therefore render
+ * INSIDE that class, not merely next to something that has it: the daily
+ * chart owns it for its standalone use in the epic dialog, and the Settings
+ * dashboard puts it on the ancestor it shares with `UsageHarnessSplit`.
  *
  * Values are the dataviz skill's validated default palette (see
  * `references/palette.md`), re-validated against this app's actual card
