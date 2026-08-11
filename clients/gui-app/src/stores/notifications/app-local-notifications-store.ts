@@ -257,6 +257,16 @@ function appendObservedCompletion(
   );
 }
 
+function hasObservedCompletion(
+  observedByHost: AppLocalNotificationsState["observedCompletionsByHost"],
+  originHostId: string,
+  occurrenceKey: string,
+): boolean {
+  return (observedByHost[originHostId] ?? []).some(
+    (completion) => completion.occurrenceKey === occurrenceKey,
+  );
+}
+
 function parsePersistedAppLocalEntry(
   id: string,
   value: unknown,
@@ -526,20 +536,28 @@ export function createAppLocalNotificationsStore(initialName: string) {
           const activeUserId = get().activeUserId;
           if (activeUserId === null) return;
           if (
-            hasAppLocalCompletionReceipt({
+            hasObservedCompletion(
+              get().observedCompletionsByHost,
+              originHostId,
+              completion.occurrenceKey,
+            )
+          ) {
+            return;
+          }
+          if (
+            !hasAppLocalCompletionReceipt({
               userId: activeUserId,
               originHostId,
               occurrenceKey: completion.occurrenceKey,
             })
           ) {
-            return;
+            recordAppLocalCompletionReceipt({
+              userId: activeUserId,
+              originHostId,
+              ...completion,
+              observedAt,
+            });
           }
-          recordAppLocalCompletionReceipt({
-            userId: activeUserId,
-            originHostId,
-            ...completion,
-            observedAt,
-          });
           set((state) => {
             const observedCompletionsByHost = appendObservedCompletion(
               state.observedCompletionsByHost,
@@ -590,20 +608,28 @@ export function createAppLocalNotificationsStore(initialName: string) {
           const activeUserId = get().activeUserId;
           if (activeUserId === null) return;
           if (
-            hasAppLocalCompletionReceipt({
+            hasObservedCompletion(
+              get().observedCompletionsByHost,
+              originHostId,
+              completion.occurrenceKey,
+            )
+          ) {
+            return;
+          }
+          if (
+            !hasAppLocalCompletionReceipt({
               userId: activeUserId,
               originHostId,
               occurrenceKey: completion.occurrenceKey,
             })
           ) {
-            return;
+            recordAppLocalCompletionReceipt({
+              userId: activeUserId,
+              originHostId,
+              ...completion,
+              observedAt,
+            });
           }
-          recordAppLocalCompletionReceipt({
-            userId: activeUserId,
-            originHostId,
-            ...completion,
-            observedAt,
-          });
           set((state) => ({
             observedCompletionsByHost: appendObservedCompletion(
               state.observedCompletionsByHost,

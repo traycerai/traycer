@@ -269,6 +269,13 @@ describe("app-local notifications store", () => {
     remounted.getState().activateIdentity("user-a");
     remounted
       .getState()
+      .seedCompletion(
+        "host-a",
+        { id: "completion-1", occurrenceKey: "completion-1@10" },
+        35,
+      );
+    remounted
+      .getState()
       .observeCompletion(
         "host-a",
         { id: "completion-1", occurrenceKey: "completion-1@10" },
@@ -277,6 +284,32 @@ describe("app-local notifications store", () => {
       );
 
     expect(remounted.getState().byId["later-failure"].readAt).toBeNull();
+  });
+
+  it("applies one shared completion independently in every renderer", () => {
+    const key = appLocalNotificationsKey("user-a");
+    const firstWindow = createAppLocalNotificationsStore(key);
+    const secondWindow = createAppLocalNotificationsStore(key);
+    firstWindow.getState().activateIdentity("user-a");
+    secondWindow.getState().activateIdentity("user-a");
+    firstWindow.getState().upsert(entry("first-window-failure", 10, null));
+    secondWindow.getState().upsert(entry("second-window-failure", 10, null));
+    const completion = {
+      id: "completion-1",
+      occurrenceKey: "completion-1@20",
+    };
+    const entity = { epicId: "epic-1", chatId: "chat-1" };
+
+    firstWindow.getState().observeCompletion("host-a", completion, entity, 20);
+    secondWindow.getState().observeCompletion("host-a", completion, entity, 21);
+    secondWindow.getState().upsert(entry("later-failure", 30, null));
+    secondWindow.getState().observeCompletion("host-a", completion, entity, 40);
+
+    expect(firstWindow.getState().byId["first-window-failure"].readAt).toBe(20);
+    expect(secondWindow.getState().byId["second-window-failure"].readAt).toBe(
+      21,
+    );
+    expect(secondWindow.getState().byId["later-failure"].readAt).toBeNull();
   });
 
   it("bounds and prunes persisted completion observations", () => {
@@ -396,6 +429,13 @@ describe("app-local notifications store", () => {
 
     const reloaded = createAppLocalNotificationsStore(key);
     reloaded.getState().activateIdentity("user-a");
+    reloaded
+      .getState()
+      .seedCompletion(
+        "host-a",
+        { id: "agent.stopped:chat-1", occurrenceKey: "stopped@10" },
+        25,
+      );
     reloaded.getState().upsert(entry("later-failure", 30, null));
     reloaded
       .getState()
