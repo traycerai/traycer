@@ -269,13 +269,22 @@ export type PublishOptions = {
 };
 
 /** The unmodeled key each captured level carries when `withFutureFields`. */
-export const FUTURE_FIELDS: Readonly<Record<string, string>> = {
+/**
+ * Keyed by residual LEVEL, and typed as its own literal map rather than a
+ * `Record<string, string>`: an index signature answers `string` for a level
+ * that does not exist, so a mistyped level would mint the key `"undefined"` and
+ * the head would still parse - leaving the passthrough tests below green over a
+ * future field that was never planted where they think it was.
+ */
+export const FUTURE_FIELDS = {
   head: "futureHeadField",
   core: "futureCoreField",
   "core.lifecycle": "futureLifecycleField",
   "core.settings": "futureSettingsField",
   hostPrivate: "futureHostPrivateField",
-};
+} as const satisfies Readonly<Record<string, string>>;
+
+export type FutureFieldLevel = keyof typeof FUTURE_FIELDS;
 
 /** Settings that parse, so `core.settings` is non-null and can carry a bag. */
 const RUN_SETTINGS: JsonObject = {
@@ -308,7 +317,7 @@ export async function publishCloudChat(
     );
   }
 
-  const future = (level: string, value: JsonValue): JsonObject =>
+  const future = (level: FutureFieldLevel, value: JsonValue): JsonObject =>
     options.withFutureFields ? { [FUTURE_FIELDS[level]]: value } : {};
 
   const wireHead: JsonObject = {
