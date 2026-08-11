@@ -3,7 +3,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -31,22 +30,12 @@ const blobSrcState = vi.hoisted(() => ({
   },
 }));
 
-const hostRequest = vi.hoisted(() =>
-  vi.fn(() => Promise.resolve({ accepted: true })),
-);
-
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useAttachmentBlobSrc: () => blobSrcState.value,
 }));
 
 vi.mock("@/components/artifacts/add-image-to-artifact-button", () => ({
   AddImageToArtifactButton: () => null,
-}));
-
-vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({
-    request: hostRequest,
-  }),
 }));
 
 const TINY_PNG_BASE64 =
@@ -149,8 +138,6 @@ function renderImage(args: {
 
 beforeEach(() => {
   blobSrcState.value = { status: "loading", src: null };
-  hostRequest.mockReset();
-  hostRequest.mockResolvedValue({ accepted: true });
 });
 
 afterEach(() => {
@@ -278,7 +265,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
   });
 
-  it("renders a consent chip for consent-required local sources", () => {
+  it("renders terminal failure text for legacy consent-required sources", () => {
     renderImage({
       src: "./local.png",
       alt: undefined,
@@ -293,11 +280,10 @@ describe("AssistantMarkdownImage source classification matrix", () => {
       },
     });
 
-    const chip = document.querySelector("[data-assistant-image-consent]");
-    expect(chip).not.toBeNull();
-    expect(chip).toBeInstanceOf(HTMLButtonElement);
-    expect((chip as HTMLButtonElement).disabled).toBe(false);
-    expect(chip?.textContent).toContain("diagram");
+    const failure = document.querySelector("[data-assistant-image-failure]");
+    expect(failure?.textContent).toBe("Couldn't display this image.");
+    expect(failure?.className).toContain("text-muted-foreground");
+    expect(document.querySelector("[data-assistant-image-consent]")).toBeNull();
   });
 
   it.each([
@@ -339,7 +325,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(document.querySelector("[data-assistant-image-consent]")).toBeNull();
   });
 
-  it("falls back to a disabled consent chip for pre-1.7 history with no resolution records", () => {
+  it("renders terminal failure text for pre-1.7 history with no resolution records", () => {
     renderImage({
       src: "/workspace/legacy.png",
       alt: undefined,
@@ -349,11 +335,10 @@ describe("AssistantMarkdownImage source classification matrix", () => {
       },
     });
 
-    const chip = document.querySelector("[data-assistant-image-consent]");
-    expect(chip).not.toBeNull();
-    expect(chip).toBeInstanceOf(HTMLButtonElement);
-    expect((chip as HTMLButtonElement).disabled).toBe(true);
-    expect(hostRequest).not.toHaveBeenCalled();
+    const failure = document.querySelector("[data-assistant-image-failure]");
+    expect(failure?.textContent).toBe("Couldn't display this image.");
+    expect(failure?.className).toContain("text-muted-foreground");
+    expect(document.querySelector("[data-assistant-image-consent]")).toBeNull();
   });
 
   it("collapses sources listed in deduplicatedTargetsBySource to a link chip", () => {
@@ -625,86 +610,7 @@ describe("AssistantMarkdownImage markdown pipeline", () => {
   });
 });
 
-describe("AssistantMarkdownImage consent RPC and record updates", () => {
-  it("calls chat.requestImageIngest with the authoritative record fields on consent click", async () => {
-    renderImage({
-      src: "shots/need-consent.png",
-      alt: "Load me",
-      context: {
-        ...BASE_CONTEXT,
-        resolutions: [
-          resolution(
-            nonResolvedEntry("shots/need-consent.png", "consent-required", {
-              canonicalSource: "/abs/shots/need-consent.png",
-            }),
-            "assistant-msg-9",
-          ),
-        ],
-      },
-    });
-
-    const chip = document.querySelector(
-      "[data-assistant-image-consent]",
-    ) as HTMLButtonElement;
-    fireEvent.click(chip);
-
-    await waitFor(() => {
-      expect(hostRequest).toHaveBeenCalledTimes(1);
-    });
-    expect(hostRequest).toHaveBeenCalledWith("chat.requestImageIngest", {
-      epicId: "epic-1",
-      chatId: "chat-1",
-      messageId: "assistant-msg-9",
-      source: "/abs/shots/need-consent.png",
-    });
-  });
-
-  it("rerenders from the authoritative resolution record after consent → resolved", () => {
-    blobSrcState.value = {
-      status: "ready",
-      src: "blob:http://localhost/after-consent",
-    };
-    const client = createQueryClient();
-    const view = render(
-      <QueryClientProvider client={client}>
-        <AssistantMarkdownImageProvider
-          context={{
-            ...BASE_CONTEXT,
-            resolutions: [
-              resolution(
-                nonResolvedEntry("./shot.png", "consent-required", {}),
-                "msg-1",
-              ),
-            ],
-          }}
-        >
-          <AssistantMarkdownImageNode src="./shot.png" alt="shot" />
-        </AssistantMarkdownImageProvider>
-      </QueryClientProvider>,
-    );
-
-    expect(
-      document.querySelector("[data-assistant-image-consent]"),
-    ).not.toBeNull();
-
-    view.rerender(
-      <QueryClientProvider client={client}>
-        <AssistantMarkdownImageProvider
-          context={{
-            ...BASE_CONTEXT,
-            resolutions: [resolution(resolvedEntry("./shot.png", {}), "msg-1")],
-          }}
-        >
-          <AssistantMarkdownImageNode src="./shot.png" alt="shot" />
-        </AssistantMarkdownImageProvider>
-      </QueryClientProvider>,
-    );
-
-    expect(document.querySelector("[data-assistant-image-consent]")).toBeNull();
-    const img = screen.getByRole("img", { name: "shot" });
-    expect(img.getAttribute("src")).toBe("blob:http://localhost/after-consent");
-  });
-
+describe("AssistantMarkdownImage context", () => {
   it("renders nothing when the assistant image context provider is missing", () => {
     const { container } = render(
       <AssistantMarkdownImageNode src="https://example.com/a.png" alt="x" />,

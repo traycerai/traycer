@@ -168,7 +168,6 @@ import {
   agentGuiListHarnessesV60,
   agentGuiListHarnessesV70,
   agentGuiListModelsV10,
-  chatRequestImageIngestV10,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
@@ -3636,26 +3635,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
-  },
-  // Optional (non-floor) capability: consent to ingest a `consent-required`
-  // markdown-referenced image (`chat.subscribe@1.7`, see
-  // `requestImageIngestRequestSchema`). The `degrade: unsupported` strategy
-  // EXCLUDES it from the released floor and the released-method-names
-  // snapshot - adding it to the floor would be handshake-fatal for existing
-  // clients. Old peers lack it in their optional manifest; the caller gets
-  // E_HOST_UNSUPPORTED for this call only and hides the consent affordance.
-  "chat.requestImageIngest": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: chatRequestImageIngestV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-    degrade: { kind: "unsupported" },
   },
   "agent.tui.listHarnesses": {
     1: {

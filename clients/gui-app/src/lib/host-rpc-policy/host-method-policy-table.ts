@@ -427,10 +427,6 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.gui.listModels": { ...LATEST_SCHEDULING, poll: null },
   "agent.gui.listCommands": { ...LATEST_SCHEDULING, poll: null },
   "agent.gui.getPlan": { ...LATEST_SCHEDULING, poll: null },
-  // Consenting to ingest a markdown-referenced image mutates the message's
-  // resolution record (optional host capability); the outcome rides the
-  // chat.subscribe image_resolution.updated event, not a poll.
-  "chat.requestImageIngest": { ...LATEST_SCHEDULING, poll: null },
   "agent.tui.listHarnesses": { ...LATEST_SCHEDULING, poll: null },
   // Preparing a launch creates or updates host-side harness launch state.
   "agent.tui.prepareLaunch": {

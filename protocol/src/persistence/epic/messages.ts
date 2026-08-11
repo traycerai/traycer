@@ -104,11 +104,11 @@ const nonResolvedImageResolutionStateSchema = z.enum([
  * host's authoritative answer for one markdown-referenced image (`![alt](src)`
  * in the assistant's text) found while streaming/persisting that message. The
  * GUI renders purely from this record (hash present ⇒ blob-cache render;
- * `consent-required` ⇒ click-to-load chip; any other non-resolved state ⇒
- * error chip) rather than re-deriving resolution client-side, so background
+ * any non-resolved state ⇒ terminal failure text) rather than re-deriving
+ * resolution client-side, so background
  * turns, re-opened chats, and multi-window rendering stay deterministic.
- * `canonicalSource` is the key identity (`chat.requestImageIngest` targets an
- * entry by it); `source` is the raw markdown reference as authored.
+ * `canonicalSource` is the normalized identity; `source` is the raw markdown
+ * reference as authored.
  *
  * State-discriminated so the invariant is structural, not just documented:
  * `resolved` REQUIRES a non-null `attachmentHash`/`mediaType` (there is

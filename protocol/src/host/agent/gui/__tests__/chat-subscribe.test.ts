@@ -17,11 +17,8 @@ import {
 import {
   guiAgentModelCapabilitiesSchema,
   guiAgentModelOptionSchema,
-  requestImageIngestRequestSchema,
-  requestImageIngestResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   autonomousResumeTriggerSchema,
@@ -2297,55 +2294,6 @@ describe("chat.subscribe@1.7 registry membership", () => {
     expect(entry[1].latestMinor).toBe(7);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
-  });
-});
-
-describe("chat.requestImageIngest is optional, not floor", () => {
-  it("is absent from RELEASED_FLOOR_METHOD_NAMES", () => {
-    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("chat.requestImageIngest");
-  });
-
-  it("is resolvable via hostRpcRegistry at 1.0 with an explicit degrade strategy", () => {
-    const entry = hostRpcRegistry["chat.requestImageIngest"];
-    expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(0);
-    expect(entry[1].versions[0]).toBeDefined();
-    expect(Object.hasOwn(entry, "degrade")).toBe(true);
-  });
-
-  it("round-trips the request and response schemas", () => {
-    expect(
-      requestImageIngestRequestSchema.parse({
-        epicId: "epic-1",
-        chatId: "chat-1",
-        messageId: "assistant-image-1",
-        source: "https://example.com/a.png",
-      }),
-    ).toEqual({
-      epicId: "epic-1",
-      chatId: "chat-1",
-      messageId: "assistant-image-1",
-      source: "https://example.com/a.png",
-    });
-
-    expect(requestImageIngestResponseSchema.parse({ accepted: true })).toEqual({
-      accepted: true,
-    });
-    expect(requestImageIngestResponseSchema.parse({ accepted: false })).toEqual(
-      {
-        accepted: false,
-      },
-    );
-  });
-
-  it("rejects an incomplete requestImageIngest request", () => {
-    expect(
-      requestImageIngestRequestSchema.safeParse({
-        epicId: "epic-1",
-        chatId: "chat-1",
-        messageId: "assistant-image-1",
-      }).success,
-    ).toBe(false);
   });
 });
 

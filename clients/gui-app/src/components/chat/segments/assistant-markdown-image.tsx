@@ -1,17 +1,10 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { Link, ShieldQuestion } from "lucide-react";
-import type { RequestImageIngestRequest } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Link } from "lucide-react";
 import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
 } from "@/components/chat/chat-scroll-to-block";
-import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
-import { epicMutationKeys } from "@/lib/query-keys";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
@@ -223,7 +216,11 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   const resolution = findResolution(props.context.resolutions, source.src);
   if (resolution === null) {
     return (
-      <ConsentImageChip alt={props.alt} source={source.src} request={null} />
+      <AttachmentImageFailure
+        alt={props.alt}
+        source={source.src}
+        reason="Couldn't display this image."
+      />
     );
   }
   if (resolution.entry.state === "resolved") {
@@ -232,20 +229,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         alt={props.alt}
         hash={resolution.entry.attachmentHash}
         mediaType={resolution.entry.mediaType}
-      />
-    );
-  }
-  if (resolution.entry.state === "consent-required") {
-    return (
-      <ConsentImageChip
-        alt={props.alt}
-        source={source.src}
-        request={{
-          epicId: props.context.epicId,
-          chatId: props.context.chatId,
-          messageId: resolution.messageId,
-          source: resolution.entry.canonicalSource,
-        }}
       />
     );
   }
@@ -280,9 +263,11 @@ function findResolution(
 }
 
 function resolutionFailureReason(
-  state: "blocked" | "oversized" | "not-found",
+  state: "blocked" | "consent-required" | "oversized" | "not-found",
 ): string {
-  if (state === "blocked") return "Couldn't display this image.";
+  if (state === "blocked" || state === "consent-required") {
+    return "Couldn't display this image.";
+  }
   if (state === "oversized") return "This image is too large to show here.";
   return "This image is no longer available.";
 }
@@ -311,70 +296,6 @@ function ResolvedImage(props: {
 function dataMediaType(src: string): string | null {
   const match = /^data:([^;,]+)/i.exec(src);
   return match?.[1] ?? null;
-}
-
-function ConsentImageChip(props: {
-  readonly alt: string;
-  readonly source: string;
-  readonly request: RequestImageIngestRequest | null;
-}): ReactNode {
-  const client = useTabHostClient();
-  const mutation = useHostMutation<HostRpcRegistry, "chat.requestImageIngest">({
-    client,
-    method: "chat.requestImageIngest",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: epicMutationKeys.requestImageIngest(
-        props.request?.epicId ?? "",
-        props.request?.chatId ?? "",
-        props.request?.messageId ?? "",
-        props.request?.source ?? props.source,
-      ),
-    },
-  });
-  if (mutation.error !== null) {
-    return (
-      <AttachmentImageFailure
-        alt={props.alt}
-        source={props.source}
-        reason="Couldn't display this image."
-      />
-    );
-  }
-  const button = (
-    <button
-      type="button"
-      disabled={props.request === null || mutation.isPending}
-      onClick={() => {
-        if (props.request !== null) mutation.mutate(props.request);
-      }}
-      className="my-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-left text-ui-sm text-muted-foreground transition-colors enabled:hover:border-foreground/30 enabled:hover:text-foreground disabled:cursor-default"
-      data-assistant-image-consent
-    >
-      {mutation.isPending ? (
-        <AgentSpinningDots
-          className="shrink-0"
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : (
-        <ShieldQuestion className="size-3.5 shrink-0" aria-hidden />
-      )}
-      <span className="truncate">
-        {props.alt.length > 0 ? props.alt : "Load local image"}
-      </span>
-    </button>
-  );
-  return (
-    <TooltipWrapper
-      label={props.source}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      {button}
-    </TooltipWrapper>
-  );
 }
 
 function DeduplicatedImageChip(props: {

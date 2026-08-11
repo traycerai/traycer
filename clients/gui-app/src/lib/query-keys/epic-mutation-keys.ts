@@ -13,10 +13,4 @@ export const epicMutationKeys = {
   prepareArtifactImage: () => ["epic.prepareArtifactImage"] as const,
   finishArtifactImage: () => ["epic.finishArtifactImage"] as const,
   archiveChats: () => ["epic.archiveChats"] as const,
-  requestImageIngest: (
-    epicId: string,
-    chatId: string,
-    messageId: string,
-    source: string,
-  ) => ["chat.requestImageIngest", epicId, chatId, messageId, source] as const,
 };

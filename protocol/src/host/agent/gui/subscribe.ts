@@ -1865,11 +1865,7 @@ export const chatSubscribeV16 = defineStreamRpcContract({
 // durable image resolution record on assistant messages
 // (`assistantMessageSchema.imageResolutions`), the typed
 // `image_resolution.updated` runtime event for initial resolution and
-// mid-turn watcher changes, and the reserved (unproduced) image-generation
-// phase field on `tool_call.progress`. The client frame is unchanged - the
-// consent flow for a `consent-required` resolution entry is a narrow unary
-// RPC (`chat.requestImageIngest`), not a stream client frame, because it acts
-// on a specific already-persisted record entry rather than the live turn.
+// mid-turn watcher changes. The client frame is unchanged.
 export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,

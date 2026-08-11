@@ -354,36 +354,3 @@ export const getGuiAgentPlanResponseSchema = z.object({
 export type GetGuiAgentPlanResponse = z.infer<
   typeof getGuiAgentPlanResponseSchema
 >;
-
-// ─── `chat.requestImageIngest` (`chat.subscribe@1.7`) ──────────────────────
-//
-// The narrow consent RPC for a markdown-referenced image the host classified
-// `consent-required` in an assistant message's image resolution record (see
-// `imageResolutionEntrySchema`). Valid only against an entry already present
-// in that record for `messageId` whose `canonicalSource` matches `source` and
-// whose `state` is `consent-required` - that binding IS the authorization,
-// there is no separate permission check. The host resolves it through the
-// shared image ingestion service and broadcasts the outcome to every client
-// via the `image_resolution.updated` runtime event; this RPC itself only
-// reports whether the request was accepted for processing.
-export const requestImageIngestRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  messageId: z.string(),
-  source: z.string(),
-});
-export type RequestImageIngestRequest = z.infer<
-  typeof requestImageIngestRequestSchema
->;
-
-// `accepted: false` covers every reason the entry couldn't be actioned (no
-// matching entry, already resolved by a concurrent request - first-write-wins,
-// wrong state) without distinguishing them: the record's own state, delivered
-// via the resolution event, is the authoritative outcome a client renders
-// from.
-export const requestImageIngestResponseSchema = z.object({
-  accepted: z.boolean(),
-});
-export type RequestImageIngestResponse = z.infer<
-  typeof requestImageIngestResponseSchema
->;
