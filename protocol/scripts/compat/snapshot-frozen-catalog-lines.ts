@@ -69,7 +69,14 @@ const FIXTURES = {
   "providers.list@4.0": dump(providersListResponseSchemaV40),
   "providers.list@5.0": dump(providersListResponseSchemaV50),
   "providers.list@6.0": dump(providersListResponseSchemaV60),
-  // Frozen the moment v8.0 opened. This is the first line that carries
+  // The one entry here that is NOT a released line: v7.0 is the newest line
+  // and unreleased, so `providersListV70` serves the live schemas and
+  // `providersListResponseSchemaV70` is the inactive pin it will be repointed
+  // to at release. Snapshotted anyway, and the earlier the better - the pin
+  // has to be correct on the day it goes live, and a snapshot cut in advance
+  // is what makes that a one-line change rather than an archaeology exercise.
+  //
+  // It also earns the coverage on its own: this is the first line that carries
   // `nativeCapabilities`, so it is the first whose drift can cost a client an
   // entire capability object rather than one field - the `supportedTabs` enum
   // is closed, and a member it cannot decode collapses MCP/Plugins/Skills with
