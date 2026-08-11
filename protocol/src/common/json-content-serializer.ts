@@ -810,6 +810,12 @@ function serializeChildren(
   return parts.join("");
 }
 
+function serializeImage(node: JsonContent): string {
+  const src = readStringAttr(node.attrs, "src");
+  const alt = readStringAttr(node.attrs, "alt");
+  return src.length === 0 ? "" : `![${alt}](${src})`;
+}
+
 function serializeNode(node: JsonContent, ctx: SerializerContext): string {
   switch (node.type) {
     case "doc":
@@ -820,6 +826,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeText(node);
     case "hardBreak":
       return serializeHardBreak();
+    case "image":
+      return serializeImage(node);
     case "heading":
       return serializeHeading(node, ctx);
     case "bulletList":

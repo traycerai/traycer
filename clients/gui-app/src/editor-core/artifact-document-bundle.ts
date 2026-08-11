@@ -22,6 +22,7 @@ import type * as Y from "yjs";
 import { MermaidNode } from "./nodes/mermaid/mermaid-node";
 import { WireframeNode } from "./nodes/wireframe/wireframe-node";
 import { ThreadAnchor } from "./extensions/thread-anchor";
+import { ArtifactImageNode } from "./nodes/image/artifact-image-node";
 
 const lowlight = createLowlight(common);
 
@@ -66,6 +67,7 @@ const extensions: AnyExtension[] = [
   artifactLinkExtension,
   TaskList,
   TaskItem.configure({ nested: true }),
+  ArtifactImageNode,
   Table.configure({ resizable: true }),
   TableRow,
   TableHeader,

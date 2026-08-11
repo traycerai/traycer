@@ -208,6 +208,7 @@
     "electron"
   ],
   "dependencies": {
+    "@tiptap/extension-image": "^3.29.2",
     "inversify": "^8.2.3",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3"
