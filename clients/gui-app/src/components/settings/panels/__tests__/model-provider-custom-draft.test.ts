@@ -15,9 +15,10 @@ import {
 } from "@/components/settings/panels/model-provider-custom-draft";
 
 /**
- * These assert UPSTREAM's rules, extracted from OpenCode desktop 1.18.2. Where
- * one looks lax, the note says why: parity on a validation rule means adopting
- * its edges too, and a stricter check would fail inputs their app accepts.
+ * These assert OPENCODE's rules, mirrored from its own custom-provider form.
+ * Where one looks lax, the note says why: mirroring a validation rule means
+ * adopting its edges too, and a stricter check would refuse inputs their app
+ * accepts.
  */
 
 /** Declaring a new provider: the minting rules apply. */

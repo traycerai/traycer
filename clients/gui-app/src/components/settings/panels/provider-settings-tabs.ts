@@ -126,7 +126,7 @@ export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
  * first profile appears and then change under the user.
  *
  * Adding a profile-capable provider means updating BOTH sides. The cost of
- * missing this one is a tab that under-promises for a round, not a broken
+ * missing it is a tab that under-promises until someone notices, not a broken
  * surface - which is why the label mirrors the rule rather than inventing a
  * second source of truth for it.
  */

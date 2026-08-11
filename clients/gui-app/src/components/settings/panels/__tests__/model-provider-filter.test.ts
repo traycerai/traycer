@@ -75,10 +75,11 @@ describe("model provider method filter", () => {
   });
 
   it("offers no API-key bucket, because it would be the whole catalog", () => {
-    // Measured against a real host: the synthesized `api` method puts 178 of
-    // ~180 rows in that bucket. A control that costs a click and returns the
-    // list you were already looking at is a dead option, and the two rows it
-    // would exclude are the ones "Browser sign-in" already isolates.
+    // The host synthesizes an `api` method for every provider whose
+    // `/provider/auth` advertises nothing, which puts 178 of ~180 rows in that
+    // bucket. A control that costs a click and returns the list you were
+    // already looking at is a dead option, and the two rows it would exclude
+    // are the ones "Browser sign-in" already isolates.
     expect(
       MODEL_PROVIDER_METHOD_FILTER_OPTIONS.map((option) => option.value),
     ).toEqual(["all", "oauth"]);

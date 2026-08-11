@@ -74,10 +74,9 @@ function useRelockAgainstCatalog(args: {
  * Declare (or edit) an OpenAI-compatible provider the catalog does not ship.
  *
  * A DELIBERATE MIRROR of upstream's `CustomProviderForm`: same fields in the
- * same order, same copy, same helper text, same row editors. The first version
- * of this dialog mirrored their predicates and invented the form around them,
- * and the user's verdict on it was the correct one - matching the rules while
- * inventing the surface is not parity.
+ * same order, same copy, same helper text, same row editors. Matching their
+ * rules while inventing the surface around them is not a mirror: the point is
+ * that a user who knows one app can use the other without relearning it.
  *
  * EDIT is ours, not theirs. Upstream has no edit mode at all: you re-declare a
  * provider with the same id, which their exists-check permits only while it is
@@ -152,8 +151,8 @@ export function ProviderCustomModelProviderDialog(props: {
   );
   // Validated continuously, SHOWN only after a submit attempt - upstream's
   // behaviour, and the reason their Submit stays live. Disabling it instead
-  // (an earlier pass did) turns a blank form into a dead button whose reasons
-  // are all invisible, because the errors it is waiting for are the ones a
+  // turns a blank form into a dead button whose reasons are all invisible,
+  // because the errors it is waiting for are exactly the ones a
   // blank form has.
   const [showErrors, setShowErrors] = useState(false);
   const errors = validateCustomProviderDraft(draft, scope);

@@ -73,8 +73,8 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
         // host commits the config block and completes its rotation before it
         // reports the credential step, so a `createCustom` whose key failed has
         // still changed what the next list will say - and reporting the failure
-        // while leaving the row showing its old state is the staleness this
-        // surface has already been bitten by once.
+        // while leaving the row on its old state is exactly the staleness this
+        // surface is prone to.
         //
         // Everything else keeps the `done`-only rule, and one arm is the reason
         // it exists: a `pending` OAuth poll has changed nothing yet, and

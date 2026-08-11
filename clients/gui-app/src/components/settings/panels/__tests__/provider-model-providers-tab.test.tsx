@@ -177,10 +177,10 @@ describe("sortModelProviderEntries", () => {
 
 describe("ProviderModelProvidersTab list states", () => {
   it("SAYS it is refreshing rather than letting stale rows look final", () => {
-    // Measured: the host rotates its managed server on every write, so the
-    // refetch after a mutation pays a cold `opencode serve` boot - ~3.7s
-    // against ~0.24s warm. For that whole window the rows are the pre-mutation
-    // answer, and the user read them as final twice before anyone timed it.
+    // The host rotates its managed server on every write, so the refetch after
+    // a mutation pays a cold `opencode serve` boot - seconds, against the
+    // fraction of a second a warm one costs. For that whole window the rows are
+    // the pre-mutation answer, and nothing on screen says so.
     hostMocks.listFetching = true;
     renderTab({
       result: { ok: true, providers: [entry({})] },
@@ -423,7 +423,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.getByText("Environment")).toBeTruthy();
     // The badge is the ONLY origin marker now. A trailing "Set by environment"
     // beside a badge reading "Environment" spent the row's last words saying
-    // the same thing twice, on the surface the user asked us to thin out.
+    // the same thing twice, in a row that has to stay scannable.
     expect(screen.queryByText("Set by environment")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Disconnect Groq" }),
@@ -527,7 +527,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.getByText("Environment")).toBeTruthy();
     // Still configurable - the warning belongs in the dialog, not in a block.
     // This is also the ONE case a connected row still shows Connect: the host
-    // will not disconnect it, so parity's "Disconnect only" would leave the row
+    // will not disconnect it, so a bare "Disconnect only" would leave the row
     // with no action at all.
     expect(screen.getByRole("button", { name: "Connect OpenAI" })).toBeTruthy();
   });
@@ -1650,12 +1650,12 @@ describe("ProviderModelProvidersTab layout", () => {
   });
 
   it("keeps the search controls an ORDINARY header control", () => {
-    // Sticky was requested, shipped, and then retired on live testing: pinning
-    // needs a fill, this pane is `bg-card/40` composited over the settings
-    // background, and the repainted fill stopped at the padded container's
-    // edges - a visible band beside the input on every frame. The Skills tab's
-    // plain placement is the convention, and scrolling up to search a long
-    // catalog is the accepted trade.
+    // Deliberately NOT sticky. Pinning needs a fill, and this pane is
+    // `bg-card/40` composited over the settings background - a pinned child
+    // cannot reproduce that composite across bounds it does not own, so the
+    // repainted fill stops at the padded container's edges and leaves a visible
+    // band beside the input. The Skills tab's plain placement is the
+    // convention; scrolling up to search a long catalog is the accepted trade.
     //
     // Structural, because jsdom has no layout engine: what can be asserted is
     // that no ancestor pins the control and no composite fill survives.

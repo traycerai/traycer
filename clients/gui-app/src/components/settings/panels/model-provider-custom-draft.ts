@@ -2,13 +2,12 @@
  * The form model behind "Add custom provider" - an OpenAI-compatible endpoint
  * the user declares themselves.
  *
- * This is a DELIBERATE MIRROR of upstream's own dialog (`CustomProviderForm` /
- * `validateCustomProvider`, OpenCode desktop 1.18.2), extracted field for
- * field: same fields in the same order, same rules, same messages. An earlier
- * pass mirrored their predicates and then invented the form around them, which
- * is how a surface ends up looking like parity and behaving like something
- * else. Where a rule here looks looser than it "should" be, it is because
- * theirs is - the notes say so at each site.
+ * This is a DELIBERATE MIRROR of OpenCode's own dialog (`CustomProviderForm` /
+ * `validateCustomProvider`): same fields in the same order, same rules, same
+ * messages. Mirroring their predicates while inventing the form around them
+ * would not be a mirror - a surface can satisfy every rule and still behave
+ * like a different app. Where a rule here looks looser than it "should" be, it
+ * is because theirs is; the notes say so at each site.
  *
  * Pure, and separate from the dialog, for the usual two reasons: it is the part
  * worth testing directly, and a component module that exports non-components

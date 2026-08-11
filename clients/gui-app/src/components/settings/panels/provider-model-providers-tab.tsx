@@ -650,7 +650,8 @@ export function ProviderModelProvidersTab(props: {
         listPending={listQuery.isPending}
         // A refetch AFTER a mutation is not instant and cannot be made so: the
         // host rotates its managed server on every write, so the next list pays
-        // a cold `opencode serve` boot - measured at ~3.7s against ~0.24s warm.
+        // a cold `opencode serve` boot, which is seconds rather than the
+        // fraction of a second a warm one costs.
         // The rows on screen are the PRE-mutation answer for that whole window,
         // and with nothing saying so they read as the final state. The user
         // reported exactly that, twice, before anyone measured it.
@@ -1052,7 +1053,7 @@ function customRowActions(
 /**
  * Says a refetch is happening, because the alternative is a row that looks
  * settled and is not. The host rotates its managed server on every write, so
- * this window is a cold `opencode serve` boot - measured ~3.7s against ~0.24s
+ * this window is a cold `opencode serve` boot - seconds, against a fraction
  * warm - and a user who reads a stale row as final concludes the button did
  * nothing. Which is what happened, twice.
  */

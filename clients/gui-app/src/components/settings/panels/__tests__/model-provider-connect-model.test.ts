@@ -50,9 +50,9 @@ describe("extractConfirmationCode", () => {
 
 describe("source badges", () => {
   it("speaks the upstream app's vocabulary", () => {
-    // Same row, same word, in both apps - which is the whole point of the
-    // parity pass. "Saved in OpenCode" was true and useful and belonged in a
-    // sentence, not in the one slot that has to be scannable across ~180 rows.
+    // Same row, same word, in both apps, so a user who knows one reads the
+    // other. "Saved in OpenCode" is true and useful in a sentence, but not in
+    // the one slot that has to stay scannable across ~180 rows.
     expect(sourceBadgeLabel("api", false)).toBe("API key");
     expect(sourceBadgeLabel("env", false)).toBe("Environment");
     expect(sourceBadgeLabel("custom", false)).toBe("Custom");

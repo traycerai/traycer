@@ -125,7 +125,7 @@ describe("model provider auth invalidation", () => {
     // The host commits the config block and rotates before it reports the
     // credential step, so a `createCustom` whose key failed has still changed
     // what the next list says. Reporting the failure while leaving the row on
-    // its old state is the staleness this surface was already bitten by once.
+    // its old state is exactly the staleness this surface is prone to.
     const client = new QueryClient({
       defaultOptions: {
         mutations: { retry: false },
