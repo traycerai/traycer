@@ -67,7 +67,7 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         <DialogTrigger asChild>
           <button
             type="button"
-            className="block size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="block max-h-full max-w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={`Open ${alt}`}
           >
             {props.children}

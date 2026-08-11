@@ -6,6 +6,7 @@ import {
 } from "@/components/artifacts/add-image-to-artifact-button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
+import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { ImageLightbox } from "./image-lightbox";
 
 export function AttachmentImageLoading(props: {
@@ -14,6 +15,7 @@ export function AttachmentImageLoading(props: {
   return (
     <span
       className="flex aspect-video w-full animate-pulse items-center justify-center bg-muted/60 text-ui-sm text-muted-foreground"
+      style={{ maxWidth: CHAT_IMAGE_MAX_EDGE }}
       role="status"
     >
       {props.label}
@@ -79,7 +81,7 @@ export function AttachmentImage(props: {
     );
   }
   return (
-    <div className="group relative my-3 w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
+    <div className="group relative my-3 w-fit max-w-full overflow-hidden rounded-lg border border-border/70 bg-muted/30">
       {props.addToArtifactSource === null ? null : (
         <AddImageToArtifactButton
           source={props.addToArtifactSource}
@@ -88,23 +90,31 @@ export function AttachmentImage(props: {
         />
       )}
       {status === "loading" ? (
-        <AttachmentImageLoading label="Loading image" />
+        <span
+          className="absolute inset-0 z-10 flex items-center justify-center bg-muted/60 text-ui-sm text-muted-foreground"
+          role="status"
+        >
+          Loading image
+        </span>
       ) : null}
       <ImageLightbox
         src={props.src}
         alt={props.alt}
         mediaType={props.mediaType}
         suggestedName={props.suggestedName}
-        className={status === "loading" ? "absolute inset-0" : undefined}
+        className="w-fit max-w-full"
       >
         <img
           src={props.src}
           alt={props.alt}
           className={cn(
-            status === "loading"
-              ? "size-full object-contain opacity-0"
-              : "block max-h-[70vh] max-w-full object-contain",
+            "block h-auto w-auto max-w-full object-contain",
+            status === "loading" && "opacity-0",
           )}
+          style={{
+            maxHeight: CHAT_IMAGE_MAX_EDGE,
+            maxWidth: `min(100%, ${CHAT_IMAGE_MAX_EDGE})`,
+          }}
           draggable={false}
           onLoad={() => setStatus("ready")}
           onError={() => setStatus("error")}

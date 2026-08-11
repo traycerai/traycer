@@ -22,6 +22,7 @@ export interface ImageGenerationProps {
   readonly onRetry?: () => void;
   readonly className?: string;
   readonly mediaClassName?: string;
+  readonly mediaStyle?: CSSProperties;
   readonly statusClassName?: string;
 }
 
@@ -39,6 +40,7 @@ interface NormalizedImageGenerationProps {
   readonly onRetry: (() => void) | undefined;
   readonly className: string | undefined;
   readonly mediaClassName: string | undefined;
+  readonly mediaStyle: CSSProperties | undefined;
   readonly statusClassName: string | undefined;
 }
 
@@ -257,12 +259,16 @@ export function ImageGeneration(props: ImageGenerationProps): ReactNode {
       data-slot="image-generation"
       data-state={normalized.status}
       aria-busy={active}
-      className={cn("w-full", normalized.className)}
+      className={cn(
+        normalized.size === "fluid" ? "w-fit max-w-full" : "w-full",
+        normalized.className,
+      )}
     >
       <div
         className={cn(
-          "w-full",
-          normalized.size === "compact" && "mx-auto max-w-52",
+          normalized.size === "compact"
+            ? "mx-auto w-full max-w-52"
+            : "w-fit max-w-full",
         )}
       >
         <ImageGenerationMedia
@@ -307,8 +313,11 @@ function ImageGenerationMedia(props: {
     <div
       role="img"
       aria-label={props.label}
-      style={{ aspectRatio: props.props.aspectRatio }}
-      className="relative isolate w-full overflow-hidden rounded-xl bg-muted"
+      style={{
+        ...props.props.mediaStyle,
+        aspectRatio: props.props.aspectRatio,
+      }}
+      className="relative isolate max-w-full overflow-hidden rounded-xl bg-muted"
     >
       <motion.div
         aria-hidden={props.props.children ? undefined : true}
@@ -326,7 +335,7 @@ function ImageGenerationMedia(props: {
           props.reduce ? { duration: 0 } : { duration: 0.4, ease: EASE_OUT }
         }
         className={cn(
-          "absolute inset-0 [&>*]:size-full [&>*]:object-cover [&_img]:size-full [&_img]:object-cover",
+          "absolute inset-0 [&>*]:size-full",
           props.props.mediaClassName,
         )}
       >
@@ -425,6 +434,7 @@ function normalizeImageGenerationProps(
     onRetry: props.onRetry,
     className: props.className,
     mediaClassName: props.mediaClassName,
+    mediaStyle: props.mediaStyle,
     statusClassName: props.statusClassName,
   };
 }

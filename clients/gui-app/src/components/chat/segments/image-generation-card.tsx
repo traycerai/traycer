@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import type {
   ImageGenerationResult,
   ToolInputDetail,
@@ -6,6 +6,7 @@ import type {
 import { AddImageToArtifactButton } from "@/components/artifacts/add-image-to-artifact-button";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { cn } from "@/lib/utils";
+import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import {
   ImageGeneration,
   type ImageGenerationStatus,
@@ -52,12 +53,12 @@ export function ImageGenerationCard(
     <section
       tabIndex={-1}
       data-image-generation-card={props.id}
-      className="w-full max-w-3xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="w-fit max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="Image generation"
     >
       <div
         className={cn(
-          "grid w-full gap-4",
+          "grid w-fit max-w-full gap-4",
           results.length > 1 && "sm:grid-cols-2",
         )}
       >
@@ -108,6 +109,7 @@ function GenerationCell(props: {
       resolution={resolution}
       aspectRatio={aspectRatio}
       size="fluid"
+      mediaStyle={generationFrameStyle(props.result, aspectRatio)}
     >
       {props.result === null ? null : (
         <GeneratedImageContent
@@ -180,7 +182,11 @@ function GeneratedImageContent(props: {
         <img
           src={image.src}
           alt={alt.length > 0 ? alt : "Generated image"}
-          className="size-full object-contain"
+          className="block h-auto w-auto max-h-full max-w-full object-contain"
+          style={{
+            maxHeight: CHAT_IMAGE_MAX_EDGE,
+            maxWidth: `min(100%, ${CHAT_IMAGE_MAX_EDGE})`,
+          }}
           draggable={false}
         />
       </ImageLightbox>
@@ -231,4 +237,18 @@ function resultAspectRatio(
     return fallback;
   }
   return Math.min(4, Math.max(0.25, result.width / result.height));
+}
+
+function generationFrameStyle(
+  result: ImageGenerationResult | null,
+  aspectRatio: number,
+): CSSProperties {
+  const intrinsicWidth =
+    result !== null && result.width !== null && result.width > 0
+      ? `${result.width}px`
+      : CHAT_IMAGE_MAX_EDGE;
+  return {
+    width: `min(${intrinsicWidth}, ${CHAT_IMAGE_MAX_EDGE}, calc(${CHAT_IMAGE_MAX_EDGE} * ${aspectRatio}))`,
+    maxHeight: CHAT_IMAGE_MAX_EDGE,
+  };
 }
