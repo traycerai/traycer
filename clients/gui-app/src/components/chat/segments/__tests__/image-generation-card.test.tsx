@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -23,6 +23,10 @@ const blobSrcState = vi.hoisted((): { value: AttachmentBlobState } => ({
 
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useAttachmentBlobSrc: () => blobSrcState.value,
+}));
+
+vi.mock("@/components/artifacts/add-image-to-artifact-button", () => ({
+  AddImageToArtifactButton: () => null,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -94,25 +98,26 @@ afterEach(() => {
 });
 
 describe("<ImageGenerationCard /> lifecycle states", () => {
-  it("renders the queued/generating frame while streaming with no results", () => {
+  it("maps a streaming zero-result call to the capped generating state", () => {
     renderCard({ isStreaming: true, imageResults: [] });
 
-    expect(
-      screen.getByRole("region", { name: "Image generation" }),
-    ).toBeTruthy();
+    const card = screen.getByRole("region", { name: "Image generation" });
+    const generation = card.querySelector('[data-slot="image-generation"]');
+    const frame = screen.getByRole("img", {
+      name: "Generating image: a misty pier",
+    });
+    expect(generation?.getAttribute("data-state")).toBe("generating");
+    expect(generation?.getAttribute("aria-busy")).toBe("true");
     expect(screen.getByText("Generating image")).toBeTruthy();
-    expect(screen.getByText("In progress")).toBeTruthy();
-    expect(
-      screen.getByRole("status", { name: "Generating image" }),
-    ).toBeTruthy();
-    const pending = screen.getByRole("status", { name: "Generating image" });
-    expect(pending.getAttribute("style")).toContain("aspect-ratio: 1.777");
-    expect(screen.getByText("a misty pier")).toBeTruthy();
+    expect(screen.getByText(/a misty pier/)).toBeTruthy();
+    expect(card.className).toContain("w-fit");
+    expect(card.className.split(" ")).not.toContain("w-full");
+    expect(frame.getAttribute("style")).toContain("22.5rem");
+    expect(frame.getAttribute("style")).toContain("aspect-ratio: 1.777");
+    expect(frame.getAttribute("style")).not.toContain("100vh");
   });
 
-  it("renders a complete result with prompt caption, resolution badge, and cross-fade classes", () => {
-    // Input hint 16:9 (~1.777) vs host result 4:3 (1.333): completed frame must
-    // consume host width/height, not the tool-arg hint.
+  it("maps results to complete and caps a large image at the shared edge", () => {
     renderCard({
       isStreaming: false,
       inputDetail: fieldsDetail({
@@ -131,78 +136,64 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
       ],
     });
 
-    expect(screen.getByText("Generated image")).toBeTruthy();
-    expect(screen.queryByText("In progress")).toBeNull();
-    expect(screen.getByText("800 × 600")).toBeTruthy();
-    expect(screen.getByText("a misty pier")).toBeTruthy();
-
+    const card = screen.getByRole("region", { name: "Image generation" });
+    const generation = card.querySelector('[data-slot="image-generation"]');
+    const frame = card.querySelector('[role="img"]');
     const img = screen.getByRole("img", { name: "a misty pier" });
-    expect(img.className).toContain("opacity-0");
-    expect(img.className).toContain("transition-opacity");
-    expect(img.className).toContain("motion-reduce:transition-none");
-    fireEvent.load(img);
-    expect(img.className).toContain("opacity-100");
-
-    const figure = img.closest("figure");
-    expect(figure?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);
-    expect(figure?.getAttribute("style")).not.toMatch(/aspect-ratio:\s*1\.777/);
+    expect(generation?.getAttribute("data-state")).toBe("complete");
+    expect(generation?.getAttribute("aria-busy")).toBe("false");
+    expect(screen.getByText("Image ready")).toBeTruthy();
+    expect(screen.getByText("800 × 600")).toBeTruthy();
+    expect(screen.getByText(/a misty pier/)).toBeTruthy();
+    expect(frame?.getAttribute("style")).toContain("22.5rem");
+    expect(frame?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);
+    expect(frame?.getAttribute("style")).not.toMatch(/aspect-ratio:\s*1\.777/);
+    expect(img.className).toContain("h-auto");
+    expect(img.className).toContain("w-auto");
+    expect(img.className.split(" ")).not.toContain("w-full");
+    expect(img.getAttribute("style")).toContain("22.5rem");
   });
 
-  it("treats a terminal zero-result call as a failure, not endless generating", () => {
+  it("keeps a small generated image intrinsic instead of stretching it", () => {
     renderCard({
+      imageResults: [
+        imageResult({
+          attachmentHash: "small-hash",
+          width: 64,
+          height: 64,
+          alt: "small orange square",
+        }),
+      ],
+    });
+
+    const card = screen.getByRole("region", { name: "Image generation" });
+    const frame = card.querySelector('[role="img"]');
+    const img = screen.getByRole("img", { name: "small orange square" });
+    expect(frame?.getAttribute("style")).toContain("max-height: 22.5rem");
+    expect(img.className).toContain("h-auto");
+    expect(img.className).toContain("w-auto");
+    expect(img.className).not.toContain("size-full");
+    expect(card.className).toContain("w-fit");
+    expect(card.className.split(" ")).not.toContain("w-full");
+  });
+
+  it("maps a provider failure to the modest error state without retry", () => {
+    renderCard({
+      error: "Provider rejected the prompt: safety filter",
       isStreaming: false,
-      error: null,
       imageResults: [],
     });
 
-    expect(screen.getByText("Image generation failed")).toBeTruthy();
-    expect(screen.getByText("The provider returned no images.")).toBeTruthy();
-    expect(screen.queryByText("Generating image")).toBeNull();
-    expect(screen.queryByText("In progress")).toBeNull();
+    const card = screen.getByRole("region", { name: "Image generation" });
+    const generation = card.querySelector('[data-slot="image-generation"]');
+    const status = screen.getByText("Generation failed").parentElement;
+    expect(generation?.getAttribute("data-state")).toBe("error");
+    expect(generation?.getAttribute("aria-busy")).toBe("false");
+    expect(status?.className).toContain("text-destructive");
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     expect(
-      document.querySelector('[data-image-generation-card="tool-img-1"]')
-        ?.className,
-    ).toContain("border-destructive/35");
-  });
-
-  it("renders duplicate attachment hashes as stable sibling results", () => {
-    renderCard({
-      imageResults: [
-        imageResult({
-          attachmentHash: "same-hash",
-          width: 100,
-          height: 100,
-          alt: "first copy",
-        }),
-        imageResult({
-          attachmentHash: "same-hash",
-          width: 100,
-          height: 100,
-          alt: "second copy",
-        }),
-      ],
-    });
-
-    expect(screen.getByText("2 results")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "first copy" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "second copy" })).toBeTruthy();
-  });
-
-  it("removes the dither canvas and its observer after the image loads", () => {
-    const { container } = renderCard({
-      imageResults: [
-        imageResult({
-          attachmentHash: "hash-dither",
-          width: 64,
-          height: 64,
-          alt: "loaded shot",
-        }),
-      ],
-    });
-
-    expect(container.querySelector("canvas")).not.toBeNull();
-    fireEvent.load(screen.getByRole("img", { name: "loaded shot" }));
-    expect(container.querySelector("canvas")).toBeNull();
+      screen.queryByText("Provider rejected the prompt: safety filter"),
+    ).toBeNull();
   });
 
   it("falls back alt text through revisedPrompt then prompt, and prefers revisedPrompt as caption", () => {
@@ -223,7 +214,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(
       screen.getByRole("img", { name: "revised pier at dawn" }),
     ).toBeTruthy();
-    expect(screen.getByText("revised pier at dawn")).toBeTruthy();
+    expect(screen.getByText(/revised pier at dawn/)).toBeTruthy();
   });
 
   it("uses the provider alt when present instead of revisedPrompt", () => {
@@ -242,51 +233,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(screen.getByRole("img", { name: "provider alt text" })).toBeTruthy();
   });
 
-  it("shows the provider error message in a reserved-ratio frame with no fake refining state", () => {
-    renderCard({
-      error: "Provider rejected the prompt: safety filter",
-      isStreaming: false,
-      imageResults: [],
-    });
-
-    expect(screen.getByText("Image generation failed")).toBeTruthy();
-    expect(
-      screen.getByText("Provider rejected the prompt: safety filter"),
-    ).toBeTruthy();
-    expect(screen.getByText("Ask the agent to try again.")).toBeTruthy();
-    expect(screen.queryByText("In progress")).toBeNull();
-    expect(screen.queryByText("Refining")).toBeNull();
-
-    const status = screen.getByRole("status");
-    expect(status.getAttribute("style")).toContain("aspect-ratio:");
-    const card = document.querySelector(
-      '[data-image-generation-card="tool-img-1"]',
-    );
-    expect(card?.className).toContain("border-destructive/35");
-  });
-
-  it("reserves the tool-arg aspect ratio on pending and avoids layout-class drift to fixed pixels", () => {
-    const { container } = renderCard({
-      isStreaming: true,
-      inputDetail: fieldsDetail({
-        prompt: "square logo",
-        aspect_ratio: "1:1",
-      }),
-      imageResults: [],
-    });
-
-    const pending = screen.getByRole("status", { name: "Generating image" });
-    expect(pending.getAttribute("style")).toMatch(/aspect-ratio:\s*1\b/);
-    // Layout surfaces stay fluid: no hard-coded px width/height on the frame.
-    expect(pending.className).not.toMatch(/\bw-\[\d+px\]/);
-    expect(pending.className).not.toMatch(/\bh-\[\d+px\]/);
-    expect(container.querySelector("canvas")).not.toBeNull();
-    expect(container.querySelector("canvas")?.className).toContain(
-      "motion-reduce:animate-none",
-    );
-  });
-
-  it("renders a multi-image grid with a result count", () => {
+  it("keeps the multi-image grid and duplicate results", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/multi",
@@ -294,13 +241,13 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     renderCard({
       imageResults: [
         imageResult({
-          attachmentHash: "hash-a",
+          attachmentHash: "same-hash",
           width: 640,
           height: 480,
           alt: "variant a",
         }),
         imageResult({
-          attachmentHash: "hash-b",
+          attachmentHash: "same-hash",
           width: 640,
           height: 480,
           alt: "variant b",
@@ -308,12 +255,16 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
       ],
     });
 
-    expect(screen.getByText("2 results")).toBeTruthy();
     expect(screen.getByRole("img", { name: "variant a" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "variant b" })).toBeTruthy();
     const card = screen.getByRole("region", { name: "Image generation" });
     const bodyGrid = card.querySelector(".grid");
     expect(bodyGrid?.className).toContain("sm:grid-cols-2");
+    expect(
+      card.querySelectorAll(
+        '[data-slot="image-generation"][data-state="complete"]',
+      ),
+    ).toHaveLength(2);
   });
 
   it("shows waiting-for-sync while the attachment blob is not ready, still ratio-reserved", () => {
@@ -334,12 +285,11 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
       ],
     });
 
-    const waiting = screen.getByText("Waiting for image sync");
-    const style =
-      waiting.getAttribute("style") ??
-      waiting.parentElement?.getAttribute("style");
-    expect(style).toMatch(/aspect-ratio:\s*1\.333/);
-    expect(style).not.toMatch(/aspect-ratio:\s*1\.777/);
+    const card = screen.getByRole("region", { name: "Image generation" });
+    const frame = card.querySelector('[role="img"]');
+    expect(screen.getByText("Waiting for image sync")).toBeTruthy();
+    expect(frame?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);
+    expect(frame?.getAttribute("style")).not.toMatch(/aspect-ratio:\s*1\.777/);
   });
 });
 

@@ -39,6 +39,10 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useAttachmentBlobSrc: () => blobSrcState.value,
 }));
 
+vi.mock("@/components/artifacts/add-image-to-artifact-button", () => ({
+  AddImageToArtifactButton: () => null,
+}));
+
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({
     request: hostRequest,
@@ -170,6 +174,27 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(screen.getByRole("img", { name: "diagram" })).toBeTruthy();
   });
 
+  it("keeps small images intrinsic while capping large images at 22.5rem", () => {
+    renderImage({
+      src: "https://cdn.example.com/orange-square.png",
+      alt: "small orange square",
+      context: undefined,
+    });
+
+    const img = screen.getByRole("img", { name: "small orange square" });
+    fireEvent.load(img);
+    const container = img.closest("button")?.parentElement?.parentElement;
+    expect(container?.className).toContain("w-fit");
+    expect(container?.className.split(" ")).not.toContain("w-full");
+    expect(img.className).toContain("h-auto");
+    expect(img.className).toContain("w-auto");
+    expect(img.className.split(" ")).not.toContain("w-full");
+    expect(img.getAttribute("style")).toContain("max-height: 22.5rem");
+    expect(img.getAttribute("style")).toContain(
+      "max-width: min(100%, 22.5rem)",
+    );
+  });
+
   it("renders raster data URLs under the decoded-byte cap", () => {
     renderImage({
       src: TINY_PNG_DATA_URL,
@@ -192,6 +217,17 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     const img = screen.getByRole("img", { name: "diagram" });
     expect(img.getAttribute("src")).toBe(SVG_DATA_URL);
     expect(screen.getByRole("button", { name: "Open diagram" })).toBeTruthy();
+  });
+
+  it("uses quiet SVG-specific copy when a thumbnail cannot load", () => {
+    renderImage({ src: SVG_DATA_URL, alt: undefined, context: undefined });
+
+    fireEvent.error(screen.getByRole("img", { name: "diagram" }));
+    const failure = document.querySelector("[data-assistant-image-failure]");
+    expect(failure?.textContent).toBe("Couldn't display this SVG.");
+    expect(failure?.className).toContain("text-muted-foreground");
+    expect(failure?.className).not.toContain("destructive");
+    expect(failure?.querySelector("svg")).toBeNull();
   });
 
   it("renders a resolved local source from the attachment blob cache when bytes are ready", () => {
@@ -267,17 +303,17 @@ describe("AssistantMarkdownImage source classification matrix", () => {
   it.each([
     {
       state: "blocked" as const,
-      reason: "Image blocked by policy",
+      reason: "Couldn't display this image.",
     },
     {
       state: "oversized" as const,
-      reason: "Image exceeds the 30 MB limit",
+      reason: "This image is too large to show here.",
     },
     {
       state: "not-found" as const,
-      reason: "Image not found",
+      reason: "This image is no longer available.",
     },
-  ])("renders a terminal failure chip for $state", ({ state, reason }) => {
+  ])("renders quiet terminal failure text for $state", ({ state, reason }) => {
     renderImage({
       src: `/workspace/${state}.png`,
       alt: undefined,
@@ -294,7 +330,11 @@ describe("AssistantMarkdownImage source classification matrix", () => {
 
     const chip = document.querySelector("[data-assistant-image-failure]");
     expect(chip).not.toBeNull();
-    expect(chip?.textContent).toContain(reason);
+    expect(chip?.textContent).toBe(reason);
+    expect(chip?.className).toContain("text-muted-foreground");
+    expect(chip?.className).not.toContain("destructive");
+    expect(chip?.querySelector("svg")).toBeNull();
+    expect(chip?.textContent).not.toContain("blocked by policy");
     expect(screen.queryByRole("img")).toBeNull();
     expect(document.querySelector("[data-assistant-image-consent]")).toBeNull();
   });
@@ -499,13 +539,11 @@ describe("AssistantMarkdownImage source classification matrix", () => {
 
     const chip = document.querySelector("[data-assistant-image-failure]");
     expect(chip).not.toBeNull();
-    expect(chip?.textContent).toContain(
-      "Inline image is invalid or exceeds the 30 MB limit",
-    );
+    expect(chip?.textContent).toBe("This image is too large to show here.");
     expect(screen.queryByRole("img")).toBeNull();
   });
 
-  it("rejects invalid raster data URLs with the same cap/invalid failure chip", () => {
+  it("uses quiet generic copy for invalid raster data URLs", () => {
     renderImage({
       src: "data:image/png;base64,abc",
       alt: undefined,
@@ -514,9 +552,21 @@ describe("AssistantMarkdownImage source classification matrix", () => {
 
     const chip = document.querySelector("[data-assistant-image-failure]");
     expect(chip).not.toBeNull();
-    expect(chip?.textContent).toContain(
-      "Inline image is invalid or exceeds the 30 MB limit",
-    );
+    expect(chip?.textContent).toBe("Couldn't display this image.");
+    expect(chip?.className).not.toContain("destructive");
+  });
+
+  it("uses quiet generic copy for unsupported image sources", () => {
+    renderImage({
+      src: "ftp://example.com/image.png",
+      alt: undefined,
+      context: undefined,
+    });
+
+    const failure = document.querySelector("[data-assistant-image-failure]");
+    expect(failure?.textContent).toBe("Couldn't display this image.");
+    expect(failure?.className).toContain("text-muted-foreground");
+    expect(failure?.className).not.toContain("destructive");
   });
 
   it("rejects SVG bytes mislabeled as image/png", () => {
@@ -525,7 +575,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
 
     expect(
       document.querySelector("[data-assistant-image-failure]")?.textContent,
-    ).toContain("Inline image is invalid or exceeds the 30 MB limit");
+    ).toBe("Couldn't display this image.");
     expect(screen.queryByRole("img")).toBeNull();
   });
 });
