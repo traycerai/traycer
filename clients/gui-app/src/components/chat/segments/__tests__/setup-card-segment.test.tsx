@@ -388,7 +388,15 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       epicId: EPIC_ID,
       ownerId: OWNER_ID,
       ownerKind: "chat",
-      entries: [folderIntent],
+      entries: [
+        {
+          ...folderIntent,
+          branch: {
+            ...folderIntent.branch,
+            collision: "fail",
+          },
+        },
+      ],
     });
     expect(retryMutate).not.toHaveBeenCalled();
   });

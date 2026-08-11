@@ -43,6 +43,8 @@ import {
   worktreeSetRepoBranchPrefixResponseSchema,
   worktreeSubmoduleMergeFactSchema,
   worktreeSubmoduleMergeFactSchemaV12,
+  worktreeCreateRequestSchema,
+  worktreeCreatePathsRequestSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 
 const V10 = { major: 1, minor: 0 } as const;
@@ -56,6 +58,114 @@ const listByWorkspacePathsRegistry =
   hostRpcRegistry["worktree.listByWorkspacePaths"];
 const listBindingsForEpicRegistry =
   hostRpcRegistry["worktree.listBindingsForEpic"];
+const createRegistry = hostRpcRegistry["worktree.create"];
+const createPathsRegistry = hostRpcRegistry["worktree.createPaths"];
+
+describe("worktree create collision-policy negotiation", () => {
+  const randomBranch = {
+    type: "new" as const,
+    name: "gentle-yak",
+    source: "development",
+    carryUncommittedChanges: false,
+    collision: "random" as const,
+    retryIdentity: "create-operation-123",
+  };
+
+  it("upgrades worktree.create v1.0 new branches to fail", () => {
+    const upgraded = upgradeRequestToVersion(createRegistry, V10, V11, {
+      epicId: "epic-1",
+      ownerId: "agent-1",
+      ownerKind: "terminal-agent",
+      entries: [
+        {
+          kind: "worktree",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          scripts: null,
+          branch: {
+            type: "new",
+            name: "gentle-yak",
+            source: "development",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+
+    expect(worktreeCreateRequestSchema.parse(upgraded)).toEqual(upgraded);
+    const entry = upgraded.entries[0];
+    expect(entry?.kind).toBe("worktree");
+    if (entry?.kind !== "worktree") throw new Error("expected worktree entry");
+    expect(entry.branch).toMatchObject({ collision: "fail" });
+  });
+
+  it("upgrades worktree.createPaths v1.0 new branches to fail", () => {
+    const upgraded = upgradeRequestToVersion(createPathsRegistry, V10, V11, {
+      entries: [
+        {
+          workspacePath: "/repo",
+          branch: {
+            type: "new",
+            name: "gentle-yak",
+            source: "development",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+
+    expect(worktreeCreatePathsRequestSchema.parse(upgraded)).toEqual(upgraded);
+    expect(upgraded.entries[0]?.branch).toMatchObject({ collision: "fail" });
+  });
+
+  it("requires an explicit retry identity for random worktree.create branches", () => {
+    const request = {
+      epicId: "epic-1",
+      ownerId: "agent-1",
+      ownerKind: "terminal-agent" as const,
+      entries: [
+        {
+          kind: "worktree" as const,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          scripts: null,
+          branch: randomBranch,
+        },
+      ],
+    };
+    expect(worktreeCreateRequestSchema.parse(request)).toEqual(request);
+    expect(() =>
+      worktreeCreateRequestSchema.parse({
+        ...request,
+        entries: [
+          {
+            ...request.entries[0],
+            branch: { ...randomBranch, retryIdentity: undefined },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("requires the same retry identity on random worktree.createPaths branches", () => {
+    const request = {
+      entries: [{ workspacePath: "/repo", branch: randomBranch }],
+    };
+    expect(worktreeCreatePathsRequestSchema.parse(request)).toEqual(request);
+    expect(() =>
+      worktreeCreatePathsRequestSchema.parse({
+        entries: [
+          {
+            workspacePath: "/repo",
+            branch: { ...randomBranch, retryIdentity: undefined },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+});
 
 // A v1.1 selector row - every field the shipped binding listing carries,
 // without the v1.2 `isGitResolvePending` marker.
@@ -905,9 +1015,9 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
     expect(
       upgradeRequestToVersion(listByWorkspacePathsRegistry, V13, V14, request),
     ).toEqual(request);
-    expect(
-      worktreeListByWorkspacePathsRequestSchemaV14.parse(request),
-    ).toEqual(request);
+    expect(worktreeListByWorkspacePathsRequestSchemaV14.parse(request)).toEqual(
+      request,
+    );
 
     const response = {
       workspaces: [
@@ -977,9 +1087,9 @@ describe("repoBranchPrefixStateSchema", () => {
         value: "has spaces",
       }),
     ).toEqual({ status: "present", value: "has spaces" });
-    expect(
-      repoBranchPrefixStateSchema.parse({ status: "malformed" }),
-    ).toEqual({ status: "malformed" });
+    expect(repoBranchPrefixStateSchema.parse({ status: "malformed" })).toEqual({
+      status: "malformed",
+    });
   });
 
   it("rejects incomplete or unknown status shapes", () => {
@@ -1031,9 +1141,9 @@ describe("worktree.setRepoBranchPrefix schemas", () => {
 
   it("is registered off the released floor as a v1.0 method", () => {
     expect(setRepoBranchPrefixRegistry[1].latestMinor).toBe(0);
-    expect(
-      Object.keys(setRepoBranchPrefixRegistry[1].versions).sort(),
-    ).toEqual(["0"]);
+    expect(Object.keys(setRepoBranchPrefixRegistry[1].versions).sort()).toEqual(
+      ["0"],
+    );
   });
 });
 
