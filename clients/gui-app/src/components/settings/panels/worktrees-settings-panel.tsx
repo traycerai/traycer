@@ -1000,9 +1000,10 @@ export function WorktreesList(props: {
   }, [mergedWorktrees, enrichmentStateFor]);
   const unavailableStatusCount = useMemo(
     () =>
-      mergedWorktrees.filter(
-        (entry) => enrichmentStateFor(entry.worktreePath) === "unknown",
-      ).length,
+      mergedWorktrees.filter((entry) => {
+        const state = enrichmentStateFor(entry.worktreePath);
+        return state === "unknown" || state === "unavailable";
+      }).length,
     [mergedWorktrees, enrichmentStateFor],
   );
   // The status filter composes with the search box (both apply) before repo

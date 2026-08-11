@@ -4047,6 +4047,46 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     ).toContain("Status unavailable for 1 worktree.");
   });
 
+  it("reports a failed stale refresh when its retained tier is filtered out", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 20,
+    });
+    const lastKnownReview = entry({
+      worktreePath: "/wt/review",
+      branch: "feat-review",
+      branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+      resolvedAt: 10,
+    });
+    const refreshedReviewBase = entry({
+      ...lastKnownReview,
+      branch: "feat-review",
+      branchStatus: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [landed, refreshedReviewBase],
+        enrichedByPath: new Map([
+          [landed.worktreePath, landed],
+          [lastKnownReview.worktreePath, lastKnownReview],
+        ]),
+        erroredPaths: new Set([lastKnownReview.worktreePath]),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+
+    screen.getByRole("button", { name: "Delete worktree feat-landed" });
+    expect(screen.queryByText("feat-review")).toBeNull();
+    expect(
+      screen.getByTestId("worktrees-filter-resolution-status").textContent,
+    ).toContain("Status unavailable for 1 worktree.");
+  });
+
   it("upgrades an errored row in place once a later refetch succeeds", () => {
     const merged = entry({
       worktreePath: "/wt/errored",
