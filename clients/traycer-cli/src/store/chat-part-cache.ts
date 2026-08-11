@@ -59,8 +59,18 @@ export function createDiskChatPartCache(rootDir: string): ChatPartCache {
         // concurrent writers of the same part must not share a temp path, or
         // one would rename the other's half-written file into place.
         const temporary = `${path}.${process.pid}.${writeCounter()}.part`;
-        await writeFile(temporary, bytes);
-        await rename(temporary, path);
+        try {
+          await writeFile(temporary, bytes);
+          await rename(temporary, path);
+        } catch (error) {
+          // A `.part` the rename never claimed is unreachable: the reader opens
+          // the exact digest path and nothing else, and this cache has no
+          // eviction, so it would sit in the user's cache directory until they
+          // deleted it by hand. Removed best-effort, then re-thrown to the same
+          // swallow every other failure here takes.
+          await rm(temporary, { force: true }).catch(() => undefined);
+          throw error;
+        }
       } catch {
         // Full disk, read-only home, denied permission. A failed `put` costs a
         // refetch next time and must never fail the read in progress.
