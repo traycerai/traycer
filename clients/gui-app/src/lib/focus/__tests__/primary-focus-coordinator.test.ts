@@ -45,6 +45,50 @@ describe("PrimaryFocusCoordinator", () => {
     expect(focus).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels a matching intent before its endpoint registers", () => {
+    const target = document.createElement("input");
+    const focus = vi.fn(() => target.focus());
+    const coordinator = new PrimaryFocusCoordinator({
+      activeElement: () => document.activeElement,
+      documentVisible: () => true,
+    });
+
+    coordinator.request(COMPOSER);
+    coordinator.cancel((intent) => intent.kind === "composer");
+    coordinator.register(
+      COMPOSER,
+      endpoint({
+        focus,
+        activeElement: () => target,
+        eligible: () => true,
+      }),
+    );
+
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("keeps an intent when the cancel predicate does not match", () => {
+    const target = document.createElement("input");
+    const focus = vi.fn(() => target.focus());
+    const coordinator = new PrimaryFocusCoordinator({
+      activeElement: () => document.activeElement,
+      documentVisible: () => true,
+    });
+
+    coordinator.request(COMPOSER);
+    coordinator.cancel((intent) => intent.kind === "terminal");
+    coordinator.register(
+      COMPOSER,
+      endpoint({
+        focus,
+        activeElement: () => target,
+        eligible: () => true,
+      }),
+    );
+
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps only the latest intent", () => {
     let activeElement: Element | null = null;
     const composer = document.createElement("div");

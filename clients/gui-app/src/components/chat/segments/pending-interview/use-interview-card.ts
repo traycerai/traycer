@@ -1,6 +1,7 @@
 import {
   useEffect,
   useEffectEvent,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -93,6 +94,7 @@ interface UseInterviewCardArgs {
 export function useInterviewCard(args: UseInterviewCardArgs) {
   const { chatId, blockId, questions, isActive, isBusy, onSubmit, onSkip } =
     args;
+  const composerSurfaceId = useId();
   const total = questions.length;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
@@ -461,18 +463,22 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // composer it replaced. Prefer the open text field, else the card itself.
   useLayoutEffect(() => {
     return registerComposerFocus(
-      () => {
-        const node = containerRef.current;
-        if (node === null) return;
-        const field = node.querySelector<HTMLElement>("textarea, input");
-        (field ?? node).focus({ preventScroll: true });
+      composerSurfaceId,
+      {
+        focus: () => {
+          const node = containerRef.current;
+          if (node === null) return;
+          const field = node.querySelector<HTMLElement>("textarea, input");
+          (field ?? node).focus({ preventScroll: true });
+        },
+        containsActiveElement: (activeElement) =>
+          activeElement !== null &&
+          containerRef.current?.contains(activeElement) === true,
+        isEligible: () => containerRef.current?.isConnected === true,
       },
       isActive,
-      (activeElement) =>
-        activeElement !== null &&
-        containerRef.current?.contains(activeElement) === true,
     );
-  }, [isActive]);
+  }, [composerSurfaceId, isActive]);
 
   return {
     containerRef,

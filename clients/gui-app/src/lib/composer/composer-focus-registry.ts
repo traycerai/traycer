@@ -1,11 +1,9 @@
 import {
   registerPrimaryFocusEndpoint,
   requestPrimaryFocus,
+  type PrimaryFocusEndpoint,
   type PrimaryFocusTarget,
 } from "@/lib/focus/primary-focus-coordinator";
-
-type FocusCallback = () => void;
-type ContainsActiveElement = (activeElement: Element | null) => boolean;
 
 interface Entry {
   readonly target: PrimaryFocusTarget;
@@ -13,24 +11,18 @@ interface Entry {
 }
 
 const entries = new Set<Entry>();
-let nextSurfaceId = 0;
 
 export function registerComposerFocus(
-  focus: FocusCallback,
+  surfaceId: string,
+  endpoint: PrimaryFocusEndpoint,
   isActive: boolean,
-  containsActiveElement: ContainsActiveElement,
 ): () => void {
-  nextSurfaceId += 1;
   const entry: Entry = {
-    target: { kind: "composer", surfaceId: `composer-${nextSurfaceId}` },
+    target: { kind: "composer", surfaceId },
     isActive,
   };
   entries.add(entry);
-  const unregister = registerPrimaryFocusEndpoint(entry.target, {
-    focus,
-    containsActiveElement,
-    isEligible: () => true,
-  });
+  const unregister = registerPrimaryFocusEndpoint(entry.target, endpoint);
   return () => {
     entries.delete(entry);
     unregister();

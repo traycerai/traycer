@@ -3,6 +3,7 @@ import {
   clearPrimaryFocusInteraction,
   handlePrimaryFocusIn,
   reconcilePrimaryFocus,
+  subscribeToPrimaryFocusIntent,
   setPrimaryFocusInteractionActive,
 } from "./primary-focus-coordinator";
 
@@ -26,10 +27,16 @@ export function PrimaryFocusCoordinatorProvider(props: {
     };
     // React portals and retained xterm hosts can move an already-focused
     // endpoint without emitting a new focus event. Child-list commits are the
-    // concrete readiness signal for that relocation; reconciliation is a
-    // no-op while the semantic owner still contains the active element.
+    // concrete readiness signal for that relocation; observe only while a
+    // semantic focus intent is parked.
     const observer = new MutationObserver(() => reconcilePrimaryFocus());
-    observer.observe(document.body, { childList: true, subtree: true });
+    const unsubscribeFromIntent = subscribeToPrimaryFocusIntent((pending) => {
+      if (pending) {
+        observer.observe(document.body, { childList: true, subtree: true });
+      } else {
+        observer.disconnect();
+      }
+    });
     document.addEventListener("visibilitychange", handleVisibilityChange);
     document.addEventListener("focusin", handleFocusIn, true);
     document.addEventListener("pointerdown", handlePointerDown, true);
@@ -43,6 +50,7 @@ export function PrimaryFocusCoordinatorProvider(props: {
       window.removeEventListener("pointerup", handlePointerSettled, true);
       window.removeEventListener("pointercancel", handlePointerSettled, true);
       window.removeEventListener("blur", handlePointerSettled);
+      unsubscribeFromIntent();
       observer.disconnect();
       clearPrimaryFocusInteraction();
     };

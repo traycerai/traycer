@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { ArrowLeft, Folder } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import {
   Command,
@@ -24,11 +25,12 @@ export interface LandingTerminalDirectoryPickerProps {
   readonly workspacePaths: ReadonlyArray<string>;
   readonly primaryWorkspacePath: string;
   readonly error: string | null;
+  readonly isPending: boolean;
   readonly onSelect: (workspacePath: string) => void;
   readonly onCancel: () => void;
 }
 
-/** Inline empty-terminal state matching the epic canvas pane opener. */
+/** Inline chooser for the workspace directory a new landing terminal opens in. */
 export function LandingTerminalDirectoryPicker(
   props: LandingTerminalDirectoryPickerProps,
 ): ReactNode {
@@ -59,6 +61,7 @@ export function LandingTerminalDirectoryPicker(
   );
 
   const cancel = (): void => {
+    if (props.isPending) return;
     props.onCancel();
   };
 
@@ -66,6 +69,7 @@ export function LandingTerminalDirectoryPicker(
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
+    if (props.isPending) return;
     cancel();
   };
 
@@ -83,6 +87,7 @@ export function LandingTerminalDirectoryPicker(
           });
         }}
         label="Create terminal in workspace"
+        aria-busy={props.isPending}
         loop
         onKeyDown={handleKeyDown}
         className="h-full min-h-0 rounded-none bg-transparent"
@@ -96,11 +101,26 @@ export function LandingTerminalDirectoryPicker(
               size="icon-xs"
               aria-label="Cancel terminal creation"
               onClick={cancel}
+              disabled={props.isPending}
             >
               <ArrowLeft />
             </InputGroupButton>
           }
         />
+        {props.isPending ? (
+          <div
+            data-testid="landing-terminal-directory-picker-pending"
+            role="status"
+            className="flex items-center gap-2 px-2 py-1 text-ui-xs text-muted-foreground"
+          >
+            <AgentSpinningDots
+              className="text-muted-foreground"
+              testId={undefined}
+              variant={undefined}
+            />
+            Opening terminal…
+          </div>
+        ) : null}
         <CommandList className="max-h-none min-h-0 flex-1">
           <CommandEmpty>No matching directories.</CommandEmpty>
           <CommandGroup heading="Create terminal in workspace">
@@ -109,6 +129,7 @@ export function LandingTerminalDirectoryPicker(
                 key={workspacePath}
                 value={workspacePath}
                 onSelect={() => props.onSelect(workspacePath)}
+                disabled={props.isPending}
                 className="items-start py-2"
               >
                 <Folder className="mt-0.5 size-4 text-muted-foreground" />

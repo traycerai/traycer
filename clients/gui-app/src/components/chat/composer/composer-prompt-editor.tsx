@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -268,6 +269,7 @@ function useIngestPastedComposerImagesGetter(
 }
 
 function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
+  const composerSurfaceId = useId();
   const {
     initialContent,
     initialSelection,
@@ -420,15 +422,19 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useLayoutEffect(() => {
     if (editor === null) return;
     return registerComposerFocus(
-      () => {
-        editor.commands.focus();
+      composerSurfaceId,
+      {
+        focus: () => {
+          editor.commands.focus();
+        },
+        containsActiveElement: (activeElement) =>
+          activeElement === editor.view.dom ||
+          (activeElement !== null && editor.view.dom.contains(activeElement)),
+        isEligible: () => editor.view.dom.isConnected,
       },
       isActive,
-      (activeElement) =>
-        activeElement === editor.view.dom ||
-        (activeElement !== null && editor.view.dom.contains(activeElement)),
     );
-  }, [editor, isActive]);
+  }, [composerSurfaceId, editor, isActive]);
 
   useEffect(() => {
     if (editor === null) return;

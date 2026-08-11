@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -351,7 +352,7 @@ export function LandingTerminalPanel(): ReactNode {
       if (instanceId !== null) focusTerminalInstance(instanceId);
       return;
     }
-    const captured = capture();
+    const captured = pending ? target : capture();
     setPanelOpen(true);
     const request = directoryRequestFor(captured, "always-create", true);
     if (request !== null) {
@@ -377,7 +378,7 @@ export function LandingTerminalPanel(): ReactNode {
     clearPending();
     if (request.closePanelOnCancel) {
       setPanelOpen(false);
-      clearPendingTerminalFocus();
+      clearPendingTerminalFocus(null);
       focusActiveComposer();
       return;
     }
@@ -416,6 +417,16 @@ export function LandingTerminalPanel(): ReactNode {
     [replaceDirectoryRequest, selectWorkspacePath],
   );
 
+  const handleReconciliationError = useCallback(() => {
+    const request = directoryRequestRef.current;
+    if (request === null || request.selectedTarget === null) return;
+    replaceDirectoryRequest({
+      ...request,
+      selectedTarget: null,
+      error: "The terminal directory could not be opened.",
+    });
+  }, [replaceDirectoryRequest]);
+
   const activateTerminalTab = useCallback(
     (instanceId: string) => {
       replaceDirectoryRequest(null);
@@ -435,7 +446,7 @@ export function LandingTerminalPanel(): ReactNode {
     const previous = previousPanelLayoutRef.current;
     previousPanelLayoutRef.current = { landingPageId, panelOpen };
     if (previous.landingPageId !== landingPageId) {
-      clearPendingTerminalFocus();
+      clearPendingTerminalFocus(null);
       return;
     }
     const wasOpen = previous.panelOpen;
@@ -444,7 +455,10 @@ export function LandingTerminalPanel(): ReactNode {
       if (!pending) capture();
       const openActiveInstanceId =
         useLandingTerminalStore.getState().activeInstanceId;
-      if (openActiveInstanceId !== null) {
+      if (
+        openActiveInstanceId !== null &&
+        directoryRequestRef.current === null
+      ) {
         focusTerminalInstance(openActiveInstanceId);
       }
       return;
@@ -452,12 +466,12 @@ export function LandingTerminalPanel(): ReactNode {
     // Every collapse path converges on this store transition: the chord, the
     // header button, closing the last tab, close-all, and a shell exiting.
     // All of them should hand the keyboard back to the composer.
-    clearPendingTerminalFocus();
+    clearPendingTerminalFocus(null);
     focusActiveComposer();
   }, [capture, landingPageId, panelOpen, pending]);
   useEffect(
     () => () => {
-      clearPendingTerminalFocus();
+      clearPendingTerminalFocus(null);
     },
     [],
   );
@@ -473,7 +487,7 @@ export function LandingTerminalPanel(): ReactNode {
     (generation: number, context: LandingTerminalHostContext) => {
       const state = useLandingTerminalStore.getState();
       if (!landingTerminalLayoutFor(state, targetLandingPageId).panelOpen) {
-        directoryRequestRef.current = null;
+        replaceDirectoryRequest(null);
         if (pending) clearPending();
         return;
       }
@@ -570,6 +584,7 @@ export function LandingTerminalPanel(): ReactNode {
     client: target.client,
     killTerminal: killTerminalAsync,
     onReconciled: setReconciledContext,
+    onError: handleReconciliationError,
     onSettled: handleReconciliationSettled,
   });
 
@@ -592,7 +607,7 @@ export function LandingTerminalPanel(): ReactNode {
       ) {
         focusTerminalInstance(state.activeInstanceId);
       } else {
-        clearPendingTerminalFocus();
+        clearPendingTerminalFocus(tab.instanceId);
         focusActiveComposer();
       }
     },
@@ -613,7 +628,7 @@ export function LandingTerminalPanel(): ReactNode {
     closeAllTabs(landingPageId).forEach((closed) => {
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
     });
-    clearPendingTerminalFocus();
+    clearPendingTerminalFocus(null);
     focusActiveComposer();
   }, [
     clearPending,
@@ -629,7 +644,7 @@ export function LandingTerminalPanel(): ReactNode {
       replaceDirectoryRequest(null);
       clearPending();
       setPanelOpen(false);
-      clearPendingTerminalFocus();
+      clearPendingTerminalFocus(null);
       focusActiveComposer();
       return;
     }
@@ -666,6 +681,22 @@ export function LandingTerminalPanel(): ReactNode {
     reconciledContext,
   });
 
+  const visibleDirectoryRequest = useMemo(() => {
+    if (!panelOpen || directoryRequest === null) return null;
+    return {
+      ...directoryRequest,
+      workspacePaths: workspace.folders,
+      primaryWorkspacePath:
+        workspace.primaryWorkspacePath ??
+        (workspace.folders.length === 0 ? "" : workspace.folders[0]),
+    };
+  }, [
+    directoryRequest,
+    panelOpen,
+    workspace.folders,
+    workspace.primaryWorkspacePath,
+  ]);
+
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
   // untouched and render no terminal affordance until one is selected. Read the
@@ -677,17 +708,6 @@ export function LandingTerminalPanel(): ReactNode {
   ) {
     return null;
   }
-
-  const visibleDirectoryRequest =
-    !panelOpen || directoryRequest === null
-      ? null
-      : {
-          ...directoryRequest,
-          workspacePaths: workspace.folders,
-          primaryWorkspacePath:
-            workspace.primaryWorkspacePath ??
-            (workspace.folders.length === 0 ? "" : workspace.folders[0]),
-        };
 
   return (
     <LandingTerminalPanelContents
@@ -1217,21 +1237,7 @@ function LandingTerminalPanelBody(props: {
   readonly onSelectDirectory: (workspacePath: string) => void;
   readonly onCancelDirectoryPicker: () => void;
 }): ReactNode {
-  if (props.directoryPicker !== null) {
-    return (
-      <div className="relative min-h-0 flex-1">
-        <LandingTerminalDirectoryPicker
-          requestKey={props.directoryPicker.key}
-          workspacePaths={props.directoryPicker.workspacePaths}
-          primaryWorkspacePath={props.directoryPicker.primaryWorkspacePath}
-          error={props.directoryPicker.error}
-          onSelect={props.onSelectDirectory}
-          onCancel={props.onCancelDirectoryPicker}
-        />
-      </div>
-    );
-  }
-  if (props.availability === "unknown") {
+  if (props.availability === "unknown" && props.directoryPicker === null) {
     return (
       <div
         role="status"
@@ -1244,34 +1250,55 @@ function LandingTerminalPanelBody(props: {
 
   return (
     <div className="relative min-h-0 flex-1">
-      {props.tabs.length === 0 ? (
-        <LandingTerminalEmptyState
-          primaryWorkspacePath={props.primaryWorkspacePath}
-          activeHostId={props.activeHostId}
-          reconciledContext={props.reconciledContext}
-        />
-      ) : (
-        props.tabs.map((tab) => (
-          <div
-            key={tab.instanceId}
-            className={cn(
-              "absolute inset-0 min-h-0",
-              tab.instanceId !== props.activeInstanceId &&
-                "invisible pointer-events-none",
-            )}
-          >
-            <LandingTerminalTile
-              landingPageId={props.landingPageId}
-              tab={tab}
-              active={tab.instanceId === props.activeInstanceId}
-              createEnabled={Boolean(
-                props.availability === "supported" &&
-                props.panelOpen &&
-                (props.createEnabled || tab.hostId !== props.activeHostId),
+      <div
+        aria-hidden={props.directoryPicker !== null}
+        className={cn(
+          "contents",
+          props.directoryPicker !== null && "invisible pointer-events-none",
+        )}
+      >
+        {props.tabs.length === 0 ? (
+          <LandingTerminalEmptyState
+            primaryWorkspacePath={props.primaryWorkspacePath}
+            activeHostId={props.activeHostId}
+            reconciledContext={props.reconciledContext}
+          />
+        ) : (
+          props.tabs.map((tab) => (
+            <div
+              key={tab.instanceId}
+              className={cn(
+                "absolute inset-0 min-h-0",
+                tab.instanceId !== props.activeInstanceId &&
+                  "invisible pointer-events-none",
               )}
-            />
-          </div>
-        ))
+            >
+              <LandingTerminalTile
+                landingPageId={props.landingPageId}
+                tab={tab}
+                active={tab.instanceId === props.activeInstanceId}
+                createEnabled={Boolean(
+                  props.availability === "supported" &&
+                  props.panelOpen &&
+                  (props.createEnabled || tab.hostId !== props.activeHostId),
+                )}
+              />
+            </div>
+          ))
+        )}
+      </div>
+      {props.directoryPicker === null ? null : (
+        <div className="absolute inset-0 z-10">
+          <LandingTerminalDirectoryPicker
+            requestKey={props.directoryPicker.key}
+            workspacePaths={props.directoryPicker.workspacePaths}
+            primaryWorkspacePath={props.directoryPicker.primaryWorkspacePath}
+            error={props.directoryPicker.error}
+            isPending={props.directoryPicker.selectedTarget !== null}
+            onSelect={props.onSelectDirectory}
+            onCancel={props.onCancelDirectoryPicker}
+          />
+        </div>
       )}
     </div>
   );

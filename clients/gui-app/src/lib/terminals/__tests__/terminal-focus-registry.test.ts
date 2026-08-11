@@ -12,7 +12,8 @@ describe("terminal-focus-registry", () => {
 
   it("fulfils a request for a mounted instance synchronously", () => {
     const target = document.createElement("textarea");
-    const focus = vi.fn();
+    document.body.append(target);
+    const focus = vi.fn(() => target.focus());
     registerTerminalFocus(
       "a",
       focus,
@@ -21,6 +22,7 @@ describe("terminal-focus-registry", () => {
     );
     focusTerminalInstance("a");
     expect(focus).toHaveBeenCalledTimes(1);
+    target.remove();
   });
 
   it("fulfils only the latest parked instance", () => {

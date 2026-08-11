@@ -23,6 +23,8 @@ interface PrimaryFocusEnvironment {
   readonly documentVisible: () => boolean;
 }
 
+type PrimaryFocusIntentListener = (pending: boolean) => void;
+
 function targetKey(target: PrimaryFocusTarget): string {
   switch (target.kind) {
     case "composer":
@@ -38,6 +40,7 @@ function targetKey(target: PrimaryFocusTarget): string {
 
 export class PrimaryFocusCoordinator {
   private readonly endpoints = new Map<string, PrimaryFocusEndpoint>();
+  private readonly intentListeners = new Set<PrimaryFocusIntentListener>();
   private epoch = 0;
   private intent: PrimaryFocusIntent | null = null;
   private fulfilledEpoch: number | null = null;
@@ -45,6 +48,23 @@ export class PrimaryFocusCoordinator {
   private interactionActive = false;
 
   constructor(private readonly environment: PrimaryFocusEnvironment) {}
+
+  private clearIntent(): void {
+    const wasPending = this.intent !== null;
+    this.intent = null;
+    this.fulfilledEpoch = null;
+    this.fulfilledEndpoint = null;
+    if (!wasPending) return;
+    this.intentListeners.forEach((listener) => listener(false));
+  }
+
+  subscribeToIntent(listener: PrimaryFocusIntentListener): () => void {
+    this.intentListeners.add(listener);
+    listener(this.intent !== null);
+    return () => {
+      this.intentListeners.delete(listener);
+    };
+  }
 
   register(
     target: PrimaryFocusTarget,
@@ -61,19 +81,21 @@ export class PrimaryFocusCoordinator {
   }
 
   request(target: PrimaryFocusTarget): number {
+    const wasPending = this.intent !== null;
     this.epoch += 1;
     this.intent = { epoch: this.epoch, target };
     this.fulfilledEpoch = null;
     this.fulfilledEndpoint = null;
+    if (!wasPending) {
+      this.intentListeners.forEach((listener) => listener(true));
+    }
     this.reconcile();
     return this.epoch;
   }
 
   cancel(predicate: (target: PrimaryFocusTarget) => boolean): void {
     if (this.intent !== null && predicate(this.intent.target)) {
-      this.intent = null;
-      this.fulfilledEpoch = null;
-      this.fulfilledEndpoint = null;
+      this.clearIntent();
     }
   }
 
@@ -126,21 +148,15 @@ export class PrimaryFocusCoordinator {
       return;
     }
     if (this.interactionActive) {
-      this.intent = null;
-      this.fulfilledEpoch = null;
-      this.fulfilledEndpoint = null;
+      this.clearIntent();
       return;
     }
-    this.intent = null;
-    this.fulfilledEpoch = null;
-    this.fulfilledEndpoint = null;
+    this.clearIntent();
   }
 
   reset(): void {
     this.endpoints.clear();
-    this.intent = null;
-    this.fulfilledEpoch = null;
-    this.fulfilledEndpoint = null;
+    this.clearIntent();
     this.interactionActive = false;
     this.epoch = 0;
   }
@@ -167,6 +183,12 @@ export function cancelPrimaryFocusIntent(
   predicate: (target: PrimaryFocusTarget) => boolean,
 ): void {
   coordinator.cancel(predicate);
+}
+
+export function subscribeToPrimaryFocusIntent(
+  listener: PrimaryFocusIntentListener,
+): () => void {
+  return coordinator.subscribeToIntent(listener);
 }
 
 export function reconcilePrimaryFocus(): boolean {

@@ -39,12 +39,16 @@ export function focusTerminalInstance(instanceId: string): void {
   requestPrimaryFocus({ kind: "terminal", instanceId });
 }
 
-export function clearPendingTerminalFocus(): void {
-  cancelPrimaryFocusIntent((target) => target.kind === "terminal");
+export function clearPendingTerminalFocus(instanceId: string | null): void {
+  cancelPrimaryFocusIntent(
+    (target) =>
+      target.kind === "terminal" &&
+      (instanceId === null || target.instanceId === instanceId),
+  );
 }
 
 export function resetTerminalFocusRegistryForTests(): void {
   registrations.forEach((unregister) => unregister());
   registrations.clear();
-  clearPendingTerminalFocus();
+  clearPendingTerminalFocus(null);
 }

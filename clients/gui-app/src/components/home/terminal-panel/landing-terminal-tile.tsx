@@ -79,7 +79,7 @@ function LandingTerminalTileBootstrap(
         focusTerminalInstance(state.activeInstanceId);
         return;
       }
-      clearPendingTerminalFocus();
+      clearPendingTerminalFocus(instanceId);
       focusActiveComposer();
     },
     [props.landingPageId, removeExitedTab],
