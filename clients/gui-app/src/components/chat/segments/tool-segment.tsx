@@ -264,6 +264,8 @@ export function ToolSegment(props: ToolSegmentProps) {
         inputDetail={props.inputDetail}
         error={props.error}
         isStreaming={props.isStreaming}
+        endState={props.endState}
+        stopped={props.stopped}
         imageResults={props.imageResults ?? []}
       />
     );

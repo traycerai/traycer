@@ -39,6 +39,9 @@ const TINY_PNG_BASE64 =
 const TINY_PNG_DATA_URL = `data:image/png;base64,${TINY_PNG_BASE64}`;
 const SVG_DATA_URL =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
+const UNSAFE_SVG_DATA_URL = `data:image/svg+xml;base64,${btoa(
+  '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="8" height="8"/></svg>',
+)}`;
 
 const EMPTY_DEDUP_TARGETS: ReadonlyMap<string, AssistantMarkdownImageTarget> =
   new Map();
@@ -200,6 +203,20 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     const img = screen.getByRole("img", { name: "diagram" });
     expect(img.getAttribute("src")).toBe(SVG_DATA_URL);
     expect(screen.getByRole("button", { name: "Open diagram" })).toBeTruthy();
+  });
+
+  it("sanitizes inline SVG before rendering the thumbnail", () => {
+    renderImage({
+      src: UNSAFE_SVG_DATA_URL,
+      alt: undefined,
+      context: undefined,
+    });
+
+    const img = screen.getByRole("img", { name: "diagram" });
+    const renderedSource = img.getAttribute("src");
+    expect(renderedSource).not.toBe(UNSAFE_SVG_DATA_URL);
+    expect(renderedSource).toContain("data:image/svg+xml;base64,");
+    expect(atob(renderedSource?.split(",")[1] ?? "")).not.toContain("<script>");
   });
 
   it("uses quiet SVG-specific copy when a thumbnail cannot load", () => {

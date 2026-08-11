@@ -7,15 +7,17 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { EASE_IN_OUT, EASE_OUT } from "./ease";
+import { EASE_OUT } from "./ease";
 import { useHoverCapable } from "./use-hover-capable";
 
-export type ImageGenerationStatus = "generating" | "complete" | "error";
+export type ImageGenerationStatus =
+  "generating" | "complete" | "error" | "stopped" | "superseded";
 
 interface ImageGenerationProps {
   readonly children: ReactNode;
@@ -30,6 +32,8 @@ const STATUS_TEXT: Record<ImageGenerationStatus, string> = {
   generating: "Generating image",
   complete: "Image ready",
   error: "Generation failed",
+  stopped: "Generation stopped",
+  superseded: "Generation superseded",
 };
 
 const MEDIA_STATE: Record<
@@ -39,12 +43,16 @@ const MEDIA_STATE: Record<
   generating: { filter: "blur(3px) saturate(0.85)", opacity: 0, scale: 1.015 },
   complete: { filter: "blur(0px) saturate(1)", opacity: 1, scale: 1 },
   error: { filter: "blur(2px) saturate(0.5)", opacity: 0.28, scale: 1 },
+  stopped: { filter: "blur(2px) saturate(0.5)", opacity: 0.28, scale: 1 },
+  superseded: { filter: "blur(2px) saturate(0.5)", opacity: 0.28, scale: 1 },
 };
 
 const OVERLAY_OPACITY: Record<ImageGenerationStatus, number> = {
   generating: 1,
   complete: 0,
   error: 0,
+  stopped: 0,
+  superseded: 0,
 };
 
 const DOT_GAP = 10;
@@ -57,22 +65,13 @@ function DitherMark(props: {
   if (props.status === "error") {
     return <CircleAlert aria-hidden="true" className="size-3.5" />;
   }
+  if (props.status !== "generating") return null;
   return (
-    <motion.span
-      aria-hidden="true"
-      animate={props.reduce ? undefined : { rotate: 360 }}
-      transition={{
-        duration: 2.4,
-        ease: EASE_IN_OUT,
-        repeat: Number.POSITIVE_INFINITY,
-      }}
-      className="grid size-3.5 grid-cols-2 place-items-center gap-0.5"
-    >
-      <span className="size-1 rounded-[1px] bg-current" />
-      <span className="size-1 rounded-[1px] bg-current opacity-55" />
-      <span className="size-1 rounded-[1px] bg-current opacity-55" />
-      <span className="size-1 rounded-[1px] bg-current" />
-    </motion.span>
+    <AgentSpinningDots
+      className="text-current"
+      testId={undefined}
+      variant={props.reduce ? "static" : undefined}
+    />
   );
 }
 

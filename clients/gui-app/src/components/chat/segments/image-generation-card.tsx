@@ -3,6 +3,7 @@ import type {
   ImageGenerationResult,
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import {
@@ -17,6 +18,8 @@ interface ImageGenerationCardProps {
   readonly inputDetail: ToolInputDetail | null;
   readonly error: string | null;
   readonly isStreaming: boolean;
+  readonly endState: SegmentEndState;
+  readonly stopped: boolean;
   readonly imageResults: ReadonlyArray<ImageGenerationResult>;
 }
 
@@ -34,11 +37,13 @@ export function ImageGenerationCard(
   );
   const result = props.imageResults.at(0) ?? null;
   const caption = result?.revisedPrompt ?? presentation.prompt;
-  const status = generationStatus(
-    props.error,
-    props.isStreaming,
-    props.imageResults.length,
-  );
+  const status = generationStatus({
+    error: props.error,
+    isStreaming: props.isStreaming,
+    resultCount: props.imageResults.length,
+    endState: props.endState,
+    stopped: props.stopped,
+  });
 
   return (
     <section
@@ -92,13 +97,17 @@ function GenerationCell(props: {
   );
 }
 
-function generationStatus(
-  error: string | null,
-  isStreaming: boolean,
-  resultCount: number,
-): ImageGenerationStatus {
-  if (resultCount > 0) return "complete";
-  if (error !== null || !isStreaming) return "error";
+function generationStatus(props: {
+  readonly error: string | null;
+  readonly isStreaming: boolean;
+  readonly resultCount: number;
+  readonly endState: SegmentEndState;
+  readonly stopped: boolean;
+}): ImageGenerationStatus {
+  if (props.resultCount > 0) return "complete";
+  if (props.endState === "superseded") return "superseded";
+  if (props.endState === "interrupted" || props.stopped) return "stopped";
+  if (props.error !== null || !props.isStreaming) return "error";
   return "generating";
 }
 

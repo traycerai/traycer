@@ -16,6 +16,8 @@ import {
   AttachmentImageFailure,
   AttachmentImageLoading,
 } from "./attachment-image";
+import { base64ToBytes, bytesToBase64 } from "@/lib/composer/image-base64";
+import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 
 const RASTER_DATA_URL_PATTERN =
   /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z\d+/]+={0,2})$/i;
@@ -66,7 +68,7 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
   const trimmed = src.trim();
   if (/^https:/i.test(trimmed)) return { kind: "https", src: trimmed };
   if (SVG_DATA_URL_PATTERN.test(trimmed)) {
-    return { kind: "data-svg", src: trimmed };
+    return classifySvgDataUrl(trimmed);
   }
   if (/^data:/i.test(trimmed)) {
     const match = RASTER_DATA_URL_PATTERN.exec(trimmed);
@@ -92,6 +94,46 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
     return { kind: "local", src: decoded };
   }
   return { kind: "unsupported", src: trimmed };
+}
+
+function classifySvgDataUrl(src: string): AssistantImageSource {
+  const match = /^data:image\/svg\+xml([^,]*),(.*)$/is.exec(src);
+  if (match === null) return { kind: "invalid-data", src };
+  const metadata = match[1];
+  const payload = match[2];
+  let svgSource: string;
+  try {
+    if (/(?:^|;)base64(?:;|$)/i.test(metadata)) {
+      const bytes = base64ToBytes(payload);
+      if (bytes === null) return { kind: "invalid-data", src };
+      if (bytes.byteLength > MAX_ARTIFACT_IMAGE_BYTES) {
+        return { kind: "data-oversized", src };
+      }
+      svgSource = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } else {
+      svgSource = decodeURIComponent(payload);
+      if (
+        new TextEncoder().encode(svgSource).byteLength >
+        MAX_ARTIFACT_IMAGE_BYTES
+      ) {
+        return { kind: "data-oversized", src };
+      }
+    }
+    const sanitized = sanitizeUntrustedSvg(svgSource);
+    const sanitizedBytes = new TextEncoder().encode(sanitized);
+    if (sanitizedBytes.byteLength > MAX_ARTIFACT_IMAGE_BYTES) {
+      return { kind: "data-oversized", src };
+    }
+    return {
+      kind: "data-svg",
+      src:
+        sanitized === svgSource
+          ? src
+          : `data:image/svg+xml;base64,${bytesToBase64(sanitizedBytes)}`,
+    };
+  } catch {
+    return { kind: "invalid-data", src };
+  }
 }
 
 function decodeImageSource(source: string): string {

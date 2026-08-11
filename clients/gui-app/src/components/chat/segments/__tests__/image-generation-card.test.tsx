@@ -81,6 +81,8 @@ function renderCard(
       }
       error={props.error === undefined ? null : props.error}
       isStreaming={props.isStreaming ?? false}
+      endState={props.endState ?? null}
+      stopped={props.stopped ?? false}
       imageResults={props.imageResults ?? []}
     />,
   );
@@ -196,6 +198,17 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(
       screen.queryByText("Provider rejected the prompt: safety filter"),
     ).toBeNull();
+  });
+
+  it("preserves stopped and superseded terminal outcomes", () => {
+    renderCard({ isStreaming: false, endState: "interrupted" });
+    expect(screen.getByText("Generation stopped")).toBeTruthy();
+    expect(screen.queryByText("Generation failed")).toBeNull();
+
+    cleanup();
+    renderCard({ isStreaming: false, endState: "superseded" });
+    expect(screen.getByText("Generation superseded")).toBeTruthy();
+    expect(screen.queryByText("Generation failed")).toBeNull();
   });
 
   it("falls back alt text through revisedPrompt then prompt, and prefers revisedPrompt as caption", () => {

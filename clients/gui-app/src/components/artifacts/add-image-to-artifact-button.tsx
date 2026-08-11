@@ -4,6 +4,7 @@ import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import * as Y from "yjs";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   Popover,
   PopoverContent,
@@ -134,9 +135,11 @@ export function AddImageToArtifactButton(props: {
               >
                 <span className="truncate">{artifact.name}</span>
                 {pendingArtifactId === artifact.id ? (
-                  <span className="ml-auto text-ui-xs text-muted-foreground">
-                    Adding…
-                  </span>
+                  <AgentSpinningDots
+                    className="ml-auto text-muted-foreground"
+                    testId={undefined}
+                    variant={undefined}
+                  />
                 ) : null}
               </button>
             ))
