@@ -1051,6 +1051,39 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Config reads and bounded diagnostics reads can coalesce safely; config
+  // writes are ordered so rapid user changes are all persisted in sequence.
+  "config.shell.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.shell.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.shell.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.add": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.shell.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.revertArgs": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.listDetected": { ...LATEST_SCHEDULING, poll: null },
+  "config.shell.probe": { ...LATEST_SCHEDULING, poll: null },
+  "config.env.list": { ...LATEST_SCHEDULING, poll: null },
+  "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.env.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.logLevels.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.logLevels.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
+  "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
   // A bounded read over settled facts (Usage page + epic cost badge). The
   // Settings panel controls its own refetch (window/metric change, manual
   // retry) and opts out of polling; the ambient epic cost badge opts in

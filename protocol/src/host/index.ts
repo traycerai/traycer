@@ -1,5 +1,7 @@
 export * from "./agent";
 export * from "./comments";
+export * from "./config";
+export * from "./diagnostics";
 export * from "./editor";
 export * from "./epic";
 export * from "./git-contracts";
