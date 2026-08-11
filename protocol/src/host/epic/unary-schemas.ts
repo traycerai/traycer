@@ -1155,7 +1155,12 @@ export type FinishArtifactImageRequest = z.infer<
 >;
 
 export const finishArtifactImageResponseSchema = z.object({
-  finished: z.boolean(),
+  status: z.enum([
+    "committed",
+    "aborted",
+    "not-yet-converged",
+    "unknown-operation",
+  ]),
 });
 export type FinishArtifactImageResponse = z.infer<
   typeof finishArtifactImageResponseSchema
