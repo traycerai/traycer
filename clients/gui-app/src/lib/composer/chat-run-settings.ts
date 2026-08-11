@@ -11,7 +11,6 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
-import { modelImageSupportOverride } from "./model-capability-overrides";
 
 const IMAGE_INPUT_MODALITIES = new Set([
   "image",
@@ -81,9 +80,6 @@ export function serviceTierFromChatRunSettings(
 }
 
 export function modelSupportsImageAttachments(model: ModelOption): boolean {
-  // Client-curated overrides win over host metadata (e.g. Kimi K3 / K2.7
-  // families accept images but the host catalog does not flag them).
-  if (modelImageSupportOverride(model) === true) return true;
   const inputModalities = model.metadata.inputModalities;
   return (
     (Array.isArray(inputModalities) &&
