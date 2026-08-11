@@ -87,7 +87,9 @@ import type {
  * All handlers are silent if the platform doesn't support them - the renderer
  * can call them unconditionally without platform-specific branches.
  */
-export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
+export function registerPlatformIpc(
+  bridge: Pick<RunnerIpcBridge, "handleInvoke">,
+): void {
   bridge.handleInvoke(
     RunnerHostInvoke.fileDropWriteTemporary,
     async (_event, input: unknown): Promise<string> => {
@@ -536,24 +538,212 @@ function parseFileSaveInput(input: unknown): FileSaveInput {
   return { name, type, bytes };
 }
 
+type ClipboardImageMediaType =
+  "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
 interface ClipboardImageInput {
-  readonly type: string;
+  readonly type: ClipboardImageMediaType;
   readonly bytes: ArrayBuffer;
 }
+
+interface RasterDimensions {
+  readonly width: number;
+  readonly height: number;
+}
+
+const MAX_CLIPBOARD_IMAGE_PIXELS = 64_000_000;
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_MAGIC = [0xff, 0xd8, 0xff];
+const GIF87A_MAGIC = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61];
+const GIF89A_MAGIC = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+
+// Mirrors the bounded header parsing used by the internal host image-ingestion
+// boundary; the OSS desktop cannot import internal host code.
 
 function parseClipboardImageInput(input: unknown): ClipboardImageInput {
   if (!isRecord(input)) {
     throw new Error("clipboard.writeImage requires an object payload");
   }
-  const type = input.type;
-  if (typeof type !== "string" || !type.startsWith("image/")) {
+  const type = clipboardImageMediaType(input.type);
+  if (type === null) {
     throw new Error("clipboard.writeImage requires an image MIME type");
   }
   const bytes = input.bytes;
   if (!(bytes instanceof ArrayBuffer) || bytes.byteLength > 30 * 1024 * 1024) {
     throw new Error("clipboard.writeImage requires image bytes under 30 MB");
   }
+  const sniffed = sniffClipboardImage(new Uint8Array(bytes));
+  if (sniffed === null || sniffed !== type) {
+    throw new Error(
+      "clipboard.writeImage requires valid PNG, JPEG, GIF, or WebP bytes matching the declared MIME and under 64 MP",
+    );
+  }
   return { type, bytes };
+}
+
+function clipboardImageMediaType(
+  value: unknown,
+): ClipboardImageMediaType | null {
+  if (typeof value !== "string") return null;
+  switch (value.trim().toLowerCase()) {
+    case "image/png":
+      return "image/png";
+    case "image/jpeg":
+      return "image/jpeg";
+    case "image/gif":
+      return "image/gif";
+    case "image/webp":
+      return "image/webp";
+    default:
+      return null;
+  }
+}
+
+function sniffClipboardImage(
+  bytes: Uint8Array,
+): ClipboardImageMediaType | null {
+  if (pngDimensions(bytes) !== null) return "image/png";
+  if (jpegDimensions(bytes) !== null) return "image/jpeg";
+  if (gifDimensions(bytes) !== null) return "image/gif";
+  if (webpDimensions(bytes) !== null) return "image/webp";
+  return null;
+}
+
+function safeRasterDimensions(
+  width: number,
+  height: number,
+): RasterDimensions | null {
+  return width > 0 && height > 0 && width <= MAX_CLIPBOARD_IMAGE_PIXELS / height
+    ? { width, height }
+    : null;
+}
+
+function startsWithBytes(
+  bytes: Uint8Array,
+  prefix: ReadonlyArray<number>,
+): boolean {
+  if (bytes.length < prefix.length) return false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    if (bytes[index] !== prefix[index]) return false;
+  }
+  return true;
+}
+
+function asciiAt(bytes: Uint8Array, offset: number, value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (bytes[offset + index] !== value.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
+function pngDimensions(bytes: Uint8Array): RasterDimensions | null {
+  if (bytes.length < 33 || !startsWithBytes(bytes, PNG_MAGIC)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(8) !== 13 || !asciiAt(bytes, 12, "IHDR")) return null;
+  return safeRasterDimensions(view.getUint32(16), view.getUint32(20));
+}
+
+function isJpegStartOfFrame(marker: number): boolean {
+  return (
+    (marker >= 0xc0 && marker <= 0xc3) ||
+    (marker >= 0xc5 && marker <= 0xc7) ||
+    (marker >= 0xc9 && marker <= 0xcb) ||
+    (marker >= 0xcd && marker <= 0xcf)
+  );
+}
+
+function jpegDimensions(bytes: Uint8Array): RasterDimensions | null {
+  if (bytes.length < 12 || !startsWithBytes(bytes, JPEG_MAGIC)) return null;
+  let offset = 2;
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) return null;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) return null;
+    const marker = bytes[offset];
+    if (marker === 0xd9 || marker === 0xda) return null;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
+      offset += 1;
+      continue;
+    }
+    if (offset + 2 >= bytes.length) return null;
+    const segmentLength = (bytes[offset + 1] << 8) | bytes[offset + 2];
+    if (segmentLength < 2 || offset + 1 + segmentLength > bytes.length) {
+      return null;
+    }
+    if (isJpegStartOfFrame(marker)) {
+      if (segmentLength < 11) return null;
+      const height = (bytes[offset + 4] << 8) | bytes[offset + 5];
+      const width = (bytes[offset + 6] << 8) | bytes[offset + 7];
+      const components = bytes[offset + 8];
+      return components > 0 && segmentLength === 8 + components * 3
+        ? safeRasterDimensions(width, height)
+        : null;
+    }
+    offset += 1 + segmentLength;
+  }
+  return null;
+}
+
+function gifDimensions(bytes: Uint8Array): RasterDimensions | null {
+  if (
+    bytes.length < 13 ||
+    (!startsWithBytes(bytes, GIF87A_MAGIC) &&
+      !startsWithBytes(bytes, GIF89A_MAGIC))
+  ) {
+    return null;
+  }
+  return safeRasterDimensions(
+    bytes[6] | (bytes[7] << 8),
+    bytes[8] | (bytes[9] << 8),
+  );
+}
+
+function readUint24LE(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+}
+
+function webpDimensions(bytes: Uint8Array): RasterDimensions | null {
+  if (
+    bytes.length < 20 ||
+    !asciiAt(bytes, 0, "RIFF") ||
+    !asciiAt(bytes, 8, "WEBP")
+  ) {
+    return null;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(4, true) + 8 !== bytes.length) return null;
+  const chunkType = String.fromCharCode(...bytes.subarray(12, 16));
+  const chunkLength = view.getUint32(16, true);
+  if (20 + chunkLength > bytes.length) return null;
+  if (chunkType === "VP8 ") {
+    if (
+      chunkLength < 10 ||
+      bytes[23] !== 0x9d ||
+      bytes[24] !== 0x01 ||
+      bytes[25] !== 0x2a
+    ) {
+      return null;
+    }
+    return safeRasterDimensions(
+      view.getUint16(26, true) & 0x3fff,
+      view.getUint16(28, true) & 0x3fff,
+    );
+  }
+  if (chunkType === "VP8L") {
+    if (chunkLength < 5 || bytes[20] !== 0x2f) return null;
+    return safeRasterDimensions(
+      1 + bytes[21] + ((bytes[22] & 0x3f) << 8),
+      1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
+    );
+  }
+  if (chunkType === "VP8X") {
+    if (chunkLength < 10) return null;
+    return safeRasterDimensions(
+      1 + readUint24LE(bytes, 24),
+      1 + readUint24LE(bytes, 27),
+    );
+  }
+  return null;
 }
 
 function parseCopyDroppedFileInput(input: unknown): readonly string[] {

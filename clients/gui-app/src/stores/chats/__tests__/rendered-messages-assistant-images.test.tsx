@@ -238,7 +238,7 @@ function textSegmentContexts(
 }
 
 describe("useRenderedMessages assistant image echo dedup", () => {
-  it("deduplicates a prose image whose resolution hash matches a tool card imageResults hash", () => {
+  it("projects source -> {toolBlockId,rowId} when resolution hash matches imageResults", () => {
     const source = "/generated/cat.png";
     const hash = "hash-cat-1";
     const assistant: Message = {
@@ -257,7 +257,10 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     const { result } = renderRenderedMessages({ messages: [assistant] });
     const context = textSegmentContext(result.current[0]?.segments ?? []);
     expect(context).not.toBeNull();
-    expect(context?.deduplicatedSources.has(source)).toBe(true);
+    expect(context?.deduplicatedTargetsBySource.get(source)).toEqual({
+      toolBlockId: "tool-img-1",
+      rowId: "assistant:turn-img-hash",
+    });
   });
 
   it("does not deduplicate matching paths when the resolved hashes differ", () => {
@@ -288,8 +291,8 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     const { result } = renderRenderedMessages({ messages: [assistant] });
     const context = textSegmentContext(result.current[0]?.segments ?? []);
     expect(context).not.toBeNull();
-    expect(context?.deduplicatedSources.has(authored)).toBe(false);
-    expect(context?.deduplicatedSources.has(canonical)).toBe(false);
+    expect(context?.deduplicatedTargetsBySource.has(authored)).toBe(false);
+    expect(context?.deduplicatedTargetsBySource.has(canonical)).toBe(false);
   });
 
   it("keeps pending prose images until the resolution record commits, then collapses", () => {
@@ -313,7 +316,7 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     const pendingContext = textSegmentContext(
       driver.result.current[0]?.segments ?? [],
     );
-    expect(pendingContext?.deduplicatedSources.has(source)).toBe(false);
+    expect(pendingContext?.deduplicatedTargetsBySource.has(source)).toBe(false);
 
     const committed: Message = {
       ...pending,
@@ -325,7 +328,10 @@ describe("useRenderedMessages assistant image echo dedup", () => {
     const committedContext = textSegmentContext(
       driver.result.current[0]?.segments ?? [],
     );
-    expect(committedContext?.deduplicatedSources.has(source)).toBe(true);
+    expect(committedContext?.deduplicatedTargetsBySource.get(source)).toEqual({
+      toolBlockId: "tool-img-1",
+      rowId: "assistant:turn-img-pending",
+    });
   });
 
   it("does not collapse when neither hash nor source matches any tool imageResults", () => {
@@ -351,7 +357,73 @@ describe("useRenderedMessages assistant image echo dedup", () => {
 
     const { result } = renderRenderedMessages({ messages: [assistant] });
     const context = textSegmentContext(result.current[0]?.segments ?? []);
-    expect(context?.deduplicatedSources.size ?? -1).toBe(0);
+    expect(context?.deduplicatedTargetsBySource.size ?? -1).toBe(0);
+  });
+
+  it("pins toolBlockId to the pre-steer row when the echo lives after a steer split", () => {
+    // tool_call before steer, prose echo after: virtualized rows diverge, so
+    // the projected rowId must name the card's slice (part:0), not the echo's.
+    const source = "/generated/steered.png";
+    const hash = "hash-steered-1";
+    const content = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "steer follow-up" }],
+        },
+      ],
+    };
+    const assistant: Message = {
+      ...assistantMessage("turn-img-steer-split", 2000),
+      blocks: [
+        toolCallWithImages({
+          blockId: "tool-img-pre-steer",
+          timestamp: 2001,
+          imageResults: [imageResult({ attachmentHash: hash, filePath: null })],
+        }),
+        {
+          type: "steer",
+          blockId: "steer:queue-img",
+          status: "completed",
+          timestamp: 2002,
+          queueItemId: "queue-img",
+          messageId: "message-queue-img",
+          mode: "safe_point",
+          sender: null,
+          content,
+        },
+        textBlock("text-post-steer", 2003, `![steered](${source})`),
+      ],
+      imageResolutions: [resolvedEntry(source, hash, {})],
+    };
+    const steered: Message = {
+      ...userMessage("message-queue-img"),
+      message: { kind: "user", content },
+      timestamp: 2002,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steered],
+    });
+
+    expect(result.current.map((message) => message.role)).toEqual([
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    // Pre-steer assistant slice owns the generation card.
+    expect(result.current[0]?.id).toBe("assistant:turn-img-steer-split:part:0");
+    // Post-steer echo slice is a different virtualized row.
+    expect(result.current[2]?.id).toBe("assistant:turn-img-steer-split:part:1");
+
+    const echoContext = textSegmentContext(result.current[2]?.segments ?? []);
+    expect(echoContext).not.toBeNull();
+    expect(echoContext?.deduplicatedTargetsBySource.get(source)).toEqual({
+      toolBlockId: "tool-img-pre-steer",
+      // Target row is the card's pre-steer slice, not the echo slice.
+      rowId: "assistant:turn-img-steer-split:part:0",
+    });
   });
 });
 

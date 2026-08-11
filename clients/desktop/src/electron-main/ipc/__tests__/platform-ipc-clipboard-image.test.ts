@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { IpcMainInvokeEvent } from "electron";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
-import type { RunnerIpcBridge } from "../runner-ipc-bridge";
+import { registerPlatformIpc } from "../platform-ipc";
 
 const writeImageMock = vi.hoisted(() => vi.fn());
 const createFromBufferMock = vi.hoisted(() =>
@@ -28,7 +29,6 @@ vi.mock("electron", () => ({
   },
 }));
 
-// Platform IPC pulls system helpers; keep them inert for this validation suite.
 vi.mock("../../app/recent-documents", () => ({
   rememberRecentDocument: vi.fn(),
 }));
@@ -102,23 +102,117 @@ vi.mock("@traycer/protocol/config/log-level", () => ({
   isLogLevel: () => true,
 }));
 
-import { registerPlatformIpc } from "../platform-ipc";
-
 type InvokeHandler = (
-  event: unknown,
+  event: IpcMainInvokeEvent,
   ...args: unknown[]
 ) => unknown | Promise<unknown>;
 
+const IPC_EVENT = {} as IpcMainInvokeEvent;
+
 function installPlatformHandlers(): Map<string, InvokeHandler> {
   const handlers = new Map<string, InvokeHandler>();
-  const bridge = {
-    handleInvoke: (channel: string, handler: InvokeHandler) => {
+  registerPlatformIpc({
+    handleInvoke: (channel, handler) => {
       handlers.set(channel, handler);
     },
-  } as RunnerIpcBridge;
-  registerPlatformIpc(bridge);
+  });
   return handlers;
 }
+
+type AllowlistedMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
+/** PNG magic + IHDR with arbitrary dimensions (header-only; enough for sniff). */
+function pngWithDimensions(width: number, height: number): ArrayBuffer {
+  const bytes = new Uint8Array(33);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(8, 13);
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  bytes[24] = 8;
+  bytes[25] = 2;
+  return bytes.buffer;
+}
+
+/** JPEG SOI + SOF0 with given dimensions. */
+function jpegWithDimensions(width: number, height: number): ArrayBuffer {
+  const bytes = new Uint8Array(20);
+  bytes[0] = 0xff;
+  bytes[1] = 0xd8;
+  bytes[2] = 0xff;
+  bytes[3] = 0xc0;
+  bytes[4] = 0x00;
+  bytes[5] = 0x0b;
+  bytes[6] = 0x08;
+  bytes[7] = (height >> 8) & 0xff;
+  bytes[8] = height & 0xff;
+  bytes[9] = (width >> 8) & 0xff;
+  bytes[10] = width & 0xff;
+  bytes[11] = 0x01;
+  bytes[12] = 0x01;
+  bytes[13] = 0x11;
+  bytes[14] = 0x00;
+  return bytes.buffer;
+}
+
+/** GIF89a logical screen descriptor with given dimensions. */
+function gifWithDimensions(width: number, height: number): ArrayBuffer {
+  const bytes = new Uint8Array(13);
+  bytes.set([0x47, 0x49, 0x46, 0x38, 0x39, 0x61], 0);
+  bytes[6] = width & 0xff;
+  bytes[7] = (width >> 8) & 0xff;
+  bytes[8] = height & 0xff;
+  bytes[9] = (height >> 8) & 0xff;
+  return bytes.buffer;
+}
+
+/** WebP VP8X canvas with given dimensions (stores width-1 / height-1). */
+function webpVp8xWithDimensions(width: number, height: number): ArrayBuffer {
+  const bytes = new Uint8Array(30);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
+  view.setUint32(4, 22, true);
+  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
+  bytes.set([0x56, 0x50, 0x38, 0x58], 12);
+  view.setUint32(16, 10, true);
+  const canvasW = width - 1;
+  const canvasH = height - 1;
+  bytes[24] = canvasW & 0xff;
+  bytes[25] = (canvasW >> 8) & 0xff;
+  bytes[26] = (canvasW >> 16) & 0xff;
+  bytes[27] = canvasH & 0xff;
+  bytes[28] = (canvasH >> 8) & 0xff;
+  bytes[29] = (canvasH >> 16) & 0xff;
+  return bytes.buffer;
+}
+
+const ALLOWLISTED_IMAGE_CASES: ReadonlyArray<{
+  readonly type: AllowlistedMime;
+  readonly bytes: ArrayBuffer;
+  readonly label: string;
+}> = [
+  {
+    type: "image/png",
+    bytes: pngWithDimensions(32, 24),
+    label: "PNG IHDR",
+  },
+  {
+    type: "image/jpeg",
+    bytes: jpegWithDimensions(32, 24),
+    label: "JPEG SOF0",
+  },
+  {
+    type: "image/gif",
+    bytes: gifWithDimensions(32, 24),
+    label: "GIF89a screen",
+  },
+  {
+    type: "image/webp",
+    bytes: webpVp8xWithDimensions(32, 24),
+    label: "WebP VP8X",
+  },
+];
 
 describe("platform IPC clipboard.writeImage validation", () => {
   beforeEach(() => {
@@ -126,68 +220,170 @@ describe("platform IPC clipboard.writeImage validation", () => {
     createFromBufferMock.mockClear();
   });
 
-  it("writes a valid image payload through nativeImage + clipboard", async () => {
-    const handlers = installPlatformHandlers();
-    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
-    expect(handler).toBeTypeOf("function");
+  it.each(ALLOWLISTED_IMAGE_CASES)(
+    "writes allowlisted $type ($label) through nativeImage after header sniff",
+    async ({ type, bytes }) => {
+      const handlers = installPlatformHandlers();
+      const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+      expect(handler).toBeTypeOf("function");
 
-    const bytes = new Uint8Array([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-    ]).buffer;
-    await handler?.({}, { type: "image/png", bytes });
+      await handler?.(IPC_EVENT, { type, bytes });
 
-    expect(createFromBufferMock).toHaveBeenCalledTimes(1);
-    expect(writeImageMock).toHaveBeenCalledTimes(1);
-  });
+      expect(createFromBufferMock).toHaveBeenCalledTimes(1);
+      expect(writeImageMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it("rejects a non-object payload", async () => {
+  it("rejects a non-object payload without decoding", async () => {
     const handlers = installPlatformHandlers();
     const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
     await expect(
-      Promise.resolve().then(() => handler?.({}, "not-an-object")),
+      Promise.resolve().then(() => handler?.(IPC_EVENT, "not-an-object")),
     ).rejects.toThrow(/object payload/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
     expect(writeImageMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a non-image MIME type", async () => {
+  it("rejects non-allowlisted image/* MIME types before nativeImage", async () => {
     const handlers = installPlatformHandlers();
     const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
-    await expect(
-      Promise.resolve().then(() =>
-        handler?.({}, { type: "text/plain", bytes: new ArrayBuffer(4) }),
-      ),
-    ).rejects.toThrow(/image MIME type/i);
+    for (const type of [
+      "text/plain",
+      "image/bmp",
+      "image/tiff",
+      "image/svg+xml",
+      "image/heic",
+      "image/x-icon",
+    ] as const) {
+      createFromBufferMock.mockClear();
+      await expect(
+        Promise.resolve().then(() =>
+          handler?.(IPC_EVENT, {
+            type,
+            bytes: pngWithDimensions(8, 8),
+          }),
+        ),
+      ).rejects.toThrow(/image MIME type/i);
+      expect(createFromBufferMock).not.toHaveBeenCalled();
+    }
   });
 
-  it("rejects missing ArrayBuffer bytes", async () => {
+  it("rejects magic/MIME mismatches without calling nativeImage.createFromBuffer", async () => {
     const handlers = installPlatformHandlers();
     const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+    // Declared PNG but bytes are JPEG.
     await expect(
       Promise.resolve().then(() =>
-        handler?.({}, { type: "image/png", bytes: [1, 2, 3] }),
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: jpegWithDimensions(16, 16),
+        }),
       ),
-    ).rejects.toThrow(/image bytes under 30 MB/i);
+    ).rejects.toThrow(/valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+
+    // Declared JPEG but bytes are PNG.
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/jpeg",
+          bytes: pngWithDimensions(16, 16),
+        }),
+      ),
+    ).rejects.toThrow(/valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
   });
 
-  it("rejects image bytes over 30 MB", async () => {
+  it("rejects truncated and malformed headers without decoding", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+
+    const pngMagicOnly = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]).buffer;
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: pngMagicOnly,
+        }),
+      ),
+    ).rejects.toThrow(/valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+
+    const truncatedIhdr = new Uint8Array(20);
+    truncatedIhdr.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: truncatedIhdr.buffer,
+        }),
+      ),
+    ).rejects.toThrow(/valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+
+    const jpegSoiOnly = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/jpeg",
+          bytes: jpegSoiOnly,
+        }),
+      ),
+    ).rejects.toThrow(/valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects pre-decode pixel-bomb dimensions without calling nativeImage.createFromBuffer", async () => {
+    const handlers = installPlatformHandlers();
+    const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
+    // 10000 x 10000 = 100 MP > 64 MP ceiling. Header-only payload is tiny.
+    const bomb = pngWithDimensions(10_000, 10_000);
+    expect(bomb.byteLength).toBeLessThan(64);
+
+    await expect(
+      Promise.resolve().then(() =>
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: bomb,
+        }),
+      ),
+    ).rejects.toThrow(/64 MP|valid PNG, JPEG, GIF, or WebP/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
+    expect(writeImageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects image bytes over 30 MB without decoding", async () => {
     const handlers = installPlatformHandlers();
     const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
     const oversized = new ArrayBuffer(30 * 1024 * 1024 + 1);
     await expect(
       Promise.resolve().then(() =>
-        handler?.({}, { type: "image/png", bytes: oversized }),
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: oversized,
+        }),
       ),
     ).rejects.toThrow(/image bytes under 30 MB/i);
+    expect(createFromBufferMock).not.toHaveBeenCalled();
   });
 
-  it("rejects nativeImage-empty payloads", async () => {
+  it("rejects nativeImage-empty payloads after header validation passes", async () => {
+    createFromBufferMock.mockImplementationOnce(() => ({
+      isEmpty: () => true,
+    }));
     const handlers = installPlatformHandlers();
     const handler = handlers.get(RunnerHostInvoke.clipboardWriteImage);
     await expect(
       Promise.resolve().then(() =>
-        handler?.({}, { type: "image/png", bytes: new ArrayBuffer(0) }),
+        handler?.(IPC_EVENT, {
+          type: "image/png",
+          bytes: pngWithDimensions(8, 8),
+        }),
       ),
     ).rejects.toThrow(/clipboard image bytes are invalid/i);
+    expect(createFromBufferMock).toHaveBeenCalledTimes(1);
     expect(writeImageMock).not.toHaveBeenCalled();
   });
 });

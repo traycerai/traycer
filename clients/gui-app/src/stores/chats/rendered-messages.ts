@@ -32,6 +32,7 @@ import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assis
 import type {
   AssistantTurnMeta,
   AssistantMarkdownImageResolution,
+  AssistantMarkdownImageTarget,
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
@@ -470,7 +471,10 @@ function completedSteerBadge(
 // Identity-stable empties for the head/tail partition's no-merge fast path.
 const NO_MESSAGES: ReadonlyArray<Message> = [];
 const NO_RENDERED_MESSAGES: ReadonlyArray<ChatMessageModel> = [];
-const NO_DEDUPLICATED_IMAGE_SOURCES: ReadonlySet<string> = new Set();
+const NO_DEDUPLICATED_IMAGE_TARGETS: ReadonlyMap<
+  string,
+  AssistantMarkdownImageTarget
+> = new Map();
 const NO_STEERED_IDS: ReadonlySet<string> = new Set();
 const NO_PENDING_APPROVALS: ReadonlyArray<ChatApprovalState> = [];
 const NO_PENDING_FILE_EDIT_APPROVALS: ReadonlyArray<ChatFileEditApprovalState> =
@@ -1475,7 +1479,7 @@ interface AssistantTurnAccumulator {
     string,
     ReadonlyArray<AssistantMarkdownImageResolution>
   >;
-  generatedImageHashes: Set<string>;
+  generatedImageBlockIdByHash: Map<string, string>;
 }
 
 interface PersistedMessagesRenderInput {
@@ -1815,7 +1819,7 @@ function addAssistantMessageToAccumulator(
     serviceTier: message.serviceTier,
     costUsd: message.usage?.costUsd ?? null,
     imageResolutionsByBlockId: new Map(),
-    generatedImageHashes: new Set(),
+    generatedImageBlockIdByHash: new Map(),
   };
   addAssistantImageProjection(
     created,
@@ -1838,9 +1842,16 @@ function addAssistantImageProjection(
       acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
       continue;
     }
-    if (block.type !== "tool_call") continue;
+    if (block.type !== "tool_call" || block.toolName !== "image_generation") {
+      continue;
+    }
     for (const result of block.imageResults) {
-      acc.generatedImageHashes.add(result.attachmentHash);
+      if (!acc.generatedImageBlockIdByHash.has(result.attachmentHash)) {
+        acc.generatedImageBlockIdByHash.set(
+          result.attachmentHash,
+          block.blockId,
+        );
+      }
     }
   }
 }
@@ -2026,6 +2037,11 @@ function renderAssistantTurnRows(
 ): ReadonlyArray<ChatMessageModel> {
   const entries = assistantTurnTimelineEntries(input.acc.blocks);
   const split = entries.some(entrySplitsAssistantTurn);
+  const rowIdByBlockId = assistantRowIdsByBlockId(
+    entries,
+    input.turnKey,
+    split,
+  );
   const rows: ChatMessageModel[] = [];
   let chunk: ContentBlock[] = [];
   let chunkIndex = 0;
@@ -2047,6 +2063,7 @@ function renderAssistantTurnRows(
         chunkIndex,
         split,
         createdAt: input.startedAt,
+        rowIdByBlockId,
       }),
     );
     chunk = [];
@@ -2090,6 +2107,7 @@ function renderAssistantTurnRows(
           chunkIndex: 0,
           split: false,
           createdAt: input.startedAt,
+          rowIdByBlockId,
         }),
       ],
       input,
@@ -2098,7 +2116,12 @@ function renderAssistantTurnRows(
 
   if (split) {
     return withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(rows, input, chunkIndex),
+      attachRunStateToTrailingAssistantSlice(
+        rows,
+        input,
+        chunkIndex,
+        rowIdByBlockId,
+      ),
       input,
     );
   }
@@ -2156,6 +2179,29 @@ function entrySplitsAssistantTurn(entry: AssistantTurnTimelineEntry): boolean {
   return entry.block.type === "steer";
 }
 
+function assistantRowIdsByBlockId(
+  entries: ReadonlyArray<AssistantTurnTimelineEntry>,
+  turnKey: string,
+  split: boolean,
+): ReadonlyMap<string, string> {
+  const rowIdByBlockId = new Map<string, string>();
+  let chunkIndex = 0;
+  let chunkHasBlocks = false;
+  for (const entry of entries) {
+    if (entry.block.type === "steer") {
+      if (chunkHasBlocks) chunkIndex += 1;
+      chunkHasBlocks = false;
+      continue;
+    }
+    rowIdByBlockId.set(
+      entry.block.blockId,
+      assistantSliceRowId(turnKey, chunkIndex, split),
+    );
+    chunkHasBlocks = true;
+  }
+  return rowIdByBlockId;
+}
+
 interface AssistantTurnSliceRenderInput {
   readonly acc: AssistantTurnAccumulator;
   readonly turnKey: string;
@@ -2170,6 +2216,7 @@ interface AssistantTurnSliceRenderInput {
   readonly createdAt: number | null;
   readonly epicId: string;
   readonly chatId: string;
+  readonly rowIdByBlockId: ReadonlyMap<string, string>;
 }
 
 function renderAssistantTurnSlice(
@@ -2206,7 +2253,8 @@ function renderAssistantTurnSlice(
         epicId: input.epicId,
         chatId: input.chatId,
         resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
-        generatedImageHashes: input.acc.generatedImageHashes,
+        generatedImageBlockIdByHash: input.acc.generatedImageBlockIdByHash,
+        rowIdByBlockId: input.rowIdByBlockId,
       },
     ),
     structuredContent: null,
@@ -2234,31 +2282,37 @@ function renderAssistantTurnSlice(
   };
 }
 
-function deduplicatedAssistantImageSources(
-  generatedImageHashes: ReadonlySet<string>,
+function deduplicatedAssistantImageTargets(
+  generatedImageBlockIdByHash: ReadonlyMap<string, string>,
+  rowIdByBlockId: ReadonlyMap<string, string>,
   resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
-): ReadonlySet<string> {
-  if (generatedImageHashes.size === 0) {
-    return NO_DEDUPLICATED_IMAGE_SOURCES;
+): ReadonlyMap<string, AssistantMarkdownImageTarget> {
+  if (generatedImageBlockIdByHash.size === 0) {
+    return NO_DEDUPLICATED_IMAGE_TARGETS;
   }
 
-  const deduplicatedSources = new Set<string>();
+  const targetsBySource = new Map<string, AssistantMarkdownImageTarget>();
   for (const resolution of resolutions) {
     const entry = resolution.entry;
     if (entry.state !== "resolved") continue;
-    if (!generatedImageHashes.has(entry.attachmentHash)) continue;
-    deduplicatedSources.add(entry.source);
-    deduplicatedSources.add(entry.canonicalSource);
+    const toolBlockId = generatedImageBlockIdByHash.get(entry.attachmentHash);
+    if (toolBlockId === undefined) continue;
+    const rowId = rowIdByBlockId.get(toolBlockId);
+    if (rowId === undefined) continue;
+    const target = { toolBlockId, rowId };
+    targetsBySource.set(entry.source, target);
+    targetsBySource.set(entry.canonicalSource, target);
   }
-  return deduplicatedSources.size === 0
-    ? NO_DEDUPLICATED_IMAGE_SOURCES
-    : deduplicatedSources;
+  return targetsBySource.size === 0
+    ? NO_DEDUPLICATED_IMAGE_TARGETS
+    : targetsBySource;
 }
 
 function attachRunStateToTrailingAssistantSlice(
   rows: ReadonlyArray<ChatMessageModel>,
   input: AssistantTurnRenderInput,
   nextChunkIndex: number,
+  rowIdByBlockId: ReadonlyMap<string, string>,
 ): ReadonlyArray<ChatMessageModel> {
   // A live turn needs a trailing indicator row. A STOPPED turn needs one too,
   // for a different reason: `withTurnCompletion` stamps `completedAt`/`stopped`
@@ -2308,6 +2362,7 @@ function attachRunStateToTrailingAssistantSlice(
       chunkIndex: nextChunkIndex,
       split: true,
       createdAt,
+      rowIdByBlockId,
     }),
   ];
 }
@@ -2541,7 +2596,7 @@ function renderLiveAssistant(
     // and re-renders via the persisted path. The live footer is suppressed.
     costUsd: null,
     imageResolutionsByBlockId: new Map(),
-    generatedImageHashes: new Set(),
+    generatedImageBlockIdByHash: new Map(),
   };
   addLiveAssistantImageProjection(acc, liveAssistant);
   return renderAssistantTurnRows({
@@ -2724,7 +2779,8 @@ function buildAssistantSegments(
       string,
       ReadonlyArray<AssistantMarkdownImageResolution>
     >;
-    readonly generatedImageHashes: ReadonlySet<string>;
+    readonly generatedImageBlockIdByHash: ReadonlyMap<string, string>;
+    readonly rowIdByBlockId: ReadonlyMap<string, string>;
   },
 ): ReadonlyArray<MessageSegment> {
   const flat: MessageSegment[] = [];
@@ -2741,8 +2797,9 @@ function buildAssistantSegments(
                 epicId: imageProjection.epicId,
                 chatId: imageProjection.chatId,
                 resolutions,
-                deduplicatedSources: deduplicatedAssistantImageSources(
-                  imageProjection.generatedImageHashes,
+                deduplicatedTargetsBySource: deduplicatedAssistantImageTargets(
+                  imageProjection.generatedImageBlockIdByHash,
+                  imageProjection.rowIdByBlockId,
                   resolutions,
                 ),
               },

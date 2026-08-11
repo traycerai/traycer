@@ -150,3 +150,108 @@ describe("sanitizeUntrustedSvg malicious fixtures", () => {
     expect(cleaned).toContain('width="64"');
   });
 });
+
+describe("sanitizeUntrustedSvg style attribute forbid + serialize/reparse", () => {
+  function reparseImport(serialized: string): Element {
+    // Mirrors SanitizedSvgMarkup: serialize → reparse as XML → import.
+    const parsed = new DOMParser().parseFromString(serialized, "image/svg+xml");
+    expect(parsed.querySelector("parsererror")).toBeNull();
+    return document.importNode(parsed.documentElement, true);
+  }
+
+  it("forbids style attributes including CSS-escaped url() beacons", () => {
+    // Review PoC: CSS escapes bypass a literal /url\s*\(/ strip on attribute values.
+    const source = svg(
+      "<rect/>",
+      'style="background-image:u\\000072l(https://attacker.example/pixel)"',
+    );
+    const cleaned = sanitizeUntrustedSvg(source);
+    expect(cleaned.toLowerCase()).not.toContain("style=");
+    expect(cleaned).not.toMatch(/attacker\.example/i);
+    expect(cleaned).not.toMatch(/u\\0*72l/i);
+    const imported = reparseImport(cleaned);
+    expect(imported.getAttribute("style")).toBeNull();
+    expect(imported.outerHTML).not.toMatch(/attacker\.example/i);
+  });
+
+  it("forbids style attributes carrying image-set() network refs", () => {
+    const source = svg(
+      "<rect/>",
+      'style="background-image:image-set(&quot;https://attacker.example/pixel&quot; 1x)"',
+    );
+    const cleaned = sanitizeUntrustedSvg(source);
+    expect(cleaned.toLowerCase()).not.toContain("style=");
+    expect(cleaned).not.toMatch(/image-set/i);
+    expect(cleaned).not.toMatch(/attacker\.example/i);
+    const imported = reparseImport(cleaned);
+    expect(imported.getAttribute("style")).toBeNull();
+  });
+
+  it("forbids style-based oversized dimensions and filters that bypass attr bounds", () => {
+    const source = svg(
+      "<rect/>",
+      'style="width:100000000px;height:100000000px;filter:blur(1000000px)"',
+    );
+    const cleaned = sanitizeUntrustedSvg(source);
+    expect(cleaned.toLowerCase()).not.toContain("style=");
+    expect(cleaned).not.toMatch(/100000000/);
+    expect(cleaned).not.toMatch(/blur\(/i);
+    const imported = reparseImport(cleaned);
+    expect(imported.getAttribute("style")).toBeNull();
+  });
+
+  it("strips network-capable refs from feImage/use/data href and animation vectors", () => {
+    const source = `<svg ${SVG_NS} xmlns:xlink="http://www.w3.org/1999/xlink">
+      <defs>
+        <filter id="f">
+          <feImage href="https://attacker.example/fe.png" xlink:href="https://attacker.example/fe-x.png"/>
+        </filter>
+      </defs>
+      <use href="#icon" xlink:href="https://attacker.example/sprite.svg#icon"/>
+      <image href="data:image/png;base64,AAAA" width="10" height="10"/>
+      <animate attributeName="x" values="0;100" dur="1s"/>
+      <set attributeName="visibility" to="hidden"/>
+      <rect width="4" height="4" filter="url(#f)"/>
+    </svg>`;
+    const cleaned = sanitizeUntrustedSvg(source);
+    // href-localName strip covers feImage/use/image/data hrefs; inert empty
+    // elements may remain after DOMPurify (e.g. bare <feImage/>).
+    expect(cleaned).not.toMatch(/attacker\.example/i);
+    expect(cleaned).not.toMatch(/data:image\/png/i);
+    expect(cleaned).not.toMatch(/\bhref\s*=/i);
+    // Serialize/reparse must not resurrect network-capable refs.
+    const imported = reparseImport(cleaned);
+    expect(imported.outerHTML).not.toMatch(/attacker\.example/i);
+    expect(imported.outerHTML).not.toMatch(/data:image\/png/i);
+    expect(imported.outerHTML).not.toMatch(/\bhref\s*=/i);
+    for (const element of [
+      imported,
+      ...imported.querySelectorAll("*"),
+    ] as Element[]) {
+      for (const attribute of [...element.attributes]) {
+        expect(attribute.localName.toLowerCase()).not.toBe("href");
+        expect(attribute.value).not.toMatch(/attacker\.example/i);
+        expect(attribute.value).not.toMatch(/url\s*\(/i);
+      }
+    }
+    // Pin current DOMPurify profile only when it actually drops animate/set.
+    if (!cleaned.toLowerCase().includes("<animate")) {
+      expect(imported.querySelector("animate")).toBeNull();
+    }
+    if (!/<set[\s>]/i.test(cleaned)) {
+      expect(imported.querySelector("set")).toBeNull();
+    }
+  });
+
+  it("keeps presentation attributes on a safe SVG after serialize/reparse", () => {
+    const source = svg(
+      '<rect x="1" y="2" width="10" height="12" fill="#0f0"/>',
+      'width="64" height="64" viewBox="0 0 64 64"',
+    );
+    const cleaned = sanitizeUntrustedSvg(source);
+    const imported = reparseImport(cleaned);
+    expect(imported.getAttribute("width")).toBe("64");
+    expect(imported.getAttribute("viewBox")).toBe("0 0 64 64");
+    expect(imported.querySelector("rect")).not.toBeNull();
+  });
+});

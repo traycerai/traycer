@@ -24,6 +24,7 @@ export function sanitizeUntrustedSvg(source: string): string {
 
   const sanitized = DOMPurify.sanitize(source, {
     USE_PROFILES: { svg: true, svgFilters: true },
+    FORBID_ATTR: ["style"],
     FORBID_TAGS: ["foreignObject", "script", "style"],
   });
   const clean = parseSvg(sanitized);

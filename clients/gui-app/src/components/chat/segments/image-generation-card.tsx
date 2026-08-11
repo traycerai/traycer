@@ -22,6 +22,11 @@ interface GenerationPresentation {
   readonly prompt: string;
 }
 
+interface KeyedImageResult {
+  readonly key: string;
+  readonly result: ImageGenerationResult;
+}
+
 export function ImageGenerationCard(
   props: ImageGenerationCardProps,
 ): ReactNode {
@@ -29,22 +34,27 @@ export function ImageGenerationCard(
     props.inputSummary,
     props.inputDetail,
   );
-  const hasError = props.error !== null && props.error.length > 0;
+  const failureMessage = generationFailureMessage(
+    props.error,
+    props.isStreaming,
+    props.imageResults.length,
+  );
+  const hasError = failureMessage !== null;
   const caption =
     props.imageResults.find((result) => result.revisedPrompt !== null)
       ?.revisedPrompt ?? presentation.prompt;
   let body: ReactNode;
-  if (props.error !== null && props.error.length > 0) {
+  if (failureMessage !== null) {
     body = (
       <GenerationError
-        message={props.error}
+        message={failureMessage}
         aspectRatio={presentation.aspectRatio}
       />
     );
   } else if (props.imageResults.length > 0) {
-    body = props.imageResults.map((result) => (
+    body = keyedImageResults(props.imageResults).map(({ key, result }) => (
       <GeneratedImage
-        key={result.attachmentHash}
+        key={key}
         result={result}
         fallbackAlt={caption}
         fallbackAspectRatio={presentation.aspectRatio}
@@ -66,7 +76,9 @@ export function ImageGenerationCard(
     >
       <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-ui-sm">
         <ImageIcon className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="font-medium">{generationTitle(props)}</span>
+        <span className="font-medium">
+          {generationTitle(hasError, props.imageResults.length)}
+        </span>
         {props.imageResults.length > 1 ? (
           <span className="text-muted-foreground">
             {props.imageResults.length} results
@@ -97,11 +109,35 @@ export function ImageGenerationCard(
   );
 }
 
-function generationTitle(props: ImageGenerationCardProps): string {
-  if (props.error !== null && props.error.length > 0) {
-    return "Image generation failed";
+function generationFailureMessage(
+  error: string | null,
+  isStreaming: boolean,
+  resultCount: number,
+): string | null {
+  if (error !== null && error.length > 0) return error;
+  if (!isStreaming && resultCount === 0) {
+    return "The provider returned no images.";
   }
-  return props.imageResults.length > 0 ? "Generated image" : "Generating image";
+  return null;
+}
+
+function generationTitle(hasError: boolean, resultCount: number): string {
+  if (hasError) return "Image generation failed";
+  return resultCount > 0 ? "Generated image" : "Generating image";
+}
+
+function keyedImageResults(
+  results: ReadonlyArray<ImageGenerationResult>,
+): ReadonlyArray<KeyedImageResult> {
+  const occurrencesByHash = new Map<string, number>();
+  return results.map((result) => {
+    const occurrence = occurrencesByHash.get(result.attachmentHash) ?? 0;
+    occurrencesByHash.set(result.attachmentHash, occurrence + 1);
+    return {
+      key: `${result.attachmentHash}:${occurrence}`,
+      result,
+    };
+  });
 }
 
 function GenerationPending(props: {
@@ -205,7 +241,9 @@ function GeneratedImage(props: {
         suggestedName={generatedImageName(props.result)}
         className="size-full overflow-hidden"
       >
-        <GenerationPending aspectRatio={aspectRatio} active={false} />
+        {loaded ? null : (
+          <GenerationPending aspectRatio={aspectRatio} active={false} />
+        )}
         <img
           src={image.src}
           alt={alt.length > 0 ? alt : "Generated image"}

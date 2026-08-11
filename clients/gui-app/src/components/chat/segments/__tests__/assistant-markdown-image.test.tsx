@@ -14,9 +14,14 @@ import {
   AssistantMarkdownImageProvider,
 } from "@/components/chat/segments/assistant-markdown-image";
 import { TraycerMarkdown } from "@/markdown";
+import {
+  ChatScrollToBlockContext,
+  type ScrollToChatBlock,
+} from "@/components/chat/chat-scroll-to-block";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
+  AssistantMarkdownImageTarget,
 } from "@/stores/composer/chat-store";
 
 const blobSrcState = vi.hoisted(() => ({
@@ -46,12 +51,28 @@ const TINY_PNG_DATA_URL = `data:image/png;base64,${TINY_PNG_BASE64}`;
 const SVG_DATA_URL =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
 
+const EMPTY_DEDUP_TARGETS: ReadonlyMap<string, AssistantMarkdownImageTarget> =
+  new Map();
+
 const BASE_CONTEXT: AssistantMarkdownImageContext = {
   epicId: "epic-1",
   chatId: "chat-1",
   resolutions: [],
-  deduplicatedSources: new Set(),
+  deduplicatedTargetsBySource: EMPTY_DEDUP_TARGETS,
 };
+
+function dedupTarget(
+  toolBlockId: string,
+  rowId: string,
+): AssistantMarkdownImageTarget {
+  return { toolBlockId, rowId };
+}
+
+function targetsBySource(
+  entries: ReadonlyArray<readonly [string, AssistantMarkdownImageTarget]>,
+): ReadonlyMap<string, AssistantMarkdownImageTarget> {
+  return new Map(entries);
+}
 
 const ASSISTANT_IMAGE_COMPONENTS = { img: AssistantMarkdownImageNode };
 
@@ -295,13 +316,18 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(hostRequest).not.toHaveBeenCalled();
   });
 
-  it("collapses sources listed in deduplicatedSources to a link chip", () => {
+  it("collapses sources listed in deduplicatedTargetsBySource to a link chip", () => {
     renderImage({
       src: "/workspace/generated.png",
       alt: undefined,
       context: {
         ...BASE_CONTEXT,
-        deduplicatedSources: new Set(["/workspace/generated.png"]),
+        deduplicatedTargetsBySource: targetsBySource([
+          [
+            "/workspace/generated.png",
+            dedupTarget("tool-img-1", "assistant-row-1"),
+          ],
+        ]),
       },
     });
 
@@ -311,18 +337,22 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
-  it("focuses the same-row generation card when the dedup link is clicked", () => {
+  it("focuses the exact same-row generation card when the dedup link is clicked", () => {
     const client = createQueryClient();
     render(
       <QueryClientProvider client={client}>
         <AssistantMarkdownImageProvider
           context={{
             ...BASE_CONTEXT,
-            deduplicatedSources: new Set(["/workspace/generated.png"]),
+            deduplicatedTargetsBySource: targetsBySource([
+              [
+                "/workspace/generated.png",
+                dedupTarget("tool-img-shared", "assistant-row-shared"),
+              ],
+            ]),
           }}
         >
-          {/* Chip walks up to data-assistant-turn, then focuses the card. */}
-          <div data-assistant-turn="turn-shared">
+          <div data-message-id="assistant-row-shared">
             <section
               data-image-generation-card="tool-img-shared"
               tabIndex={-1}
@@ -352,6 +382,108 @@ describe("AssistantMarkdownImage source classification matrix", () => {
       block: "nearest",
     });
     expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("targets the exact card when two generation cards share a virtualized row", () => {
+    const client = createQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <AssistantMarkdownImageProvider
+          context={{
+            ...BASE_CONTEXT,
+            deduplicatedTargetsBySource: targetsBySource([
+              [
+                "/workspace/second.png",
+                dedupTarget("tool-img-second", "assistant-row-multi"),
+              ],
+            ]),
+          }}
+        >
+          <div data-message-id="assistant-row-multi">
+            <section
+              data-image-generation-card="tool-img-first"
+              tabIndex={-1}
+            />
+            <section
+              data-image-generation-card="tool-img-second"
+              tabIndex={-1}
+            />
+            <AssistantMarkdownImageNode
+              src="/workspace/second.png"
+              alt="second image"
+            />
+          </div>
+        </AssistantMarkdownImageProvider>
+      </QueryClientProvider>,
+    );
+
+    const first = document.querySelector<HTMLElement>(
+      '[data-image-generation-card="tool-img-first"]',
+    );
+    const second = document.querySelector<HTMLElement>(
+      '[data-image-generation-card="tool-img-second"]',
+    );
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    const firstFocus = vi.spyOn(first as HTMLElement, "focus");
+    const secondFocus = vi.spyOn(second as HTMLElement, "focus");
+    const secondScroll = vi.spyOn(second as HTMLElement, "scrollIntoView");
+
+    fireEvent.click(
+      document.querySelector(
+        "[data-assistant-image-deduplicated]",
+      ) as HTMLElement,
+    );
+
+    expect(secondFocus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(secondScroll).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "nearest",
+    });
+    // Exact targeting: the first card must not steal focus.
+    expect(firstFocus).not.toHaveBeenCalled();
+  });
+
+  it("navigates the unmounted split-row timeline target via scrollToBlock", () => {
+    const scrollToBlock = vi.fn<ScrollToChatBlock>();
+    const client = createQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <ChatScrollToBlockContext.Provider value={scrollToBlock}>
+          <AssistantMarkdownImageProvider
+            context={{
+              ...BASE_CONTEXT,
+              deduplicatedTargetsBySource: targetsBySource([
+                [
+                  "/workspace/echoed.png",
+                  dedupTarget("tool-img-pre-steer", "assistant-row-pre-steer"),
+                ],
+              ]),
+            }}
+          >
+            {/*
+              Echo lives on a later virtualized row; the generation card's
+              owning row is unmounted (no data-message-id match in the DOM).
+            */}
+            <div data-message-id="assistant-row-post-steer">
+              <AssistantMarkdownImageNode
+                src="/workspace/echoed.png"
+                alt="echoed image"
+              />
+            </div>
+          </AssistantMarkdownImageProvider>
+        </ChatScrollToBlockContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    expect(document.querySelector("[data-image-generation-card]")).toBeNull();
+    fireEvent.click(
+      document.querySelector(
+        "[data-assistant-image-deduplicated]",
+      ) as HTMLElement,
+    );
+    expect(scrollToBlock).toHaveBeenCalledTimes(1);
+    expect(scrollToBlock).toHaveBeenCalledWith("tool-img-pre-steer", "tool");
   });
 
   it("rejects oversized raster data URLs via the decoded-byte cap", () => {

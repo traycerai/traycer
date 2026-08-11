@@ -78,11 +78,19 @@ export interface AssistantMarkdownImageResolution {
   readonly entry: ImageResolutionEntry;
 }
 
+export interface AssistantMarkdownImageTarget {
+  readonly toolBlockId: string;
+  readonly rowId: string;
+}
+
 export interface AssistantMarkdownImageContext {
   readonly epicId: string;
   readonly chatId: string;
   readonly resolutions: ReadonlyArray<AssistantMarkdownImageResolution>;
-  readonly deduplicatedSources: ReadonlySet<string>;
+  readonly deduplicatedTargetsBySource: ReadonlyMap<
+    string,
+    AssistantMarkdownImageTarget
+  >;
 }
 
 export interface FileChangeSegment {

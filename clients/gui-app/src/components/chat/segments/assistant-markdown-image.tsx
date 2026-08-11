@@ -4,6 +4,10 @@ import type { RequestImageIngestRequest } from "@traycer/protocol/host/agent/gui
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  useScrollToChatBlock,
+  type ScrollToChatBlock,
+} from "@/components/chat/chat-scroll-to-block";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
@@ -11,6 +15,7 @@ import { epicMutationKeys } from "@/lib/query-keys";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
+  AssistantMarkdownImageTarget,
 } from "@/stores/composer/chat-store";
 import {
   AttachmentImage,
@@ -139,8 +144,18 @@ function hasRasterMagic(mediaType: string, payload: string): boolean {
 
 function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   const source = classifyAssistantImageSource(props.src);
-  if (props.context.deduplicatedSources.has(source.src)) {
-    return <DeduplicatedImageChip alt={props.alt} />;
+  const scrollToBlock = useScrollToChatBlock();
+  const deduplicatedTarget = props.context.deduplicatedTargetsBySource.get(
+    source.src,
+  );
+  if (deduplicatedTarget !== undefined) {
+    return (
+      <DeduplicatedImageChip
+        alt={props.alt}
+        target={deduplicatedTarget}
+        scrollToBlock={scrollToBlock}
+      />
+    );
   }
   if (source.kind === "https" || source.kind === "data-raster") {
     return (
@@ -341,16 +356,22 @@ function ConsentImageChip(props: {
   );
 }
 
-function DeduplicatedImageChip(props: { readonly alt: string }): ReactNode {
+function DeduplicatedImageChip(props: {
+  readonly alt: string;
+  readonly target: AssistantMarkdownImageTarget;
+  readonly scrollToBlock: ScrollToChatBlock | null;
+}): ReactNode {
   return (
     <button
       type="button"
-      onClick={(event) => {
-        const card = event.currentTarget
-          .closest("[data-assistant-turn]")
-          ?.querySelector<HTMLElement>("[data-image-generation-card]");
-        card?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        card?.focus({ preventScroll: true });
+      onClick={() => {
+        const card = mountedGenerationCard(props.target);
+        if (card !== null) {
+          card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          card.focus({ preventScroll: true });
+          return;
+        }
+        props.scrollToBlock?.(props.target.toolBlockId, "tool");
       }}
       className="my-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-ui-sm text-muted-foreground"
       data-assistant-image-deduplicated
@@ -360,5 +381,19 @@ function DeduplicatedImageChip(props: { readonly alt: string }): ReactNode {
         {props.alt.length > 0 ? props.alt : "Generated image"}
       </span>
     </button>
+  );
+}
+
+function mountedGenerationCard(
+  target: AssistantMarkdownImageTarget,
+): HTMLElement | null {
+  const row = [
+    ...document.querySelectorAll<HTMLElement>("[data-message-id]"),
+  ].find((element) => element.dataset.messageId === target.rowId);
+  if (row === undefined) return null;
+  return (
+    [...row.querySelectorAll<HTMLElement>("[data-image-generation-card]")].find(
+      (element) => element.dataset.imageGenerationCard === target.toolBlockId,
+    ) ?? null
   );
 }

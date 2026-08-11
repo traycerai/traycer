@@ -111,13 +111,19 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
   });
 
   it("renders a complete result with prompt caption, resolution badge, and cross-fade classes", () => {
+    // Input hint 16:9 (~1.777) vs host result 4:3 (1.333): completed frame must
+    // consume host width/height, not the tool-arg hint.
     renderCard({
       isStreaming: false,
+      inputDetail: fieldsDetail({
+        prompt: "a misty pier",
+        aspect_ratio: "16:9",
+      }),
       imageResults: [
         imageResult({
           attachmentHash: "hash-1",
-          width: 1024,
-          height: 576,
+          width: 800,
+          height: 600,
           alt: null,
           revisedPrompt: null,
           filePath: "/tmp/pier.png",
@@ -127,7 +133,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
 
     expect(screen.getByText("Generated image")).toBeTruthy();
     expect(screen.queryByText("In progress")).toBeNull();
-    expect(screen.getByText("1024 × 576")).toBeTruthy();
+    expect(screen.getByText("800 × 600")).toBeTruthy();
     expect(screen.getByText("a misty pier")).toBeTruthy();
 
     const img = screen.getByRole("img", { name: "a misty pier" });
@@ -138,7 +144,65 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(img.className).toContain("opacity-100");
 
     const figure = img.closest("figure");
-    expect(figure?.getAttribute("style")).toContain("aspect-ratio:");
+    expect(figure?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);
+    expect(figure?.getAttribute("style")).not.toMatch(/aspect-ratio:\s*1\.777/);
+  });
+
+  it("treats a terminal zero-result call as a failure, not endless generating", () => {
+    renderCard({
+      isStreaming: false,
+      error: null,
+      imageResults: [],
+    });
+
+    expect(screen.getByText("Image generation failed")).toBeTruthy();
+    expect(screen.getByText("The provider returned no images.")).toBeTruthy();
+    expect(screen.queryByText("Generating image")).toBeNull();
+    expect(screen.queryByText("In progress")).toBeNull();
+    expect(
+      document.querySelector('[data-image-generation-card="tool-img-1"]')
+        ?.className,
+    ).toContain("border-destructive/35");
+  });
+
+  it("renders duplicate attachment hashes as stable sibling results", () => {
+    renderCard({
+      imageResults: [
+        imageResult({
+          attachmentHash: "same-hash",
+          width: 100,
+          height: 100,
+          alt: "first copy",
+        }),
+        imageResult({
+          attachmentHash: "same-hash",
+          width: 100,
+          height: 100,
+          alt: "second copy",
+        }),
+      ],
+    });
+
+    expect(screen.getByText("2 results")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "first copy" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "second copy" })).toBeTruthy();
+  });
+
+  it("removes the dither canvas and its observer after the image loads", () => {
+    const { container } = renderCard({
+      imageResults: [
+        imageResult({
+          attachmentHash: "hash-dither",
+          width: 64,
+          height: 64,
+          alt: "loaded shot",
+        }),
+      ],
+    });
+
+    expect(container.querySelector("canvas")).not.toBeNull();
+    fireEvent.load(screen.getByRole("img", { name: "loaded shot" }));
+    expect(container.querySelector("canvas")).toBeNull();
   });
 
   it("falls back alt text through revisedPrompt then prompt, and prefers revisedPrompt as caption", () => {
@@ -254,21 +318,28 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
 
   it("shows waiting-for-sync while the attachment blob is not ready, still ratio-reserved", () => {
     blobSrcState.value = { status: "loading", src: null };
+    // Waiting frame must also consume host result dimensions (4:3), not the
+    // default 16:9 input hint from renderCard.
     renderCard({
+      inputDetail: fieldsDetail({
+        prompt: "pending",
+        aspect_ratio: "16:9",
+      }),
       imageResults: [
         imageResult({
           attachmentHash: "hash-pending",
-          width: 800,
-          height: 600,
+          width: 400,
+          height: 300,
         }),
       ],
     });
 
     const waiting = screen.getByText("Waiting for image sync");
-    expect(
+    const style =
       waiting.getAttribute("style") ??
-        waiting.parentElement?.getAttribute("style"),
-    ).toMatch(/aspect-ratio/);
+      waiting.parentElement?.getAttribute("style");
+    expect(style).toMatch(/aspect-ratio:\s*1\.333/);
+    expect(style).not.toMatch(/aspect-ratio:\s*1\.777/);
   });
 });
 
