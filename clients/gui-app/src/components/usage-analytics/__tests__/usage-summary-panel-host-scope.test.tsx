@@ -254,7 +254,7 @@ describe("<UsageSummaryPanel /> host scope", () => {
     // rebuilding the options from the current response alone left no way to
     // move from one such host straight to another.
     const user = userEvent.setup();
-    renderPanel({
+    const { requests } = renderPanel({
       response: (request) =>
         response({
           servedBy: "cloud",
@@ -276,6 +276,9 @@ describe("<UsageSummaryPanel /> host scope", () => {
       expect(screen.getByTestId("usage-host-filter").textContent).not.toContain(
         "All hosts",
       );
+      // The picker updating locally is not enough - the follow-up request
+      // must actually carry the narrowed host filter.
+      expect(requests.at(-1)).toMatchObject({ hostId: "host-a" });
     });
 
     await user.click(screen.getByTestId("usage-host-filter"));
