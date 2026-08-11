@@ -232,6 +232,37 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
+  it("preserves an unread failure when terminal timestamps tie", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "a-failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "z-done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+      ]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: true,
+      unreadDone: false,
+    });
+  });
+
   it("does not let one chat's completion hide a sibling failure", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([

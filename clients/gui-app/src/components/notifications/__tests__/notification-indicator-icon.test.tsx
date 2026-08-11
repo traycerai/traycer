@@ -155,6 +155,7 @@ describe("<NotificationIndicatorIcon />", () => {
     renderIcon(
       {
         unreadFailure: true,
+        pendingFork: false,
         pendingApproval: false,
         pendingInterview: false,
         unreadDone: true,

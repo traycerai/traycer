@@ -232,7 +232,10 @@ function terminalEntryIsNewer(
   if (candidate.updatedAt !== current.updatedAt) {
     return candidate.updatedAt > current.updatedAt;
   }
-  return candidate.id.localeCompare(current.id) > 0;
+  if ((candidate.readAt === null) !== (current.readAt === null)) {
+    return candidate.readAt === null;
+  }
+  return candidate.severity === "failure" && current.severity === "done";
 }
 
 function terminalIndicatorContribution(
