@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
@@ -17,6 +19,9 @@ import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-
 interface MockReplicaQueryResult {
   readonly data: ChatReplicaReadResponse | undefined;
   readonly isPending: boolean;
+  /** Absent on the happy paths, like the real result's `false`. */
+  readonly isError?: boolean;
+  readonly error?: HostRpcError;
 }
 
 interface MockHostReachability {
@@ -49,7 +54,16 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
   ),
 }));
 vi.mock("@/components/epic-canvas/renderers/published-chat-notice", () => ({
-  PublishedChatNotice: () => <div data-testid="published-chat-notice" />,
+  // The notice's own copy is its unit's business; what this suite asserts is
+  // WHICH state the tile hands it, so the state kind is surfaced as an attribute.
+  PublishedChatNotice: (props: {
+    readonly state: { readonly kind: string };
+  }) => (
+    <div
+      data-testid="published-chat-notice"
+      data-state-kind={props.state.kind}
+    />
+  ),
 }));
 vi.mock("@/lib/chats/published-chat-source-provider", () => ({
   PublishedChatSourceProvider: (props: { readonly children: ReactNode }) => (
@@ -166,6 +180,21 @@ function replicaAbsent(): MockReplicaQueryResult {
   return { isPending: false, data: { outcome: { status: "absent" } } };
 }
 
+function replicaFailed(code: RpcErrorCode): MockReplicaQueryResult {
+  return {
+    isPending: false,
+    data: undefined,
+    isError: true,
+    error: new HostRpcError({
+      code,
+      message: "boom",
+      requestId: "r",
+      method: "epic.chatReplicaRead",
+      fatalDetails: null,
+    }),
+  };
+}
+
 function replicaNotFetched(): MockReplicaQueryResult {
   return { isPending: true, data: undefined };
 }
@@ -217,6 +246,47 @@ describe("PublishedChatTile - doc-replica fallback", () => {
 
     expect(screen.queryByTestId("published-chat-notice")).not.toBeNull();
     expect(screen.queryByTestId("chat-tile-session-view")).toBeNull();
+  });
+
+  it('says the replica read FAILED rather than repeating "not published yet"', () => {
+    // Retries exhausted, `data` undefined - identical to an absent replica from
+    // the notice's point of view, and the difference matters: one means no copy
+    // exists, the other means the lookup never completed and is worth retrying.
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaFailed("RPC_ERROR"));
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.getByTestId("published-chat-notice").dataset.stateKind).toBe(
+      "failed",
+    );
+  });
+
+  it("keeps the cloud refusal when the serving host has no replica RPC", () => {
+    // An older host did not fail - it has no second source at all, so the
+    // cloud's own answer is still the honest one.
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaFailed("E_HOST_UNSUPPORTED"));
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.getByTestId("published-chat-notice").dataset.stateKind).toBe(
+      "refused",
+    );
   });
 
   it("does not fall back to the replica for a non-unpublished refusal", () => {

@@ -1,10 +1,14 @@
 import { useMemo, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useCloudChatTranscript } from "@/hooks/chats/use-cloud-chat-transcript";
 import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
+import { isCloudChatsUnsupported } from "@/lib/chats/cloud-chat-read-port";
 import {
   convertPublishedChat,
   convertReplicaChat,
@@ -245,11 +249,20 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     );
   }
 
+  const replicaFailure = replicaTransportFailure(
+    cloudUnpublished,
+    replicaQuery,
+  );
+
   if (state.kind !== "ready" || handle === null || conversion === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
         <PublishedChatNotice
-          state={state}
+          state={
+            replicaFailure === null
+              ? state
+              : { kind: "failed", error: replicaFailure }
+          }
           ownerLabel={ownerLabel}
           refusal={
             state.kind === "refused"
@@ -294,4 +307,24 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       </PublishedChatSourceProvider>
     </div>
   );
+}
+
+/**
+ * The replica read's TRANSPORT failure, or `null`.
+ *
+ * A replica read that failed is not a replica that is ABSENT, and from the
+ * notice branch the two are otherwise identical: retries exhausted, `data` still
+ * undefined. Rendering the cloud's `unpublished` refusal there tells the reader
+ * nothing was ever published when in fact the lookup never completed, and offers
+ * no way to try again.
+ *
+ * An older serving host is the one case where that refusal stays honest: it has
+ * no replica RPC at all, so nothing failed - there is simply no second source.
+ */
+function replicaTransportFailure(
+  cloudUnpublished: boolean,
+  query: UseQueryResult<ChatReplicaReadResponse, HostRpcError>,
+): HostRpcError | null {
+  if (!cloudUnpublished || !query.isError) return null;
+  return isCloudChatsUnsupported(query.error) ? null : query.error;
 }
