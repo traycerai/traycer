@@ -1128,11 +1128,13 @@ export const AUTH_ERROR_CODE = "auth";
  * (keyed by `entry.canonicalSource`); `entry` is the same shape persisted on
  * the message - see `imageResolutionEntrySchema`. `blockId` remains the
  * runtime envelope identity and equals `messageId`; consumers must not treat it
- * as a content-block address.
+ * as a content-block address. `turnId` lets a live renderer reject a delayed
+ * update after the addressed assistant row has left its message snapshot.
  */
 export const imageResolutionUpdatedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("image_resolution.updated"),
+  turnId: z.string().nullable(),
   messageId: z.string(),
   entry: imageResolutionEntrySchema,
 });

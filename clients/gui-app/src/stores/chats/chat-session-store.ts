@@ -3014,7 +3014,13 @@ function applyImageResolutionDelta(
   );
   if (messageIndex < 0) {
     const activeTurn = state.activeTurn;
-    if (activeTurn === null) return {};
+    if (
+      activeTurn === null ||
+      event.turnId === null ||
+      event.turnId !== activeTurn.turnId
+    ) {
+      return {};
+    }
     const liveAssistant = liveAssistantForActiveTurn(
       state.liveAssistantMessage,
       activeTurn,

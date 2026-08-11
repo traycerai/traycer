@@ -2131,6 +2131,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
             type: "image_resolution.updated",
             blockId: "assistant-image-1",
             timestamp: 5100,
+            turnId: "turn-image-1",
             messageId: "assistant-image-1",
             entry,
           },
@@ -2179,6 +2180,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
       type: "image_resolution.updated",
       blockId: "assistant-image-1",
       timestamp: 5100,
+      turnId: "turn-image-1",
       messageId: "assistant-image-1",
       entry: imageResolutions[0],
     });

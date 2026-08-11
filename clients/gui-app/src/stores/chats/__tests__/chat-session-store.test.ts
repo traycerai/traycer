@@ -4971,6 +4971,7 @@ describe("blockDelta coalescing", () => {
             blockId: "assistant-live-1",
             messageId: "assistant-live-1",
             timestamp,
+            turnId: "turn-1",
             entry: {
               source: "C:%5Cwork%5Cchart.png",
               canonicalSource: "C:\\work\\chart.png",
@@ -4990,6 +4991,32 @@ describe("blockDelta coalescing", () => {
     expect(live?.imageResolutions).toHaveLength(1);
     expect(live?.imageResolutions[0]?.messageId).toBe("assistant-live-1");
     expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
+
+    callbacks.onBlockDelta(
+      createImageResolutionUpdatedFrame({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "image_resolution.updated",
+          blockId: "assistant-old-1",
+          messageId: "assistant-old-1",
+          timestamp: 12,
+          turnId: "turn-old",
+          entry: {
+            source: "C:%5Cwork%5Cold.png",
+            canonicalSource: "C:\\work\\old.png",
+            state: "resolved",
+            attachmentHash: "stale-hash",
+            mediaType: "image/png",
+            width: null,
+            height: null,
+          },
+        },
+      }),
+    );
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.imageResolutions).toHaveLength(1);
 
     emitTextDelta(callbacks, "![chart](C:%5Cwork%5Cchart.png)", 12);
     harness.manual.runAll();

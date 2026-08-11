@@ -3590,6 +3590,7 @@ describe("accumulateEvent - provider_notice.upsert", () => {
       type: "image_resolution.updated",
       blockId: "assistant-1",
       timestamp: 2,
+      turnId: "turn-1",
       messageId: "assistant-1",
       entry: {
         source: "https://example.com/a.png",
