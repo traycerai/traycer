@@ -32,6 +32,7 @@ import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
+  hasPrimaryFocusIntent,
   reconcilePrimaryFocus,
   requestPrimaryFocus,
 } from "@/lib/focus/primary-focus-coordinator";
@@ -132,6 +133,7 @@ function settleDirectoryRequest(args: {
     request: LandingTerminalDirectoryRequest | null,
   ) => void;
   readonly clearPending: () => void;
+  readonly ownsFocus: () => boolean;
 }): boolean {
   const request = args.request;
   if (request === null) return false;
@@ -160,6 +162,7 @@ function settleDirectoryRequest(args: {
     return true;
   }
 
+  const shouldFocusTerminal = args.ownsFocus();
   const state = useLandingTerminalStore.getState();
   let instanceId: string;
   if (request.mode === "always-create") {
@@ -182,7 +185,7 @@ function settleDirectoryRequest(args: {
   }
   args.replaceDirectoryRequest(null);
   args.clearPending();
-  focusTerminalInstance(instanceId);
+  if (shouldFocusTerminal) focusTerminalInstance(instanceId);
   return true;
 }
 
@@ -491,14 +494,22 @@ export function LandingTerminalPanel(): ReactNode {
         if (pending) clearPending();
         return;
       }
+      const request = directoryRequestRef.current;
       if (
         settleDirectoryRequest({
-          request: directoryRequestRef.current,
+          request,
           generation,
           context,
           addTerminalTab,
           replaceDirectoryRequest,
           clearPending,
+          ownsFocus: () =>
+            request !== null &&
+            hasPrimaryFocusIntent(
+              (target) =>
+                target.kind === "landing-terminal-directory" &&
+                target.requestId === request.key,
+            ),
         })
       ) {
         return;

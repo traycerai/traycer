@@ -210,6 +210,35 @@ describe("PrimaryFocusCoordinator", () => {
     expect(focus).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels a fulfilled intent when pointer interaction starts", () => {
+    let activeElement: Element | null = null;
+    const target = document.createElement("input");
+    const other = document.createElement("button");
+    const focus = vi.fn(() => {
+      activeElement = target;
+    });
+    const coordinator = new PrimaryFocusCoordinator({
+      activeElement: () => activeElement,
+      documentVisible: () => true,
+    });
+    coordinator.register(
+      COMPOSER,
+      endpoint({
+        focus,
+        activeElement: () => target,
+        eligible: () => true,
+      }),
+    );
+
+    coordinator.request(COMPOSER);
+    expect(focus).toHaveBeenCalledTimes(1);
+    coordinator.setInteractionActive(true);
+    activeElement = other;
+    coordinator.setInteractionActive(false);
+
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
   it("restores the semantic owner when its endpoint relocates", () => {
     let activeElement: Element | null = null;
     const first = document.createElement("textarea");

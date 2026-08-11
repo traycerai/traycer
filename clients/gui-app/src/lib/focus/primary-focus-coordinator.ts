@@ -99,10 +99,18 @@ export class PrimaryFocusCoordinator {
     }
   }
 
+  hasIntent(predicate: (target: PrimaryFocusTarget) => boolean): boolean {
+    return this.intent !== null && predicate(this.intent.target);
+  }
+
   setInteractionActive(active: boolean): void {
     if (this.interactionActive === active) return;
     this.interactionActive = active;
-    if (!active) this.reconcile();
+    if (active) {
+      this.clearIntent();
+      return;
+    }
+    this.reconcile();
   }
 
   clearInteraction(): void {
@@ -183,6 +191,12 @@ export function cancelPrimaryFocusIntent(
   predicate: (target: PrimaryFocusTarget) => boolean,
 ): void {
   coordinator.cancel(predicate);
+}
+
+export function hasPrimaryFocusIntent(
+  predicate: (target: PrimaryFocusTarget) => boolean,
+): boolean {
+  return coordinator.hasIntent(predicate);
 }
 
 export function subscribeToPrimaryFocusIntent(

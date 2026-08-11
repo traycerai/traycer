@@ -14,6 +14,7 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
+  handlePrimaryFocusIn,
   reconcilePrimaryFocus,
   resetPrimaryFocusCoordinatorForTests,
 } from "@/lib/focus/primary-focus-coordinator";
@@ -1853,6 +1854,57 @@ describe("<LandingTerminalPanel />", () => {
     expect(
       screen.queryByTestId("landing-terminal-directory-picker"),
     ).toBeNull();
+  });
+
+  it("does not refocus a selected directory after focus moves before settlement", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    const composer = document.createElement("button");
+    document.body.append(composer);
+    composer.focus();
+    handlePrimaryFocusIn(composer);
+    await drainDeferredListFetches(resolvers);
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+
+    const terminalTarget = document.createElement("textarea");
+    document.body.append(terminalTarget);
+    const terminalFocus = vi.fn(() => terminalTarget.focus());
+    const tab = useLandingTerminalStore.getState().tabs[0];
+    focusCleanups.push(
+      registerTerminalFocus(
+        tab.instanceId,
+        terminalFocus,
+        (activeElement) => activeElement === terminalTarget,
+        () => true,
+      ),
+    );
+
+    expect(terminalFocus).not.toHaveBeenCalled();
+    terminalTarget.remove();
+    composer.remove();
   });
 
   it("keeps the chooser open when its captured host is no longer active", async () => {
