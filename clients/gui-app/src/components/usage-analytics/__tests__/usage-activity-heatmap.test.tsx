@@ -5,7 +5,37 @@ import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activit
 import { buildUsageActivityCalendar } from "@/lib/usage-analytics/usage-activity";
 import type { UsageBucket } from "@/lib/usage-analytics/usage-chart-data";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  restoreScrollWidth?.();
+  restoreScrollWidth = null;
+});
+
+/**
+ * jsdom does no layout, so `scrollWidth` is 0 everywhere and an
+ * "anchored to the end" assertion would pass against a scroller that was
+ * never touched. Stub a real content width so the assertion can only pass
+ * if the component actually drove `scrollLeft`.
+ */
+const YEAR_GRID_WIDTH = 650;
+let restoreScrollWidth: (() => void) | null = null;
+function stubScrollWidth(): void {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollWidth",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get: () => YEAR_GRID_WIDTH,
+  });
+  restoreScrollWidth = () => {
+    if (original === undefined) {
+      delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
+      return;
+    }
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", original);
+  };
+}
 
 function bucket(day: string, knownCostUsd: number): UsageBucket {
   return {
@@ -65,6 +95,20 @@ describe("<UsageActivityHeatmap />", () => {
     );
     expect(empty?.getAttribute("data-level")).toBe("0");
     expect(empty?.getAttribute("aria-label")).toBe("2026-08-02: No usage");
+  });
+
+  it("opens on the most recent weeks, not the oldest", () => {
+    // The year grid is wider than a narrow Settings pane. A fresh scroller
+    // sits at scrollLeft 0 - the OLDEST weeks - so the current period, the
+    // reason to open this at all, would hide behind a scrollbar.
+    stubScrollWidth();
+    render(
+      <TooltipProvider>
+        <UsageActivityHeatmap calendar={calendar} metric="cost" />
+      </TooltipProvider>,
+    );
+    const scroller = screen.getByTestId("usage-activity-scroller");
+    expect(scroller.scrollLeft).toBe(YEAR_GRID_WIDTH);
   });
 
   it("shows the stat row computed from the same calendar", () => {

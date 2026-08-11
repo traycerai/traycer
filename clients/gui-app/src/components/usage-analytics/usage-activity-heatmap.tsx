@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   Tooltip,
   TooltipContent,
@@ -52,12 +52,28 @@ export function UsageActivityHeatmap(props: {
   readonly metric: UsageMetric;
 }): ReactNode {
   const { calendar, metric } = props;
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  // A year grid is wider than a narrow Settings pane, and a fresh scroller
+  // starts at the OLDEST week - so the current period, the whole point of
+  // opening this, would sit off-screen behind a scrollbar the reader has
+  // to discover. Anchor to the newest week instead. Re-runs when the week
+  // count changes (window/host filter), since that resizes the content.
+  const weekCount = calendar.weeks.length;
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    scroller.scrollLeft = scroller.scrollWidth;
+  }, [weekCount]);
   return (
     <div
       className="flex w-full flex-col gap-3"
       data-testid="usage-activity-heatmap"
     >
-      <div className="w-full overflow-x-auto">
+      <div
+        ref={scrollerRef}
+        className="w-full overflow-x-auto"
+        data-testid="usage-activity-scroller"
+      >
         <div className="flex min-w-max flex-col gap-1">
           <MonthLabelRow calendar={calendar} />
           <div className="flex gap-1.5">
