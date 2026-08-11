@@ -77,8 +77,9 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
  * auth-aware messenger observes the rotated lease; the stream monitor + proactive
  * scheduler key on the outcome kind.
  *
- * The store already knows the file's `authnBaseUrl`/`refreshToken`, so — unlike
- * the old revalidator — no `authnBaseUrl` is threaded here. The lock also makes
+ * The injected refresh closes over this process's configured authn origin and
+ * the store reads the file's `refreshToken`, so — unlike the old revalidator —
+ * no `authnBaseUrl` is threaded here. The lock also makes
  * the old reject-reread poll unnecessary: a concurrent winner's pair is observed
  * as `superseded` (adopt, spend nothing) rather than a lost race to recover from.
  */

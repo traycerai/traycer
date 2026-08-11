@@ -10,10 +10,13 @@
  * an install-ok/error-later FSEvents loop would hammer at the initial delay
  * forever.
  */
-import { mkdtempSync, rmSync, watch, type FSWatcher } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, watch, type FSWatcher } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import { writeCredentialsFile } from "@traycer/protocol/config/credentials";
+import type { TokenStoreChange } from "@traycer-clients/shared/platform/runner-host";
 import { sandboxHome } from "../../__tests__/sandbox-home";
 import { FileTokenStore } from "../file-token-store";
 
@@ -37,9 +40,16 @@ vi.mock("electron-log", () => ({
   },
 }));
 
+// A 0o000 directory still reads for root, so the read-fault retry case cannot
+// be provoked there.
+const canForceReadFailure =
+  process.platform !== "win32" &&
+  !(typeof process.getuid === "function" && process.getuid() === 0);
+
 describe("FileTokenStore watcher self-healing (synthetic stream errors)", () => {
   let homeDir: string;
   const stores: FileTokenStore[] = [];
+  const decoyDirs: string[] = [];
 
   beforeEach(() => {
     homeDir = mkdtempSync(join(tmpdir(), "traycer-watcher-error-test-"));
@@ -51,7 +61,15 @@ describe("FileTokenStore watcher self-healing (synthetic stream errors)", () => 
     for (const store of stores) store.dispose();
     stores.length = 0;
     vi.useRealTimers();
+    // A test may have left a directory unreadable to force a read fault.
+    try {
+      chmodSync(dirname(cliCredentialsPath("development")), 0o700);
+    } catch {
+      // never created - nothing to restore
+    }
     rmSync(homeDir, { recursive: true, force: true });
+    for (const dir of decoyDirs) rmSync(dir, { recursive: true, force: true });
+    decoyDirs.length = 0;
   });
 
   it("closes into a doubling backoff while unstable, resetting only after a stable run", async () => {
@@ -89,4 +107,104 @@ describe("FileTokenStore watcher self-healing (synthetic stream errors)", () => 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(created).toHaveLength(4);
   });
+
+  it("emits a catch-up change for a write that landed while the stream was down", async () => {
+    const created: FSWatcher[] = [];
+    const store = new FileTokenStore({
+      environment: "development",
+      authnBaseUrl: "http://authn.watcher-error.test",
+      watchImpl: (dir, listener) => {
+        const watcher = watch(dir, listener);
+        created.push(watcher);
+        return watcher;
+      },
+    });
+    stores.push(store);
+    const changes: TokenStoreChange[] = [];
+    store.subscribe((change) => changes.push(change));
+
+    // The stream dies: the watcher is closed, so the write below produces NO
+    // filesystem event for this process.
+    created[0].emit("error", new Error("stream reset"));
+    await writeCredentialsFile(
+      cliCredentialsPath("development"),
+      {
+        token: "written-while-blind",
+        refreshToken: "rt",
+        savedAt: new Date().toISOString(),
+        user: { id: "u1", email: "a@x", name: "A" },
+      },
+      0,
+    );
+    expect(changes).toHaveLength(0);
+
+    // Reinstall, then the debounced catch-up read: the missed write surfaces.
+    // `waitFor` (not a bare advance) because the read itself is real async fs
+    // I/O - fake timers fire the debounce but do not wait for the syscall.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(created).toHaveLength(2);
+    await vi.waitFor(() => {
+      expect(changes.at(-1)?.present).toBe(true);
+    });
+  });
+
+  it.runIf(canForceReadFailure)(
+    "retries the catch-up read until it succeeds - nothing else redelivers it",
+    async () => {
+      // Written BEFORE the store exists, so no watcher ever saw it land: the
+      // catch-up read is the only thing that can surface it.
+      const credsPath = cliCredentialsPath("development");
+      await writeCredentialsFile(
+        credsPath,
+        {
+          token: "written-while-blind",
+          refreshToken: "rt",
+          savedAt: new Date().toISOString(),
+          user: { id: "u1", email: "a@x", name: "A" },
+        },
+        0,
+      );
+
+      // Watch a DECOY directory nothing ever touches. The store believes it
+      // has a healthy watch, but no filesystem event for the credentials file
+      // can ever be delivered - so the catch-up retry is the ONLY thing that
+      // can surface the snapshot. (Watching the real dir made this vacuous:
+      // the chmod that heals the read is itself an event in that dir, and it
+      // delivered the change even with the retry deleted.)
+      const decoyDir = mkdtempSync(join(tmpdir(), "traycer-watch-decoy-"));
+      decoyDirs.push(decoyDir);
+      const created: FSWatcher[] = [];
+      const store = new FileTokenStore({
+        environment: "development",
+        authnBaseUrl: "http://authn.watcher-error.test",
+        watchImpl: (_dir, listener) => {
+          const watcher = watch(decoyDir, listener);
+          created.push(watcher);
+          return watcher;
+        },
+      });
+      stores.push(store);
+      const changes: TokenStoreChange[] = [];
+      store.subscribe((change) => changes.push(change));
+
+      // The FILE becomes unreadable: the reinstall still succeeds and
+      // schedules its catch-up, but that read fails EACCES.
+      created[0].emit("error", new Error("stream reset"));
+      chmodSync(credsPath, 0o000);
+
+      await vi.advanceTimersByTimeAsync(1_000); // reinstall + catch-up armed
+      expect(created).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(100); // debounced read -> EACCES
+      expect(changes).toHaveLength(0);
+
+      // Heal it. The retry - not a filesystem event, there is none - is what
+      // finally delivers the snapshot.
+      chmodSync(credsPath, 0o600);
+      await vi.advanceTimersByTimeAsync(1_000); // catch-up retry timer
+      await vi.advanceTimersByTimeAsync(100); // its debounced read
+      await vi.waitFor(() => {
+        expect(changes.at(-1)?.present).toBe(true);
+      });
+    },
+  );
 });

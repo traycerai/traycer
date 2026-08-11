@@ -1349,6 +1349,51 @@ describe("AuthService", () => {
     expect(service.getLastError()).toBeNull();
   });
 
+  it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {
+    // Another dev slot signs out. That deletes the SHARED file for the whole
+    // machine (by design), and it reaches this process through the watcher -
+    // which deliberately does not touch `identityGeneration`, and installs no
+    // bearer. So every fence a recovery tick holds is still "current" when its
+    // `/user` call returns valid (the token stays valid server-side for hours
+    // after the local file is gone). Without a file re-check the tick would
+    // sign the UI back in with no later event to correct it.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "doomed-token", refreshToken: "doomed-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    let reachable = false;
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (!reachable) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      if (url === VALIDATION_URL) {
+        // The delete lands while this very probe is in flight.
+        void host.tokenStore.delete();
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    reachable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // And it settles instead of spinning: the next tick reads an absent file.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+  });
+
   it("does not burn refresh generations while identity validation is unreachable but refresh works", async () => {
     // A half-reachable authn: /user unreachable, /auth/refresh alive. A
     // validation with no verdict must NEVER authorize a spend - otherwise

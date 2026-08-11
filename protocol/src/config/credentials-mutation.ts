@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { readCredentialsFile, type StoredCredentials } from "./credentials";
-import { errorCode, fileMtimeMsOrZero } from "./credentials-fs";
+import {
+  errorCode,
+  fileMtimeMsOrZero,
+  writeJsonFileAtomic,
+} from "./credentials-fs";
 import {
   isHolderProvablyDead,
   isProcessAlive,
@@ -243,10 +247,16 @@ type PendingContinuation =
  *
  * Unblocking mirrors the lock's holder-liveness rules exactly: a marker whose
  * owner is provably dead (pid gone, or start-time fingerprint mismatch) is
- * reclaimed immediately; an uncertain owner is assumed live and the
- * `SPENT_BASE_MARKER_TTL_MS` age-out bounds the wait. Reclaiming risks at
- * most one server-side replay/reject of an already-spent base - strictly
- * better than the unconditional sibling re-spend it replaces.
+ * reclaimed immediately. `SPENT_BASE_MARKER_TTL_MS` then bounds EVERY other
+ * hold - including one whose owner is positively confirmed alive. That is
+ * deliberate, not an oversight: a live owner can stop retrying without ever
+ * releasing its marker (`dispose()` drops the continuation retry timer and
+ * leaves the file behind; a dropped continuation does the same), so a hold
+ * that liveness alone could extend would block every sibling of a still-running
+ * process forever - the permanent sticky signed-out this store exists to kill.
+ * Reclaiming risks at most one server-side replay/reject of an already-spent
+ * base - strictly better than both the unconditional sibling re-spend it
+ * replaces and an unbounded wait on an owner that may never come back.
  *
  * Known residual (client-side bound): after a network-AMBIGUOUS refresh the
  * OWNER's own retry re-presents the base - the only client-side recovery
@@ -264,7 +274,13 @@ interface SpentBaseMarker {
 
 const SPENT_BASE_MARKER_TTL_MS = 60_000;
 
-function spentBaseMarkerPath(credentialsPath: string): string {
+/**
+ * Exported so tests assert against the path production actually writes. A test
+ * that rebuilds this suffix locally keeps passing if the suffix ever changes -
+ * every "the marker was cleared" assertion would then hold vacuously against a
+ * path nothing ever wrote.
+ */
+export function spentBaseMarkerPath(credentialsPath: string): string {
   return `${credentialsPath}.pending-spend.json`;
 }
 
@@ -358,6 +374,14 @@ function markerOwnerProvablyDead(marker: SpentBaseMarker): boolean {
  * commit-failed double-spend window the marker exists to close. Refusing to
  * spend (a store-unavailable the caller retries) is strictly safer than
  * spending unguarded into a store that cannot record the spend.
+ *
+ * ATOMIC (temp + rename), and it overwrites in place rather than being
+ * preceded by an unlink. Both matter for the same reason: a marker that is
+ * momentarily absent or torn reads as "no marker", and a sibling that acquires
+ * the lock in that state re-spends the base. An in-place truncating write
+ * leaves a torn record if the process dies mid-write; an unlink-then-write
+ * leaves NO record at all in the gap. The rename makes replacement a single
+ * step - readers see either the old marker or the new one, never neither.
  */
 async function writeSpentBaseMarker(
   credentialsPath: string,
@@ -370,11 +394,7 @@ async function writeSpentBaseMarker(
     ownerFingerprint: ownPidStartFingerprint(),
   };
   try {
-    await writeFile(
-      spentBaseMarkerPath(credentialsPath),
-      JSON.stringify(marker) + "\n",
-      { encoding: "utf8", mode: 0o600 },
-    );
+    await writeJsonFileAtomic(spentBaseMarkerPath(credentialsPath), marker, 0o600);
   } catch {
     throw new CredentialsStoreUnavailableError(
       "spent-base marker could not be armed",
@@ -667,7 +687,12 @@ export function createCredentialsMutationStore(
           if (blocked) {
             return { outcome: "spend-pending", credentials: null };
           }
-          await clearSpentBaseMarker(paths.credentialsPath);
+          // Reclaimable - but do NOT unlink it here. The arm below replaces it
+          // atomically, and unlinking first would leave the base momentarily
+          // unguarded: if this process dies in that gap - and the marker we are
+          // reclaiming is OUR OWN residue from a network-ambiguous attempt, so
+          // the base may already be spent - a sibling takes the lock, sees no
+          // marker, and spends it again.
         }
         // Arm the marker BEFORE the spend (an intent record): a crash at any
         // point past the refresh call leaves the base guarded on disk, a
@@ -924,7 +949,12 @@ export function createCredentialsMutationStore(
           if (blocked) {
             return { outcome: "spend-pending", credentials: null };
           }
-          await clearSpentBaseMarker(paths.credentialsPath);
+          // Reclaimable - but do NOT unlink it here. The arm below replaces it
+          // atomically, and unlinking first would leave the base momentarily
+          // unguarded: if this process dies in that gap - and the marker we are
+          // reclaiming is OUR OWN residue from a network-ambiguous attempt, so
+          // the base may already be spent - a sibling takes the lock, sees no
+          // marker, and spends it again.
         }
         await writeSpentBaseMarker(paths.credentialsPath, args.candidate.token);
         // The sole remote call of the hold - every guard above has passed. A

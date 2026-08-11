@@ -89,6 +89,15 @@ const WATCHER_REINSTALL_MAX_MS = 30_000;
 // delay keeps doubling. (Resetting on mere construction success would pin an
 // install-ok/error-later FSEvents loop at the initial delay forever.)
 const WATCHER_STABILITY_MS = 30_000;
+
+// The reinstall's catch-up read is the ONLY delivery of everything written
+// while the watch was down - unlike an ordinary watch event, no further
+// filesystem event is coming to try again. A transient read fault (EIO,
+// EACCES, a briefly unavailable mount) would otherwise strand this process on
+// a stale session forever, so the catch-up alone retries on backoff until it
+// gets a snapshot or a real event supersedes it.
+const CATCH_UP_RETRY_INITIAL_MS = 1_000;
+const CATCH_UP_RETRY_MAX_MS = 30_000;
 // §6 migration: overall abort deadline threaded through the probes, lock waits,
 // and the in-lock refresh. Set above one healthy probe + one refresh timeout
 // (~10s each is the inner bound) so a slow-but-alive rotate finishes on its own
@@ -123,6 +132,9 @@ export class FileTokenStore {
   private watcherReinstallDelayMs: number = WATCHER_REINSTALL_INITIAL_MS;
   private watcherWasInterrupted = false;
   private watcherInstalledAtMs = 0;
+  private catchUpPending = false;
+  private catchUpRetryTimer: NodeJS.Timeout | null = null;
+  private catchUpRetryDelayMs: number = CATCH_UP_RETRY_INITIAL_MS;
   // §6 single-flight: every window reads the same shared localStorage pair, so
   // the first migration call drives it and all concurrent/later calls adopt the
   // same result (retained for the process lifetime; a `retryable` outcome
@@ -261,7 +273,11 @@ export class FileTokenStore {
         log.info("[file-token-store] credentials watcher reinstalled");
         // Catch up on anything written while the watch was down - a change
         // event is a hint and the reconcile re-reads the store, so a spurious
-        // one is harmless while a missed one is a stale-session hazard.
+        // one is harmless while a missed one is a stale-session hazard. Marked
+        // as the catch-up so a failed read retries: nothing else will redeliver
+        // it.
+        this.catchUpPending = true;
+        this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
         this.scheduleEmitChange();
       }
     } catch (error) {
@@ -285,6 +301,20 @@ export class FileTokenStore {
     this.watcherReinstallTimer = setTimeout(() => {
       this.watcherReinstallTimer = null;
       this.installWatcher();
+    }, delayMs);
+  }
+
+  private scheduleCatchUpRetry(): void {
+    if (this.disposed || this.catchUpRetryTimer !== null) {
+      return;
+    }
+    const delayMs = this.catchUpRetryDelayMs;
+    this.catchUpRetryDelayMs = Math.min(delayMs * 2, CATCH_UP_RETRY_MAX_MS);
+    this.catchUpRetryTimer = setTimeout(() => {
+      this.catchUpRetryTimer = null;
+      if (this.catchUpPending) {
+        this.scheduleEmitChange();
+      }
     }, delayMs);
   }
 
@@ -312,10 +342,23 @@ export class FileTokenStore {
       log.warn("[file-token-store] credentials read after watch event failed", {
         error: describeLogError(error),
       });
+      // An ordinary watch event can be dropped - the next one re-reads. An
+      // outstanding reinstall catch-up cannot: it is standing in for events
+      // that already happened and will never be re-delivered.
+      if (this.catchUpPending) {
+        this.scheduleCatchUpRetry();
+      }
       return;
     }
     if (this.disposed) {
       return;
+    }
+    // Any successful read satisfies the catch-up, whoever triggered it.
+    this.catchUpPending = false;
+    this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
+    if (this.catchUpRetryTimer !== null) {
+      clearTimeout(this.catchUpRetryTimer);
+      this.catchUpRetryTimer = null;
     }
     this.revision += 1;
     const change: TokenStoreChange = {
@@ -486,6 +529,10 @@ export class FileTokenStore {
     if (this.watcherReinstallTimer !== null) {
       clearTimeout(this.watcherReinstallTimer);
       this.watcherReinstallTimer = null;
+    }
+    if (this.catchUpRetryTimer !== null) {
+      clearTimeout(this.catchUpRetryTimer);
+      this.catchUpRetryTimer = null;
     }
     if (this.watcher !== null) {
       this.watcher.close();

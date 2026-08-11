@@ -756,6 +756,16 @@ export class AuthService {
         return;
       }
       if (revalidated.kind === "valid") {
+        // Same deletion race as the recovery path: our locked rotate committed
+        // this pair, but an explicit sign-out can land (and delete the file)
+        // while the identity probe is in flight.
+        if (!(await this.storedSessionStillOnDisk(pair.token))) {
+          this.scheduleSessionRecovery(`${trigger}:rotated-pair-superseded`);
+          return;
+        }
+        if (!stillWanted() || this.hasLiveBearer()) {
+          return;
+        }
         this.settleSessionRecovery("recovered");
         this.applySignedIn(pair.token, revalidated.user, undefined);
         return;
@@ -914,8 +924,7 @@ export class AuthService {
       return;
     }
     if (outcome.kind === "valid") {
-      this.settleSessionRecovery("recovered");
-      this.applySignedIn(stored.token, outcome.user, undefined);
+      await this.adoptRecoveredStoredSession(stored, outcome.user, generation);
       return;
     }
     if (outcome.kind === "network-error") {
@@ -932,6 +941,31 @@ export class AuthService {
       () => this.isIdentityCurrent(generation),
       "recovery",
     );
+  }
+
+  /**
+   * Tail of {@link runSessionRecovery} for a stored session the server just
+   * called valid: confirm the file still holds it, then sign in. Extracted so
+   * the recovery tick stays under the complexity ceiling.
+   */
+  private async adoptRecoveredStoredSession(
+    stored: StoredCredentials,
+    user: AuthenticatedUser,
+    generation: number,
+  ): Promise<void> {
+    if (!(await this.storedSessionStillOnDisk(stored.token))) {
+      // A sign-out (or a sibling rotation) landed while `/user` was in flight.
+      // Re-arm rather than settle: if the file is gone the next tick reads null
+      // and settles on `no-stored-session`; if it was rotated the next tick
+      // adopts the CURRENT pair.
+      this.scheduleSessionRecovery("recovery:stored-session-superseded");
+      return;
+    }
+    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+      return;
+    }
+    this.settleSessionRecovery("recovered");
+    this.applySignedIn(stored.token, user, undefined);
   }
 
   private shouldStopStartFlow(startGeneration: number): boolean {
@@ -955,6 +989,32 @@ export class AuthService {
    */
   private isIdentityCurrent(generation: number): boolean {
     return !this.disposed && generation === this.identityGeneration;
+  }
+
+  /**
+   * Re-read the file and confirm it still carries `token` before an AUTOMATIC
+   * path adopts it into a signed-in UI.
+   *
+   * The generation fences cannot cover this. `identityGeneration` moves only on
+   * a LOCAL `signIn`/`signOut`/`dispose`; an external mutation - most
+   * importantly another slot's explicit sign-out, which deletes the shared file
+   * for the whole machine by design - arrives through the watcher and reconcile,
+   * which deliberately leave it alone. So a deletion that lands while our
+   * `/user` probe is in flight leaves every fence intact: the UI is already
+   * signed out (nothing to clear, no bearer installed), and the stale token is
+   * still valid server-side for hours. Adopting it would resurrect a session
+   * the user explicitly ended, with no further file event to correct it.
+   *
+   * A read fault answers "not current": refusing to adopt is recoverable (the
+   * loop retries), adopting a session that is gone is not.
+   */
+  private async storedSessionStillOnDisk(token: string): Promise<boolean> {
+    try {
+      const latest = await this.tokenStore.get();
+      return latest !== null && latest.token === token;
+    } catch {
+      return false;
+    }
   }
 
   private isExpectedBearerCurrent(expected: OpenFrameBearerSource): boolean {

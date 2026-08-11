@@ -19,6 +19,7 @@ import {
 import {
   createCredentialsMutationStore,
   CredentialsStoreUnavailableError,
+  spentBaseMarkerPath,
   type CredentialsMutationStore,
   type RefreshFn,
   type RefreshResult,
@@ -750,8 +751,11 @@ describe("credentials mutation store", () => {
   });
 
   describe("spent-base marker (cross-process double-spend gate)", () => {
+    // The production path, not a local rebuild of the suffix: if this drifted,
+    // every `existsSync(markerPath())` assertion below would hold against a
+    // file nothing writes and the "marker is cleared" cases would go vacuous.
     function markerPath(): string {
-      return `${credentialsPath}.pending-spend.json`;
+      return spentBaseMarkerPath(credentialsPath);
     }
 
     function sha256(token: string): string {
@@ -765,6 +769,11 @@ describe("credentials mutation store", () => {
       readonly token: string;
       readonly ageMs: number;
     }): void {
+      // Every deferral case below turns on this owner being a DIFFERENT live
+      // process. If the runner ever gives a worker no distinguishable parent,
+      // the marker would read as OUR OWN and the `spend-pending` assertions
+      // would silently invert into "reclaimed and spent" - fail loudly instead.
+      expect(process.ppid).not.toBe(process.pid);
       writeFileSync(
         markerPath(),
         JSON.stringify({
