@@ -420,6 +420,8 @@ import {
   worktreeListAllForHostResponseSchemaV13,
   worktreeListAllForHostRequestSchemaV14,
   worktreeListAllForHostResponseSchemaV14,
+  worktreeListAllForHostRequestSchemaV15,
+  worktreeListAllForHostResponseSchemaV15,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -434,6 +436,8 @@ import {
   worktreeListByWorkspacePathsResponseSchemaV13,
   worktreeListByWorkspacePathsRequestSchemaV14,
   worktreeListByWorkspacePathsResponseSchemaV14,
+  worktreeListByWorkspacePathsRequestSchemaV15,
+  worktreeListByWorkspacePathsResponseSchemaV15,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
@@ -749,6 +753,33 @@ export const worktreeListByWorkspacePathsUpgradeV13ToV14 = defineUpgradePath<
   }),
 });
 
+// v1.5 adds the host-local `presence` fact to every workspace summary. Both
+// worktree list methods take this minor together so an old host's previously
+// authoritative summary preserves the established behavior: its path reads as
+// present rather than being mistaken for a missing remote directory.
+export const worktreeListByWorkspacePathsV15 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV15,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV15,
+});
+
+export const worktreeListByWorkspacePathsUpgradeV14ToV15 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV14,
+  typeof worktreeListByWorkspacePathsV15
+>({
+  from: worktreeListByWorkspacePathsV14.schemaVersion,
+  to: worktreeListByWorkspacePathsV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    workspaces: response.workspaces.map((workspace) => ({
+      ...workspace,
+      presence: "present" as const,
+    })),
+  }),
+});
+
 export const worktreeListBranchesV10 = defineRpcContract({
   method: "worktree.listBranches",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1029,6 +1060,32 @@ export const worktreeListAllForHostUpgradeV13ToV14 = defineUpgradePath<
     worktrees: response.worktrees.map((worktree) => ({
       ...worktree,
       resolvedAt: LEGACY_HOST_RESOLVED_AT,
+    })),
+  }),
+});
+
+// v1.5 adds the same `presence` fact to the host-wide worktree listing. Keep
+// it paired with `worktree.listByWorkspacePaths@1.5`: a v1.4 host's rows were
+// already authoritative and therefore upgrade as present.
+export const worktreeListAllForHostV15 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV15,
+  responseSchema: worktreeListAllForHostResponseSchemaV15,
+});
+
+export const worktreeListAllForHostUpgradeV14ToV15 = defineUpgradePath<
+  typeof worktreeListAllForHostV14,
+  typeof worktreeListAllForHostV15
+>({
+  from: worktreeListAllForHostV14.schemaVersion,
+  to: worktreeListAllForHostV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    worktrees: response.worktrees.map((worktree) => ({
+      ...worktree,
+      presence: "present" as const,
     })),
   }),
 });
@@ -5169,7 +5226,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listByWorkspacePaths": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: worktreeListByWorkspacePathsV10,
@@ -5194,6 +5251,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: worktreeListByWorkspacePathsV14,
           upgradeFromPreviousVersion:
             worktreeListByWorkspacePathsUpgradeV13ToV14,
+        },
+        5: {
+          contract: worktreeListByWorkspacePathsV15,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
@@ -5305,7 +5367,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -5326,6 +5388,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         4: {
           contract: worktreeListAllForHostV14,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV13ToV14,
+        },
+        5: {
+          contract: worktreeListAllForHostV15,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
