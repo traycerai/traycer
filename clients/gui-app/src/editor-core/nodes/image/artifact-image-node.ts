@@ -12,6 +12,12 @@ export const ArtifactImageNode = Image.extend({
       mediaType: { default: null, rendered: false },
     };
   },
+  // Images are admitted through the prepare/commit flow below the editor.
+  // Parsing arbitrary HTML `<img>` nodes would create a durable node without
+  // the attachment hash that its renderer requires.
+  parseHTML() {
+    return [];
+  },
   addNodeView() {
     return ReactNodeViewRenderer(ArtifactImageNodeView);
   },

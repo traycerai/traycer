@@ -54,6 +54,22 @@ const JPEG_PIXEL_BOMB_DATA_URL = (() => {
   );
   return `data:image/jpeg;base64,${btoa(String.fromCharCode(...bytes))}`;
 })();
+const JPEG_SOF_AFTER_PREFIX_DATA_URL = (() => {
+  const bytes = new Uint8Array(65_560);
+  bytes.set([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xff], 0);
+  const sofOffset = 65_539;
+  bytes.set(
+    [
+      0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x20, 0x00, 0x20, 0x00, 0x01, 0x01,
+      0x11, 0x00,
+    ],
+    sofOffset,
+  );
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join(
+    "",
+  );
+  return `data:image/jpeg;base64,${btoa(binary)}`;
+})();
 
 const EMPTY_DEDUP_TARGETS: ReadonlyMap<string, AssistantMarkdownImageTarget> =
   new Map();
@@ -585,6 +601,19 @@ describe("AssistantMarkdownImage source classification matrix", () => {
   it("reads JPEG dimensions as big-endian before applying the pixel cap", () => {
     renderImage({
       src: JPEG_PIXEL_BOMB_DATA_URL,
+      alt: undefined,
+      context: undefined,
+    });
+
+    expect(
+      document.querySelector("[data-assistant-image-failure]")?.textContent,
+    ).toBe("This image is too large to show here.");
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("rejects JPEGs whose dimensions are outside the inspected prefix", () => {
+    renderImage({
+      src: JPEG_SOF_AFTER_PREFIX_DATA_URL,
       alt: undefined,
       context: undefined,
     });

@@ -228,11 +228,19 @@ export interface ComposerImageIngest<Attrs = ImageAttachmentAttrs> {
   readonly onRejected: (error: unknown, aborted: boolean) => void;
 }
 
+export interface ComposerImageInsertion<Attrs> {
+  readonly insert: (attrs: ReadonlyArray<Attrs>) => number;
+  readonly release: () => void;
+}
+
+export type ComposerImageInsertionFactory<Attrs> =
+  () => ComposerImageInsertion<Attrs> | null;
+
 async function runImageIngest<Attrs>(
   files: ReadonlyArray<File>,
   signal: AbortSignal,
   imageIngest: ComposerImageIngest<Attrs>,
-  insertAttrs: (attrs: ReadonlyArray<Attrs>) => number,
+  insertion: ComposerImageInsertion<Attrs>,
 ): Promise<void> {
   let release: (() => void) | undefined;
   try {
@@ -242,7 +250,7 @@ async function runImageIngest<Attrs>(
     if (converted.length === 0) return;
     const acceptedCount = Math.min(
       converted.length,
-      Math.max(0, insertAttrs(converted)),
+      Math.max(0, insertion.insert(converted)),
     );
     await imageIngest.onSettled(converted.slice(0, acceptedCount), converted);
   } catch (error) {
@@ -253,6 +261,7 @@ async function runImageIngest<Attrs>(
     // `convert` itself, so a concurrent admission check during the
     // conversion-to-insertion handoff still sees this reservation charged.
     release?.();
+    insertion.release();
   }
 }
 
@@ -512,6 +521,7 @@ export function useComposerPasteEvents<Attrs>(
   imageIngest: ComposerImageIngest<Attrs>,
   insertAttrs: (attrs: ReadonlyArray<Attrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
+  captureImageInsertion: ComposerImageInsertionFactory<Attrs> | undefined,
 ): UseComposerPasteResult {
   const [dragState, setDragState] = useState<ComposerDragState>(
     IDLE_COMPOSER_DRAG_STATE,
@@ -548,11 +558,17 @@ export function useComposerPasteEvents<Attrs>(
   const attachImageFiles = useCallback(
     (files: ReadonlyArray<File>) => {
       if (files.length === 0) return;
+      const insertion =
+        captureImageInsertion?.() ??
+        ({
+          insert: insertAttrs,
+          release: () => undefined,
+        } satisfies ComposerImageInsertion<Attrs>);
       trackPendingImageJob((signal) =>
-        runImageIngest(files, signal, imageIngest, insertAttrs),
+        runImageIngest(files, signal, imageIngest, insertion),
       );
     },
-    [imageIngest, insertAttrs, trackPendingImageJob],
+    [captureImageInsertion, imageIngest, insertAttrs, trackPendingImageJob],
   );
 
   const attachFilePaths = useCallback(
@@ -728,7 +744,7 @@ export function useComposerPasteAdapter(
     }),
     [],
   );
-  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths);
+  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
 }
 
 export interface ComposerPasteEditorHandle {

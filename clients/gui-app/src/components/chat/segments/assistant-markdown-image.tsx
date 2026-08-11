@@ -84,7 +84,8 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
     if (!hasRasterMagic(match[1], match[2])) {
       return { kind: "invalid-data", src: trimmed };
     }
-    if (rasterPixelCount(match[1], match[2]) > MAX_ASSISTANT_IMAGE_PIXELS) {
+    const pixelCount = rasterPixelCount(match[1], match[2]);
+    if (pixelCount === null || pixelCount > MAX_ASSISTANT_IMAGE_PIXELS) {
       return { kind: "data-oversized", src: trimmed };
     }
     return { kind: "data-raster", src: trimmed };
@@ -177,7 +178,7 @@ function percentEncodedPayloadFits(payload: string, limit: number): boolean {
   return true;
 }
 
-function rasterPixelCount(mediaType: string, payload: string): number {
+function rasterPixelCount(mediaType: string, payload: string): number | null {
   const bytes = decodeBase64Prefix(payload, 64 * 1024);
   if (bytes === null) return 0;
   if (mediaType === "image/png" && bytes.length >= 24) {
@@ -242,7 +243,7 @@ function ascii(bytes: Uint8Array, offset: number, length: number): string {
   return String.fromCharCode(...bytes.slice(offset, offset + length));
 }
 
-function jpegPixelCount(bytes: Uint8Array): number {
+function jpegPixelCount(bytes: Uint8Array): number | null {
   let offset = 2;
   while (offset + 9 < bytes.length) {
     if (bytes[offset] !== 0xff) {
@@ -259,7 +260,7 @@ function jpegPixelCount(bytes: Uint8Array): number {
       continue;
     }
     const length = readUint16BigEndian(bytes, offset);
-    if (length < 2 || offset + length > bytes.length) return 0;
+    if (length < 2 || offset + length > bytes.length) return null;
     const isSof =
       marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
     if (isSof && length >= 7) {
@@ -270,7 +271,7 @@ function jpegPixelCount(bytes: Uint8Array): number {
     }
     offset += length;
   }
-  return 0;
+  return null;
 }
 
 function hasRasterMagic(mediaType: string, payload: string): boolean {

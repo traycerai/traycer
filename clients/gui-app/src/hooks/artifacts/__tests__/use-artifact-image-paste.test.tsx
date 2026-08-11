@@ -225,6 +225,47 @@ beforeEach(() => {
   resolveDroppedFilePaths.mockClear();
 });
 describe("useArtifactImagePaste", () => {
+  it("maps the paste selection while preparation is pending", async () => {
+    let resolvePrepare = (_value: ArtifactImagePreparation): void => {
+      throw new Error("prepare promise was not initialized");
+    };
+    prepareBytes.mockImplementationOnce(
+      () =>
+        new Promise<ArtifactImagePreparation>((resolve) => {
+          resolvePrepare = resolve;
+        }),
+    );
+    const editor = makeEditor();
+    editor.commands.setContent({
+      type: "doc",
+      content: [{ type: "paragraph" }, { type: "paragraph" }],
+    });
+    editor.commands.setTextSelection(1);
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+    });
+    await waitFor(() => expect(prepareBytes).toHaveBeenCalledTimes(1));
+
+    editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+    editor.commands.insertContent("typed after paste");
+    resolvePrepare({
+      ok: true,
+      operationId: "op-1",
+      attachmentHash: "hash-1",
+      mediaType: "image/png",
+      src: "images/hash-1.png",
+    });
+
+    await waitFor(() => expect(countImages(editor)).toBe(1));
+    expect(editor.state.doc.firstChild?.type.name).toBe("image");
+    expect(editor.getText()).toContain("typed after paste");
+    editor.destroy();
+  });
+
   it("ingests a pasteable image at the caret and finishes with commit", async () => {
     const editor = makeEditor();
     const { result } = renderHook(() =>

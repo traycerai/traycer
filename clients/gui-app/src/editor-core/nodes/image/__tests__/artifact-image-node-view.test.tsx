@@ -10,7 +10,9 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { Editor } from "@tiptap/core";
 import { EditorContent, EditorContext } from "@tiptap/react";
 import * as Y from "yjs";
@@ -81,6 +83,14 @@ function mountImageEditor(attrs: {
   return editor;
 }
 
+function renderWithQueryClient(children: ReactNode): void {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      {children}
+    </QueryClientProvider>,
+  );
+}
+
 afterEach(() => {
   cleanup();
   blobSrcState.value = { status: "loading", src: null };
@@ -102,7 +112,7 @@ describe("ArtifactImageNodeView", () => {
       attachmentHash: "hash",
       mediaType: "image/png",
     });
-    render(
+    renderWithQueryClient(
       <EditorContext.Provider value={{ editor }}>
         <EditorContent editor={editor} />
       </EditorContext.Provider>,
@@ -127,7 +137,7 @@ describe("ArtifactImageNodeView", () => {
       attachmentHash: "missing",
       mediaType: "image/png",
     });
-    render(
+    renderWithQueryClient(
       <EditorContext.Provider value={{ editor }}>
         <EditorContent editor={editor} />
       </EditorContext.Provider>,
@@ -154,9 +164,11 @@ describe("ArtifactImageNodeView", () => {
       mediaType: "image/png",
     });
     const { container } = render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <EditorContext.Provider value={{ editor }}>
+          <EditorContent editor={editor} />
+        </EditorContext.Provider>
+      </QueryClientProvider>,
     );
     const img = await waitFor((): HTMLImageElement => {
       const found = container.querySelector("img");
@@ -208,7 +220,7 @@ describe("ArtifactImageNodeView", () => {
       attachmentHash: "selected",
       mediaType: "image/png",
     });
-    render(
+    renderWithQueryClient(
       <EditorContext.Provider value={{ editor }}>
         <EditorContent editor={editor} />
         <ArtifactToolbar
@@ -257,9 +269,11 @@ describe("ArtifactImageNodeView", () => {
       mediaType: "image/svg+xml",
     });
     const { container } = render(
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <EditorContext.Provider value={{ editor }}>
+          <EditorContent editor={editor} />
+        </EditorContext.Provider>
+      </QueryClientProvider>,
     );
     const img = await waitFor((): HTMLImageElement => {
       const found = container.querySelector("img");

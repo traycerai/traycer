@@ -1,11 +1,14 @@
 import { useCallback, useMemo } from "react";
 import type { Editor } from "@tiptap/core";
+import type { Transaction } from "@tiptap/pm/state";
+import { Mapping } from "@tiptap/pm/transform";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import * as Y from "yjs";
 import { useComposerPasteEvents } from "@/hooks/composer/use-composer-paste";
 import type {
   ComposerImageConversionResult,
   ComposerImageIngest,
+  ComposerImageInsertion,
   UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -257,6 +260,41 @@ export function useArtifactImagePaste(
     },
     [editor],
   );
+  const captureImageInsertion =
+    useCallback((): ComposerImageInsertion<PreparedArtifactImage> | null => {
+      if (editor === null || editor.isDestroyed || !editor.isEditable) {
+        return null;
+      }
+      const bookmark = editor.state.selection.getBookmark();
+      const mapping = new Mapping();
+      let released = false;
+      const onTransaction = ({
+        transaction,
+      }: {
+        transaction: Transaction;
+      }): void => {
+        mapping.appendMapping(transaction.mapping);
+      };
+      editor.on("transaction", onTransaction);
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        editor.off("transaction", onTransaction);
+      };
+      return {
+        insert: (images) => {
+          release();
+          if (editor.isDestroyed || !editor.isEditable) return 0;
+          const selection = bookmark.map(mapping).resolve(editor.state.doc);
+          editor.commands.setTextSelection({
+            from: selection.from,
+            to: selection.to,
+          });
+          return insertAttrs(images);
+        },
+        release,
+      };
+    }, [editor, insertAttrs]);
   const beginPathInsertion = useCallback((): null => null, []);
   const filePaths = useMemo(
     () => ({
@@ -266,6 +304,11 @@ export function useArtifactImagePaste(
     }),
     [beginPathInsertion, runnerHost.fileDrops],
   );
-  const paste = useComposerPasteEvents(imageIngest, insertAttrs, filePaths);
+  const paste = useComposerPasteEvents(
+    imageIngest,
+    insertAttrs,
+    filePaths,
+    captureImageInsertion,
+  );
   return { supported: operations.supported, paste };
 }

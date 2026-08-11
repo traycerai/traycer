@@ -242,7 +242,7 @@ describe("<ImageLightbox /> actions", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("shows Copy for attachment-backed extended WebP media", () => {
+  it("keeps extended WebP downloadable but outside the clipboard allowlist", () => {
     renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/extended-webp"
@@ -255,8 +255,41 @@ describe("<ImageLightbox /> actions", () => {
       </ImageLightbox>,
     );
 
-    expect(screen.getByRole("button", { name: "Copy image" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
     expect(screen.getByRole("button", { name: "Download image" })).toBeTruthy();
+  });
+
+  it("shows the standard spinner while a copy is pending", async () => {
+    let resolveCopy = (): void => {
+      throw new Error("copy promise was not initialized");
+    };
+    copyImageMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCopy = resolve;
+        }),
+    );
+    renderWithRunner(
+      <ImageLightbox
+        src="blob:http://localhost/raster-pending"
+        alt="pending copy"
+        mediaType="image/png"
+        suggestedName="pending.png"
+        className={undefined}
+      >
+        <img src="blob:http://localhost/raster-pending" alt="pending copy" />
+      </ImageLightbox>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
+    await waitFor(() => {
+      expect(copyImageMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("image-action-spinner")).toBeTruthy();
+    });
+    resolveCopy();
+    await waitFor(() => {
+      expect(screen.queryByTestId("image-action-spinner")).toBeNull();
+    });
   });
 
   it("opens a dialog with the raster image on trigger click", async () => {

@@ -16,6 +16,7 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 interface ImageLightboxProps {
   readonly src: string;
@@ -134,6 +135,7 @@ function ImageActions(props: {
         <ImageActionButton
           label="Copy image"
           disabled={props.pendingAction !== null}
+          pending={props.pendingAction === "copy"}
           onClick={props.onCopy}
           icon={<Copy className="size-3.5" aria-hidden />}
         />
@@ -142,6 +144,7 @@ function ImageActions(props: {
         <ImageActionButton
           label="Download image"
           disabled={props.pendingAction !== null}
+          pending={props.pendingAction === "download"}
           onClick={props.onDownload}
           icon={<Download className="size-3.5" aria-hidden />}
         />
@@ -149,6 +152,7 @@ function ImageActions(props: {
         <ImageActionButton
           label="Open in browser"
           disabled={props.pendingAction !== null || props.openExternalPending}
+          pending={props.openExternalPending}
           onClick={props.onOpenExternal}
           icon={<ExternalLink className="size-3.5" aria-hidden />}
         />
@@ -160,6 +164,7 @@ function ImageActions(props: {
 function ImageActionButton(props: {
   readonly label: string;
   readonly disabled: boolean;
+  readonly pending: boolean;
   readonly onClick: () => void;
   readonly icon: ReactNode;
 }): ReactNode {
@@ -177,7 +182,15 @@ function ImageActionButton(props: {
         className="flex size-7 items-center justify-center rounded-sm text-white/85 outline-none transition-colors hover:bg-white/15 hover:text-white focus-visible:ring-1 focus-visible:ring-white disabled:opacity-50"
         aria-label={props.label}
       >
-        {props.icon}
+        {props.pending ? (
+          <AgentSpinningDots
+            className="text-current"
+            testId="image-action-spinner"
+            variant={undefined}
+          />
+        ) : (
+          props.icon
+        )}
       </button>
     </TooltipWrapper>
   );
