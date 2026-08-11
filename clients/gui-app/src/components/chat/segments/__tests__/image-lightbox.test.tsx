@@ -363,7 +363,9 @@ describe("<UntrustedSvgLightbox /> sanitized routing", () => {
       expect(screen.queryByLabelText("Loading SVG")).toBeNull();
     });
     expect(
-      screen.getByRole("status", { name: "bad svg" }).textContent,
+      screen.getByRole("status", {
+        name: /bad svg: couldn't display this svg/i,
+      }).textContent,
     ).toContain("Couldn't display this SVG.");
     expect(screen.queryByRole("img")).toBeNull();
     expect(trustedMarkupSpy).not.toHaveBeenCalled();

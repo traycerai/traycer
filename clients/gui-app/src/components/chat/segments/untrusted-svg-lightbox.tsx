@@ -51,7 +51,11 @@ export function UntrustedSvgLightbox(
       <div
         className="flex size-full items-center justify-center rounded-lg bg-muted/60 px-4 text-center text-ui-sm text-muted-foreground"
         role="status"
-        aria-label={props.alt.length > 0 ? props.alt : "SVG image unavailable"}
+        aria-label={
+          props.alt.length > 0
+            ? `${props.alt}: Couldn't display this SVG.`
+            : "Couldn't display this SVG."
+        }
       >
         Couldn&apos;t display this SVG.
       </div>

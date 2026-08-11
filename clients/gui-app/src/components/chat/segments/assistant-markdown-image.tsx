@@ -225,6 +225,10 @@ function readUint16(bytes: Uint8Array, offset: number): number {
   return bytes[offset] + (bytes[offset + 1] << 8);
 }
 
+function readUint16BigEndian(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 8) + bytes[offset + 1];
+}
+
 function readUint32(bytes: Uint8Array, offset: number): number {
   return (
     bytes[offset] * 2 ** 24 +
@@ -254,12 +258,15 @@ function jpegPixelCount(bytes: Uint8Array): number {
     ) {
       continue;
     }
-    const length = readUint16(bytes, offset);
+    const length = readUint16BigEndian(bytes, offset);
     if (length < 2 || offset + length > bytes.length) return 0;
     const isSof =
       marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
     if (isSof && length >= 7) {
-      return readUint16(bytes, offset + 3) * readUint16(bytes, offset + 5);
+      return (
+        readUint16BigEndian(bytes, offset + 3) *
+        readUint16BigEndian(bytes, offset + 5)
+      );
     }
     offset += length;
   }

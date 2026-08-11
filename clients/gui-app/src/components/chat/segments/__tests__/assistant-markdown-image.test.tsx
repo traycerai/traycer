@@ -42,6 +42,18 @@ const SVG_DATA_URL =
 const UNSAFE_SVG_DATA_URL = `data:image/svg+xml;base64,${btoa(
   '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="8" height="8"/></svg>',
 )}`;
+const JPEG_PIXEL_BOMB_DATA_URL = (() => {
+  const bytes = new Uint8Array(40);
+  bytes.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10], 0);
+  bytes.set(
+    [
+      0xff, 0xc0, 0x00, 0x11, 0x08, 0x20, 0x00, 0x20, 0x00, 0x01, 0x01, 0x11,
+      0x00,
+    ],
+    20,
+  );
+  return `data:image/jpeg;base64,${btoa(String.fromCharCode(...bytes))}`;
+})();
 
 const EMPTY_DEDUP_TARGETS: ReadonlyMap<string, AssistantMarkdownImageTarget> =
   new Map();
@@ -543,6 +555,19 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     const chip = document.querySelector("[data-assistant-image-failure]");
     expect(chip).not.toBeNull();
     expect(chip?.textContent).toBe("This image is too large to show here.");
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("reads JPEG dimensions as big-endian before applying the pixel cap", () => {
+    renderImage({
+      src: JPEG_PIXEL_BOMB_DATA_URL,
+      alt: undefined,
+      context: undefined,
+    });
+
+    expect(
+      document.querySelector("[data-assistant-image-failure]")?.textContent,
+    ).toBe("This image is too large to show here.");
     expect(screen.queryByRole("img")).toBeNull();
   });
 
