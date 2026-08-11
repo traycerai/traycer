@@ -752,4 +752,81 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     );
     track.mockRestore();
   });
+
+  it("a settings resolution that REJECTS ends the flow through onCloneFailed, never silently", async () => {
+    // `resolveClonedChatSettings` itself never throws, so this covers the
+    // seams around it (a directory lookup, transient-client construction)
+    // rejecting - without the catch arm the flow just stopped, leaving the
+    // caller's "cloning…" state pending forever with no clone and no
+    // terminal signal.
+    const createChat = vi.fn<CreateChatCommand>();
+    const onCloneFailed = vi.fn();
+    const throwingDirectory: IHostDirectoryService = {
+      ...fakeDirectory([]),
+      findById: () => {
+        throw new Error("directory backend gone");
+      },
+    };
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: throwingDirectory,
+        createChat,
+        onCloneFailed,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).not.toHaveBeenCalled();
+    expect(onCloneFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("a selection that MOVED while settings resolved fails the clone instead of creating on the wrong host", async () => {
+    // The create mutation stamps the ACTIVE host at mutate time. A user who
+    // moves the active host mid-resolution (from a surface that never cancels
+    // this flow) must get a failed clone, not a chat created on the moved-to
+    // host under an open intent that names the original target.
+    const createChat = vi.fn<CreateChatCommand>();
+    const onCloneFailed = vi.fn();
+    const targetEntry: HostDirectoryEntry = {
+      hostId: "target-host",
+      label: "Target",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:0/target",
+      version: "0.0.0-mock",
+      status: "available",
+    };
+    const movedToEntry: HostDirectoryEntry = {
+      hostId: "third-host",
+      label: "Third",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:0/third",
+      version: "0.0.0-mock",
+      status: "available",
+    };
+    const selected = { current: targetEntry };
+    const movingDirectory: IHostDirectoryService = {
+      ...fakeDirectory([targetEntry, movedToEntry]),
+      getSelected: () => selected.current,
+    };
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory: movingDirectory,
+        createChat,
+        onCloneFailed,
+        sourceSettings: null,
+      }),
+    );
+    // The move lands while `resolveSettingsForClone`'s microtask is pending.
+    selected.current = movedToEntry;
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createChat).not.toHaveBeenCalled();
+    expect(onCloneFailed).toHaveBeenCalledTimes(1);
+  });
 });

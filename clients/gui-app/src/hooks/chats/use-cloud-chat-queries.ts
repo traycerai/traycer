@@ -121,6 +121,32 @@ export function isCloudChatListSettled(
   return !query.isEnabled || query.isSuccess || query.isError;
 }
 
+/**
+ * Whether the cloud-chat list's answer can authorize DESTROYING things -
+ * specifically the canvas's record-liveness sweep, which closes tabs it
+ * cannot prove alive and is not undone by a later, better answer.
+ *
+ * Stricter than {@link isCloudChatListSettled} in exactly one arm: a FAILED
+ * list is a settled answer but not an authorizing one. A transient transport
+ * failure that exhausted its retries has produced no evidence about any chat,
+ * and treating its `data === undefined` as "no cloud rows" is what would reap
+ * every restored same-host record-less tab the exemption exists to keep. The
+ * one error that does authorize is `E_HOST_UNSUPPORTED`: an older host will
+ * keep answering it forever, there are no cloud rows to consult through it,
+ * and record policing on local records alone is that host's correct
+ * pre-cloud-list behavior. A disabled query authorizes for the same reason it
+ * settles - nothing will ever answer, and the sweep cannot wait forever.
+ */
+export function cloudChatListAuthorizesRecordSweep(
+  query: Pick<
+    UseQueryResult<unknown, HostRpcError>,
+    "isEnabled" | "isSuccess" | "isError" | "error"
+  >,
+): boolean {
+  if (!query.isEnabled || query.isSuccess) return true;
+  return query.isError && query.error?.code === "E_HOST_UNSUPPORTED";
+}
+
 export interface UseCloudChatReadArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   /**
@@ -339,11 +365,20 @@ export function useCloudChatPayload(args: {
     if (client === null || identity === null || ref === null) {
       throw new Error("Cloud chat payload read ran without its inputs");
     }
-    const response = await client.request("epic.readCloudChatPayload", {
-      ...identity,
-      ref: { kind: ref.kind, sha256: ref.sha256 },
-    });
-    return decodeCloudChatPayload(response, ref, webCryptoSha256Hex);
+    // Same normalization boundary as `useCloudChatRead`: the decode's own
+    // rejections (a digest mismatch, `crypto.subtle` unavailable) are plain
+    // Errors, and this query's declared error type - which the `retry`
+    // predicate below reads `.code` off - is `HostRpcError`. An RPC failure
+    // arrives already typed and passes through untouched.
+    try {
+      const response = await client.request("epic.readCloudChatPayload", {
+        ...identity,
+        ref: { kind: ref.kind, sha256: ref.sha256 },
+      });
+      return await decodeCloudChatPayload(response, ref, webCryptoSha256Hex);
+    } catch (error) {
+      throw toHostRpcError(error, "epic.readCloudChatPayload");
+    }
   };
 
   return useQuery<CloudChatPayloadBytes, HostRpcError>(

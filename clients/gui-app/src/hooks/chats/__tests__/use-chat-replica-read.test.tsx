@@ -104,7 +104,7 @@ describe("useChatReplicaRead degrade path", () => {
     expect(requestCount.value).toBe(2);
   });
 
-  it("reads an E_HOST_UNSUPPORTED rejection as no replica, without surfacing an error", async () => {
+  it("reads an E_HOST_UNSUPPORTED rejection as no replica, surfacing the error without retrying", async () => {
     const fixture = createFixture();
     fixture.client.bind(mockLocalHostEntry);
     fixture.client.setRequestContext(
@@ -152,7 +152,11 @@ function createFixture(): {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
+    // Retries ON at the client level, deliberately: the single-request
+    // assertion is about the HOOK's own `retry` predicate refusing
+    // E_HOST_UNSUPPORTED, and a client that never retries anything would keep
+    // that assertion green even with the predicate deleted.
+    defaultOptions: { queries: { retry: 3, retryDelay: 0, staleTime: 0, gcTime: 0 } },
   });
   const requestCount = { value: 0 };
   const client = new HostClient<HostRpcRegistry>({

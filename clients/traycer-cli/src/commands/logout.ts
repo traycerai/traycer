@@ -44,14 +44,22 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   // AFTER the delete is confirmed, and awaited: unlike the GUI there is no
   // process left to finish the work, so a fire-and-forget clear here would race
   // the command's own exit.
-  await clearDiskChatPartCache(cliChatPartCacheDir());
+  //
+  // A clear that FAILS does not fail the logout - the credential is already
+  // deleted and re-running logout could not improve on that - but it must not
+  // be silent either: the bytes it names are exactly what the clear exists to
+  // remove, so the user is told what remains and where, and `data` says so for
+  // scripts.
+  const cachePath = cliChatPartCacheDir();
+  const cacheClearError = await clearDiskChatPartCache(cachePath);
+  const loggedOutLine = hadSession ? "Logged out." : "Not logged in.";
   return {
-    data: { loggedOut: hadSession },
+    data: { loggedOut: hadSession, chatCacheCleared: cacheClearError === null },
     human: ctx.runtime.json
       ? null
-      : hadSession
-        ? "Logged out."
-        : "Not logged in.",
+      : cacheClearError === null
+        ? loggedOutLine
+        : `${loggedOutLine} The cached published-chat content at ${cachePath} could not be removed (${cacheClearError.message}); delete that directory manually to finish clearing local data.`,
     exitCode: 0,
   };
 };

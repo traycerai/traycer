@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 
 /**
  * The row's HOST SCOPE, pinned.
@@ -22,7 +23,13 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-a",
 }));
 
-const reachability = { status: "unreachable", hostLabel: "Tanveer's laptop" };
+// Typed against the hook's own union so the stand-in cannot produce a status
+// the production code has no branch for - an unchecked string here would let a
+// typo silently render the unreachable arm under a "reachable" test name.
+const reachability: { status: HostReachabilityStatus; hostLabel: string } = {
+  status: "unreachable",
+  hostLabel: "Tanveer's laptop",
+};
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => reachability,
@@ -229,7 +236,12 @@ describe("EpicSidebarCloudChatRow", () => {
     it("never leaves a click opening nothing", () => {
       // The shape of the bug rather than one instance of it: whatever the
       // reachability/presence combination, a click must hand the canvas a ref.
-      for (const status of ["reachable", "unreachable", "checking"]) {
+      const statuses: readonly HostReachabilityStatus[] = [
+        "reachable",
+        "unreachable",
+        "checking",
+      ];
+      for (const status of statuses) {
         {
           reachability.status = status;
           renderRow();

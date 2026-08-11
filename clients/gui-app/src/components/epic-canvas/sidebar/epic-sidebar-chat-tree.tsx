@@ -1122,19 +1122,19 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const ownerUserId = useEpicNodeOwnerUserId(nodeId);
-  const opensPublishedCopy =
-    openableType === "chat" &&
-    ownerHostId !== null &&
-    ownerUserId !== null &&
-    ownerReachability.status === "unreachable";
+  const opensPublishedCopy = chatRowOpensPublishedCopy({
+    isChat: openableType === "chat",
+    ownerHostId,
+    ownerUserId,
+    ownerIsUnreachable: ownerReachability.status === "unreachable",
+  });
   const openRef = useCallback(
     () =>
-      // No re-checking `ownerHostId` / `ownerUserId` here: both null checks
-      // are already inside `opensPublishedCopy`, and TypeScript carries that
-      // narrowing through the aliased condition - so repeating them is not
-      // defence in depth, it is dead code that reads as though the flag alone
-      // were insufficient.
-      opensPublishedCopy
+      // The null re-checks below are for the COMPILER, not for the logic:
+      // `chatRowOpensPublishedCopy` guarantees both are non-null whenever it
+      // returns true, but that fact lives behind the function call where
+      // TypeScript's narrowing cannot follow it.
+      opensPublishedCopy && ownerHostId !== null && ownerUserId !== null
         ? makePublishedChatTileRef({
             taskId: epicId,
             chatId: nodeId,
@@ -2178,6 +2178,55 @@ interface ChatRowButtonProps {
  */
 const ARCHIVED_ROW_CLASS = "opacity-55";
 
+/**
+ * Whether a chat row's click opens the published copy instead of a live tab.
+ *
+ * ONE predicate for the two components that must agree on the answer:
+ * `ChatNode` builds the tile ref from it and `ChatRowButton` renders the lock
+ * (and its "opens read-only" tooltip) from it. They started as two inlined
+ * copies and drifted - the button showed the lock for a record with no owner
+ * user while the click fell back to a live ref, promising a read-only copy and
+ * then dialing the dead host - so the decision lives here and both read it.
+ */
+export function chatRowOpensPublishedCopy(input: {
+  readonly isChat: boolean;
+  readonly ownerHostId: string | null;
+  readonly ownerUserId: string | null;
+  readonly ownerIsUnreachable: boolean;
+}): boolean {
+  return (
+    input.isChat &&
+    input.ownerHostId !== null &&
+    input.ownerUserId !== null &&
+    input.ownerIsUnreachable
+  );
+}
+
+/**
+ * The row button's accessible name. Its explicit `aria-label` replaces the
+ * subtree as the name, so every state a glyph inside the row shows visually
+ * (archived prefix, offline lock) has to be restated here or a keyboard /
+ * screen-reader user never receives it - the lock's tooltip is hover-or-focus
+ * on a trigger that is not focusable.
+ */
+function chatRowAriaLabel(input: {
+  readonly nodeName: string;
+  readonly isArchived: boolean;
+  readonly offlineHostLabel: string | null;
+}): string {
+  const stateSuffix = [
+    input.isArchived ? "archived" : null,
+    input.offlineHostLabel !== null
+      ? `on ${input.offlineHostLabel}, offline, opens read-only`
+      : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(", ");
+  return stateSuffix.length > 0
+    ? `${input.nodeName}, ${stateSuffix}`
+    : input.nodeName;
+}
+
 // Only chats and terminal-agents own a resource-tracked process tree; other
 // node kinds (specs, tickets, …) never carry a resource snapshot.
 function resourceOwnerKindForNode(
@@ -2259,14 +2308,18 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // whose owner host is unreachable is readonly here (its click opens the
   // published copy), and the row must say so before the click. State, not
   // provenance - reachable-owner rows stay lock-free whatever host they
-  // live on.
+  // live on. The SAME predicate `ChatNode` builds the click's ref from, so
+  // the lock can never promise a published copy the click will not open.
   const ownerReachability = useHostReachability(
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
-  const showUnreachableLock =
-    artifactType === "chat" &&
-    ownerHostId !== null &&
-    ownerReachability.status === "unreachable";
+  const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
+  const showUnreachableLock = chatRowOpensPublishedCopy({
+    isChat: artifactType === "chat",
+    ownerHostId,
+    ownerUserId: rowOwnerUserId,
+    ownerIsUnreachable: ownerReachability.status === "unreachable",
+  });
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       sourceHostId === null
@@ -2384,7 +2437,13 @@ function ChatRowButton(props: ChatRowButtonProps) {
       type="button"
       // Explicit, so the row's accessible name is its title plus archive state
       // rather than a concatenation of every resource chip and timestamp.
-      aria-label={isArchived ? `${nodeName}, archived` : nodeName}
+      aria-label={chatRowAriaLabel({
+        nodeName,
+        isArchived,
+        offlineHostLabel: showUnreachableLock
+          ? ownerReachability.hostLabel
+          : null,
+      })}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-artifact-type={artifactType}
       className={rowClassName}
@@ -2422,7 +2481,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"
                 data-testid={`epic-sidebar-tree-lock-${nodeId}`}
-                aria-label={`On ${ownerReachability.hostLabel}, offline`}
+                // Decoration: the row button's explicit `aria-label` REPLACES
+                // its subtree as the accessible name, so a label here could
+                // never reach assistive technology - the offline state rides
+                // the row's own name instead (see `chatRowAriaLabel`).
+                aria-hidden
               />
             </TooltipWrapper>
           ) : null}

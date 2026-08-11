@@ -16,9 +16,10 @@ import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostClient } from "@/lib/host";
 import {
-  isCloudChatListSettled,
+  cloudChatListAuthorizesRecordSweep,
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -433,26 +434,36 @@ export function useEpicRouteSynchronization(
   // sync rather than by mutation callbacks. `isTileRefRecordLive` is the same
   // predicate back/forward's preview-reopen path uses before restoring a
   // closed tile, so "is this tile's record gone" is answered in one place.
-  // An UNSETTLED cloud list is not an empty one, and this decision cannot tell
-  // the difference from `data` alone: while the list is in flight every cloud
-  // row reads as absent, which is exactly the never-adopted same-host chat the
-  // exemption below exists for - and closing its tab is not undoable by the
-  // response that would have saved it.
+  // An UNANSWERED cloud list is not an empty one, and this decision cannot
+  // tell the difference from `data` alone: while the list is in flight (or
+  // after it FAILED on a transient transport error) every cloud row reads as
+  // absent, which is exactly the never-adopted same-host chat the exemption
+  // below exists for - and closing its tab is not undoable by the response
+  // that would have saved it.
   //
-  // The predicate is the query's own, not `isSuccess || isError` spelled out
-  // here: a failed list is a settled answer (an older host will keep answering
-  // `E_HOST_UNSUPPORTED`), and so is a DISABLED one - with no client or no
-  // resolved viewer nothing will ever answer, and gating on the two flags alone
-  // left record policing switched off for as long as that lasted.
-  const cloudChatsSettled = isCloudChatListSettled(cloudChats);
+  // The predicate is the query's own, not flags spelled out here, and it is
+  // the sweep-authorizing one rather than plain settledness: a transiently
+  // failed list is settled but has produced no evidence about any chat, so it
+  // must not authorize closing tabs. `E_HOST_UNSUPPORTED` and a DISABLED
+  // query DO authorize - nothing will ever answer through either, and record
+  // policing on local records alone is the correct degraded behavior.
+  const cloudChatsAuthorizeSweep = cloudChatListAuthorizesRecordSweep(cloudChats);
   useEffect(() => {
     if (!snapshotLoaded) return;
-    if (!cloudChatsSettled) return;
+    if (!cloudChatsAuthorizeSweep) return;
     if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
+    // VIEWER-OWNED rows only, matching `usePublishedChatFallbackRef`'s own
+    // filter: `chatId` is host-minted and the list carries collaborators'
+    // rows too, so an id-only set could keep a deleted viewer-owned tab open
+    // on the strength of a collaborator's row - a row the substitution
+    // resolver would then (correctly) refuse to serve, leaving the tab
+    // permanently loading instead of closed.
     const cloudKnownIds = new Set(
-      (cloudChats.data?.chats ?? []).map((chat) => chat.identity.chatId),
+      (cloudChats.data?.chats ?? [])
+        .filter(cloudRowIsViewersOwn)
+        .map((chat) => chat.identity.chatId),
     );
     const isCloudKnown = (id: string) => cloudKnownIds.has(id);
     for (const pane of collectPanes(canvas.root)) {
@@ -474,7 +485,7 @@ export function useEpicRouteSynchronization(
     }
   }, [
     snapshotLoaded,
-    cloudChatsSettled,
+    cloudChatsAuthorizeSweep,
     canvas,
     records,
     cloudChats.data,

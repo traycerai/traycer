@@ -128,12 +128,14 @@ describe("clearing", () => {
     await cache.put(DIGEST_A, new Uint8Array([1]));
     await cache.put(DIGEST_B, new Uint8Array([2]));
 
-    await clearDiskChatPartCache(root);
+    // `null` is the success verdict - the clear RETURNS its failure instead
+    // of throwing or swallowing, so logout can report what remains on disk.
+    expect(await clearDiskChatPartCache(root)).toBeNull();
 
     expect(await cache.get(DIGEST_A)).toBeNull();
     await expect(
       clearDiskChatPartCache(join(root, "never-existed")),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
   });
 });
 

@@ -124,6 +124,14 @@ export function cloneChatOnHostSwitch(
   args: CloneChatOnHostSwitchArgs,
 ): CancelFn {
   args.directory.selectById(args.targetHostId);
+  // Whatever the line above actually selected (the target normally; unchanged
+  // when the target has vanished from the directory - that arm deliberately
+  // still proceeds, into ambient fallback). Captured so the dispatch below
+  // can tell "the user moved the active host while we were resolving" apart
+  // from "nothing changed": the create mutation stamps the ACTIVE host at
+  // mutate time, so dispatching after an uncancelled move would create the
+  // chat on a host the open intent does not name.
+  const selectedHostIdAtStart = args.directory.getSelected()?.hostId ?? null;
 
   let cancelled = false;
   let innerCancel: CancelFn | null = null;
@@ -133,6 +141,16 @@ export function cloneChatOnHostSwitch(
     forkSource: CreateChatMutationInput["forkSource"] | null,
   ): void => {
     if (cancelled) return;
+    // The user can move the active host while settings resolution (or the
+    // settings-only retry) is in flight, from a surface that never cancels
+    // this flow - and the create mutation stamps the ACTIVE host at mutate
+    // time. A selection that moved since this flow started would land the
+    // clone on a host the open intent does not name, so the flow ends as a
+    // failure instead of creating on the wrong machine.
+    if ((args.directory.getSelected()?.hostId ?? null) !== selectedHostIdAtStart) {
+      args.onCloneFailed();
+      return;
+    }
     innerCancel = openNewChatInActiveTile({
       epicId: args.epicId,
       tabId: args.tabId,
@@ -195,6 +213,14 @@ export function cloneChatOnHostSwitch(
       // is worse than none, because the host would trust it.
       sourceOwnerUserId: args.sourceOwnerUserId,
     });
+  }).catch(() => {
+    // A settings resolution that REJECTED (a profile lookup's transport
+    // failure, not a mapping miss - those resolve to ambient) has produced
+    // neither settings nor a clone. Without this arm the flow just stops,
+    // which leaves the caller's "cloning…" state pending forever with no
+    // clone and no terminal signal.
+    if (cancelled) return;
+    args.onCloneFailed();
   });
 
   return () => {

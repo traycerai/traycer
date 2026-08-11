@@ -102,12 +102,19 @@ function writeCounter(): number {
 /**
  * Drops the whole store. For a sign-out, and for anyone who wants the disk back.
  *
- * Always safe: every entry is a copy of bytes the cloud still holds.
+ * Always safe: every entry is a copy of bytes the cloud still holds. The
+ * failure is RETURNED, not thrown and not swallowed: by the time logout runs
+ * this its own contract (the credential delete) has already landed, so a
+ * filesystem refusal here must neither crash that nor pass silently - the
+ * caller owes the user an honest report of what remains on disk.
  */
-export async function clearDiskChatPartCache(rootDir: string): Promise<void> {
+export async function clearDiskChatPartCache(
+  rootDir: string,
+): Promise<Error | null> {
   try {
     await rm(rootDir, { recursive: true, force: true });
-  } catch {
-    // Nothing a caller can do about it, and nothing that should fail a sign-out.
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
   }
 }

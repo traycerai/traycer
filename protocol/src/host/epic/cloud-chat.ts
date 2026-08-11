@@ -209,11 +209,29 @@ export type ResolveCloudChatHeadOutcome = z.infer<
   typeof resolveCloudChatHeadOutcomeSchema
 >;
 
-export const resolveCloudChatHeadResponseSchema = z.object({
-  /** Null exactly when `outcome.status === "missing"` - no row, no summary. */
-  chat: cloudChatSummarySchema.nullable(),
-  outcome: resolveCloudChatHeadOutcomeSchema,
-});
+export const resolveCloudChatHeadResponseSchema = z
+  .object({
+    /** Null exactly when `outcome.status === "missing"` - no row, no summary. */
+    chat: cloudChatSummarySchema.nullable(),
+    outcome: resolveCloudChatHeadOutcomeSchema,
+  })
+  // The doc line above is a validated invariant, not prose: a "missing"
+  // outcome with a summary attached (or a resolved outcome without one)
+  // is a malformed response either way, and every consumer branches on
+  // `outcome.status` while reading `chat` - so the contract refuses the
+  // combination rather than letting one consumer discover it at runtime.
+  .superRefine((response, ctx) => {
+    const chatMustBeNull = response.outcome.status === "missing";
+    if ((response.chat === null) !== chatMustBeNull) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["chat"],
+        message: chatMustBeNull
+          ? 'A "missing" outcome carries no summary - `chat` must be null.'
+          : 'A resolved outcome must carry its summary - `chat` must not be null.',
+      });
+    }
+  });
 export type ResolveCloudChatHeadResponse = z.infer<
   typeof resolveCloudChatHeadResponseSchema
 >;
