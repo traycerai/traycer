@@ -34,6 +34,7 @@ type AssistantImageSource =
   | { readonly kind: "https"; readonly src: string }
   | { readonly kind: "data-raster"; readonly src: string }
   | { readonly kind: "data-svg"; readonly src: string }
+  | { readonly kind: "data-oversized"; readonly src: string }
   | { readonly kind: "local"; readonly src: string }
   | { readonly kind: "invalid-data"; readonly src: string }
   | { readonly kind: "unsupported"; readonly src: string };
@@ -76,11 +77,15 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
   }
   if (/^data:/i.test(trimmed)) {
     const match = RASTER_DATA_URL_PATTERN.exec(trimmed);
-    if (
-      match === null ||
-      decodedBase64ByteLength(match[2]) === null ||
-      !hasRasterMagic(match[1], match[2])
-    ) {
+    if (match === null) {
+      return { kind: "invalid-data", src: trimmed };
+    }
+    const byteLength = decodedBase64ByteLength(match[2]);
+    if (byteLength === null) return { kind: "invalid-data", src: trimmed };
+    if (byteLength > MAX_INLINE_IMAGE_BYTES) {
+      return { kind: "data-oversized", src: trimmed };
+    }
+    if (!hasRasterMagic(match[1], match[2])) {
       return { kind: "invalid-data", src: trimmed };
     }
     return { kind: "data-raster", src: trimmed };
@@ -110,7 +115,7 @@ function decodedBase64ByteLength(payload: string): number | null {
   if (payload.endsWith("==")) padding = 2;
   else if (payload.endsWith("=")) padding = 1;
   const byteLength = (payload.length / 4) * 3 - padding;
-  return byteLength <= MAX_INLINE_IMAGE_BYTES ? byteLength : null;
+  return byteLength;
 }
 
 function hasRasterMagic(mediaType: string, payload: string): boolean {
@@ -192,7 +197,16 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
       <AttachmentImageFailure
         alt={props.alt}
         source={source.src}
-        reason="Inline image is invalid or exceeds the 30 MB limit"
+        reason="Couldn't display this image."
+      />
+    );
+  }
+  if (source.kind === "data-oversized") {
+    return (
+      <AttachmentImageFailure
+        alt={props.alt}
+        source={source.src}
+        reason="This image is too large to show here."
       />
     );
   }
@@ -201,7 +215,7 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
       <AttachmentImageFailure
         alt={props.alt}
         source={source.src}
-        reason="Unsupported image source"
+        reason="Couldn't display this image."
       />
     );
   }
@@ -268,9 +282,9 @@ function findResolution(
 function resolutionFailureReason(
   state: "blocked" | "oversized" | "not-found",
 ): string {
-  if (state === "blocked") return "Image blocked by policy";
-  if (state === "oversized") return "Image exceeds the 30 MB limit";
-  return "Image not found";
+  if (state === "blocked") return "Couldn't display this image.";
+  if (state === "oversized") return "This image is too large to show here.";
+  return "This image is no longer available.";
 }
 
 function ResolvedImage(props: {
@@ -323,7 +337,7 @@ function ConsentImageChip(props: {
       <AttachmentImageFailure
         alt={props.alt}
         source={props.source}
-        reason="Image load request failed"
+        reason="Couldn't display this image."
       />
     );
   }

@@ -1,10 +1,8 @@
 import { useState, type ReactNode } from "react";
-import { ImageOff } from "lucide-react";
 import {
   AddImageToArtifactButton,
   type AddToArtifactImageSource,
 } from "@/components/artifacts/add-image-to-artifact-button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { ImageLightbox } from "./image-lightbox";
@@ -28,27 +26,14 @@ export function AttachmentImageFailure(props: {
   readonly source: string;
   readonly reason: string;
 }): ReactNode {
-  const chip = (
+  return (
     <span
-      className="my-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-ui-sm text-muted-foreground"
+      className="my-2 inline-block max-w-full text-ui-sm leading-relaxed text-muted-foreground"
       role="status"
       data-assistant-image-failure
     >
-      <ImageOff className="size-3.5 shrink-0 text-destructive" aria-hidden />
-      <span className="truncate">
-        {props.alt.length > 0 ? props.alt : "Image"}: {props.reason}
-      </span>
+      {props.reason}
     </span>
-  );
-  return (
-    <TooltipWrapper
-      label={`${props.reason}: ${props.source}`}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      {chip}
-    </TooltipWrapper>
   );
 }
 
@@ -68,7 +53,11 @@ export function AttachmentImage(props: {
         <AttachmentImageFailure
           alt={props.alt}
           source={props.src}
-          reason="Image could not be loaded"
+          reason={
+            props.mediaType === "image/svg+xml"
+              ? "Couldn't display this SVG."
+              : "Couldn't display this image."
+          }
         />
         {props.addToArtifactSource === null ? null : (
           <AddImageToArtifactButton
