@@ -21,10 +21,11 @@ import {
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
+import type { ArtifactImagePreparation } from "@/hooks/artifacts/use-artifact-image-operations";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
 
 const prepareBytes = vi.hoisted(() =>
-  vi.fn((_bytes: Uint8Array) =>
+  vi.fn((_bytes: Uint8Array): Promise<ArtifactImagePreparation> =>
     Promise.resolve({
       ok: true as const,
       operationId: "op-1",
@@ -105,6 +106,45 @@ function imageAlts(editor: Editor): string[] {
     return true;
   });
   return alts;
+}
+
+function imageMediaTypes(editor: Editor): string[] {
+  const mediaTypes: string[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "image") {
+      mediaTypes.push(String(node.attrs.mediaType ?? ""));
+    }
+    return true;
+  });
+  return mediaTypes;
+}
+
+function countFragmentImages(fragment: Y.XmlFragment | Y.XmlElement): number {
+  let count = 0;
+  for (const child of fragment.toArray()) {
+    if (!(child instanceof Y.XmlElement)) continue;
+    if (child.nodeName === "image") count += 1;
+    count += countFragmentImages(child);
+  }
+  return count;
+}
+
+function editorFragment(editor: Editor): Y.XmlFragment {
+  const collaboration = editor.extensionManager.extensions.find(
+    (extension) => extension.name === "collaboration",
+  );
+  const options: unknown = collaboration?.options;
+  if (typeof options !== "object" || options === null) {
+    throw new Error("expected collaboration options");
+  }
+  if (!("fragment" in options)) {
+    throw new Error("expected collaboration fragment option");
+  }
+  const fragment: unknown = options.fragment;
+  if (!(fragment instanceof Y.XmlFragment)) {
+    throw new Error("expected collaboration fragment");
+  }
+  return fragment;
 }
 
 function tinyPngFile(name: string): File {
@@ -341,10 +381,13 @@ describe("useArtifactImagePaste", () => {
       result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
     });
 
-    await waitFor(() => {
-      expect(reportableErrorToast).toHaveBeenCalled();
-    });
-    expect(commit).toHaveBeenCalledTimes(3);
+    await waitFor(
+      () => {
+        expect(reportableErrorToast).toHaveBeenCalled();
+      },
+      { timeout: 3_000 },
+    );
+    expect(commit).toHaveBeenCalledTimes(7);
     expect(countImages(editor)).toBe(0);
     editor.destroy();
   });
@@ -401,6 +444,76 @@ describe("useArtifactImagePaste", () => {
     expect(abort).not.toHaveBeenCalledWith("artifact-1", "op-2");
     expect(abort).not.toHaveBeenCalledWith("artifact-1", "op-3");
     editor.destroy();
+  });
+
+  it("tracks rollback by inserted node instead of matching image attributes", async () => {
+    let prepareCount = 0;
+    prepareBytes.mockImplementation(() => {
+      prepareCount += 1;
+      return Promise.resolve({
+        ok: true as const,
+        operationId: `op-${prepareCount}`,
+        attachmentHash: "same-hash",
+        mediaType:
+          prepareCount === 1 ? ("image/png" as const) : ("image/jpeg" as const),
+        src: "images/same.png",
+      });
+    });
+    commit.mockImplementation((_artifactId: string, operationId: string) =>
+      operationId === "op-1"
+        ? Promise.resolve(
+            artifactImageFinishResponseFixtures.commit.unknownOperation,
+          )
+        : Promise.resolve(artifactImageFinishResponseFixtures.commit.committed),
+    );
+
+    const editor = makeEditor();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([
+        tinyPngFile("same.png"),
+        tinyPngFile("same.png"),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(reportableErrorToast).toHaveBeenCalled();
+      expect(countImages(editor)).toBe(1);
+    });
+    expect(imageMediaTypes(editor)).toEqual(["image/jpeg"]);
+    editor.destroy();
+  });
+
+  it("rolls back through Yjs after the editor view is destroyed", async () => {
+    let rejectCommit: (reason: unknown) => void = () => {};
+    commit.mockImplementation(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectCommit = reject;
+        }),
+    );
+    const editor = makeEditor();
+    const fragment = editorFragment(editor);
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+    });
+    await waitFor(() => expect(countImages(editor)).toBe(1));
+    editor.destroy();
+    rejectCommit(new Error("commit failed"));
+
+    await waitFor(
+      () => {
+        expect(countFragmentImages(fragment)).toBe(0);
+      },
+      { timeout: 3_000 },
+    );
   });
 
   it("rejects oversized images before prepare and classifies non-images as skips", async () => {

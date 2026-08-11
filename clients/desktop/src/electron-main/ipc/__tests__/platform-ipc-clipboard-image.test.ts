@@ -4,7 +4,6 @@ import {
   clipboardImageMediaTypes,
   type ClipboardImageMediaType,
 } from "@traycer-clients/shared/images/clipboard-image-media";
-import { supportedImageMediaTypes } from "@traycer/protocol/persistence/epic/images";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
 import { registerPlatformIpc } from "../platform-ipc";
@@ -161,79 +160,6 @@ function jpegWithDimensions(width: number, height: number): ArrayBuffer {
   return bytes.buffer;
 }
 
-/** GIF89a logical screen descriptor with given dimensions. */
-function gifWithDimensions(width: number, height: number): ArrayBuffer {
-  const bytes = new Uint8Array(13);
-  bytes.set([0x47, 0x49, 0x46, 0x38, 0x39, 0x61], 0);
-  bytes[6] = width & 0xff;
-  bytes[7] = (width >> 8) & 0xff;
-  bytes[8] = height & 0xff;
-  bytes[9] = (height >> 8) & 0xff;
-  return bytes.buffer;
-}
-
-/** WebP VP8X canvas with given dimensions (stores width-1 / height-1). */
-function webpVp8xWithDimensions(width: number, height: number): ArrayBuffer {
-  const bytes = new Uint8Array(30);
-  const view = new DataView(bytes.buffer);
-  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
-  view.setUint32(4, 22, true);
-  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
-  bytes.set([0x56, 0x50, 0x38, 0x58], 12);
-  view.setUint32(16, 10, true);
-  const canvasW = width - 1;
-  const canvasH = height - 1;
-  bytes[24] = canvasW & 0xff;
-  bytes[25] = (canvasW >> 8) & 0xff;
-  bytes[26] = (canvasW >> 16) & 0xff;
-  bytes[27] = canvasH & 0xff;
-  bytes[28] = (canvasH >> 8) & 0xff;
-  bytes[29] = (canvasH >> 16) & 0xff;
-  return bytes.buffer;
-}
-
-/** WebP VP8 lossy frame header with 14-bit dimensions. */
-function webpVp8WithDimensions(width: number, height: number): ArrayBuffer {
-  const payloadLen = 10;
-  const bytes = new Uint8Array(20 + payloadLen);
-  const view = new DataView(bytes.buffer);
-  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
-  view.setUint32(4, 12 + payloadLen, true);
-  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
-  bytes.set([0x56, 0x50, 0x38, 0x20], 12); // "VP8 "
-  view.setUint32(16, payloadLen, true);
-  bytes[20] = 0x00;
-  bytes[21] = 0x00;
-  bytes[22] = 0x00;
-  bytes[23] = 0x9d;
-  bytes[24] = 0x01;
-  bytes[25] = 0x2a;
-  view.setUint16(26, width & 0x3fff, true);
-  view.setUint16(28, height & 0x3fff, true);
-  return bytes.buffer;
-}
-
-/** WebP VP8L lossless header with encoded dimensions. */
-function webpVp8lWithDimensions(width: number, height: number): ArrayBuffer {
-  const payloadLen = 5;
-  const bytes = new Uint8Array(20 + payloadLen);
-  const view = new DataView(bytes.buffer);
-  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
-  view.setUint32(4, 12 + payloadLen, true);
-  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
-  bytes.set([0x56, 0x50, 0x38, 0x4c], 12); // "VP8L"
-  view.setUint32(16, payloadLen, true);
-  bytes[20] = 0x2f;
-  const w = width - 1;
-  const h = height - 1;
-  const bits = w | (h << 14);
-  bytes[21] = bits & 0xff;
-  bytes[22] = (bits >> 8) & 0xff;
-  bytes[23] = (bits >> 16) & 0xff;
-  bytes[24] = (bits >> 24) & 0xff;
-  return bytes.buffer;
-}
-
 const ALLOWLISTED_IMAGE_CASES: ReadonlyArray<{
   readonly type: ClipboardImageMediaType;
   readonly bytes: ArrayBuffer;
@@ -248,26 +174,6 @@ const ALLOWLISTED_IMAGE_CASES: ReadonlyArray<{
     type: "image/jpeg",
     bytes: jpegWithDimensions(32, 24),
     label: "JPEG SOF0",
-  },
-  {
-    type: "image/gif",
-    bytes: gifWithDimensions(32, 24),
-    label: "GIF89a screen",
-  },
-  {
-    type: "image/webp",
-    bytes: webpVp8WithDimensions(32, 24),
-    label: "WebP VP8",
-  },
-  {
-    type: "image/webp",
-    bytes: webpVp8lWithDimensions(32, 24),
-    label: "WebP VP8L",
-  },
-  {
-    type: "image/webp",
-    bytes: webpVp8xWithDimensions(32, 24),
-    label: "WebP VP8X",
   },
 ];
 
@@ -291,12 +197,8 @@ describe("platform IPC clipboard.writeImage validation", () => {
     },
   );
 
-  it("derives the raster allowlist from the protocol media list, excluding only SVG", () => {
-    expect(clipboardImageMediaTypes).toEqual(
-      supportedImageMediaTypes.filter(
-        (mediaType) => mediaType !== "image/svg+xml",
-      ),
-    );
+  it("keeps the native clipboard allowlist to formats Electron decodes", () => {
+    expect(clipboardImageMediaTypes).toEqual(["image/png", "image/jpeg"]);
   });
 
   it("rejects a non-object payload without decoding", async () => {
@@ -316,6 +218,8 @@ describe("platform IPC clipboard.writeImage validation", () => {
       "text/plain",
       "image/bmp",
       "image/tiff",
+      "image/gif",
+      "image/webp",
       "image/svg+xml",
       "image/heic",
       "image/x-icon",

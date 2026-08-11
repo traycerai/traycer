@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import type { Editor } from "@tiptap/core";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
+import * as Y from "yjs";
 import { useComposerPasteEvents } from "@/hooks/composer/use-composer-paste";
 import type {
   ComposerImageConversionResult,
@@ -26,10 +27,54 @@ export interface ArtifactImagePasteResult {
   readonly paste: UseComposerPasteResult;
 }
 
+const insertedArtifactImages = new WeakMap<
+  PreparedArtifactImage,
+  Y.XmlElement
+>();
+
+function collaborationFragment(editor: Editor): Y.XmlFragment | null {
+  const collaboration = editor.extensionManager.extensions.find(
+    (extension) => extension.name === "collaboration",
+  );
+  const options: unknown = collaboration?.options;
+  if (typeof options !== "object" || options === null) return null;
+  if (!("fragment" in options)) return null;
+  const fragment: unknown = options.fragment;
+  return fragment instanceof Y.XmlFragment ? fragment : null;
+}
+
+function imageElements(parent: Y.XmlFragment | Y.XmlElement): Y.XmlElement[] {
+  const images: Y.XmlElement[] = [];
+  for (const child of parent.toArray()) {
+    if (!(child instanceof Y.XmlElement)) continue;
+    if (child.nodeName === "image") images.push(child);
+    images.push(...imageElements(child));
+  }
+  return images;
+}
+
+function removeYImage(image: Y.XmlElement): boolean {
+  const parent = image.parent;
+  if (!(parent instanceof Y.XmlFragment || parent instanceof Y.XmlElement)) {
+    return false;
+  }
+  const index = parent.toArray().indexOf(image);
+  if (index < 0) return false;
+  parent.delete(index, 1);
+  return true;
+}
+
 function removeArtifactImage(
-  editor: Editor,
+  editor: Editor | null,
   image: PreparedArtifactImage,
 ): void {
+  const inserted = insertedArtifactImages.get(image);
+  if (inserted !== undefined) {
+    insertedArtifactImages.delete(image);
+    removeYImage(inserted);
+    return;
+  }
+  if (editor === null || editor.isDestroyed) return;
   const positions: number[] = [];
   editor.state.doc.descendants((node, pos) => {
     if (
@@ -144,9 +189,7 @@ export function useArtifactImagePaste(
             result.reason instanceof Error
               ? result.reason
               : new Error("The artifact image could not be committed.");
-          if (editor !== null && !editor.isDestroyed) {
-            removeArtifactImage(editor, image);
-          }
+          removeArtifactImage(editor, image);
         }
         if (failure !== null) throw failure;
       },
@@ -173,6 +216,11 @@ export function useArtifactImagePaste(
   const insertAttrs = useCallback(
     (images: ReadonlyArray<PreparedArtifactImage>): number => {
       if (editor === null || editor.isDestroyed || !editor.isEditable) return 0;
+      const fragment = collaborationFragment(editor);
+      const existingImages =
+        fragment === null
+          ? new Set<Y.XmlElement>()
+          : new Set(imageElements(fragment));
       const imageContent = images.map((image) => ({
         type: "image",
         attrs: {
@@ -196,6 +244,15 @@ export function useArtifactImagePaste(
             : imageContent,
         )
         .run();
+      if (inserted && fragment !== null) {
+        imageElements(fragment)
+          .filter((image) => !existingImages.has(image))
+          .slice(0, images.length)
+          .forEach((image, index) => {
+            const prepared = images[index];
+            insertedArtifactImages.set(prepared, image);
+          });
+      }
       return inserted ? images.length : 0;
     },
     [editor],
