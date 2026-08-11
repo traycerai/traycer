@@ -78,6 +78,13 @@ export function removeAppLocalCompletionReceipts(
     .forEach((receipt) => window.localStorage.removeItem(receipt.key));
 }
 
+export function clearAppLocalCompletionReceipts(userId: string): void {
+  const prefix = `${appLocalNotificationCompletionReceiptPrefix(userId)}:`;
+  storageKeys()
+    .filter((key) => key.startsWith(prefix))
+    .forEach((key) => window.localStorage.removeItem(key));
+}
+
 function removeOldestReceipts(
   receipts: ReadonlyArray<StoredCompletionReceipt>,
   cap: number,

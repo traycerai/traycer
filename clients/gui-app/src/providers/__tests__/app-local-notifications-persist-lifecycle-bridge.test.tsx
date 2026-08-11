@@ -12,6 +12,10 @@ import {
   hasAppLocalDisplayReceipt,
   recordAppLocalDisplayReceipt,
 } from "@/lib/notifications/app-local-display-receipts";
+import {
+  hasAppLocalCompletionReceipt,
+  recordAppLocalCompletionReceipt,
+} from "@/lib/notifications/app-local-completion-receipts";
 
 function entry(id: string): AppLocalNotificationEntry {
   return {
@@ -180,7 +184,22 @@ describe("<AppLocalNotificationsPersistLifecycleBridge />", () => {
       notificationId: "alice",
       updatedAt: 1,
     };
+    const completionReceipt = {
+      userId: "user-a",
+      originHostId: "host-a",
+      id: "done-alice",
+      occurrenceKey: "done-alice@1",
+      observedAt: 1,
+    };
+    const otherUserCompletionReceipt = {
+      ...completionReceipt,
+      userId: "user-b",
+      id: "done-bob",
+      occurrenceKey: "done-bob@1",
+    };
     recordAppLocalDisplayReceipt(receipt);
+    recordAppLocalCompletionReceipt(completionReceipt);
+    recordAppLocalCompletionReceipt(otherUserCompletionReceipt);
 
     render(
       <AppLocalNotificationsPersistLifecycleBridge>
@@ -209,6 +228,10 @@ describe("<AppLocalNotificationsPersistLifecycleBridge />", () => {
       expect(useAppLocalNotificationsStore.getState().activeUserId).toBeNull();
       expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
       expect(hasAppLocalDisplayReceipt(receipt)).toBe(false);
+      expect(hasAppLocalCompletionReceipt(completionReceipt)).toBe(false);
+      expect(hasAppLocalCompletionReceipt(otherUserCompletionReceipt)).toBe(
+        true,
+      );
     });
 
     useAppLocalNotificationsStore.getState().upsert(entry("ignored"));
