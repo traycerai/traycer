@@ -4,6 +4,7 @@ import type {
   ImageGenerationResult,
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { AddImageToArtifactButton } from "@/components/artifacts/add-image-to-artifact-button";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { cn } from "@/lib/utils";
 import { ImageLightbox } from "./image-lightbox";
@@ -234,6 +235,11 @@ function GeneratedImage(props: {
 
   return (
     <figure className="relative w-full bg-muted/30" style={{ aspectRatio }}>
+      <AddImageToArtifactButton
+        source={{ kind: "client", url: image.src }}
+        alt={alt.length > 0 ? alt : "Generated image"}
+        className="absolute right-2 top-2 z-10"
+      />
       <ImageLightbox
         src={image.src}
         alt={alt.length > 0 ? alt : "Generated image"}

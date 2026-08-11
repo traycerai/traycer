@@ -1,5 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
+import {
+  AddImageToArtifactButton,
+  type AddToArtifactImageSource,
+} from "@/components/artifacts/add-image-to-artifact-button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { ImageLightbox } from "./image-lightbox";
@@ -51,21 +55,38 @@ export function AttachmentImage(props: {
   readonly src: string;
   readonly mediaType: string | null;
   readonly suggestedName: string | null;
+  readonly addToArtifactSource: AddToArtifactImageSource | null;
 }): ReactNode {
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
   if (status === "error") {
     return (
-      <AttachmentImageFailure
-        alt={props.alt}
-        source={props.src}
-        reason="Image could not be loaded"
-      />
+      <span className="relative inline-block max-w-full">
+        <AttachmentImageFailure
+          alt={props.alt}
+          source={props.src}
+          reason="Image could not be loaded"
+        />
+        {props.addToArtifactSource === null ? null : (
+          <AddImageToArtifactButton
+            source={props.addToArtifactSource}
+            alt={props.alt}
+            className="absolute right-2 top-2"
+          />
+        )}
+      </span>
     );
   }
   return (
     <div className="relative my-3 w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
+      {props.addToArtifactSource === null ? null : (
+        <AddImageToArtifactButton
+          source={props.addToArtifactSource}
+          alt={props.alt}
+          className="absolute right-2 top-2 z-10"
+        />
+      )}
       {status === "loading" ? (
         <AttachmentImageLoading label="Loading image" />
       ) : null}

@@ -34,6 +34,7 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
         alt={alt}
         mediaType={mediaTypeFromSrc(src)}
         suggestedName={src.split("/").at(-1) ?? null}
+        addToArtifactSource={null}
       />
     );
   }

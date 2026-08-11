@@ -167,6 +167,11 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
           source.kind === "data-raster" ? dataMediaType(source.src) : null
         }
         suggestedName={null}
+        addToArtifactSource={
+          source.kind === "https"
+            ? { kind: "remote", url: source.src }
+            : { kind: "client", url: source.src }
+        }
       />
     );
   }
@@ -178,6 +183,7 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         alt={props.alt}
         mediaType="image/svg+xml"
         suggestedName={null}
+        addToArtifactSource={{ kind: "client", url: source.src }}
       />
     );
   }
@@ -283,6 +289,7 @@ function ResolvedImage(props: {
       alt={props.alt}
       mediaType={props.mediaType}
       suggestedName={null}
+      addToArtifactSource={{ kind: "client", url: image.src }}
     />
   );
 }
