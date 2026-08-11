@@ -2,7 +2,8 @@ import type { HarnessModelRow } from "@/components/home/data/harness-model-searc
 import { Badge } from "@/components/ui/badge";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
-import { Check } from "lucide-react";
+import { Check, ImagePlus } from "lucide-react";
+import { guiAgentModelCapabilitiesSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
 interface HarnessModelPickerItemProps {
   readonly idPrefix: string;
@@ -36,6 +37,11 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
   // no notice), so the badge never renders without the tooltip behind it.
   const hasDeprecationNotice =
     row.deprecationNotice !== null && row.deprecationNotice.length > 0;
+  const supportsImageGeneration = modelSupportsImageGeneration(row);
+  const tooltipLabel = modelRowTooltipLabel(
+    row.deprecationNotice,
+    supportsImageGeneration,
+  );
 
   return (
     // Anchored to the row button itself (not the inner Badge) so the notice is
@@ -46,7 +52,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
     // TooltipWrapper) - never add tabIndex to the Badge to "fix" this instead,
     // that nests a focusable element inside the button, which is invalid.
     <TooltipWrapper
-      label={row.deprecationNotice}
+      label={tooltipLabel}
       side="top"
       sideOffset={6}
       align="center"
@@ -88,6 +94,16 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
             Deprecated
           </Badge>
         ) : null}
+        {supportsImageGeneration ? (
+          <Badge
+            variant="outline"
+            className="h-5 shrink-0 gap-1 px-1.5 text-muted-foreground"
+            aria-label="Supports image generation"
+          >
+            <ImagePlus data-icon="inline-start" aria-hidden />
+            Image
+          </Badge>
+        ) : null}
         {capacityLabel === null ? null : (
           <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-ui-xs text-muted-foreground">
             {capacityLabel}
@@ -101,6 +117,28 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
       </button>
     </TooltipWrapper>
   );
+}
+
+function modelSupportsImageGeneration(row: HarnessModelRow): boolean {
+  const parsed = guiAgentModelCapabilitiesSchema.safeParse(
+    row.model.metadata.capabilities,
+  );
+  return parsed.success && parsed.data.imageGeneration;
+}
+
+function modelRowTooltipLabel(
+  deprecationNotice: string | null,
+  supportsImageGeneration: boolean,
+): string | null {
+  const imageLabel = supportsImageGeneration
+    ? "Supports image generation"
+    : null;
+  if (deprecationNotice === null || deprecationNotice.length === 0) {
+    return imageLabel;
+  }
+  return imageLabel === null
+    ? deprecationNotice
+    : `${deprecationNotice} · ${imageLabel}`;
 }
 
 function modelRowElementId(idPrefix: string, rowId: string): string {
