@@ -1214,8 +1214,7 @@ function ModelPacksSection(props: {
             onClose={props.onCloseEditor}
           />
         </div>
-      ) : null}
-      {props.showCreateForm ? (
+      ) : props.showCreateForm ? (
         <div className="mt-3">
           <CreateModelGroupForm
             existingNames={props.packNames}
@@ -1223,8 +1222,118 @@ function ModelPacksSection(props: {
             onCancel={props.onCloseCreate}
           />
         </div>
-      ) : null}
+      ) : (
+        <PackPreview name={selectedPack} />
+      )}
     </details>
+  );
+}
+
+/** Read-only tier/model listing for the selected pack (shown on chip click). */
+function PackPreview(props: { readonly name: string }) {
+  const runnerHost = useRunnerHost();
+  const [group, setGroup] = useState<TraycerModelGroup | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setGroup(null);
+    setFailed(false);
+    const cli = runnerHost.traycerCli;
+    if (cli === null) {
+      setFailed(true);
+      return;
+    }
+    let cancelled = false;
+    cli
+      .orchestrationGroupShow({ name: props.name })
+      .then((g) => {
+        if (cancelled) return;
+        if (g === null) setFailed(true);
+        else setGroup(g);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runnerHost, props.name]);
+
+  if (failed) {
+    return (
+      <p className="mt-3 text-ui-xs text-muted-foreground">
+        Couldn’t load this preset.
+      </p>
+    );
+  }
+  if (group === null) {
+    return (
+      <p className="mt-3 text-ui-xs text-muted-foreground">Loading…</p>
+    );
+  }
+
+  const tierOrder = ["premium", "executor", "economic"];
+  const tierNames = [
+    ...tierOrder.filter((t) => t in group.tiers),
+    ...Object.keys(group.tiers).filter((t) => !tierOrder.includes(t)),
+  ];
+
+  return (
+    <div
+      className="mt-3 flex flex-col gap-3"
+      data-testid="pack-preview"
+    >
+      {group.description !== "" ? (
+        <p className="text-ui-xs text-muted-foreground">{group.description}</p>
+      ) : null}
+      {tierNames.map((tierName) => {
+        const tier = group.tiers[tierName];
+        return (
+          <div key={tierName}>
+            <div className="mb-1 flex items-center gap-2">
+              <Badge variant="outline" className="text-ui-xs">
+                {qualityLabel(tierName)}
+              </Badge>
+              {tier.description !== "" ? (
+                <span className="text-ui-xs text-muted-foreground">
+                  {tier.description}
+                </span>
+              ) : null}
+            </div>
+            <div className="flex flex-col gap-1">
+              {tier.models.map((m, i) => (
+                <div
+                  key={`${m.harnessId}/${m.model}`}
+                  className="flex items-center gap-2 rounded-md border border-border/30 px-2.5 py-1.5 text-ui-xs"
+                >
+                  <span className="text-muted-foreground">{i + 1}.</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground">
+                    {m.harnessId}
+                  </span>
+                  <code className="font-mono">{m.model}</code>
+                  {m.effort !== null && m.effort !== "" ? (
+                    <Badge variant="outline" className="text-ui-xs">
+                      {m.effort}
+                    </Badge>
+                  ) : null}
+                  <Badge variant="secondary" className="text-ui-xs">
+                    {m.family}
+                  </Badge>
+                  {m.note !== "" ? (
+                    <span className="ml-auto truncate text-muted-foreground">
+                      {m.note}
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      <p className="text-ui-xs text-muted-foreground">
+        Read-only. Use the pencil to edit.
+      </p>
+    </div>
   );
 }
 
