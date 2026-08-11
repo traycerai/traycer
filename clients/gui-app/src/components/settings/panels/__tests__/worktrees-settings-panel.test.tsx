@@ -3984,7 +3984,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       }),
     );
 
-    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
 
     expect(
       screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),

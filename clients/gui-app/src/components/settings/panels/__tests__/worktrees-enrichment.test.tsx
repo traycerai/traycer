@@ -362,7 +362,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
 
     act(() => {
       result.current.reportVisiblePaths(["/wt/a"]);
-      rerender({ client: null, reachable: false, hostId: "host-b" });
+      rerender({ client: fixture.client, reachable: true, hostId: "host-b" });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
