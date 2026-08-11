@@ -40,6 +40,7 @@ import {
   canReenableCustomProvider,
   customProviderValuesOf,
   type CustomProviderValues,
+  type StoredCustomKeys,
 } from "./model-provider-custom-draft";
 import { ProviderCustomModelProviderDialog } from "./provider-custom-model-provider-dialog";
 import {
@@ -57,6 +58,38 @@ import { ProviderListSearchEmptyState } from "./provider-list-search";
 import { ProviderModelProviderConnectDialog } from "./provider-model-provider-connect-dialog";
 
 const EMPTY_ENTRIES: readonly ModelProviderEntry[] = [];
+
+/** Nothing declared - a fresh declaration, or a row the catalog no longer has. */
+const NO_STORED_KEYS: StoredCustomKeys = { models: [], headers: [] };
+
+/** The provider an open EDIT form is for - null for a fresh declaration. */
+function openCustomFormId(
+  state: { readonly initial: CustomProviderValues | null } | null,
+): string | null {
+  if (state === null || state.initial === null) return null;
+  return state.initial.modelProviderId;
+}
+
+/**
+ * What the config declares for one provider, read off the CURRENT catalog.
+ *
+ * The open form's locks were captured when it opened, and the host commits a
+ * config block before it reports the credential step - so a failed write can
+ * still have stored rows the form believes are unsaved. This is the authority
+ * the form re-locks against.
+ */
+function storedCustomKeysFor(
+  entries: readonly ModelProviderEntry[],
+  modelProviderId: string | null,
+): StoredCustomKeys {
+  if (modelProviderId === null) return NO_STORED_KEYS;
+  const entry = entries.find((row) => row.id === modelProviderId);
+  if (entry === undefined || entry.custom === null) return NO_STORED_KEYS;
+  return {
+    models: entry.custom.models.map((model) => model.id),
+    headers: entry.custom.headers.map((header) => header.key),
+  };
+}
 
 type RowError = {
   readonly modelProviderId: string;
@@ -560,6 +593,13 @@ export function ProviderModelProvidersTab(props: {
   const canDisconnect = capabilities.actions.includes("disconnect");
   const connectable = isConnectable(capabilities);
   const canCreateCustom = capabilities.actions.includes("createCustom");
+  // Memoized on the catalog, so the open form re-locks when a refetch actually
+  // changes what is declared and never on an unrelated render.
+  const openFormId = openCustomFormId(customForm.state);
+  const storedKeysForOpenForm = useMemo(
+    () => storedCustomKeysFor(entries, openFormId),
+    [entries, openFormId],
+  );
   // Hoisted out of JSX: `eslint --fix` (react/jsx-no-leaked-render) rewrites a
   // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
@@ -694,6 +734,7 @@ export function ProviderModelProvidersTab(props: {
           takenIds={entries.map((entry) => entry.id)}
           disabledIds={disabledCustomIds(entries)}
           initial={customForm.state.initial}
+          stored={storedKeysForOpenForm}
           isPending={customForm.isPending}
           submitError={customForm.error}
           onSubmit={customForm.submit}

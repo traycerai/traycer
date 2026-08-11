@@ -204,6 +204,54 @@ export function customProviderDraftFrom(
 }
 
 /**
+ * The keys a provider's config ACTUALLY declares right now, straight off the
+ * catalog - the authority on what is stored, as opposed to what a form was
+ * opened with.
+ */
+export type StoredCustomKeys = {
+  readonly models: readonly string[];
+  readonly headers: readonly string[];
+};
+
+/**
+ * Re-lock a draft against a fresh reading of the config.
+ *
+ * The locks a form opens with are provenance captured at that moment, and a
+ * write can land underneath them: the host commits the config block before it
+ * reports the credential step, so a `updateCustom` that FAILS on the key has
+ * still stored every model in it. Left alone, the retry form keeps offering a
+ * trash on a row that is now stored - an action the deep merge cannot express
+ * and the host will refuse. Nothing here ever UNLOCKS: a key that left the
+ * config did so through a route this form does not have.
+ *
+ * Returns the same draft when nothing changed, so this is safe to run on every
+ * catalog reading.
+ */
+export function relockCustomProviderDraft(
+  draft: CustomProviderDraft,
+  stored: StoredCustomKeys,
+): CustomProviderDraft {
+  const modelIds = new Set(stored.models);
+  // HTTP header names are case-insensitive, so `x-org` and `X-Org` are the same
+  // stored key - matching case-sensitively would leave one of them unlocked.
+  const headerKeys = new Set(stored.headers.map((key) => key.toLowerCase()));
+  const models = draft.models.map((row) =>
+    row.locked || !modelIds.has(row.id.trim())
+      ? row
+      : { ...row, locked: true },
+  );
+  const headers = draft.headers.map((row) =>
+    row.locked || !headerKeys.has(row.key.trim().toLowerCase())
+      ? row
+      : { ...row, locked: true },
+  );
+  const changed = models.some((row, at) => row !== draft.models[at]);
+  const headersChanged = headers.some((row, at) => row !== draft.headers[at]);
+  if (!changed && !headersChanged) return draft;
+  return { ...draft, models, headers };
+}
+
+/**
  * Upstream's id rule, verbatim: `/^[a-z0-9][a-z0-9-_]*$/`.
  *
  * UNDERSCORES ARE LEGAL after the first character. Ours banned them, which

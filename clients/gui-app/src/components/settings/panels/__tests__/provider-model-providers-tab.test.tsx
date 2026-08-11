@@ -871,6 +871,145 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
+  it("keeps a REFUSED new row editable, and the stored ones locked", () => {
+    // The retry form is rebuilt from flattened values, which carry no
+    // provenance - so a row the host never persisted must not come back
+    // wearing the lock that belongs to stored rows. It is the row that caused
+    // the refusal, so locking it would leave the failure unrepairable.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    fireEvent.change(screen.getAllByLabelText("ID")[1], {
+      target: { value: "__proto__" },
+    });
+    fireEvent.change(screen.getAllByLabelText("Name")[1], {
+      target: { value: "Hazard" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    act(() => {
+      hostMocks.authMutate.mock.calls[0][1].onSuccess({
+        result: {
+          kind: "error",
+          code: "invalid_input",
+          detail: "model id '__proto__' is not allowed",
+        },
+      });
+    });
+
+    // Nothing was written - the host refuses before the config PATCH - so the
+    // stored row is still the only stored row.
+    expect(screen.getAllByLabelText("ID")[0].hasAttribute("readonly")).toBe(
+      true,
+    );
+    expect(screen.getAllByLabelText("ID")[1].hasAttribute("readonly")).toBe(
+      false,
+    );
+    expect(
+      screen.getByRole("button", { name: "Remove model 2" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove model 1" })).toBeNull();
+  });
+
+  it("locks a row the CATALOG says got written, even mid-retry", () => {
+    // The other direction, and the one that actually bit: locks are provenance
+    // captured when the form opened, so a write that PARTIALLY committed left
+    // the retry form still offering a trash on a row that is now stored. The
+    // host refuses the removal, so nothing corrupts - but the form invites an
+    // action it knows cannot succeed. The refetched catalog is the authority.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "my-gateway",
+            name: "My gateway",
+            connected: true,
+            source: "config",
+            configDeclaredCustom: true,
+            canDisconnect: true,
+            custom: {
+              baseUrl: "https://api.example.test/v1",
+              models: [{ id: "a", name: "a" }],
+              headers: [],
+              env: [],
+            },
+          }),
+        ],
+      },
+      capabilities: { actions: ["connect", "disconnect", "updateCustom"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit My gateway" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    fireEvent.change(screen.getAllByLabelText("ID")[1], {
+      target: { value: "b" },
+    });
+    fireEvent.change(screen.getAllByLabelText("Name")[1], {
+      target: { value: "b" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    // The config block committed; the credential step is what failed, so the
+    // refetched catalog carries `b` while the user is still in the form.
+    hostMocks.listResult = {
+      ok: true,
+      providers: [
+        entry({
+          id: "my-gateway",
+          name: "My gateway",
+          connected: true,
+          source: "config",
+          configDeclaredCustom: true,
+          canDisconnect: true,
+          custom: {
+            baseUrl: "https://api.example.test/v1",
+            models: [
+              { id: "a", name: "a" },
+              { id: "b", name: "b" },
+            ],
+            headers: [],
+            env: [],
+          },
+        }),
+      ],
+    };
+    act(() => {
+      hostMocks.authMutate.mock.calls[0][1].onSuccess({
+        result: {
+          kind: "error",
+          code: "provider_auth_failed",
+          detail: "key rejected",
+        },
+      });
+    });
+
+    // Both rows are stored now, so neither offers a removal the merge cannot
+    // express.
+    expect(screen.queryByRole("button", { name: "Remove model 2" })).toBeNull();
+    expect(screen.getAllByLabelText("ID")[1].hasAttribute("readonly")).toBe(
+      true,
+    );
+  });
+
   it("re-enables a disabled declaration with no form in between", () => {
     // A declared row that is off re-enables through `updateCustom` with its OWN
     // values - the wire has no enable verb, deliberately. Connect would demand

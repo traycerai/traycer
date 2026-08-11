@@ -5,7 +5,9 @@ import {
   useId,
   useMemo,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -28,11 +30,13 @@ import {
   emptyCustomProviderDraft,
   emptyCustomProviderHeaderRow,
   emptyCustomProviderModelRow,
+  relockCustomProviderDraft,
   suggestCustomProviderId,
   validateCustomProviderDraft,
   type CustomProviderDraft,
   type CustomProviderRowErrors,
   type CustomProviderValues,
+  type StoredCustomKeys,
 } from "./model-provider-custom-draft";
 
 /**
@@ -41,6 +45,30 @@ import {
  */
 const CUSTOM_PROVIDER_DOCS_URL =
   "https://opencode.ai/docs/providers/#custom-provider";
+
+/**
+ * Re-lock the draft whenever the catalog's reading of this provider changes.
+ *
+ * DURING RENDER, guarded by the snapshot's identity - the same shape the tab
+ * uses to adopt a resumed OAuth attempt, and for the same reason: this is
+ * adjusting state to a prop that changed, so an effect would only add a commit
+ * and a frame that still shows the stale locks. The snapshot is memoized by the
+ * tab, so the guard settles in one pass and no-ops thereafter.
+ *
+ * The case it exists for: the host commits a config block before it reports the
+ * credential step, so a write that FAILED can still have stored rows this form
+ * opened believing were unsaved.
+ */
+function useRelockAgainstCatalog(args: {
+  readonly stored: StoredCustomKeys;
+  readonly setDraft: Dispatch<SetStateAction<CustomProviderDraft>>;
+}): void {
+  const [relockedAgainst, setRelockedAgainst] =
+    useState<StoredCustomKeys | null>(null);
+  if (relockedAgainst === args.stored) return;
+  setRelockedAgainst(args.stored);
+  args.setDraft((current) => relockCustomProviderDraft(current, args.stored));
+}
 
 /**
  * Declare (or edit) an OpenAI-compatible provider the catalog does not ship.
@@ -76,6 +104,14 @@ export function ProviderCustomModelProviderDialog(props: {
   readonly disabledIds: readonly string[];
   /** The provider being edited, or null when declaring a new one. */
   readonly initial: CustomProviderValues | null;
+  /**
+   * What the config declares for this provider RIGHT NOW, from the catalog.
+   *
+   * The form's own locks are a snapshot of when it opened, and a partially
+   * committed write moves the config underneath them - see
+   * {@link relockCustomProviderDraft}.
+   */
+  readonly stored: StoredCustomKeys;
   readonly isPending: boolean;
   /** Inline failure from the last submit, already redacted, or null. */
   readonly submitError: string | null;
@@ -92,6 +128,8 @@ export function ProviderCustomModelProviderDialog(props: {
   // id is already fixed, and re-deriving it from a renamed provider would
   // propose changing the key every stored model reference is built from.
   const [idPinned, setIdPinned] = useState(editing);
+
+  useRelockAgainstCatalog({ stored: props.stored, setDraft });
 
   const openExternalLink = useRunnerOpenExternalLink();
   const fieldId = useId();

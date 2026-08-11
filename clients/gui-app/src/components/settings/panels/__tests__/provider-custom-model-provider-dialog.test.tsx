@@ -25,6 +25,14 @@ function renderDialog(args: {
       takenIds={args.takenIds}
       disabledIds={args.disabledIds}
       initial={args.initial}
+      // What the CATALOG says is declared. These cases open on a settled
+      // config, so it matches the row's own values; the mid-retry case that
+      // makes the two diverge lives in the tab suite, where a refetch can
+      // actually land under an open form.
+      stored={{
+        models: (args.initial?.models ?? []).map((model) => model.id),
+        headers: (args.initial?.headers ?? []).map((header) => header.key),
+      }}
       isPending={args.isPending ?? false}
       submitError={args.submitError}
       onSubmit={args.onSubmit}
