@@ -2270,9 +2270,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(
-      screen.getByRole("tab", { name: "Usage limits" }),
-    ).toBeDefined();
+    expect(screen.getByRole("tab", { name: "Usage limits" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();

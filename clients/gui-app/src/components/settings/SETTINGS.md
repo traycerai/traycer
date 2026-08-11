@@ -1060,7 +1060,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     - **Edit can ADD and CHANGE; it cannot REMOVE.** The write is a deep merge,
       and removal is not something the provider's API can express — probed, not
       assumed. A null model entry is answered with a 400; a null header value is
-      *accepted* and stores the literal null, poisoning a file the provider's own
+      _accepted_ and stores the literal null, poisoning a file the provider's own
       CLI reads. Their own app never hit this because it has no Edit at all, so
       removal was never in the contract their API was written to.
       So a row already in the config is **locked**: no trash on it, and its KEY
