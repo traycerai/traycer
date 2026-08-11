@@ -588,7 +588,6 @@ export class AuthService {
         // runtime provider would dispose the entire runtime. UI-only signed-out
         // + store-unavailable; no file write.
         this.markStoreUnavailable("start.get", error);
-        this.scheduleSessionRecovery("startup:store-unavailable");
         return;
       }
       if (this.shouldStopStartFlow(startGeneration)) {
@@ -606,11 +605,23 @@ export class AuthService {
         this.applySignedIn(stored.token, outcome.user, undefined);
         return;
       }
-      // Invalid/expired OR no verdict (authn unreachable): both route to the
-      // locked rotate rather than clearing the file. The rotate's own outcome
-      // is the arbiter - its refresh either lands a fresh pair, fails as a
-      // transient the recovery loop retries, or returns the definitive
-      // rejection the validate probe could not deliver.
+      if (outcome.kind === "network-error") {
+        // No verdict (authn unreachable) is no reason to spend: the recovery
+        // loop re-validates on backoff, and only a REJECTED verdict ever
+        // authorizes the locked rotate. Rotating here instead would let a
+        // half-reachable authn (identity probe down, refresh up) burn one
+        // refresh generation per retry for pairs it can never validate.
+        appLogger.warn(
+          "[auth] stored session could not be validated at startup",
+          {},
+        );
+        this.scheduleSessionRecovery("startup:validate-network");
+        return;
+      }
+      // Invalid/expired: route to the locked rotate rather than clearing the
+      // file. The rotate's own outcome is the arbiter - its refresh either
+      // lands a fresh pair, fails as a transient the recovery loop retries,
+      // or returns the definitive rejection.
       appLogger.warn("[auth] stored session access token invalid at startup", {
         outcome: outcome.kind,
       });
@@ -696,6 +707,13 @@ export class AuthService {
    * a store fault) schedule a backoff retry so no blip ever latches
    * signed-out. The credentials file is NEVER deleted here - only explicit
    * sign-out destroys it (settled decision / H1).
+   *
+   * Stand-down invariant: every caller enters with NO live bearer, so a
+   * bearer observed after any await means a competing path (the §4 watcher
+   * adopting an externally-written session mid-flight) already established a
+   * session - one that may belong to a DIFFERENT user and does not bump the
+   * identity generation the `stillWanted` fences watch. Applying or clearing
+   * anything past that point would clobber it, so every gate checks both.
    */
   private async rotateStoredSession(
     stored: StoredCredentials,
@@ -709,11 +727,13 @@ export class AuthService {
         token: stored.token,
       });
     } catch (error) {
+      if (!stillWanted() || this.hasLiveBearer()) {
+        return;
+      }
       this.markStoreUnavailable(`${trigger}.rotate`, error);
-      this.scheduleSessionRecovery(`${trigger}:store-unavailable`);
       return;
     }
-    if (!stillWanted()) {
+    if (!stillWanted() || this.hasLiveBearer()) {
       return;
     }
     appLogger.info("[auth] stored-session rotate outcome", {
@@ -728,7 +748,7 @@ export class AuthService {
       // The rotated pair carries only the cached identity; re-validate it
       // (access-only) to mint the full `AuthenticatedUser` the context needs.
       const revalidated = await this.validateToken(pair.token);
-      if (!stillWanted()) {
+      if (!stillWanted() || this.hasLiveBearer()) {
         return;
       }
       if (revalidated.kind === "valid") {
@@ -894,8 +914,15 @@ export class AuthService {
       this.applySignedIn(stored.token, outcome.user, undefined);
       return;
     }
-    // `rejected` and `network-error` both route to the locked rotate - its
-    // refresh outcome is the arbiter (see the startup path).
+    if (outcome.kind === "network-error") {
+      // No verdict is no reason to spend: re-validate on the next tick. Only
+      // a REJECTED verdict authorizes the locked rotate - otherwise a
+      // half-reachable authn (identity probe down, refresh up) would rotate
+      // the freshly-committed pair again on every tick, burning one refresh
+      // generation per backoff step for pairs it can never validate.
+      this.scheduleSessionRecovery("recovery:validate-network");
+      return;
+    }
     await this.rotateStoredSession(
       stored,
       () => this.isIdentityCurrent(generation),
@@ -1004,6 +1031,11 @@ export class AuthService {
       return;
     }
     this.identityGeneration += 1;
+    // Explicit user intent replaces the automatic loop: a pending recovery
+    // tick would only race the attempt (it stands down, but its timer would
+    // fire a stale no-op). A failed attempt re-arms recovery (applyFailure);
+    // a successful one settles it again (applySignedIn).
+    this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
     useAuthStore.getState().setSigningIn();
@@ -1791,6 +1823,12 @@ export class AuthService {
     });
     this.setLastError(AUTH_ERROR_STORE_UNAVAILABLE);
     this.clearUiSession();
+    // Every store fault is transient from the session's point of view, so the
+    // signed-out projection must never latch: arm the recovery loop here, at
+    // the one seam every fault path passes through (the loop's own store read
+    // keeps re-arming it while the fault persists, and stands down for a live
+    // session).
+    this.scheduleSessionRecovery(`${context}:store-unavailable`);
   }
 
   /**
@@ -1844,7 +1882,6 @@ export class AuthService {
         return;
       }
       this.markStoreUnavailable("reconcile.get", error);
-      this.scheduleSessionRecovery("reconcile:store-unavailable");
       return;
     }
     if (!this.isReconcileCurrent(identityGen, reconcileGen)) {
@@ -1911,8 +1948,13 @@ export class AuthService {
       return;
     }
     if (outcome.kind === "network-error") {
-      // Transient: cannot adopt an unvalidated bearer, but do not tear down a
-      // live session over a blip. A later event / restart re-tries.
+      // Transient: cannot adopt an unvalidated bearer, and a live session is
+      // never torn down over a blip. With NO live session there is also no
+      // later file event guaranteed (authn recovering writes nothing), so the
+      // adoption is handed to the recovery loop instead of dropped.
+      if (!this.hasLiveBearer()) {
+        this.scheduleSessionRecovery("reconcile:validate-network");
+      }
       return;
     }
     // Invalid/expired but PRESENT: the file may still hold a perfectly
@@ -2452,6 +2494,11 @@ export class AuthService {
       return;
     }
     this.settleSessionRecovery("signed-in");
+    // A session being established IS the recovery: any prior transient error
+    // (store-unavailable, session-expired) is stale the moment a bearer
+    // lands - including on the automatic watcher/recovery paths that never
+    // pass through the interactive entry's clear.
+    this.setLastError(null);
     this.setDeviceProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
     let rotatedInPlace = false;
@@ -2535,6 +2582,11 @@ export class AuthService {
     });
     this.setLastError(error);
     this.applySignedOut();
+    // A failed interactive attempt says nothing about the SHARED file - a
+    // recoverable stored session may still be sitting there (the entry to
+    // `signIn` settled any loop that was nursing one). Re-arm; the first tick
+    // settles itself when the file turns out to be empty.
+    this.scheduleSessionRecovery("interactive-failure");
   }
 
   private profileFromUser(user: AuthenticatedUser): AuthProfile {

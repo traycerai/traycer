@@ -163,10 +163,12 @@ export interface CredentialsMutationStore {
   /**
    * Migration first-write that must SPEND a candidate refresh token first (§6
    * step 4, F absent/invalid). Guards before the spend (tombstone / file
-   * snapshot), then spends `candidate.refreshToken` and commits the refreshed
-   * pair stamped with the pre-validated `identity`. `refresh-rejected` → caller
-   * maps to terminal-dead; commit failure arms the same first-write continuation
-   * `guardedSignIn` uses.
+   * snapshot / spent-base marker - a sibling slot migrating the same legacy
+   * pair defers with `spend-pending`), then spends `candidate.refreshToken`
+   * under its own armed marker and commits the refreshed pair stamped with the
+   * pre-validated `identity`. `refresh-rejected` → caller maps to
+   * terminal-dead; commit failure arms the same first-write continuation
+   * `guardedSignIn` uses, with the marker held until it lands or drops.
    */
   migrateFirstWrite(args: {
     readonly candidate: {
@@ -206,6 +208,13 @@ type PendingContinuation =
       readonly credentials: StoredCredentials;
       readonly expectedDigest: string | null;
       readonly tombstoneEpoch: number;
+      /**
+       * Access token keying the on-disk spent-base marker this continuation is
+       * still guarding: the migration candidate whose refresh token was spent
+       * (`migrateFirstWrite`), or `null` when nothing was spent
+       * (`guardedSignIn`). Cleared with the continuation on land or drop.
+       */
+      readonly spentBaseToken: string | null;
     };
 
 /**
@@ -238,6 +247,13 @@ type PendingContinuation =
  * `SPENT_BASE_MARKER_TTL_MS` age-out bounds the wait. Reclaiming risks at
  * most one server-side replay/reject of an already-spent base - strictly
  * better than the unconditional sibling re-spend it replaces.
+ *
+ * Known residual (client-side bound): after a network-AMBIGUOUS refresh the
+ * OWNER's own retry re-presents the base - the only client-side recovery
+ * (refusing forever guarantees the forced re-login the retry merely risks).
+ * Within authn's replay grace that re-present adopts the already-minted
+ * successor; past it, prod replay controls may kill the family. Fully closing
+ * this needs a server-side durable per-base successor, not more client state.
  */
 interface SpentBaseMarker {
   readonly spentTokenDigest: string;
@@ -256,7 +272,13 @@ function digestToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
-/** Total read: absent/malformed -> null (a marker is advisory coordination). */
+/**
+ * Absent and malformed both read as "no marker": the marker is written BEFORE
+ * the refresh spend, so a torn record (crash mid-write) proves the spend never
+ * happened - there is nothing left to guard. An I/O fault (EACCES/EIO/...)
+ * proves nothing about the marker's content, so it fails CLOSED - spending
+ * past an unreadable marker could re-spend a sibling's in-flight base.
+ */
 async function readSpentBaseMarker(
   credentialsPath: string,
 ): Promise<SpentBaseMarker | null> {
@@ -265,7 +287,9 @@ async function readSpentBaseMarker(
     raw = await readFile(spentBaseMarkerPath(credentialsPath), "utf8");
   } catch (err) {
     if (errorCode(err) === "ENOENT") return null;
-    return null;
+    throw new CredentialsStoreUnavailableError(
+      "spent-base marker is unreadable",
+    );
   }
   let parsed: unknown;
   try {
@@ -295,8 +319,13 @@ async function readSpentBaseMarker(
 function markerIsFresh(marker: SpentBaseMarker, nowMs: number): boolean {
   const atMs = Date.parse(marker.at);
   if (Number.isNaN(atMs)) return false;
-  // A future timestamp (clock step) must not extend the block window.
-  return nowMs - atMs < SPENT_BASE_MARKER_TTL_MS && atMs <= nowMs;
+  // Liveness dominates freshness: a future `at` (a backward clock step landed
+  // between the owner's write and this read) clamps to age 0 - fully fresh -
+  // rather than reading as stale. Stale would reclaim a marker whose owner may
+  // be alive MID-SPEND and re-spend its base. The extra block a clamp can add
+  // is bounded by the step size plus the TTL, and a dead owner is still
+  // reclaimed immediately by the liveness probe regardless of age.
+  return Math.max(0, nowMs - atMs) < SPENT_BASE_MARKER_TTL_MS;
 }
 
 /** This process armed the marker. A live pid is unique, so a pid match while
@@ -322,9 +351,14 @@ function markerOwnerProvablyDead(marker: SpentBaseMarker): boolean {
   });
 }
 
-/** Best-effort: a failed arm degrades to the pre-marker behavior (no sibling
- *  protection), never worse, so the failure is swallowed rather than turned
- *  into a spurious rotate error on an otherwise-healthy path. */
+/**
+ * Fail-closed arm, run BEFORE the spend. The marker lives beside the
+ * credentials file, so a failed write here is the cheapest proof that the
+ * post-spend credentials commit would likely fail too - which is exactly the
+ * commit-failed double-spend window the marker exists to close. Refusing to
+ * spend (a store-unavailable the caller retries) is strictly safer than
+ * spending unguarded into a store that cannot record the spend.
+ */
 async function writeSpentBaseMarker(
   credentialsPath: string,
   spentToken: string,
@@ -342,7 +376,9 @@ async function writeSpentBaseMarker(
       { encoding: "utf8", mode: 0o600 },
     );
   } catch {
-    // swallowed - see doc comment
+    throw new CredentialsStoreUnavailableError(
+      "spent-base marker could not be armed",
+    );
   }
 }
 
@@ -447,6 +483,8 @@ export function createCredentialsMutationStore(
     // firstWrite: a sign-out (committed or pending) or any newer state wins. The
     // snapshot guard is a full-file digest, not just the token, so a same-token
     // content change (e.g. a sibling profile merge) is also treated as newer.
+    // Land or drop, the marker guarding a spent migration candidate (if any)
+    // is released with the continuation - mirroring the pair branch above.
     const snapshotMatches =
       p.expectedDigest === null
         ? file === null
@@ -457,6 +495,9 @@ export function createCredentialsMutationStore(
       !snapshotMatches
     ) {
       pending = null;
+      if (p.spentBaseToken !== null) {
+        await clearOwnSpentBaseMarker(p.spentBaseToken);
+      }
       return state;
     }
     const commit = await commitMutation({
@@ -467,6 +508,9 @@ export function createCredentialsMutationStore(
     });
     if (commit.kind === "committed") {
       pending = null;
+      if (p.spentBaseToken !== null) {
+        await clearOwnSpentBaseMarker(p.spentBaseToken);
+      }
       return commit.state;
     }
     return state;
@@ -626,8 +670,16 @@ export function createCredentialsMutationStore(
           await clearSpentBaseMarker(paths.credentialsPath);
         }
         // Arm the marker BEFORE the spend (an intent record): a crash at any
-        // point past the refresh call leaves the base guarded on disk, and a
-        // network-ambiguous refresh (below) keeps it armed on purpose.
+        // point past the refresh call leaves the base guarded on disk, a
+        // network-ambiguous refresh (below) keeps it armed on purpose, and a
+        // failed arm throws store-unavailable with nothing yet spent.
+        //
+        // Keyed by the BASE PAIR's access token - not the token handed to
+        // `refresh` - because that is the one value a deferring sibling can
+        // compare against its own read of the file (the gate above). In the
+        // migration-override case the spend still replaces THIS base pair, so
+        // the gate serializes every competitor either way; keying on the
+        // override token would make siblings read the marker as an orphan.
         await writeSpentBaseMarker(paths.credentialsPath, file.token);
         const refreshToken = args.refreshTokenOverride ?? file.refreshToken;
         const refreshed = await refresh({
@@ -805,6 +857,9 @@ export function createCredentialsMutationStore(
           currentState: state,
         });
         if (commit.kind === "committed") {
+          // Same rationale as `signIn`: a landed first-write replaces the
+          // session wholesale, so any lingering marker is an orphan.
+          await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "applied", credentials: args.credentials };
         }
         pending = {
@@ -812,6 +867,7 @@ export function createCredentialsMutationStore(
           credentials: args.credentials,
           expectedDigest,
           tombstoneEpoch: state.epoch,
+          spentBaseToken: null,
         };
         scheduleContinuationRetry();
         return { outcome: "commit-failed", credentials: args.credentials };
@@ -846,9 +902,36 @@ export function createCredentialsMutationStore(
         if (!snapshotMatches) {
           return { outcome: "superseded", credentials: file };
         }
+        // Cross-process spent-base gate + arm, mirroring `rotate`: on upgrade
+        // every slot migrates the SAME legacy pair, and the first-write
+        // continuation is process-local - it proves nothing to a sibling. The
+        // migration marker is keyed by the CANDIDATE's access token (the one
+        // value every competing migrator derives from the same legacy source);
+        // a marker for the file's base pair also defers us, letting the
+        // sibling's in-flight rotate land before the snapshot guard re-judges.
+        const candidateDigest = digestToken(args.candidate.token);
+        const marker = await readSpentBaseMarker(paths.credentialsPath);
+        if (marker !== null) {
+          const guardsLiveSpend =
+            marker.spentTokenDigest === candidateDigest ||
+            (file !== null &&
+              marker.spentTokenDigest === digestToken(file.token));
+          const blocked =
+            guardsLiveSpend &&
+            !isOwnSpentBaseMarker(marker) &&
+            !markerOwnerProvablyDead(marker) &&
+            markerIsFresh(marker, Date.now());
+          if (blocked) {
+            return { outcome: "spend-pending", credentials: null };
+          }
+          await clearSpentBaseMarker(paths.credentialsPath);
+        }
+        await writeSpentBaseMarker(paths.credentialsPath, args.candidate.token);
         // The sole remote call of the hold - every guard above has passed. A
-        // rejected candidate is the migration's `terminal-dead` signal; a network
-        // failure spent nothing (the caller re-enters).
+        // rejected candidate is the migration's `terminal-dead` signal. A
+        // network failure is AMBIGUOUS - a lost response may have consumed the
+        // candidate server-side - so the marker stays armed while the caller
+        // re-enters, keeping sibling migrators deferred.
         const refreshed = await refresh({
           token: args.candidate.token,
           refreshToken: args.candidate.refreshToken,
@@ -858,6 +941,8 @@ export function createCredentialsMutationStore(
           return { outcome: "refresh-network", credentials: null };
         }
         if (refreshed.kind === "rejected") {
+          // Dead regardless of who spends it - nothing left to guard.
+          await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "refresh-rejected", credentials: null };
         }
         // Identity comes from the caller's pre-lock non-spending `/user` probe
@@ -876,16 +961,20 @@ export function createCredentialsMutationStore(
           currentState: state,
         });
         if (commit.kind === "committed") {
+          await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "applied", credentials: next };
         }
         // Post-spend local-commit failure: keep the minted pair and land it under
         // a fresh lock later - the same first-write continuation guardedSignIn
         // arms (a rotate-shaped retry cannot land against an absent F, R8-C2).
+        // The armed marker keeps sibling migrators off the spent candidate
+        // until the continuation lands or drops.
         pending = {
           kind: "firstWrite",
           credentials: next,
           expectedDigest,
           tombstoneEpoch: state.epoch,
+          spentBaseToken: args.candidate.token,
         };
         scheduleContinuationRetry();
         return { outcome: "commit-failed", credentials: next };

@@ -131,6 +131,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     const store = new FileTokenStore({
       environment: ENVIRONMENT,
       authnBaseUrl: AUTHN_BASE_URL,
+      watchImpl: undefined,
     });
     stores.push(store);
     return store;
