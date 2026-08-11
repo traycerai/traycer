@@ -829,31 +829,44 @@ describe("providers.listModelProviders payloads", () => {
     expect(entry.canDisconnect).toBe(true);
   });
 
-  it("accepts a null source for an unauthenticated provider and rejects an unmodeled one", () => {
+  it("accepts a null source both disconnected AND connected, and rejects an unmodeled one", () => {
+    // `null` is not "unauthenticated". It carries two cases a reader must not
+    // collapse: not connected, or connected through an origin this closed enum
+    // cannot name.
+    const base = {
+      id: "groq",
+      name: "Groq",
+      hasStoredCredential: false,
+      canDisconnect: false,
+      configDeclaredCustom: false,
+      custom: null,
+      methods: [],
+    };
     expect(
       modelProviderEntrySchema.safeParse({
-        id: "groq",
-        name: "Groq",
+        ...base,
         source: null,
-        hasStoredCredential: false,
-        canDisconnect: false,
         connected: false,
-        configDeclaredCustom: false,
-        custom: null,
-        methods: [],
       }).success,
     ).toBe(true);
+    // The fail-soft case: upstream reports a source value newer than this
+    // enum, so the origin goes unnamed - but the provider is serving requests
+    // right now, and reporting it as disconnected would hide a working row.
     expect(
       modelProviderEntrySchema.safeParse({
-        id: "groq",
-        name: "Groq",
+        ...base,
+        source: null,
+        connected: true,
+      }).success,
+    ).toBe(true);
+    // The enum itself stays closed: an unrecognized value is normalized to
+    // null by the HOST, never carried through as a string a client would have
+    // to guess at.
+    expect(
+      modelProviderEntrySchema.safeParse({
+        ...base,
         source: "keychain",
-        hasStoredCredential: false,
-        canDisconnect: false,
         connected: false,
-        configDeclaredCustom: false,
-        custom: null,
-        methods: [],
       }).success,
     ).toBe(false);
   });

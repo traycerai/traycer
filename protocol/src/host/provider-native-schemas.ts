@@ -1279,8 +1279,21 @@ export type ModelProviderAuthMethod = z.infer<
  * Where the credential this provider is CURRENTLY using comes from, as the
  * server reports it: `env` a variable in the host's environment, `config` a
  * provider block in an OpenCode config file, `custom` a plugin/loader, `api` a
- * credential stored in OpenCode's own auth store. Null when the provider is
- * not authenticated at all.
+ * credential stored in OpenCode's own auth store.
+ *
+ * `null` covers TWO cases, and a reader must not collapse them: the provider
+ * is not connected at all, OR it is connected through an origin this enum
+ * cannot name. The second is deliberate fail-soft - upstream may report a
+ * source value newer than this closed enum, and a row whose origin we cannot
+ * name is still a row the user has working. Rejecting it, or reporting it as
+ * disconnected, would hide a provider that is serving requests right now.
+ *
+ * So the invariant runs ONE WAY only: a non-null source implies connected, and
+ * nothing may be concluded from null. `connected` is the authoritative answer
+ * to "is this usable?"; `source` answers "and where does that come from?", a
+ * question with an honest "we do not know" - which is what null carries when
+ * `connected` is true. Renderers read `connected` for state and treat a null
+ * source as an unlabelled origin, never as an absent credential.
  *
  * Deliberately the EFFECTIVE origin rather than a stored/not-stored flag:
  * upstream exposes no way to read its auth store, so anything stronger would
