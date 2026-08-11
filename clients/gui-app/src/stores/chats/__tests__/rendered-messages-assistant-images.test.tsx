@@ -469,7 +469,6 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
       blocksVersion: 1,
       imageResolutions: [
         {
-          blockId: "text-live",
           messageId: "assistant-live",
           entry,
         },
@@ -494,6 +493,11 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
     driver.patch({
       liveAssistantMessage: {
         ...live,
+        blocks: [
+          ...live.blocks,
+          textBlock("text-live-future", 2002, `again ![chart](${source})`),
+        ],
+        blocksVersion: 2,
         imageResolutions: [
           {
             ...live.imageResolutions[0],
@@ -503,12 +507,12 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
         imageResolutionsVersion: 2,
       },
     });
-    const updated = textSegmentContext(
+    const updated = textSegmentContexts(
       driver.result.current[0]?.segments ?? [],
     );
-    expect(updated?.resolutions[0]?.entry.attachmentHash).toBe(
-      "hash-live-updated",
-    );
+    expect(
+      updated.map((context) => context.resolutions[0]?.entry.attachmentHash),
+    ).toEqual(["hash-live-updated", "hash-live-updated"]);
   });
 
   it("rebuilds only the assistant row whose imageResolutions record changed", () => {

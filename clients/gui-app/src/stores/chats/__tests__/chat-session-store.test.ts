@@ -13,6 +13,7 @@ import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -4959,41 +4960,43 @@ describe("blockDelta coalescing", () => {
     const harness = createCoalesceHarness();
     const callbacks = harness.callbacks();
     startRunningTurn(callbacks);
-    emitTextDelta(callbacks, "![chart](C:%5Cwork%5Cchart.png)", 10);
-    harness.manual.runAll();
 
     const emitResolution = (attachmentHash: string, timestamp: number): void =>
-      callbacks.onBlockDelta({
-        kind: "blockDelta",
-        hasBinaryPayload: false,
-        epicId: EPIC_ID,
-        chatId: CHAT_ID,
-        event: {
-          type: "image_resolution.updated",
-          blockId: "block-1",
-          messageId: "assistant-live-1",
-          timestamp,
-          entry: {
-            source: "C:%5Cwork%5Cchart.png",
-            canonicalSource: "C:\\work\\chart.png",
-            state: "resolved",
-            attachmentHash,
-            mediaType: "image/png",
-            width: null,
-            height: null,
+      callbacks.onBlockDelta(
+        createImageResolutionUpdatedFrame({
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event: {
+            type: "image_resolution.updated",
+            blockId: "assistant-live-1",
+            messageId: "assistant-live-1",
+            timestamp,
+            entry: {
+              source: "C:%5Cwork%5Cchart.png",
+              canonicalSource: "C:\\work\\chart.png",
+              state: "resolved",
+              attachmentHash,
+              mediaType: "image/png",
+              width: null,
+              height: null,
+            },
           },
-        },
-      });
+        }),
+      );
 
     emitResolution("hash-1", 11);
     harness.manual.runAll();
     let live = harness.handle.store.getState().liveAssistantMessage;
     expect(live?.imageResolutions).toHaveLength(1);
-    expect(live?.imageResolutions[0]?.blockId).toBe("block-1");
     expect(live?.imageResolutions[0]?.messageId).toBe("assistant-live-1");
     expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
 
-    emitResolution("hash-2", 12);
+    emitTextDelta(callbacks, "![chart](C:%5Cwork%5Cchart.png)", 12);
+    harness.manual.runAll();
+    live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.blocks).toHaveLength(1);
+
+    emitResolution("hash-2", 13);
     harness.manual.runAll();
     live = harness.handle.store.getState().liveAssistantMessage;
     expect(live?.imageResolutions).toHaveLength(1);

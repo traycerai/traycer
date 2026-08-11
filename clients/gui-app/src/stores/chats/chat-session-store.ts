@@ -189,7 +189,6 @@ export interface LiveAssistantMessage {
   readonly startedAt: number;
   readonly blocksVersion: number;
   readonly imageResolutions: ReadonlyArray<{
-    readonly blockId: string;
     readonly messageId: string;
     readonly entry: ImageResolutionEntry;
   }>;
@@ -3020,11 +3019,6 @@ function applyImageResolutionDelta(
       state.liveAssistantMessage,
       activeTurn,
     );
-    if (
-      !liveAssistant.blocks.some((block) => block.blockId === event.blockId)
-    ) {
-      return {};
-    }
     const resolutionIndex = liveAssistant.imageResolutions.findIndex(
       (resolution) =>
         resolution.messageId === event.messageId &&
@@ -3035,14 +3029,13 @@ function applyImageResolutionDelta(
         ? [
             ...liveAssistant.imageResolutions,
             {
-              blockId: event.blockId,
               messageId: event.messageId,
               entry: event.entry,
             },
           ]
         : liveAssistant.imageResolutions.map((resolution, index) =>
             index === resolutionIndex
-              ? { ...resolution, blockId: event.blockId, entry: event.entry }
+              ? { ...resolution, entry: event.entry }
               : resolution,
           );
     return {

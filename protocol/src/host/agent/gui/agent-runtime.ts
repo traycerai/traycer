@@ -1126,7 +1126,9 @@ export const AUTH_ERROR_CODE = "auth";
  * is part of the versioned union, not implementer discretion. `messageId`
  * addresses the assistant row whose `imageResolutions` this entry upserts
  * (keyed by `entry.canonicalSource`); `entry` is the same shape persisted on
- * the message - see `imageResolutionEntrySchema`.
+ * the message - see `imageResolutionEntrySchema`. `blockId` remains the
+ * runtime envelope identity and equals `messageId`; consumers must not treat it
+ * as a content-block address.
  */
 export const imageResolutionUpdatedEventSchema = z.object({
   ...baseRuntimeEventFields,

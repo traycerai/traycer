@@ -58,6 +58,7 @@ import {
   runtimeEventSchemaV12PreInReplyTo,
   runtimeInterviewAnswerSchema,
   runtimePlanActionSchema,
+  type ImageResolutionUpdatedEvent,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 export {
@@ -928,6 +929,20 @@ export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
 export type ChatSubscribeServerFrame = z.infer<
   typeof chatSubscribeServerFrameSchema
 >;
+
+export function createImageResolutionUpdatedFrame(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly event: ImageResolutionUpdatedEvent;
+}): Extract<ChatSubscribeServerFrame, { readonly kind: "blockDelta" }> {
+  return {
+    kind: "blockDelta",
+    hasBinaryPayload: false,
+    epicId: input.epicId,
+    chatId: input.chatId,
+    event: input.event,
+  };
+}
 
 const pauseQueueClientFrameSchema = z.object({
   kind: z.literal("pauseQueue"),

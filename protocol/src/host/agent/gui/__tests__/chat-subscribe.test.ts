@@ -13,6 +13,7 @@ import {
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   guiAgentModelCapabilitiesSchema,
@@ -2120,12 +2121,16 @@ describe("chat.subscribe@1.7 (image generation)", () => {
   it("round-trips image_resolution.updated through the 1.7 serverFrame", () => {
     for (const entry of imageResolutions) {
       const parsed = chatSubscribeV17.serverFrameSchema.parse(
-        blockDeltaFrame({
-          type: "image_resolution.updated",
-          blockId: "resolution-evt",
-          timestamp: 5100,
-          messageId: "assistant-image-1",
-          entry,
+        createImageResolutionUpdatedFrame({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          event: {
+            type: "image_resolution.updated",
+            blockId: "assistant-image-1",
+            timestamp: 5100,
+            messageId: "assistant-image-1",
+            entry,
+          },
         }),
       );
       expect(parsed).toMatchObject({
@@ -2169,7 +2174,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     });
     const resolutionUpdated = blockDeltaFrame({
       type: "image_resolution.updated",
-      blockId: "resolution-evt",
+      blockId: "assistant-image-1",
       timestamp: 5100,
       messageId: "assistant-image-1",
       entry: imageResolutions[0],

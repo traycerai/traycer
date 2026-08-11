@@ -3576,7 +3576,7 @@ describe("accumulateEvent - provider_notice.upsert", () => {
     const before = blocks;
     const after = accumulateEvent(blocks, {
       type: "image_resolution.updated",
-      blockId: "resolution-evt",
+      blockId: "assistant-1",
       timestamp: 2,
       messageId: "assistant-1",
       entry: {

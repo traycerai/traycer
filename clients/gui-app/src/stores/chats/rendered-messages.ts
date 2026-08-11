@@ -1882,22 +1882,11 @@ function addLiveAssistantImageProjection(
   acc: AssistantTurnAccumulator,
   liveAssistant: LiveAssistantMessage,
 ): void {
-  addAssistantImageProjection(acc, liveAssistant.blocks, []);
-  const resolutionsByBlockId = new Map<
-    string,
-    AssistantMarkdownImageResolution[]
-  >();
-  for (const resolution of liveAssistant.imageResolutions) {
-    const resolutions = resolutionsByBlockId.get(resolution.blockId) ?? [];
-    resolutions.push({
-      messageId: resolution.messageId,
-      entry: resolution.entry,
-    });
-    resolutionsByBlockId.set(resolution.blockId, resolutions);
-  }
-  for (const [blockId, resolutions] of resolutionsByBlockId) {
-    acc.imageResolutionsByBlockId.set(blockId, resolutions);
-  }
+  addAssistantImageProjection(
+    acc,
+    liveAssistant.blocks,
+    liveAssistant.imageResolutions,
+  );
 }
 
 /**
