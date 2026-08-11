@@ -7,7 +7,7 @@ import { OrchestrationBindingChip } from "../orchestration-binding-chip";
 
 vi.mock("@/hooks/runner/use-runner-orchestration-queries", () => ({
   useRunnerOrchestrationListQuery: () => ({
-    data: ["dev-team-full", "x"],
+    data: ["dev-team", "x"],
     isLoading: false,
   }),
   useRunnerOrchestrationGroupsQuery: () => ({
@@ -32,7 +32,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 const GLOBAL = {
   enabled: true,
-  orchestrationName: "dev-team-full",
+  orchestrationName: "dev-team",
   roleId: "orchestrator",
   modelGroup: null as string | null,
 };
@@ -54,7 +54,7 @@ describe("OrchestrationBindingChip", () => {
     render(<OrchestrationBindingChip epicId="epic-1" />);
     await waitFor(() => {
       expect(screen.getByTestId("orchestration-binding-chip").textContent).toContain(
-        "dev-team-full",
+        "dev-team",
       );
     });
     expect(screen.getByTestId("orchestration-binding-chip").textContent).toContain(
@@ -122,7 +122,7 @@ describe("OrchestrationBindingChip", () => {
     ).toEqual({});
     await waitFor(() => {
       expect(screen.getByTestId("orchestration-binding-chip").textContent).toContain(
-        "dev-team-full",
+        "dev-team",
       );
     });
   });

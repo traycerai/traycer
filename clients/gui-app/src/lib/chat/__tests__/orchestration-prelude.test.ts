@@ -10,7 +10,7 @@ const PRELUDE = [
   "# Orchestration context (injected once at chat creation)",
   "",
   "## Binding",
-  "- Orchestration: `dev-team-full`",
+  "- Orchestration: `dev-team`",
   "- Role: `orchestrator` (Orchestrator)",
   "",
   "## Responsibility",

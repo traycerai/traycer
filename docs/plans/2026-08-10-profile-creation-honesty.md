@@ -33,7 +33,7 @@
 - `components/epic-canvas/sidebar/new-conversation-modal.tsx` — chat creation inside an existing epic; calls `maybeInjectOrchestrationPreludeAtCreate(content, traycerCli, null)` (~line 760).
 - `components/home/hooks/use-landing-composer-actions.ts` — epic.create path; calls `maybeInjectOrchestrationPreludeAtCreate(...)` (~line 300).
 - `lib/orchestration/inject-orchestration-prelude.ts` — `maybeInjectOrchestrationPreludeAtCreate(content, traycerCli, bindingOverride)`; `bindingOverride` param exists but every call site passes `null`; silent fail-open (catch → original content).
-- `stores/orchestration/orchestration-binding-store.ts` — global binding `{ enabled, orchestrationName, roleId, modelGroup }` (DEFAULT enabled:true, `dev-team-full`, `orchestrator`).
+- `stores/orchestration/orchestration-binding-store.ts` — global binding `{ enabled, orchestrationName, roleId, modelGroup }` (DEFAULT enabled:true, `dev-team`, `orchestrator`).
 - `lib/chat/orchestration-prelude.ts` — `stripOrchestrationPrelude(content: string): string` + markers `ORCHESTRATION_PRELUDE_START/END`. CLI already emits markers (`clients/traycer-cli/src/store/orchestration-store.ts:231,267`). Strip is NEVER imported by production render code (bug).
 - `components/chat/chat-message-user-body.tsx` — user bubble; `message.content` (string) flows to `ChatUserMessageContent` (~line 335) and `messageText` (~line 150).
 - `stores/composer/composer-run-settings-store.ts` (lines 17-21) — the per-epic persistence pattern to copy for G3 overrides.

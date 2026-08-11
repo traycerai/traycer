@@ -277,7 +277,7 @@ describe("useLandingComposerActions", () => {
     );
     useOrchestrationBindingStore.getState().setBinding({
       enabled: true,
-      orchestrationName: "dev-team-full",
+      orchestrationName: "dev-team",
       roleId: "orchestrator",
       modelGroup: null,
     });
@@ -303,7 +303,7 @@ describe("useLandingComposerActions", () => {
     });
     expect(landingMocks.injectCalls[0]?.bindingOverride).toMatchObject({
       enabled: true,
-      orchestrationName: "dev-team-full",
+      orchestrationName: "dev-team",
       roleId: "orchestrator",
       modelGroup: null,
     });

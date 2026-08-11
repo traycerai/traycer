@@ -528,7 +528,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     useOrchestrationEpicOverridesStore.getState().resetForTests();
     useOrchestrationBindingStore.getState().setBinding({
       enabled: true,
-      orchestrationName: "dev-team-full",
+      orchestrationName: "dev-team",
       roleId: "orchestrator",
       modelGroup: null,
     });
@@ -554,7 +554,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     await act(async () => {});
 
     expect(testState.orchestrationPrelude).toHaveBeenCalledWith({
-      name: "dev-team-full",
+      name: "dev-team",
       roleId: "orchestrator",
       group: undefined,
     });

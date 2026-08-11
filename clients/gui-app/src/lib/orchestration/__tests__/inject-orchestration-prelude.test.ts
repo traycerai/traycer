@@ -16,7 +16,7 @@ const DOC: JsonContent = {
 
 const ENABLED: OrchestrationBinding = {
   enabled: true,
-  orchestrationName: "dev-team-full",
+  orchestrationName: "dev-team",
   roleId: "orchestrator",
   modelGroup: null,
 };
@@ -40,7 +40,7 @@ describe("maybeInjectOrchestrationPreludeAtCreate", () => {
     expect(onFailure).toHaveBeenCalledTimes(1);
     expect(onFailure).toHaveBeenCalledWith({
       kind: "cli-unavailable",
-      orchestrationName: "dev-team-full",
+      orchestrationName: "dev-team",
       roleId: "orchestrator",
     });
   });
@@ -83,7 +83,7 @@ describe("maybeInjectOrchestrationPreludeAtCreate", () => {
     const onFailure = vi.fn<(r: OrchestrationInjectionFailure) => void>();
     const cli = makeCli(async () => ({
       text: "<!-- traycer-orchestration-prelude -->\nx\n<!-- /traycer-orchestration-prelude -->",
-      orchestration: "dev-team-full",
+      orchestration: "dev-team",
       roleId: "orchestrator",
       roleLabel: "Orchestrator",
       modelGroup: "default",

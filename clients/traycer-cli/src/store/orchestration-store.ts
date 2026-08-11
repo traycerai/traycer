@@ -148,7 +148,7 @@ export async function readModelGroup(name: string): Promise<ModelGroup | null> {
 // ─── Orchestrations ─────────────────────────────────────────────────────────
 
 /**
- * Idempotent seed of built-in templates (dev-team-full, dev-squad, …).
+ * Idempotent seed of built-in templates (auto, dev-squad, …).
  * - Missing orchestration → create full template + role markdown.
  * - Existing with version !== SEED_VERSION → RE-CREATE seed roles (overwrite
  *   seed-owned ids incl. responsibility text, in seed order so the root rule

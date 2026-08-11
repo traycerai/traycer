@@ -4,7 +4,7 @@ import { useOrchestrationEpicOverridesStore } from "../orchestration-epic-overri
 
 const SAMPLE: OrchestrationBinding = {
   enabled: true,
-  orchestrationName: "dev-team-full",
+  orchestrationName: "dev-team",
   roleId: "orchestrator",
   modelGroup: "cheap",
 };

@@ -8,7 +8,7 @@ import { effectiveOrchestrationBinding } from "../effective-orchestration-bindin
 
 const GLOBAL: OrchestrationBinding = {
   enabled: true,
-  orchestrationName: "dev-team-full",
+  orchestrationName: "dev-team",
   roleId: "orchestrator",
   modelGroup: null,
 };
