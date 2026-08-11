@@ -391,7 +391,15 @@ function ImageFailureChip(props: {
 
 function DeduplicatedImageChip(props: { readonly alt: string }): ReactNode {
   return (
-    <span
+    <button
+      type="button"
+      onClick={(event) => {
+        const card = event.currentTarget
+          .closest("[data-assistant-turn]")
+          ?.querySelector<HTMLElement>("[data-image-generation-card]");
+        card?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        card?.focus({ preventScroll: true });
+      }}
       className="my-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-ui-sm text-muted-foreground"
       data-assistant-image-deduplicated
     >
@@ -399,6 +407,6 @@ function DeduplicatedImageChip(props: { readonly alt: string }): ReactNode {
       <span className="truncate">
         {props.alt.length > 0 ? props.alt : "Generated image"}
       </span>
-    </span>
+    </button>
   );
 }
