@@ -31,6 +31,10 @@ function renderPreview(
       meta={meta}
       fileName="photo.png"
       compact={compact}
+      fitOverride={null}
+      onFitOverrideChange={null}
+      scrollContainerRef={null}
+      onScroll={null}
     />,
   );
 }

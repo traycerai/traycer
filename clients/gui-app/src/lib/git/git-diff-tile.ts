@@ -44,6 +44,43 @@ export function gitBundleGroupLabel(group: GitDiffBundleGroup): string {
   return "Changes";
 }
 
+export interface GitImageDiffSides {
+  /** Stage to request the OLD (pre-change) side at; `null` = no old side (Added empty state). */
+  readonly oldStage: "staged" | "unstaged" | null;
+  /** Stage to request the NEW (post-change) side at; `null` = no new side (Deleted empty state). */
+  readonly newStage: "staged" | "unstaged" | null;
+  readonly conflicted: boolean;
+}
+
+/**
+ * (side, stage) routing for `git.streamFileAsset` from a `GitChangedFile` -
+ * there is no server-side "conflicted" signal, so the client constructs
+ * these tuples itself (image-preview tech plan section 1 side-table;
+ * decision log decisions #9, #10). Shared between the single-file diff tile
+ * and bundle sections, which both need the same routing for the same file.
+ */
+export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
+  if (file.stage === "conflicted") {
+    return { oldStage: "staged", newStage: "unstaged", conflicted: true };
+  }
+  if (file.status === "added" || file.status === "untracked") {
+    return {
+      oldStage: null,
+      newStage: file.stage === "staged" ? "staged" : "unstaged",
+      conflicted: false,
+    };
+  }
+  if (file.status === "deleted") {
+    return {
+      oldStage: file.stage === "staged" ? "staged" : "unstaged",
+      newStage: null,
+      conflicted: false,
+    };
+  }
+  const stage = file.stage === "staged" ? "staged" : "unstaged";
+  return { oldStage: stage, newStage: stage, conflicted: false };
+}
+
 export function gitDiffRepositoryContextLabel(
   context: GitDiffRepositoryContext,
 ): string {

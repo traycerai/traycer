@@ -318,6 +318,10 @@ function WorkspaceImageFileTile(props: {
           meta={assetState.meta}
           fileName={node.name}
           compact={false}
+          fitOverride={null}
+          onFitOverrideChange={null}
+          scrollContainerRef={null}
+          onScroll={null}
         />
       </div>
     </div>

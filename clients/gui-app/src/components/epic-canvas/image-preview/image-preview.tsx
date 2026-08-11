@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
   type RefObject,
+  type UIEvent,
 } from "react";
 import { Copy, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,16 +30,40 @@ export interface ImagePreviewProps {
   readonly meta: ImageAssetMeta | null;
   /** Alt text and the file name copy/report actions would reference. */
   readonly fileName: string;
-  /** Drops zoom + copy for bundle/diff use (ticket 05) - image-preview decision log, decision #18. */
+  /** Drops the toolbar (zoom + copy) for bundle/diff use (ticket 05) - image-preview decision log, decision #18. */
   readonly compact: boolean;
+  /**
+   * Controlled zoom for callers that link multiple instances (ticket 05's
+   * `ImageDiffView`) - `null` manages `fit` internally (today's only other
+   * caller, the workspace tile). A non-null value always wins over internal
+   * state, so a caller can also use it to freeze zoom (pass a fixed value
+   * with `onFitOverrideChange: null`) without a separate "disabled" prop.
+   */
+  readonly fitOverride: ImagePreviewFit | null;
+  /** Called instead of internal state when `fitOverride` drives this instance; `null` when uncontrolled or frozen. */
+  readonly onFitOverrideChange: ((fit: ImagePreviewFit) => void) | null;
+  /**
+   * Callback ref (not a ref object - see `useNativeDivScrollRestoration`'s
+   * doc comment) to the scrollable image stage, for callers that sync scroll
+   * across linked instances (ticket 05, decision #17); `null` when unneeded.
+   */
+  readonly scrollContainerRef:
+    ((element: HTMLDivElement | null) => void) | null;
+  readonly onScroll: ((event: UIEvent<HTMLDivElement>) => void) | null;
 }
 
-type ImagePreviewFit = "fit" | "actual";
+export type ImagePreviewFit = "fit" | "actual";
 
 const COPY_FEEDBACK_RESET_MS = 1500;
 
 export function ImagePreview(props: ImagePreviewProps) {
-  const [fit, setFit] = useState<ImagePreviewFit>("fit");
+  // Destructured (not `props.scrollContainerRef`/`props.onScroll` inline in
+  // the JSX below) so the ref-safety linter can see these are plain values,
+  // not a live ref read during render - same reasoning as
+  // `diff-content-primitive.tsx`'s `scrollContainerRef` destructure.
+  const { scrollContainerRef, onScroll, onFitOverrideChange } = props;
+  const [internalFit, setInternalFit] = useState<ImagePreviewFit>("fit");
+  const fit = props.fitOverride ?? internalFit;
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">(
     "idle",
   );
@@ -50,8 +75,13 @@ export function ImagePreview(props: ImagePreviewProps) {
   }, []);
 
   const toggleFit = useCallback(() => {
-    setFit((current) => (current === "fit" ? "actual" : "fit"));
-  }, []);
+    const next: ImagePreviewFit = fit === "fit" ? "actual" : "fit";
+    if (onFitOverrideChange !== null) {
+      onFitOverrideChange(next);
+      return;
+    }
+    setInternalFit(next);
+  }, [fit, onFitOverrideChange]);
 
   const handleImageClick = useCallback(() => {
     if (props.status === "ready") toggleFit();
@@ -132,6 +162,8 @@ export function ImagePreview(props: ImagePreviewProps) {
         </div>
       )}
       <div
+        ref={scrollContainerRef}
+        onScroll={onScroll ?? undefined}
         className={cn(
           "image-preview-checkerboard relative min-h-0 flex-1",
           fit === "fit" ? "flex items-center justify-center" : "overflow-auto",
