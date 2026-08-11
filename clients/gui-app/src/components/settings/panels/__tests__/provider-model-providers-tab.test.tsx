@@ -1478,6 +1478,39 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("treats a null source on a CONNECTED row as unlabelled, not absent", () => {
+    // The wire contract runs ONE WAY: a non-null source implies connected, and
+    // nothing may be concluded from null. Null covers two cases - not connected,
+    // or connected through an origin the closed enum cannot name (fail-soft for
+    // a source value newer than this client). Reading it as "no credential"
+    // would report a provider that is serving requests right now as disconnected.
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "openai",
+            name: "OpenAI",
+            connected: true,
+            source: null,
+            hasStoredCredential: true,
+            canDisconnect: true,
+          }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    // `connected` is the authoritative answer, so the row reads as connected...
+    expect(
+      screen.getByRole("button", { name: "Disconnect OpenAI" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Connect / })).toBeNull();
+    // ...and the origin simply goes unlabelled rather than being guessed at.
+    for (const label of ["API key", "Environment", "Config", "Custom"]) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+  });
+
   it("hides every connect affordance when the host advertises no write action", () => {
     // A read-only catalog is a legal, honest state - the CLI version gate can
     // allow the list endpoints and not the write ones.
