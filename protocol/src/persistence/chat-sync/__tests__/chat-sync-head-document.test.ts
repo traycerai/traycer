@@ -52,7 +52,14 @@ function readEnvelope(documentBytes: string): JsonValue | undefined {
 /** Rebuilds document bytes with the envelope replaced. */
 function withEnvelope(record: ChatHeadRecord, envelope: JsonValue): string {
   const document = encodeChatHeadDocument(record);
-  const tampered: JsonObject = { ...document, parts: envelope };
+  // Through the reserved-key constant, like `readEnvelope` above. A literal
+  // here would keep writing `parts` if the key were ever renamed, so the five
+  // negative tests below would pass on an unrelated extra field instead of on
+  // the tampering they describe.
+  const tampered: JsonObject = {
+    ...document,
+    [CHAT_HEAD_PARTS_KEY]: envelope,
+  };
   return canonicalJsonStringify(tampered);
 }
 

@@ -477,13 +477,24 @@ function ComposerSurface(props: {
     return null;
   }
   if (model.access.isViewer) {
+    // The workspace row is LIVE: its selector targets the reading host and this
+    // surface's chat id, and both create/re-bind and remove are real mutations.
+    // For a viewer of a live chat that is the chat's own workspace and the row
+    // is informative. For a COPY (`readOnlyNotice` is set only by the published
+    // and doc-replica surfaces) the binding shown is `null` and the chat id is
+    // the one the OWNER minted, so acting on the row would commit a workspace
+    // change against whatever local lineage happens to hold that id here.
+    // A copy has no live workspace to show, so it shows none.
+    const isCopy = model.access.readOnlyNotice !== null;
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
         <div className="flex flex-col gap-3">
           <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
-          <ComposerReadonlyWorkspaceModeRow
-            workspaceSlot={model.composer.workspaceControls}
-          />
+          {isCopy ? null : (
+            <ComposerReadonlyWorkspaceModeRow
+              workspaceSlot={model.composer.workspaceControls}
+            />
+          )}
         </div>
       </ComposerSlotShell>
     );

@@ -136,7 +136,11 @@ function renderAppShell(): QueryClient {
 }
 
 describe("<AppShell />", () => {
-  let queryClient: QueryClient;
+  // Undefined until a test renders, and reset after every one: a teardown that
+  // dereferences this unconditionally throws over the top of the assertion
+  // error that stopped the render, and a binding that survived the test would
+  // let a test that forgets to render clear the PREVIOUS test's client.
+  let queryClient: QueryClient | undefined;
 
   beforeEach(() => {
     windowHost.runnerHost = {};
@@ -152,7 +156,8 @@ describe("<AppShell />", () => {
 
   afterEach(() => {
     cleanup();
-    queryClient.clear();
+    queryClient?.clear();
+    queryClient = undefined;
     delete windowHost.runnerHost;
     useAuthStore.getState().setSignedOut();
     useSettingsStore.setState({ showGlobalResourceMonitor: true });

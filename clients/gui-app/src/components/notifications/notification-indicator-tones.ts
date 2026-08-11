@@ -61,7 +61,11 @@ export const NOTIFICATION_STATUS_TONES: Readonly<
   },
   fork: {
     testId: "fork",
-    title: "Chat publishing paused — choose which history to keep",
+    // States the temporary condition, and nothing else. The dialog and the
+    // resolve RPC this copy used to point at are gone: the host submits the
+    // deterministic decision itself and files a notification afterwards, so
+    // there is no choice for a user to go looking for.
+    title: "Chat publishing paused while a fork is resolved",
     className: "text-warning-foreground",
     Icon: GitFork,
   },

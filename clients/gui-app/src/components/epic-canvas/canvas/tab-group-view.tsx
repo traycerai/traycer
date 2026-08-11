@@ -17,6 +17,7 @@ import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderer
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useHostClient } from "@/lib/host";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import {
   PaneActivationFocusIntentContext,
   registerHostedPaneActivationClaim,
@@ -73,6 +74,7 @@ import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-hos
 import { HOSTED_TILE_RECORD_SELECTOR } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import {
   TILE_KIND_GIT_DIFF,
+  TILE_KIND_PUBLISHED_CHAT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
@@ -103,7 +105,15 @@ function positionFor(
 function panelIdForTabType(
   tabType: EpicCanvasTileRef["type"] | undefined,
 ): LeftPanelId {
-  if (tabType === "chat" || tabType === "terminal-agent") return "chats";
+  // A published chat is a chat: its row lives in the Chats tree, so "Reveal in
+  // sidebar" has to open that panel and not fall through to the default.
+  if (
+    tabType === "chat" ||
+    tabType === "terminal-agent" ||
+    tabType === TILE_KIND_PUBLISHED_CHAT
+  ) {
+    return "chats";
+  }
   if (tabType === "terminal") return "terminals";
   if (tabType === TILE_KIND_GIT_DIFF) return "git-diff";
   if (tabType === TILE_KIND_SNAPSHOT_DIFF) return "chats";
@@ -602,7 +612,14 @@ function usePublishedChatFallbackRef(args: {
   });
   const cloudChatRecord = wantsCloudChatFallback
     ? (cloudChats.data?.chats.find(
-        (chat) => chat.identity.chatId === activeTab.id,
+        // The OWNER is half the identity, not a refinement of the id: `chatId`
+        // is host-minted and the list deliberately carries every task-visible
+        // row including collaborators'. This arm targets a same-host local chat
+        // ref, which is the viewer's own by construction, so an id-only match
+        // could pick a collaborator's row on list order alone and open their
+        // transcript as this tab's fallback.
+        (chat) =>
+          chat.identity.chatId === activeTab.id && cloudRowIsViewersOwn(chat),
       ) ?? null)
     : null;
   const liveArtifactOwnerUserId =

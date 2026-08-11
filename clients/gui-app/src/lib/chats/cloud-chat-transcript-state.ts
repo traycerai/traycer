@@ -70,11 +70,20 @@ export function composeCloudChatTranscriptState(
       ? { kind: "unsupported" }
       : { kind: "failed", error: inputs.readError };
   }
-  if (inputs.read === undefined || !inputs.payloadsSettled) {
+  if (inputs.read === undefined) {
     return { kind: "loading" };
   }
+  // A REFUSAL needs no payload list. The settle rule below exists so a presented
+  // transcript's fidelity count cannot disagree with itself a moment later, and
+  // a refused read presents no transcript to count: its remedy is already known,
+  // and the list can only describe attachments for a chat this surface will
+  // never show. Waiting anyway held the tile on a spinner for as long as an
+  // independent request took to answer - indefinitely, if it stalled.
   if (inputs.read.outcome.kind !== "ok") {
     return { kind: "refused", read: inputs.read };
+  }
+  if (!inputs.payloadsSettled) {
+    return { kind: "loading" };
   }
 
   // An `ambiguous-identity` list describes a DIFFERENT owner's chat, so it is

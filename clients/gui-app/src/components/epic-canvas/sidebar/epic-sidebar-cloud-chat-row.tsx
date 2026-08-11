@@ -42,6 +42,14 @@ export interface EpicSidebarCloudChatRowProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly depth: number;
+  /**
+   * Whether the sidebar is in bulk-selection mode. A cloud row is not
+   * selectable - the bulk actions are archive and delete, and neither belongs to
+   * a chat this device does not own - so it goes INERT rather than opening a
+   * tile: navigating away mid-selection is the one thing a click here must not
+   * do while the user is picking rows.
+   */
+  readonly selectionMode: boolean;
 }
 
 export function EpicSidebarCloudChatRow(
@@ -151,7 +159,12 @@ export function EpicSidebarCloudChatRow(
     <li role="treeitem" aria-selected={false}>
       <button
         type="button"
-        aria-label={title}
+        // The lock is state, not decoration, so it belongs in the row's
+        // ACCESSIBLE NAME. An `aria-label` on the glyph inside a labelled button
+        // never surfaces, and the tooltip is hover-only - which left a locked row
+        // announcing exactly like a live one, though the two open different
+        // surfaces.
+        aria-label={ownerReachable ? title : `${title} — ${lockCopy.ariaLabel}`}
         data-testid={`epic-sidebar-cloud-item-${chat.identity.chatId}`}
         data-owner-host-id={chat.ownerHostId}
         className={cn(
@@ -163,8 +176,8 @@ export function EpicSidebarCloudChatRow(
         style={{
           paddingLeft: `${props.depth * INDENT_PX + BASE_PAD_LEFT}px`,
         }}
-        onClick={open}
-        onDoubleClick={openPermanent}
+        onClick={props.selectionMode ? undefined : open}
+        onDoubleClick={props.selectionMode ? undefined : openPermanent}
       >
         <TreeChevronSpacer />
         {/* The SAME icon a local chat row renders. A distinct glyph for
@@ -188,7 +201,10 @@ export function EpicSidebarCloudChatRow(
               <Lock
                 className="size-3 shrink-0 text-muted-foreground"
                 data-testid={`epic-sidebar-cloud-lock-${chat.identity.chatId}`}
-                aria-label={lockCopy.ariaLabel}
+                // Decorative here: the state it depicts is in the row's own
+                // accessible name above, and a graphics node inside a labelled
+                // button contributes nothing but noise.
+                aria-hidden="true"
               />
             </TooltipWrapper>
           )}

@@ -159,4 +159,24 @@ describe("what counts as an error", () => {
     // failure would offer a retry that cannot help.
     expect(state.kind).toBe("refused");
   });
+
+  it("refuses WITHOUT waiting for the payload list, whose answer cannot matter", () => {
+    const read: CloudChatRead = {
+      chat: UNPUBLISHED_SUMMARY,
+      outcome: { kind: "unpublished" },
+    };
+
+    const state = composeCloudChatTranscriptState({
+      read,
+      readError: null,
+      payloadsOutcome: undefined,
+      // Still in flight - and for a refusal it may stay that way. The remedy is
+      // known, no transcript is presented, and there is no fidelity count for a
+      // late list to contradict; holding the spinner on an unrelated request is
+      // an indefinite wait for nothing.
+      payloadsSettled: false,
+    });
+
+    expect(state.kind).toBe("refused");
+  });
 });

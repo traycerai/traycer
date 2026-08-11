@@ -93,6 +93,7 @@ describe("EpicSidebarCloudChatRow", () => {
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
+        selectionMode={false}
       />,
     );
     expect(
@@ -100,31 +101,39 @@ describe("EpicSidebarCloudChatRow", () => {
     ).toBeTruthy();
   });
 
-  it("names the owning host on the lock rather than a section heading", () => {
-    // Hosts are a property of the row now. The lock carries the host's name so
-    // the statement survives without the "other devices" heading that used to
-    // make it.
+  it("names the owning host in the ROW's accessible name, not on the glyph", () => {
+    // Hosts are a property of the row now, and so is being locked. An
+    // `aria-label` on the glyph inside a labelled button never surfaces, and the
+    // tooltip beside it is hover-only, so the state has to reach the name the
+    // row announces or it reaches nobody.
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
+        selectionMode={false}
       />,
     );
-    expect(screen.getByLabelText("On Tanveer's laptop, offline")).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Walkthrough — On Tanveer's laptop, offline",
+      }),
+    ).toBeTruthy();
   });
 
-  it("keeps the row's accessible name to the chat title", () => {
-    // The row carries a lock and a timestamp, each with its own accessible
-    // name; without an explicit label it would announce as all three run
-    // together - the same reason the local rows set one.
+  it("keeps a reachable row's accessible name to the chat title", () => {
+    // The row carries a timestamp with its own text; without an explicit label
+    // it would announce as both run together - the same reason the local rows
+    // set one. A row that is NOT locked has nothing to add to the title.
+    reachability.status = "reachable";
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
+        selectionMode={false}
       />,
     );
     expect(screen.getByRole("button", { name: "Walkthrough" })).toBeTruthy();
@@ -142,6 +151,7 @@ describe("EpicSidebarCloudChatRow", () => {
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
+        selectionMode={false}
       />,
     );
     expect(
@@ -156,6 +166,7 @@ describe("EpicSidebarCloudChatRow", () => {
         epicId={CHAT.identity.taskId}
         tabId="tab-1"
         depth={0}
+        selectionMode={false}
       />,
     );
     expect(
@@ -171,6 +182,7 @@ describe("EpicSidebarCloudChatRow", () => {
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
+          selectionMode={false}
         />,
       );
     }
@@ -194,6 +206,24 @@ describe("EpicSidebarCloudChatRow", () => {
       renderRow();
       clickRow();
       expect(openedRefs[0].type).toBe("published-chat");
+    });
+
+    it("opens NOTHING while the sidebar is in bulk-selection mode", () => {
+      // A cloud row is not selectable - archive and delete are the bulk actions
+      // and neither belongs to a chat this device does not own - so it goes
+      // inert rather than navigating away from a selection in progress.
+      reachability.status = "unreachable";
+      render(
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          epicId={CHAT.identity.taskId}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={true}
+        />,
+      );
+      clickRow();
+      expect(openedRefs).toHaveLength(0);
     });
 
     it("never leaves a click opening nothing", () => {
@@ -223,6 +253,7 @@ describe("EpicSidebarCloudChatRow", () => {
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
+          selectionMode={false}
         />,
       );
       const row = screen.getByTestId(
@@ -242,6 +273,7 @@ describe("EpicSidebarCloudChatRow", () => {
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
+          selectionMode={false}
         />,
       );
       expect(

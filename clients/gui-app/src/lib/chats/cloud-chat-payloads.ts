@@ -1,4 +1,7 @@
-import type { Sha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
+import {
+  decodeBase64,
+  type Sha256Hex,
+} from "@traycer-clients/shared/cloud-chat/bytes";
 import type { ReadCloudChatPayloadResponse } from "@traycer/protocol/host/epic/cloud-chat";
 
 /**
@@ -118,7 +121,7 @@ export async function decodeCloudChatPayload(
   if (outcome.bytesBase64.length > MAX_ENCODED_PAYLOAD_CHARS)
     return UNAVAILABLE;
 
-  const bytes = decodeBase64(outcome.bytesBase64);
+  const bytes = decodeBase64OrNull(outcome.bytesBase64);
   if (bytes === null || bytes.byteLength !== outcome.byteLength) {
     return UNAVAILABLE;
   }
@@ -165,15 +168,18 @@ function previewOf(bytes: Uint8Array): {
   };
 }
 
-/** `null` for anything `atob` refuses - the same "not the named object". */
-function decodeBase64(value: string): Uint8Array | null {
+/**
+ * `null` for anything `atob` refuses - the same "not the named object".
+ *
+ * Wraps the shared decoder rather than repeating its charCode walk: two copies
+ * of one decode step on one verification path is a correction that lands in one
+ * of them. Only the FAILURE shape differs, which is the whole reason this exists
+ * - the shard path treats an undecodable body as a transport failure and throws;
+ * a payload is one marker inside a transcript that reads fine otherwise.
+ */
+function decodeBase64OrNull(value: string): Uint8Array | null {
   try {
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
+    return decodeBase64(value);
   } catch {
     return null;
   }

@@ -430,8 +430,16 @@ export function useEpicRouteSynchronization(
   // sync rather than by mutation callbacks. `isTileRefRecordLive` is the same
   // predicate back/forward's preview-reopen path uses before restoring a
   // closed tile, so "is this tile's record gone" is answered in one place.
+  // An UNSETTLED cloud list is not an empty one, and this decision cannot tell
+  // the difference from `data` alone: while the list is in flight every cloud
+  // row reads as absent, which is exactly the never-adopted same-host chat the
+  // exemption below exists for - and closing its tab is not undoable by the
+  // response that would have saved it. A list that FAILED (an older host
+  // answering `E_HOST_UNSUPPORTED`) is a settled answer, so the sweep proceeds.
+  const cloudChatsSettled = cloudChats.isSuccess || cloudChats.isError;
   useEffect(() => {
     if (!snapshotLoaded) return;
+    if (!cloudChatsSettled) return;
     if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
@@ -458,6 +466,7 @@ export function useEpicRouteSynchronization(
     }
   }, [
     snapshotLoaded,
+    cloudChatsSettled,
     canvas,
     records,
     cloudChats.data,

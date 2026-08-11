@@ -9,8 +9,15 @@ const mocks = vi.hoisted(() => ({
   bound: true,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => (mocks.bound ? { hostClient: {} } : null),
+// The Epic SESSION's host, not the app-wide one: the indicator asks
+// `epic.chatBackupStatus` about this Epic's publisher, so a retained tab bound
+// to one host must not poll another.
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => (mocks.bound ? "host-session" : null),
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : { hostId },
 }));
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: mocks.data }),

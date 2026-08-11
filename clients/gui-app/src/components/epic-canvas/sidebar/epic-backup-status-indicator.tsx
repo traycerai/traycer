@@ -5,7 +5,8 @@ import type {
 } from "@traycer/protocol/host/epic/chat-backup-status";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostBinding } from "@/lib/host";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -14,11 +15,21 @@ export interface EpicBackupStatusIndicatorProps {
   readonly epicId: string;
 }
 
-/** Quiet local publication health, shown only when somebody can act on it. */
+/**
+ * Quiet local publication health, shown only when somebody can act on it.
+ *
+ * Scoped to the host that owns the surrounding Epic SESSION, not to the app-wide
+ * active host. The two differ whenever a retained Epic tab is bound to one host
+ * while another is active, and `epic.chatBackupStatus` is a question about THIS
+ * Epic's publisher: asked of the wrong machine it either hides the bound host's
+ * halted backup or reports a status for a task that host is not running. Same
+ * contract every other sidebar RPC follows - the sidebar is a sibling of the
+ * canvas, outside every tile `TabHostProvider`, so it reads the session's host.
+ */
 export function EpicBackupStatusIndicator(
   props: EpicBackupStatusIndicatorProps,
 ) {
-  const client = useHostBinding()?.hostClient ?? null;
+  const client = useHostClientForHostId(useEpicSessionHostId());
   if (client === null) return null;
   return <BoundEpicBackupStatusIndicator {...props} client={client} />;
 }
@@ -114,9 +125,7 @@ function labelForHaltCauses(causes: readonly ChatBackupHaltCause[]): string {
   if (
     causes.some(
       (cause) =>
-        cause === "conflict" ||
-        cause === "too-large" ||
-        cause === "escalation",
+        cause === "conflict" || cause === "too-large" || cause === "escalation",
     )
   ) {
     return "Backup failing";

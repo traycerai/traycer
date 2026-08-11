@@ -272,7 +272,16 @@ function PublishedPlanModal(
     <PlanModalView
       {...props}
       modalMarkdown={publishedPlan.markdown ?? markdownFallback}
-      unavailable={!publishedPlan.isLoading && publishedPlan.markdown === null}
+      // A plan with no `fullContentRef` has no external content to be missing:
+      // its saved preview IS the whole plan, and the payload query is disabled
+      // on purpose. Without the first clause that disabled query's `null`
+      // markdown read as "unavailable" and warned about content that was
+      // already on screen - the live path gates the same way.
+      unavailable={
+        segment.fullContentRef !== null &&
+        !publishedPlan.isLoading &&
+        publishedPlan.markdown === null
+      }
       isFetching={publishedPlan.isLoading}
       truncationNotice={
         publishedPlan.truncation === null

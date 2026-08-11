@@ -846,6 +846,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               epicId={epicId}
               tabId={tabId}
               depth={0}
+              selectionMode={selectionMode}
             />
           ),
         )}

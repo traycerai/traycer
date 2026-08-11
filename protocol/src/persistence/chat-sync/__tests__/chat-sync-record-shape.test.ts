@@ -22,7 +22,12 @@ import type { z } from "zod";
  * dropping it.
  */
 
-type Assignable<From, To> = From extends To ? true : never;
+// Tuple-wrapped so the conditional is not DISTRIBUTIVE. A naked `From extends
+// To` spreads over a union `From` and collapses `true | never` back to `true`,
+// so a union in which only some members fit would pass this guard. The records
+// are object types today; the day a shard variant set becomes a discriminated
+// union is the day that would matter, silently.
+type Assignable<From, To> = [From] extends [To] ? true : never;
 type ChatHeadReaderRecord = z.infer<typeof chatHeadReaderSchema>;
 type ChatShardReaderRecord = z.infer<typeof chatShardReaderSchema>;
 
