@@ -53,6 +53,28 @@ describe("model provider icons", () => {
     }
   });
 
+  it("covers the plan and region variants the catalog actually ships", () => {
+    // Checked against the real `models.dev` catalog (183 ids), not guessed: the
+    // coding-plan and region suffixes are a large share of the tail, and each
+    // one is a separate row a user sees.
+    for (const id of [
+      "togetherai",
+      "zhipuai",
+      "zhipuai-coding-plan",
+      "siliconflow",
+      "siliconflow-cn",
+      "xiaomi",
+      "xiaomi-token-plan-cn",
+      "tencent-coding-plan",
+      "stepfun-step-plan",
+      "302ai",
+      "watsonx",
+      "snowflake-cortex",
+    ]) {
+      expect(markFor(id, false)).toBe(id);
+    }
+  });
+
   it("falls back for an unknown id instead of rendering nothing", () => {
     // Upstream's failure was an invisible icon, which reads as a broken row
     // rather than an unknown provider.

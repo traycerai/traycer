@@ -1,5 +1,6 @@
 import { createElement, type ReactElement, type SVGProps } from "react";
 import { Sparkles } from "lucide-react";
+import Ai302Mono from "@lobehub/icons/es/Ai302/components/Mono";
 import AiHubMixMono from "@lobehub/icons/es/AiHubMix/components/Mono";
 import AlibabaMono from "@lobehub/icons/es/Alibaba/components/Mono";
 import AnthropicMono from "@lobehub/icons/es/Anthropic/components/Mono";
@@ -45,6 +46,17 @@ import VercelMono from "@lobehub/icons/es/Vercel/components/Mono";
 import VertexAIMono from "@lobehub/icons/es/VertexAI/components/Mono";
 import XAIMono from "@lobehub/icons/es/XAI/components/Mono";
 import ZAIMono from "@lobehub/icons/es/ZAI/components/Mono";
+import ClineMono from "@lobehub/icons/es/Cline/components/Mono";
+import IbmMono from "@lobehub/icons/es/IBM/components/Mono";
+import KiloCodeMono from "@lobehub/icons/es/KiloCode/components/Mono";
+import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
+import QiniuMono from "@lobehub/icons/es/Qiniu/components/Mono";
+import SiliconCloudMono from "@lobehub/icons/es/SiliconCloud/components/Mono";
+import SnowflakeMono from "@lobehub/icons/es/Snowflake/components/Mono";
+import TencentMono from "@lobehub/icons/es/Tencent/components/Mono";
+import TogetherMono from "@lobehub/icons/es/Together/components/Mono";
+import XiaomiMiMoMono from "@lobehub/icons/es/XiaomiMiMo/components/Mono";
+import ZhipuMono from "@lobehub/icons/es/Zhipu/components/Mono";
 import ZenMuxMono from "@lobehub/icons/es/ZenMux/components/Mono";
 
 /**
@@ -75,9 +87,12 @@ import ZenMuxMono from "@lobehub/icons/es/ZenMux/components/Mono";
  *     between them there is no state where a mark is claimed and nothing
  *     renders.
  *
- * Coverage is the popular HEAD of the catalog, not all of it. The tail falls
- * back, which is the honest outcome - `@lobehub/icons` has no mark for most of
- * those, and inventing one would be the impersonation bug in a different coat.
+ * Coverage is 84 of the catalog's 183 ids, checked against the real
+ * `models.dev` payload rather than guessed - every key below is an id the
+ * catalog actually ships, so none of them is a mark that can never match. The
+ * remaining tail falls back, which is the honest outcome: `@lobehub/icons` has
+ * no mark for those, and inventing one would be the impersonation bug in a
+ * different coat.
  */
 export type ModelProviderIcon = (
   props: SVGProps<SVGSVGElement>,
@@ -115,6 +130,7 @@ export const GenericModelProviderIcon: ModelProviderIcon = (props) => (
  * billing arrangement, not a different company.
  */
 const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
+  "302ai": (props) => <Ai302Mono {...props} />,
   aihubmix: (props) => <AiHubMixMono {...props} />,
   alibaba: (props) => <AlibabaMono {...props} />,
   "alibaba-cn": (props) => <AlibabaMono {...props} />,
@@ -179,6 +195,29 @@ const MODEL_PROVIDER_ICONS: Readonly<Record<string, ModelProviderIcon>> = {
   // is the parent company rather than the brand this row names - and it broke
   // the rule stated above it, where every plan variant wears its parent's mark.
   "zai-coding-plan": (props) => <ZAIMono {...props} />,
+  "cline-pass": (props) => <ClineMono {...props} />,
+  kilo: (props) => <KiloCodeMono {...props} />,
+  "kimi-for-coding": (props) => <KimiMono {...props} />,
+  "opencode-go": (props) => <OpenCodeMono {...props} />,
+  "perplexity-agent": (props) => <PerplexityMono {...props} />,
+  "qiniu-ai": (props) => <QiniuMono {...props} />,
+  siliconflow: (props) => <SiliconCloudMono {...props} />,
+  "siliconflow-cn": (props) => <SiliconCloudMono {...props} />,
+  "snowflake-cortex": (props) => <SnowflakeMono {...props} />,
+  "stepfun-ai": (props) => <StepfunMono {...props} />,
+  "stepfun-ai-step-plan": (props) => <StepfunMono {...props} />,
+  "stepfun-step-plan": (props) => <StepfunMono {...props} />,
+  "tencent-coding-plan": (props) => <TencentMono {...props} />,
+  "tencent-token-plan": (props) => <TencentMono {...props} />,
+  "tencent-tokenhub": (props) => <TencentMono {...props} />,
+  togetherai: (props) => <TogetherMono {...props} />,
+  watsonx: (props) => <IbmMono {...props} />,
+  xiaomi: (props) => <XiaomiMiMoMono {...props} />,
+  "xiaomi-token-plan-ams": (props) => <XiaomiMiMoMono {...props} />,
+  "xiaomi-token-plan-cn": (props) => <XiaomiMiMoMono {...props} />,
+  "xiaomi-token-plan-sgp": (props) => <XiaomiMiMoMono {...props} />,
+  zhipuai: (props) => <ZhipuMono {...props} />,
+  "zhipuai-coding-plan": (props) => <ZhipuMono {...props} />,
   zenmux: (props) => <ZenMuxMono {...props} />,
 };
 

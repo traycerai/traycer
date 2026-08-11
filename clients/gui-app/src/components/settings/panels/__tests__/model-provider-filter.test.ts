@@ -3,8 +3,8 @@ import type { ModelProviderEntry } from "@traycer/protocol/host/provider-native-
 import {
   filterModelProvidersByMethod,
   MODEL_PROVIDER_METHOD_FILTER,
+  MODEL_PROVIDER_METHOD_FILTER_OPTIONS,
   modelProviderMethodFilterLabel,
-  supportsApiKeySignIn,
   supportsOauthSignIn,
 } from "@/components/settings/panels/model-provider-filter";
 
@@ -54,13 +54,8 @@ describe("model provider method filter", () => {
   it("reads support off what the PROVIDER advertises", () => {
     expect(supportsOauthSignIn(OAUTH_ONLY)).toBe(true);
     expect(supportsOauthSignIn(KEY_ONLY)).toBe(false);
-    // The common case reaches this through the host's synthesized key method,
-    // the same branch a real advertised key arm takes.
-    expect(supportsApiKeySignIn(KEY_ONLY)).toBe(true);
-    // Excluded: a method list with no key arm, and a row the host offered
-    // nothing for at all.
-    expect(supportsApiKeySignIn(OAUTH_ONLY)).toBe(false);
-    expect(supportsApiKeySignIn(NOTHING_OFFERED)).toBe(false);
+    expect(supportsOauthSignIn(BOTH)).toBe(true);
+    expect(supportsOauthSignIn(NOTHING_OFFERED)).toBe(false);
   });
 
   it("returns the SAME array while showing everything", () => {
@@ -79,36 +74,20 @@ describe("model provider method filter", () => {
     ).toEqual(["github-copilot", "openai"]);
   });
 
-  it("is NOT a partition - a provider offering both appears under either", () => {
-    // The two buckets overlap on purpose. Treating them as exclusive would hide
-    // a provider from the filter that describes it perfectly well.
-    const apiKey = filterModelProvidersByMethod(
-      ALL,
-      MODEL_PROVIDER_METHOD_FILTER.ApiKey,
-    ).map((row) => row.id);
-    expect(apiKey).toContain("openai");
-    expect(apiKey).toContain("anthropic");
-  });
-
-  it("excludes rows with no key arm - advertised or synthesized", () => {
-    // `github-copilot` advertises `['oauth']` and nothing else; the bedrock
-    // fixture stands for a row the host offered nothing for. Neither has a key
-    // path, so neither belongs in the bucket.
-    const apiKey = filterModelProvidersByMethod(
-      ALL,
-      MODEL_PROVIDER_METHOD_FILTER.ApiKey,
-    ).map((row) => row.id);
-    expect(apiKey).not.toContain("github-copilot");
-    expect(apiKey).not.toContain("amazon-bedrock");
+  it("offers no API-key bucket, because it would be the whole catalog", () => {
+    // Measured against a real host: the synthesized `api` method puts 178 of
+    // ~180 rows in that bucket. A control that costs a click and returns the
+    // list you were already looking at is a dead option, and the two rows it
+    // would exclude are the ones "Browser sign-in" already isolates.
+    expect(
+      MODEL_PROVIDER_METHOD_FILTER_OPTIONS.map((option) => option.value),
+    ).toEqual(["all", "oauth"]);
   });
 
   it("names every option", () => {
     expect(
       modelProviderMethodFilterLabel(MODEL_PROVIDER_METHOD_FILTER.Oauth),
     ).toBe("Browser sign-in");
-    expect(
-      modelProviderMethodFilterLabel(MODEL_PROVIDER_METHOD_FILTER.ApiKey),
-    ).toBe("API key");
     expect(
       modelProviderMethodFilterLabel(MODEL_PROVIDER_METHOD_FILTER.All),
     ).toBe("All");

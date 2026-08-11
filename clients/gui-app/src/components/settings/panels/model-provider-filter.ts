@@ -11,13 +11,19 @@
  * have lit "API key" on ~170 rows to say nothing - the same failure the removed
  * per-tab content dots had. A filter puts the rare, interesting answer one
  * click away and leaves the common case unmarked.
+ *
+ * There is deliberately NO "API key" option, for the same reason there is no
+ * badge: the host synthesizes an `api` method for every provider whose
+ * `/provider/auth` advertises nothing, so that bucket measured 178 of ~180 rows
+ * - a control that looks like a choice, costs a click, and returns almost
+ * exactly the list you were already looking at. "All" is the honest name for
+ * that set.
  */
 import type { ModelProviderEntry } from "@traycer/protocol/host/provider-native-schemas";
 
 export const MODEL_PROVIDER_METHOD_FILTER = {
   All: "all",
   Oauth: "oauth",
-  ApiKey: "apiKey",
 } as const;
 
 export type ModelProviderMethodFilter =
@@ -29,7 +35,6 @@ export const MODEL_PROVIDER_METHOD_FILTER_OPTIONS: ReadonlyArray<{
 }> = [
   { value: MODEL_PROVIDER_METHOD_FILTER.All, label: "All" },
   { value: MODEL_PROVIDER_METHOD_FILTER.Oauth, label: "Browser sign-in" },
-  { value: MODEL_PROVIDER_METHOD_FILTER.ApiKey, label: "API key" },
 ];
 
 /**
@@ -45,8 +50,6 @@ export function modelProviderMethodFilterEmptyDescription(
   switch (filter) {
     case MODEL_PROVIDER_METHOD_FILTER.Oauth:
       return "No providers on this host advertise a browser sign-in.";
-    case MODEL_PROVIDER_METHOD_FILTER.ApiKey:
-      return "No providers on this host take an API key.";
     case MODEL_PROVIDER_METHOD_FILTER.All:
       return "No providers on this host.";
   }
@@ -67,26 +70,6 @@ export function supportsOauthSignIn(entry: ModelProviderEntry): boolean {
 }
 
 /**
- * A provider that can be signed in with a pasted key - which is now simply one
- * that advertises an `api` method.
- *
- * The host synthesizes exactly that method for every provider whose
- * `/provider/auth` advertises nothing, so the common case reaches this through
- * the same branch as a real advertised key arm. An earlier version also treated
- * an EMPTY method list as key-capable, which was right while the client did the
- * synthesizing and is wrong now: an empty list means the host offered nothing,
- * and calling that "takes an API key" would put a row in the bucket that has no
- * key path at all.
- *
- * An OAUTH-ONLY provider (`github-copilot`) is the one kind excluded, which is
- * what makes the bucket worth offering. A provider can satisfy BOTH this and
- * {@link supportsOauthSignIn} - the two filters are not a partition.
- */
-export function supportsApiKeySignIn(entry: ModelProviderEntry): boolean {
-  return entry.methods.some((method) => method.type === "api");
-}
-
-/**
  * Filters by what the PROVIDER advertises, not by what this host can run. A
  * method the host cannot execute is still shown in the connect dialog with a
  * reason, so hiding its row from the filter would contradict the surface that
@@ -101,8 +84,6 @@ export function matchesModelProviderMethodFilter(
       return true;
     case MODEL_PROVIDER_METHOD_FILTER.Oauth:
       return supportsOauthSignIn(entry);
-    case MODEL_PROVIDER_METHOD_FILTER.ApiKey:
-      return supportsApiKeySignIn(entry);
   }
 }
 

@@ -840,20 +840,23 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       viewport under jsdom's zero-height layout, which would put this list's
       behavior beyond test).
       - **One filter beside the search box**
-        (`model-provider-filter.ts` + `model-provider-list-controls.tsx`): All /
-        Browser sign-in / API key, in the same `ListFilter` menu shape the
+        (`model-provider-filter.ts` + `model-provider-list-controls.tsx`):
+        **All / Browser sign-in**, in the same `ListFilter` menu shape the
         provider rail uses (`provider-rail-controls.tsx`), down to the dot that
         marks an active filter and the trigger's accessible name carrying the
         current value. Per-row method badges were the other option and would
         have lit "API key" on ~170 of ~180 rows to say nothing — the failure the
         removed per-tab content dots had. The interesting answer is the rare
         one, so it lives one click away instead.
-        Both buckets read off `methods[]`. The API-key bucket is every row
-        carrying an `api` arm — which, since the host synthesizes a generic key
-        method for any provider whose `/provider/auth` advertises nothing, is
-        nearly all of them; an EMPTY method list means the host offered nothing
-        and belongs in neither bucket. The two deliberately OVERLAP rather than
-        partition: a provider advertising both arms belongs under either.
+        There is deliberately **no "API key" option**, and it is the same
+        argument one step further: the host synthesizes an `api` method for
+        every provider whose `/provider/auth` advertises nothing, so that bucket
+        measured **178 of ~180 rows** against a real host. A control that costs a
+        click and returns the list you were already looking at is a dead option
+        wearing a choice's clothes; "All" is the honest name for that set, and
+        the two rows it would have excluded are exactly the ones **Browser
+        sign-in** already isolates. The remaining bucket reads off `methods[]`,
+        and an EMPTY method list means the host offered nothing at all.
         Filtering runs BEFORE the fuzzy search, so a query cannot quietly
         re-widen the bucket the user picked.
     - **`source` is badged only for a CONNECTED provider, and disconnect is
