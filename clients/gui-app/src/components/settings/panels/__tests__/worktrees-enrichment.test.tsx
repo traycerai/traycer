@@ -851,7 +851,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         null,
         createAppQueryClient(),
       );
-      renderHook(
+      const { result } = renderHook(
         () =>
           useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
             "/wt/a",
@@ -894,6 +894,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         await vi.advanceTimersByTimeAsync(60_000);
       });
       expect(requests).toHaveLength(settled);
+      expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
     });
   });
 

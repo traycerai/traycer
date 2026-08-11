@@ -844,20 +844,30 @@ export function useWorktreeActivityEnrichment(
     sweepTick,
   ]);
 
-  // Errored paths ARE derived from the live window results (index-aligned with
-  // `requestedPaths`): a settled error has no cached data, so it can't come from
-  // the cache fold; it must come from the live query state of the current window.
+  // Error state is host-wide, not viewport-owned. Strict filtering removes
+  // never-classified rows from the virtual window, after which only the
+  // background sweep owns their queries. Reading every listed path's query
+  // state lets an exhausted/failed sweep settle from Checking to unavailable.
+  // `sweepTick` is the sweep completion signal; `results` covers observer-owned
+  // transitions. A retry clears the error presentation while it is fetching.
   const erroredPaths = useMemo(() => {
+    void results;
+    void sweepTick;
+    if (hostId === null) return EMPTY_ERRORED;
     const errored = new Set<string>();
-    results.forEach((result, index) => {
-      if (result.data === undefined && result.isError) {
-        errored.add(requestedPaths[index]);
+    for (const path of worktreePaths) {
+      const state =
+        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
+          perPathEnrichmentQueryKey(hostId, path),
+        );
+      if (state?.status === "error" && state.fetchStatus !== "fetching") {
+        errored.add(path);
       }
-    });
+    }
     // The stable constant in the (overwhelmingly common) empty case, so this
     // prop can't defeat downstream memoization on every `results` identity.
     return errored.size === 0 ? EMPTY_ERRORED : errored;
-  }, [results, requestedPaths]);
+  }, [hostId, queryClient, results, sweepTick, worktreePaths]);
 
   const enriching = results.some((result) => result.isFetching);
   // Gated perf telemetry for the enrichment leg (invisible before - only the base

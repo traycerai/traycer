@@ -147,9 +147,9 @@ import {
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
 // `ready` = enriched (real tier), `pending` = in flight ("Checking…" spinner),
-// `unknown` = the per-path query settled to an error (non-animated fallback, no
-// infinite spinner). `pending` and `unknown` are both un-enriched for filtering.
-type WorktreeEnrichmentState = "ready" | "pending" | "unknown";
+// `unknown` = the first probe settled to an error (no tier is known), and
+// `unavailable` = a refresh failed but a last-known tier remains displayable.
+type WorktreeEnrichmentState = "ready" | "pending" | "unknown" | "unavailable";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
@@ -396,8 +396,8 @@ function worktreeTierFilterLabel(
   tierFilters: WorktreeTierFilterSet,
   availableTiers: readonly WorktreeTier[],
 ): string {
-  // Only count selections that still exist in the list, so a stale selection for
-  // a now-absent tier does not leave the trigger reading a phantom count.
+  // `availableTiers` includes every selected tier even when it currently has no
+  // matches, so a strict persisted filter never masquerades as "All".
   const active = availableTiers.filter((tier) => tierFilters.has(tier));
   if (active.length === 0) return "All";
   if (active.length === 1) return WORKTREE_TIER_LABEL[active[0]];
@@ -864,6 +864,21 @@ export function WorktreesList(props: {
     }
     return accepted;
   }, [worktrees, enrichedByPath]);
+  // Classification is stale-while-revalidate. TanStack retains an invalidated
+  // query's data while its refetch runs, and that last-known evidence is exactly
+  // what keeps an active tier filter stable. It is DISPLAY-ONLY: destructive
+  // actions continue to use `acceptedEnrichedByPath` below and therefore never
+  // trust an overlay older than the refreshed base row.
+  const classificationEntryByPath = useMemo(() => {
+    const known = new Map<string, WorktreeHostEntryV14>();
+    for (const base of worktrees) {
+      const enriched = enrichedByPath.get(base.worktreePath);
+      if (enriched !== undefined && enriched.resolvedAt !== null) {
+        known.set(base.worktreePath, enriched);
+      }
+    }
+    return known;
+  }, [worktrees, enrichedByPath]);
   // The merged view every downstream computation reads. A row is "pending"
   // until a freshness-valid overlay exists for its current base row.
   const mergedWorktrees = useMemo(
@@ -873,22 +888,28 @@ export function WorktreesList(props: {
       ),
     [worktrees, acceptedEnrichedByPath],
   );
-  // Un-enriched for classification/filtering (covers BOTH still-in-flight and
-  // settled-error rows - neither has a known tier, so both stay out of the green /
-  // tier-filtered cohorts).
-  const isPending = useCallback(
-    (worktreePath: string) => !acceptedEnrichedByPath.has(worktreePath),
-    [acceptedEnrichedByPath],
+  // Search/display may keep using a last-known overlay while it revalidates.
+  // This mirrors tier filtering: entering a loading state must not erase a PR
+  // number the user could search a moment earlier. Safety-sensitive consumers
+  // continue to read `mergedWorktrees` / `acceptedEnrichedByPath` instead.
+  const displayWorktrees = useMemo(
+    () =>
+      mergedWorktrees.map(
+        (entry) => classificationEntryByPath.get(entry.worktreePath) ?? entry,
+      ),
+    [mergedWorktrees, classificationEntryByPath],
   );
   // The row PILL, however, distinguishes the two: an errored row reads a settled
   // "Unknown" (non-animated), never an infinite "Checking…" spinner.
   const enrichmentStateFor = useCallback(
     (worktreePath: string): WorktreeEnrichmentState => {
-      if (acceptedEnrichedByPath.has(worktreePath)) return "ready";
+      if (classificationEntryByPath.has(worktreePath)) {
+        return erroredPaths.has(worktreePath) ? "unavailable" : "ready";
+      }
       if (erroredPaths.has(worktreePath)) return "unknown";
       return "pending";
     },
-    [acceptedEnrichedByPath, erroredPaths],
+    [classificationEntryByPath, erroredPaths],
   );
   // DELETE surfaces read this variant instead: a snapshot-seeded row reads
   // "pending" (its restored tier is last-run display data, not verified
@@ -898,11 +919,12 @@ export function WorktreesList(props: {
   // tier filters) keeps using `enrichmentStateFor`, so warm-open tiers still
   // paint instantly.
   const deleteEnrichmentStateFor = useCallback(
-    (worktreePath: string): WorktreeEnrichmentState =>
-      seededPaths.has(worktreePath)
-        ? "pending"
-        : enrichmentStateFor(worktreePath),
-    [seededPaths, enrichmentStateFor],
+    (worktreePath: string): WorktreeEnrichmentState => {
+      if (seededPaths.has(worktreePath)) return "pending";
+      if (acceptedEnrichedByPath.has(worktreePath)) return "ready";
+      return erroredPaths.has(worktreePath) ? "unknown" : "pending";
+    },
+    [seededPaths, acceptedEnrichedByPath, erroredPaths],
   );
   // True-AND merge rollup per owning Task (epic), aggregated across every worktree
   // entry the epic owns (superproject branch + each entry's owned submodules). Same
@@ -943,8 +965,8 @@ export function WorktreesList(props: {
   // Keyed on the ENRICHED list, unlike the text haystack above: a PR number only
   // exists once a path's activity probe has landed.
   const prHaystackByPath = useMemo(
-    () => buildWorktreePrHaystackByPath(mergedWorktrees),
-    [mergedWorktrees],
+    () => buildWorktreePrHaystackByPath(displayWorktrees),
+    [displayWorktrees],
   );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
@@ -952,55 +974,49 @@ export function WorktreesList(props: {
   // background sweep over the rest).
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
-    for (const entry of mergedWorktrees) {
-      if (isPending(entry.worktreePath)) continue;
+    for (const entry of classificationEntryByPath.values()) {
       present.add(classifyWorktreeTier(entry));
     }
-    return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
-  }, [mergedWorktrees, isPending]);
-  // Intersects the raw selection with the tiers actually present (mirroring
-  // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is
-  // ignored, so the effective filter is empty and every row shows, matching
-  // the "All" the toolbar reads. Hoisted so the tier-filter stage below and the
-  // "still checking" notice agree on whether a filter is ACTUALLY narrowing
-  // the list.
-  const effectiveTierFilters = useMemo(
-    () => new Set(availableTiers.filter((tier) => tierFilters.has(tier))),
-    [availableTiers, tierFilters],
-  );
-  // Rows still waiting on their probe. A PR-number query CANNOT match them yet
+    // A persisted/selected tier remains visible even when it currently has no
+    // matches. Otherwise its trigger would silently read "All" and broaden the
+    // list while never-classified rows are still resolving.
+    return WORKTREE_TIER_ORDER.filter(
+      (tier) => present.has(tier) || tierFilters.has(tier),
+    );
+  }, [classificationEntryByPath, tierFilters]);
+  // Rows still waiting on their first probe. A PR-number query CANNOT match them yet
   // (their `prNumber` is null), so an empty result set only honestly reads "no
   // matches" once this hits zero - until then the empty state says "still
   // checking". Errored rows are excluded deliberately: they settle to "Unknown"
   // and will never enrich, so counting them would hold the notice open forever.
   //
-  // Suppressed entirely while a tier filter is active: a pending row bypasses
-  // the tier stage only WHILE it's pending (see `filteredWorktrees` below) - if
-  // it resolves into an excluded tier, it drops out right where a plain PR
-  // match would otherwise have shown it. Promising "still checking" in that
-  // case overclaims; the tier-filtered empty state falls back to the honest
-  // plain "no matches" copy instead.
+  // This count is also shown beside an active tier filter: unknown rows remain
+  // outside the strict result set, but the user can still see that classification
+  // is incomplete.
   const stillCheckingCount = useMemo(() => {
-    if (effectiveTierFilters.size > 0) return 0;
     return mergedWorktrees.filter(
       (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
     ).length;
-  }, [mergedWorktrees, enrichmentStateFor, effectiveTierFilters]);
+  }, [mergedWorktrees, enrichmentStateFor]);
+  const unavailableStatusCount = useMemo(
+    () =>
+      mergedWorktrees.filter(
+        (entry) => enrichmentStateFor(entry.worktreePath) === "unknown",
+      ).length,
+    [mergedWorktrees, enrichmentStateFor],
+  );
   // The status filter composes with the search box (both apply) before repo
   // grouping. The repo / branch / path / Task legs of search run on cheap base
   // fields, so they work before enrichment; only the PR-number leg waits on a
   // probe, and the empty state owns that gap.
   // Tier comes from the shared classifier, so the filter options exactly match the
-  // row pills. Intersect the selection with the tiers actually present (mirroring
-  // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is ignored,
-  // so the effective filter is empty and every row shows, matching the "All" the
-  // toolbar reads.
+  // row pills. Selected zero-match tiers remain active and visible in the control;
+  // only an explicit "All" action broadens the result set.
   //
-  // Pending rows are KEPT under an active tier filter (tier unknown ⇒ can't be
-  // excluded yet): they render as "Checking…" until their probe lands (viewport
-  // or background sweep). Once enriched, a non-matching row drops out on the
-  // next pass, so the filtered list converges on its own - scrolling only
-  // changes which rows resolve first.
+  // A tier selection is strict: only rows with last-known evidence in a selected
+  // tier enter the result set. Never-classified rows are accounted for by the
+  // checking/unavailable status outside the results, then appear only if their
+  // first successful classification matches.
   const filteredWorktrees = useMemo(() => {
     const searched = filterWorktrees(
       mergedWorktrees,
@@ -1008,19 +1024,21 @@ export function WorktreesList(props: {
       searchHaystackByPath,
       prHaystackByPath,
     );
-    if (effectiveTierFilters.size === 0) return searched;
-    return searched.filter(
-      (entry) =>
-        isPending(entry.worktreePath) ||
-        effectiveTierFilters.has(classifyWorktreeTier(entry)),
-    );
+    if (tierFilters.size === 0) return searched;
+    return searched.filter((entry) => {
+      const classification = classificationEntryByPath.get(entry.worktreePath);
+      return (
+        classification !== undefined &&
+        tierFilters.has(classifyWorktreeTier(classification))
+      );
+    });
   }, [
     mergedWorktrees,
     deferredSearchText,
     searchHaystackByPath,
     prHaystackByPath,
-    effectiveTierFilters,
-    isPending,
+    tierFilters,
+    classificationEntryByPath,
   ]);
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
@@ -1522,6 +1540,22 @@ export function WorktreesList(props: {
           summary={progressSummary}
           onDismiss={dismissTerminalBackgrounded}
         />
+        {shouldShowWorktreeFilterResolutionStatus(
+          tierFilters,
+          stillCheckingCount,
+          unavailableStatusCount,
+        ) ? (
+          <div
+            role="status"
+            className="border-b border-border/40 px-5 py-1.5 text-ui-xs text-muted-foreground"
+            data-testid="worktrees-filter-resolution-status"
+          >
+            {worktreeFilterResolutionStatusText(
+              stillCheckingCount,
+              unavailableStatusCount,
+            )}
+          </div>
+        ) : null}
 
         {/*
          * Relatively-positioned wrapper so the contextual selection bar can be
@@ -1544,11 +1578,10 @@ export function WorktreesList(props: {
           >
             {groups.length === 0 ? (
               /**
-               * Empty because the search excluded everything - a tier filter
-               * alone can't land here, since un-enriched rows always pass it.
-               * So while probes are outstanding, "no matches" would be a lie for
-               * a PR-number query: the row exists, it just doesn't know its PR
-               * yet. Say what's actually true and keep the spinner honest.
+               * A strict tier filter can legitimately have no proven matches
+               * while first-time probes are outstanding. Distinguish that from
+               * the settled no-match state; the status strip above accounts for
+               * failed first classifications without an endless spinner.
                */
               <WorktreesStateMessage
                 tone="muted"
@@ -1608,6 +1641,11 @@ export function WorktreesList(props: {
                         >
                           <WorktreeRow
                             entry={item.entry}
+                            classificationEntry={
+                              classificationEntryByPath.get(
+                                item.entry.worktreePath,
+                              ) ?? null
+                            }
                             enrichment={enrichmentStateFor(
                               item.entry.worktreePath,
                             )}
@@ -1883,6 +1921,30 @@ function worktreeSearchCheckingNoticeText(checkingCount: number): string {
   return `No matches yet - still checking ${checkingCount} ${plural}.`;
 }
 
+function worktreeFilterResolutionStatusText(
+  checkingCount: number,
+  unavailableCount: number,
+): string {
+  const parts: string[] = [];
+  if (checkingCount > 0) {
+    const plural = checkingCount === 1 ? "worktree" : "worktrees";
+    parts.push(`Checking ${checkingCount} ${plural}…`);
+  }
+  if (unavailableCount > 0) {
+    const plural = unavailableCount === 1 ? "worktree" : "worktrees";
+    parts.push(`Status unavailable for ${unavailableCount} ${plural}.`);
+  }
+  return parts.join(" ");
+}
+
+function shouldShowWorktreeFilterResolutionStatus(
+  tierFilters: WorktreeTierFilterSet,
+  checkingCount: number,
+  unavailableCount: number,
+): boolean {
+  return tierFilters.size > 0 && (checkingCount > 0 || unavailableCount > 0);
+}
+
 /**
  * Bulk-delete confirmation: aggregate-by-class summary, dirty loss naming, a
  * neutral caveat for the unverified cohort, named exclusions, and the full
@@ -2067,6 +2129,7 @@ function worktreeDeleteDisabledReason(
 
 interface WorktreeRowProps {
   readonly entry: WorktreeHostEntryV14;
+  readonly classificationEntry: WorktreeHostEntryV14 | null;
   // This row's activity-enrichment state, driving the tier pill: `pending` (still
   // in flight → "Checking…"), `unknown` (settled to error → non-animated fallback),
   // or `ready` (enriched → real tier). Base fields paint regardless.
@@ -2101,6 +2164,7 @@ function worktreeRowPropsEqual(
 ): boolean {
   if (
     prev.entry !== next.entry ||
+    prev.classificationEntry !== next.classificationEntry ||
     prev.enrichment !== next.enrichment ||
     prev.deleteEnrichment !== next.deleteEnrichment ||
     prev.deleteStatus !== next.deleteStatus ||
@@ -2130,6 +2194,7 @@ const WorktreeRow = memo(function WorktreeRow(
 ): ReactNode {
   const {
     entry,
+    classificationEntry,
     enrichment,
     deleteEnrichment,
     taskTitlesByEpicId,
@@ -2148,6 +2213,8 @@ const WorktreeRow = memo(function WorktreeRow(
   // row look clean enough to delete when it is actually still unknown.
   const classification =
     entry.resolvedAt === null ? null : classifyWorktree(entry);
+  const tierClassification =
+    classificationEntry === null ? null : classifyWorktree(classificationEntry);
   const navigate = useNavigate();
   const openTask = useCallback(
     (epicId: string): void => {
@@ -2204,9 +2271,9 @@ const WorktreeRow = memo(function WorktreeRow(
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
           <WorktreeTierPill
-            entry={entry}
-            tier={classification?.tier ?? "review"}
-            state={entry.resolvedAt === null ? "pending" : enrichment}
+            entry={classificationEntry ?? entry}
+            tier={tierClassification?.tier ?? classification?.tier ?? "review"}
+            state={enrichment}
           />
           {entry.resolvedAt === null ? null : <WorktreePrChips entry={entry} />}
           <span className="truncate text-ui-sm font-medium text-foreground">
@@ -2326,12 +2393,13 @@ function WorktreeTierPill(props: {
       </TooltipWrapper>
     );
   }
+  const unavailable = props.state === "unavailable";
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
   const reviewReasons =
     props.tier === "review" && props.entry.branchStatus !== null
       ? describeReviewReasons(props.entry)
       : [];
-  const tooltip =
+  const tierTooltip =
     reviewReasons.length === 0 ? (
       WORKTREE_TIER_TOOLTIP[props.tier]
     ) : (
@@ -2341,6 +2409,14 @@ function WorktreeTierPill(props: {
         ))}
       </div>
     );
+  const tooltip = unavailable ? (
+    <div className="max-w-[min(90vw,24rem)] space-y-1">
+      <p>Status couldn't be refreshed; showing the last known tier.</p>
+      {typeof tierTooltip === "string" ? <p>{tierTooltip}</p> : tierTooltip}
+    </div>
+  ) : (
+    tierTooltip
+  );
   return (
     <TooltipWrapper
       label={tooltip}
@@ -2353,8 +2429,10 @@ function WorktreeTierPill(props: {
         className={cn("gap-1 font-medium", style.className)}
         data-testid="worktree-tier-pill"
         data-tier={props.tier}
+        data-status={unavailable ? "unavailable" : "ready"}
       >
         <WorktreeTierPillIcon tier={props.tier} />
+        {unavailable ? <HelpCircle className="size-3" aria-hidden /> : null}
         {WORKTREE_TIER_LABEL[props.tier]}
       </Badge>
     </TooltipWrapper>
