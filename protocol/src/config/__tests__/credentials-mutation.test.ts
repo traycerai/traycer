@@ -1117,8 +1117,13 @@ describe("credentials mutation store", () => {
           expect(existsSync(markerPath())).toBe(true);
 
           chmodSync(workDir, 0o700);
-          await waitUntil(() => !store.hasPendingContinuation());
-          expect(existsSync(markerPath())).toBe(false);
+          // Wait on the marker too, not just the flag: the continuation clears
+          // `pending` BEFORE it awaits the marker unlink (both still under the
+          // lock, so no other process can observe the gap - but this in-process
+          // reader can, and did, flakily).
+          await waitUntil(
+            () => !store.hasPendingContinuation() && !existsSync(markerPath()),
+          );
           expect((await readCredentialsFile(credentialsPath))?.token).toBe(
             "cand-tok::r",
           );
@@ -1169,8 +1174,11 @@ describe("credentials mutation store", () => {
         // Unfreeze: A's continuation lands the minted pair and releases the
         // marker; B then adopts via the normal superseded path.
         chmodSync(workDir, 0o700);
-        await waitUntil(() => !storeA.hasPendingContinuation());
-        expect(existsSync(markerPath())).toBe(false);
+        // Same barrier as the migration case above: `pending` is cleared before
+        // the marker unlink is awaited, so the flag alone races the release.
+        await waitUntil(
+          () => !storeA.hasPendingContinuation() && !existsSync(markerPath()),
+        );
 
         const adopted = await storeB.rotate({
           expectedUserId: CREDS.user.id,
