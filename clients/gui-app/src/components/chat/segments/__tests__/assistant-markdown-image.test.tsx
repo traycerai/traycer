@@ -162,15 +162,15 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
   });
 
-  it("defers data:image/svg+xml to the secure SVG path (failure chip for now)", () => {
+  it("routes data:image/svg+xml through the loadable image + SVG lightbox path", () => {
     renderImage({ src: SVG_DATA_URL, alt: undefined, context: undefined });
 
-    const chip = document.querySelector("[data-assistant-image-failure]");
-    expect(chip).not.toBeNull();
-    expect(chip?.textContent).toContain(
-      "SVG preview will be available with the secure SVG viewer",
-    );
-    expect(screen.queryByRole("img")).toBeNull();
+    // Thumbnails stay <img>; the lightbox owns the sanitizer on open.
+    // Ticket 07: never fail-chip SVG data URLs on the assistant surface.
+    expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
+    const img = screen.getByRole("img", { name: "diagram" });
+    expect(img.getAttribute("src")).toBe(SVG_DATA_URL);
+    expect(screen.getByRole("button", { name: "Open diagram" })).toBeTruthy();
   });
 
   it("renders a resolved local source from the attachment blob cache when bytes are ready", () => {
@@ -309,6 +309,49 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(chip).not.toBeNull();
     expect(chip?.textContent).toContain("diagram");
     expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("focuses the same-row generation card when the dedup link is clicked", () => {
+    const client = createQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <AssistantMarkdownImageProvider
+          context={{
+            ...BASE_CONTEXT,
+            deduplicatedSources: new Set(["/workspace/generated.png"]),
+          }}
+        >
+          {/* Chip walks up to data-assistant-turn, then focuses the card. */}
+          <div data-assistant-turn="turn-shared">
+            <section
+              data-image-generation-card="tool-img-shared"
+              tabIndex={-1}
+            />
+            <AssistantMarkdownImageNode
+              src="/workspace/generated.png"
+              alt="generated pier"
+            />
+          </div>
+        </AssistantMarkdownImageProvider>
+      </QueryClientProvider>,
+    );
+
+    const liveCard = document.querySelector<HTMLElement>(
+      '[data-image-generation-card="tool-img-shared"]',
+    );
+    expect(liveCard).not.toBeNull();
+    const focusSpy = vi.spyOn(liveCard as HTMLElement, "focus");
+    const scrollSpy = vi.spyOn(liveCard as HTMLElement, "scrollIntoView");
+
+    const chip = document.querySelector("[data-assistant-image-deduplicated]");
+    expect(chip).not.toBeNull();
+    fireEvent.click(chip as HTMLElement);
+
+    expect(scrollSpy).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "nearest",
+    });
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
   });
 
   it("rejects oversized raster data URLs via the decoded-byte cap", () => {
