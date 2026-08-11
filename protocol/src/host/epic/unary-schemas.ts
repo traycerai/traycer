@@ -1144,24 +1144,60 @@ export type PrepareArtifactImageResponse = z.infer<
   typeof prepareArtifactImageResponseSchema
 >;
 
-export const finishArtifactImageRequestSchema = z.object({
+const finishArtifactImageRequestBaseSchema = z.object({
   epicId: z.string(),
   artifactId: z.string(),
   operationId: z.string(),
-  commit: z.boolean(),
 });
+export const finishArtifactImageRequestSchema = z.discriminatedUnion("commit", [
+  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(true) }),
+  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(false) }),
+]);
 export type FinishArtifactImageRequest = z.infer<
   typeof finishArtifactImageRequestSchema
 >;
 
-export const finishArtifactImageResponseSchema = z.object({
-  status: z.enum([
-    "committed",
-    "aborted",
-    "not-yet-converged",
-    "unknown-operation",
-  ]),
+export const artifactImageFinishResponseFixtures = {
+  commit: {
+    committed: { committed: true },
+    notYetConverged: { status: "not-yet-converged" },
+    unknownOperation: { status: "unknown-operation" },
+  },
+  abort: { aborted: { status: "aborted" } },
+} as const;
+
+export const commitArtifactImageResponseSchema = z.union([
+  z.object({
+    committed: z.literal(
+      artifactImageFinishResponseFixtures.commit.committed.committed,
+    ),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.commit.notYetConverged.status,
+    ),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.commit.unknownOperation.status,
+    ),
+  }),
+]);
+export type CommitArtifactImageResponse = z.infer<
+  typeof commitArtifactImageResponseSchema
+>;
+
+export const abortArtifactImageResponseSchema = z.object({
+  status: z.literal(artifactImageFinishResponseFixtures.abort.aborted.status),
 });
+export type AbortArtifactImageResponse = z.infer<
+  typeof abortArtifactImageResponseSchema
+>;
+
+export const finishArtifactImageResponseSchema = z.union([
+  commitArtifactImageResponseSchema,
+  abortArtifactImageResponseSchema,
+]);
 export type FinishArtifactImageResponse = z.infer<
   typeof finishArtifactImageResponseSchema
 >;
