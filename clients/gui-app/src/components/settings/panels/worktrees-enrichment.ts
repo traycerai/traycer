@@ -427,11 +427,12 @@ export function useWorktreeActivityEnrichment(
   worktreePaths: readonly string[],
 ): {
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
-  // Paths whose per-path enrichment query SETTLED to an error (retries exhausted).
-  // A path here is distinct from one still in flight: the row must stop reading as
-  // progress and fall back to a non-animated "Unknown" pill instead of spinning
-  // forever. Kept disjoint from `enrichedByPath` - a later successful refetch moves
-  // the path from errored to enriched.
+  // Paths whose per-path enrichment query SETTLED to an error (retries exhausted),
+  // across the whole listed host inventory. A failed first probe has no cached
+  // enrichment and renders as "Unknown"; a failed refetch can remain present in
+  // `enrichedByPath`, because TanStack retains its last successful data, and renders
+  // that tier as unavailable. A retry removes the path while it is fetching, and a
+  // later successful refetch clears the error state.
   readonly erroredPaths: ReadonlySet<string>;
   // Paths whose overlay entry is still the restored warm-open seed - display
   // data only. Delete surfaces treat these as not-yet-verified ("pending")
