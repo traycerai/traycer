@@ -255,6 +255,102 @@ export const epicSchemaSurfaceBaseline = {
                   reason: {
                     type: "string",
                   },
+                  retryDeadlineStartedAt: {
+                    anyOf: [
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  heldChain: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          harnessId: {
+                            type: "string",
+                            enum: [
+                              "claude",
+                              "codex",
+                              "opencode",
+                              "traycer",
+                              "cursor",
+                              "grok",
+                              "qwen",
+                              "kiro",
+                              "droid",
+                              "kimi",
+                              "copilot",
+                              "kilocode",
+                              "openrouter",
+                              "amp",
+                              "devin",
+                              "pi",
+                              "hermes",
+                              "omp",
+                              "huggingface",
+                            ],
+                          },
+                          sessionId: {
+                            type: "string",
+                          },
+                          sessionWorkspaceSnapshot: {
+                            type: "object",
+                            properties: {
+                              workspaceKind: {
+                                type: "string",
+                                const: "session-snapshot",
+                              },
+                              primaryWorkspace: {
+                                type: "string",
+                              },
+                              secondaryWorkspaces: {
+                                default: [],
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            required: ["workspaceKind", "primaryWorkspace"],
+                          },
+                          coveredUntilMessageId: {
+                            default: null,
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "null",
+                              },
+                            ],
+                          },
+                          profileId: {
+                            default: null,
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "null",
+                              },
+                            ],
+                          },
+                        },
+                        required: [
+                          "harnessId",
+                          "sessionId",
+                          "sessionWorkspaceSnapshot",
+                        ],
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
                 },
                 required: [
                   "sessionId",
@@ -6969,6 +7065,110 @@ export const epicSchemaSurfaceBaseline = {
                   },
                   reason: {
                     type: "string",
+                  },
+                  retryDeadlineStartedAt: {
+                    anyOf: [
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  heldChain: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          harnessId: {
+                            type: "string",
+                            enum: [
+                              "claude",
+                              "codex",
+                              "opencode",
+                              "traycer",
+                              "cursor",
+                              "grok",
+                              "qwen",
+                              "kiro",
+                              "droid",
+                              "kimi",
+                              "copilot",
+                              "kilocode",
+                              "openrouter",
+                              "amp",
+                              "devin",
+                              "pi",
+                              "hermes",
+                              "omp",
+                              "huggingface",
+                            ],
+                          },
+                          sessionId: {
+                            type: "string",
+                          },
+                          sessionWorkspaceSnapshot: {
+                            type: "object",
+                            properties: {
+                              workspaceKind: {
+                                type: "string",
+                                const: "session-snapshot",
+                              },
+                              primaryWorkspace: {
+                                type: "string",
+                              },
+                              secondaryWorkspaces: {
+                                default: [],
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            required: [
+                              "workspaceKind",
+                              "primaryWorkspace",
+                              "secondaryWorkspaces",
+                            ],
+                            additionalProperties: false,
+                          },
+                          coveredUntilMessageId: {
+                            default: null,
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "null",
+                              },
+                            ],
+                          },
+                          profileId: {
+                            default: null,
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "null",
+                              },
+                            ],
+                          },
+                        },
+                        required: [
+                          "harnessId",
+                          "sessionId",
+                          "sessionWorkspaceSnapshot",
+                          "coveredUntilMessageId",
+                          "profileId",
+                        ],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
                   },
                 },
                 required: [
