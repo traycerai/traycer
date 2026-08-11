@@ -5,11 +5,13 @@ import {
   recordAppLocalDisplayReceipt,
 } from "@/lib/notifications/app-local-display-receipts";
 import {
+  APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST,
   APP_LOCAL_NOTIFICATIONS_ROW_CAP,
   __resetAppLocalNotificationsStoreForTests,
   createAppLocalNotificationsStore,
   emitTerminalClosedNotification,
   emitTerminalCrashedNotification,
+  emitChatStreamErrorNotification,
   migrateAppLocalNotificationsPersistedState,
   type AppLocalNotificationEntry,
   useAppLocalNotificationsStore,
@@ -56,6 +58,7 @@ describe("app-local notifications store", () => {
       byId: { retained: entry("retained", 20, null) },
       orderedIds: ["retained"],
       unreadCount: 1,
+      observedCompletionIdsByHost: {},
     });
   });
 
@@ -234,7 +237,9 @@ describe("app-local notifications store", () => {
 
     store
       .getState()
-      .markFailuresObservedBeforeCompletion(
+      .observeCompletion(
+        "host-a",
+        "completion-1",
         { epicId: "epic-1", chatId: "chat-1" },
         20,
       );
@@ -243,6 +248,101 @@ describe("app-local notifications store", () => {
     expect(store.getState().byId["older-match"].readAt).toBe(20);
     expect(store.getState().byId["later-match"].readAt).toBeNull();
     expect(store.getState().byId["older-sibling"].readAt).toBeNull();
+  });
+
+  it("persists completion observations so a remount cannot replay one over a later failure", () => {
+    const key = appLocalNotificationsKey("user-a");
+    const first = createAppLocalNotificationsStore(key);
+    first.getState().activateIdentity("user-a");
+    first
+      .getState()
+      .observeCompletion(
+        "host-a",
+        "completion-1",
+        { epicId: "epic-1", chatId: "chat-1" },
+        20,
+      );
+    first.getState().upsert(entry("later-failure", 30, null));
+
+    const remounted = createAppLocalNotificationsStore(key);
+    remounted.getState().activateIdentity("user-a");
+    remounted
+      .getState()
+      .observeCompletion(
+        "host-a",
+        "completion-1",
+        { epicId: "epic-1", chatId: "chat-1" },
+        40,
+      );
+
+    expect(remounted.getState().byId["later-failure"].readAt).toBeNull();
+  });
+
+  it("bounds and prunes persisted completion observations", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    for (
+      let index = 0;
+      index < APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST + 1;
+      index++
+    ) {
+      store
+        .getState()
+        .observeCompletion(
+          "host-a",
+          `completion-${index}`,
+          { epicId: "epic-1", chatId: `chat-${index}` },
+          index,
+        );
+    }
+
+    expect(store.getState().observedCompletionIdsByHost["host-a"]).toHaveLength(
+      APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST,
+    );
+    expect(
+      store.getState().observedCompletionIdsByHost["host-a"],
+    ).not.toContain("completion-0");
+
+    store.getState().removeObservedCompletions("host-a", ["completion-1"]);
+    expect(
+      store.getState().observedCompletionIdsByHost["host-a"],
+    ).not.toContain("completion-1");
+  });
+
+  it("resurfaces a same-code chat disconnect after completion", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    const details = {
+      code: "CONNECTION_LOST",
+      reason: "Connection lost",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    emitChatStreamErrorNotification({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      details,
+    });
+    const notificationId = "stream.transport.error:chat-1:CONNECTION_LOST";
+    useAppLocalNotificationsStore
+      .getState()
+      .observeCompletion(
+        "host-a",
+        "completion-1",
+        { epicId: "epic-1", chatId: "chat-1" },
+        20,
+      );
+    emitChatStreamErrorNotification({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      details,
+    });
+
+    const state = useAppLocalNotificationsStore.getState();
+    expect(state.orderedIds).toEqual([notificationId]);
+    expect(state.byId[notificationId].readAt).toBeNull();
+    expect(state.unreadCount).toBe(1);
   });
 
   it("consumes only epic-level rows for an epic-only presence", () => {

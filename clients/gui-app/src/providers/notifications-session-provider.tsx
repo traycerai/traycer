@@ -140,27 +140,27 @@ export function NotificationsSessionProvider(
   const markEntityReadMutation = useNotificationMarkEntityRead();
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
-  const observedCompletionIdsRef = useRef<Map<string, Set<string>>>(new Map());
   // Producer timestamps come from different host clocks, while app-local
   // failures use this renderer's clock. First observation of a completion is
-  // therefore the only causal boundary shared by both sources. Remember it so
-  // reconnect snapshots cannot replay an old completion over a later failure.
+  // therefore the only causal boundary shared by both sources. The app-local
+  // store remembers it durably so reconnect snapshots and provider/renderer
+  // remounts cannot replay an old completion over a later failure.
   const consumeObservedCompletion = useCallback(
     (entry: HostNotificationEntryV21, originHostId: string): void => {
       if (entry.severity !== "done") return;
       const entity = notificationEntityFromHostEntry(entry);
       if (entity === null) return;
-      const observedForHost =
-        observedCompletionIdsRef.current.get(originHostId);
-      if (observedForHost?.has(entry.id) === true) return;
-      if (observedForHost === undefined) {
-        observedCompletionIdsRef.current.set(originHostId, new Set([entry.id]));
-      } else {
-        observedForHost.add(entry.id);
-      }
       useAppLocalNotificationsStore
         .getState()
-        .markFailuresObservedBeforeCompletion(entity, Date.now());
+        .observeCompletion(originHostId, entry.id, entity, Date.now());
+    },
+    [],
+  );
+  const removeObservedCompletions = useCallback(
+    (originHostId: string, completionIds: ReadonlyArray<string>): void => {
+      useAppLocalNotificationsStore
+        .getState()
+        .removeObservedCompletions(originHostId, completionIds);
     },
     [],
   );
@@ -251,10 +251,12 @@ export function NotificationsSessionProvider(
         return;
       }
       if (frame.kind === "cleared" || frame.kind === "removed") {
+        removeObservedCompletions(hostId, frame.removedIds);
         invalidateNotificationIndicators(queryClient, hostId, hostClient);
         return;
       }
       if (frame.kind === "readStateChanged") {
+        removeObservedCompletions(hostId, frame.removedIds);
         // A read-state frame can also carry retention `removedIds` for
         // unrelated rows the protocol has no entity refs for - full-invalidate
         // rather than leave those entities' indicators stale.
@@ -271,6 +273,7 @@ export function NotificationsSessionProvider(
         return;
       }
       const entity = notificationEntityFromHostEntry(frame.entry);
+      removeObservedCompletions(hostId, frame.removedIds);
       // Same reasoning as above: a surviving upsert's `removedIds` can name
       // entities this frame carries no ref for.
       if (frame.removedIds.length > 0) {
@@ -300,6 +303,7 @@ export function NotificationsSessionProvider(
       localHostId,
       consumeEntity,
       consumeObservedCompletion,
+      removeObservedCompletions,
       hostClient,
       queryClient,
     ],
@@ -346,7 +350,6 @@ export function NotificationsSessionProvider(
   // user's entries.
   const resetIdentityReplica = useCallback((): void => {
     activeEntityRef.current = null;
-    observedCompletionIdsRef.current.clear();
     useNotificationsStore.getState().reset();
     useAgentActivityStore.getState().reset();
     useHostNotificationsStore.getState().reset();

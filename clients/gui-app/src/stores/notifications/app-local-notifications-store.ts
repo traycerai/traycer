@@ -22,6 +22,14 @@ type TerminalNotificationTarget = Extract<
 export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
 
 /**
+ * Completion observations are causal guards, not feed rows. Keep enough per
+ * host to cover the whole local notification window plus churn between
+ * snapshots, while explicit host retention frames remove ids sooner.
+ */
+export const APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST =
+  APP_LOCAL_NOTIFICATIONS_ROW_CAP * 2;
+
+/**
  * How long a read cause-keyed entry stays acknowledged before a recurrence
  * of the same cause flips it back to unread. Caps badge churn from a
  * high-frequency failure at one unread-flip per window while still
@@ -67,6 +75,9 @@ export interface AppLocalNotificationsState {
   readonly byId: Readonly<Record<string, AppLocalNotificationEntry>>;
   readonly orderedIds: ReadonlyArray<string>;
   readonly unreadCount: number;
+  readonly observedCompletionIdsByHost: Readonly<
+    Partial<Record<string, ReadonlyArray<string>>>
+  >;
 
   activateIdentity: (userId: string) => void;
   deactivateIdentity: () => void;
@@ -75,6 +86,7 @@ export interface AppLocalNotificationsState {
   reset: () => void;
   upsert: (entry: AppLocalNotificationInput) => void;
   upsertReplacing: (entry: AppLocalNotificationInput) => void;
+  upsertRecurringFailure: (entry: AppLocalNotificationInput) => void;
   upsertReplacingPreservingReadState: (
     entry: AppLocalNotificationInput,
   ) => void;
@@ -83,9 +95,15 @@ export interface AppLocalNotificationsState {
     entity: HostNotificationsEntityRef,
     readAt: number,
   ) => void;
-  markFailuresObservedBeforeCompletion: (
+  observeCompletion: (
+    originHostId: string,
+    completionId: string,
     entity: HostNotificationsEntityRef,
     observedAt: number,
+  ) => void;
+  removeObservedCompletions: (
+    originHostId: string,
+    completionIds: ReadonlyArray<string>,
   ) => void;
   markAllAsRead: (readAt: number) => void;
   markAsDisplayed: (id: string, updatedAt: number) => void;
@@ -96,13 +114,18 @@ export interface AppLocalNotificationsState {
 
 function appLocalInitialState(): Pick<
   AppLocalNotificationsState,
-  "activeUserId" | "byId" | "orderedIds" | "unreadCount"
+  | "activeUserId"
+  | "byId"
+  | "orderedIds"
+  | "unreadCount"
+  | "observedCompletionIdsByHost"
 > {
   return {
     activeUserId: null,
     byId: {},
     orderedIds: [],
     unreadCount: 0,
+    observedCompletionIdsByHost: {},
   };
 }
 
@@ -146,7 +169,7 @@ function pendingDisplayEntry(
 
 type AppLocalNotificationsPersistedState = Pick<
   AppLocalNotificationsState,
-  "byId" | "orderedIds" | "unreadCount"
+  "byId" | "orderedIds" | "unreadCount" | "observedCompletionIdsByHost"
 >;
 
 /**
@@ -159,7 +182,12 @@ export function migrateAppLocalNotificationsPersistedState(
   persisted: unknown,
 ): AppLocalNotificationsPersistedState {
   if (!isRecord(persisted) || !isRecord(persisted.byId)) {
-    return { byId: {}, orderedIds: [], unreadCount: 0 };
+    return {
+      byId: {},
+      orderedIds: [],
+      unreadCount: 0,
+      observedCompletionIdsByHost: {},
+    };
   }
   const byId = Object.fromEntries(
     Object.entries(persisted.byId)
@@ -172,7 +200,27 @@ export function migrateAppLocalNotificationsPersistedState(
     byId,
     orderedIds: projection.orderedIds,
     unreadCount: projection.unreadCount,
+    observedCompletionIdsByHost: parseObservedCompletionIdsByHost(
+      persisted.observedCompletionIdsByHost,
+    ),
   };
+}
+
+function parseObservedCompletionIdsByHost(
+  value: unknown,
+): Readonly<Partial<Record<string, ReadonlyArray<string>>>> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([hostId, ids]) => {
+      if (!Array.isArray(ids)) return [];
+      const parsedIds = ids.filter(
+        (id): id is string => typeof id === "string",
+      );
+      return [
+        [hostId, parsedIds.slice(-APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST)],
+      ];
+    }),
+  );
 }
 
 function parsePersistedAppLocalEntry(
@@ -336,6 +384,42 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
+        // Fatal stream closures are cause-keyed so repeated renders of the
+        // same active failure stay one row. A genuinely recurring closure,
+        // however, must become unread even when a completion or the user read
+        // the prior occurrence. Preserve the display receipt only while the
+        // existing occurrence is still unread; replacing a read occurrence is
+        // a new notification that should be displayed again.
+        upsertRecurringFailure: (entry) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const pendingEntry = pendingDisplayEntry(entry);
+            const existing = Object.hasOwn(state.byId, entry.id)
+              ? state.byId[entry.id]
+              : null;
+            const replacement =
+              existing !== null && existing.readAt === null
+                ? {
+                    ...pendingEntry,
+                    displayedUpdatedAt:
+                      existing.displayedUpdatedAt === null
+                        ? null
+                        : pendingEntry.updatedAt,
+                  }
+                : pendingEntry;
+            const byId = cappedAppLocalEntries({
+              ...state.byId,
+              [pendingEntry.id]: replacement,
+            });
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
         upsertReplacingPreservingReadState: (entry) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -404,9 +488,16 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        markFailuresObservedBeforeCompletion: (entity, observedAt) => {
+        observeCompletion: (originHostId, completionId, entity, observedAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
+            const observedForHost =
+              state.observedCompletionIdsByHost[originHostId] ?? [];
+            if (observedForHost.includes(completionId)) return state;
+            const nextObservedForHost = [
+              ...observedForHost,
+              completionId,
+            ].slice(-APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST);
             const supersededEntries = Object.values(state.byId).filter(
               (entry) => {
                 if (entry.readAt !== null) return false;
@@ -419,7 +510,14 @@ export function createAppLocalNotificationsStore(initialName: string) {
                 );
               },
             );
-            if (supersededEntries.length === 0) return state;
+            if (supersededEntries.length === 0) {
+              return {
+                observedCompletionIdsByHost: {
+                  ...state.observedCompletionIdsByHost,
+                  [originHostId]: nextObservedForHost,
+                },
+              };
+            }
             const byId = {
               ...state.byId,
               ...Object.fromEntries(
@@ -434,7 +532,32 @@ export function createAppLocalNotificationsStore(initialName: string) {
               byId,
               orderedIds: projection.orderedIds,
               unreadCount: projection.unreadCount,
+              observedCompletionIdsByHost: {
+                ...state.observedCompletionIdsByHost,
+                [originHostId]: nextObservedForHost,
+              },
             };
+          });
+        },
+
+        removeObservedCompletions: (originHostId, completionIds) => {
+          if (completionIds.length === 0) return;
+          set((state) => {
+            const observedForHost =
+              state.observedCompletionIdsByHost[originHostId];
+            if (observedForHost === undefined) return state;
+            const removed = new Set(completionIds);
+            const retained = observedForHost.filter((id) => !removed.has(id));
+            if (retained.length === observedForHost.length) return state;
+            const observedCompletionIdsByHost = {
+              ...state.observedCompletionIdsByHost,
+            };
+            if (retained.length === 0) {
+              delete observedCompletionIdsByHost[originHostId];
+            } else {
+              observedCompletionIdsByHost[originHostId] = retained;
+            }
+            return { observedCompletionIdsByHost };
           });
         },
 
@@ -515,12 +638,13 @@ export function createAppLocalNotificationsStore(initialName: string) {
       }),
       {
         ...basePersistOptions(initialName),
-        version: 2,
+        version: 3,
         storage: createJSONStorage(() => window.localStorage),
         partialize: (state) => ({
           byId: state.byId,
           orderedIds: state.orderedIds,
           unreadCount: state.unreadCount,
+          observedCompletionIdsByHost: state.observedCompletionIdsByHost,
         }),
         migrate: (persisted) =>
           migrateAppLocalNotificationsPersistedState(persisted),
@@ -582,7 +706,7 @@ export function emitChatStreamErrorNotification(input: {
   readonly chatId: string;
   readonly details: FatalErrorDetails;
 }): void {
-  useAppLocalNotificationsStore.getState().upsert({
+  useAppLocalNotificationsStore.getState().upsertRecurringFailure({
     id: `stream.transport.error:${input.chatId}:${input.details.code}`,
     updatedAt: Date.now(),
     readAt: null,
