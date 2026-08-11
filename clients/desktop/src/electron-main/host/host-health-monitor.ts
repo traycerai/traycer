@@ -11,15 +11,33 @@ import type {
   HostProcessLiveness,
   HostRecoveryGovernor,
 } from "./host-recovery-governor";
+import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 
 /**
  * Steady-state watchdog for the CLI-owned host. Runs on every platform (see
- * `desktop-startup.ts`); auto-respawn matters most on Windows, where the
- * Scheduled Task cannot restart-on-failure (its hidden-launcher action
- * detaches the host and exits, so the job "completed" long before the host
- * can die), while the snapshot-convergence duty matters everywhere.
+ * `desktop-startup.ts`); auto-respawn has historically mattered most on
+ * Windows, while the snapshot-convergence duty matters everywhere.
+ *
+ * This comment used to justify the Windows gap with "the Scheduled Task cannot
+ * restart-on-failure (its hidden-launcher action detaches the host and exits,
+ * so the job 'completed' long before the host can die)". That was FALSE, and
+ * saying so here is worth the lines because it was the stated reason nobody
+ * pursued the gap: `traycer host start` spawns the host with no `detached` and
+ * no `unref()` (it must stay attached to tee the child's stderr), and the VBS
+ * launcher uses `shell.Run(..., True)`, which waits. The chain therefore lives
+ * as long as the host and exits with the host's own code - a crashed host DID
+ * surface to Task Scheduler as a failed run, and it still was not restarted.
+ *
+ * The supervisor now relaunches its own child on any non-clean exit
+ * (`MAX_CONSECUTIVE_RELAUNCHES` in `commands/host-start.ts`, int #4826), which
+ * covers the case this monitor structurally cannot: a crash while the desktop
+ * app is CLOSED, when nothing here is running to notice. The two layers do not
+ * fight - the supervisor is faster, so a later tick's `reloadSnapshotFromDisk`
+ * simply converges onto the replacement, and any respawn this monitor does
+ * request goes through `traycer host restart`, which announces stop intent and
+ * so suppresses the supervisor's own relaunch.
  *
  * `HostLifecycle`'s steady state is pid.json-watcher driven plus a
  * retry-until-reachable ladder for metadata whose endpoint doesn't answer.
@@ -139,7 +157,7 @@ export interface HostHealthMonitor {
 
 interface PublishedHealthMetadata {
   readonly snapshot: DesktopLocalHostSnapshot;
-  readonly startedAt: string | null;
+  readonly startIdentity: ProcessStartIdentity | null;
 }
 
 function isCurrentPublishedSnapshot(
@@ -157,19 +175,19 @@ export function startHostHealthMonitor(
 ): HostHealthMonitor {
   const probe = deps.probe ?? canReachHostWebsocketUrl;
   const readMetadata = deps.readMetadata ?? readPidMetadata;
-  // Production needs the publication timestamp for A1's process-identity
+  // Production needs the published start identity for A1's process-identity
   // check. Existing test callers can continue supplying a structural reader;
-  // a missing timestamp deliberately falls through A1's indeterminate arm.
+  // a missing identity deliberately falls through A1's indeterminate arm.
   const readPublishedMetadata = async (
     path: string,
   ): Promise<PublishedHealthMetadata | null> => {
     if (deps.readMetadata !== undefined) {
       const snapshot = await readMetadata(path);
-      return snapshot === null ? null : { snapshot, startedAt: null };
+      return snapshot === null ? null : { snapshot, startIdentity: null };
     }
     const state = await readPidMetadataState(path);
     return state.kind === "parsed"
-      ? { snapshot: state.snapshot, startedAt: state.startedAt }
+      ? { snapshot: state.snapshot, startIdentity: state.startIdentity }
       : null;
   };
   const respawn = deps.respawn;
@@ -333,7 +351,7 @@ export function startHostHealthMonitor(
         (await isPublishedHostEndpointReachable(
           published.snapshot.websocketUrl,
           published.snapshot.pid,
-          published.startedAt,
+          published.startIdentity,
           probe,
         ))
       ) {

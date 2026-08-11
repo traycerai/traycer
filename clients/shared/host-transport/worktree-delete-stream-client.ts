@@ -12,7 +12,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for a `worktree.deleteByPath@1.0` session. Frames flow
@@ -42,7 +42,7 @@ export interface WorktreeDeleteStreamCallbacks {
 }
 
 export interface WorktreeDeleteStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly worktreePath: string;
   readonly scripts: WorktreeEntryScripts | null;
   readonly callbacks: WorktreeDeleteStreamCallbacks;

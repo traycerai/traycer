@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import {
   act,
   cleanup,
@@ -13,6 +11,8 @@ import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedItem,
+  ChatQueuedPromptItem,
+  ChatQueuedManagedCommandItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { buildQueuedMessageOrderKey } from "@/components/chat/queued-message-reorder-dnd";
@@ -21,6 +21,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 interface TestDndEvent {
   readonly active: {
     readonly data: { readonly current: unknown };
@@ -132,6 +133,7 @@ const SETTINGS: ChatRunSettings = {
 };
 
 const onAbortSteerSpy = vi.fn();
+const onCancelSpy = vi.fn();
 
 describe("<QueuedMessagePanel />", () => {
   afterEach(() => {
@@ -604,8 +606,10 @@ describe("<QueuedMessagePanel />", () => {
     ).toBeNull();
     // ...but it is labelled as received and can still be reordered.
     expect(
-      within(agentRow).getByTitle(/Response received from/),
-    ).not.toBeNull();
+      tooltipTextNear(
+        within(agentRow).getByTestId("queued-message-sender-badge"),
+      ),
+    ).toMatch(/Response received from/);
     expect(
       within(agentRow).getByTestId("queued-message-drag-handle"),
     ).not.toBeNull();
@@ -621,6 +625,166 @@ describe("<QueuedMessagePanel />", () => {
 
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(1);
     expect(screen.getByText("Agent response")).not.toBeNull();
+  });
+
+  it("renders a managed-command item as a describable, cancellable chip", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        managedCommandQueuedItem("queue-managed", "bun test --watch"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(screen.getAllByTestId("queued-message-row")).toHaveLength(2);
+    const managedRow = screen.getAllByTestId("queued-message-row")[1];
+
+    // The chip names the command it will deliver output for.
+    expect(within(managedRow).getByText("bun test --watch")).not.toBeNull();
+    expect(
+      within(managedRow).getByTestId("queued-managed-command-badge"),
+    ).not.toBeNull();
+
+    // Never editable, never hand-steerable (decision 6).
+    expect(
+      within(managedRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(managedRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+
+    // ...but the user can cancel it.
+    const cancel = within(managedRow).getByRole("button", {
+      name: "Cancel queued command output",
+    });
+    fireEvent.click(cancel);
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-managed",
+      kind: "managed-command",
+    });
+  });
+
+  it("lets a managed-command item be reordered like any other row", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        managedCommandQueuedItem("queue-managed", "tail -f server.log"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getAllByTestId("queued-message-row")[1];
+    const handle = within(managedRow).getByTestId("queued-message-drag-handle");
+    expect(handle.getAttribute("data-disabled")).not.toBe("true");
+  });
+
+  it("labels a paused managed-command item", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...managedCommandQueuedItem("queue-managed", "bun test"),
+          status: "paused",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(within(managedRow).getByText("Paused")).not.toBeNull();
+  });
+
+  it("labels a pending same-turn delivery as aimed at the running turn", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...managedCommandQueuedItem("queue-managed", "bun test"),
+          delivery: "same_turn",
+          targetTurnId: "turn-1",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(within(managedRow).getByText("Will deliver")).not.toBeNull();
+    // Not yet at the handover: the cancel lever is still open.
+    expect(
+      within(managedRow).queryByRole("button", { name: /cancel/i }),
+    ).not.toBeNull();
+  });
+
+  it("labels a steering managed-command item and closes its cancel lever", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...managedCommandQueuedItem("queue-managed", "bun test"),
+          status: "steering",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    // The handover window: the digest is being delivered into the running
+    // turn. The label is what tells the user why the controls went away -
+    // without it the row locks silently.
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(within(managedRow).getByText("Delivering")).not.toBeNull();
+    expect(managedRow.getAttribute("aria-busy")).toBe("true");
+    expect(
+      within(managedRow).queryByRole("button", { name: /cancel/i }),
+    ).toBeNull();
+  });
+
+  // The next two pin `readOnly` and `canAct` one at a time: the cancel action
+  // reads them independently, so a single test setting both to their hiding
+  // value would still pass with either check regressed.
+  it("hides the managed-command cancel action in read-only mode", () => {
+    renderPanel({
+      queue: queueState([
+        managedCommandQueuedItem("queue-managed", "bun test"),
+      ]),
+      readOnly: true,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(
+      within(managedRow).queryByRole("button", {
+        name: "Cancel queued command output",
+      }),
+    ).toBeNull();
+  });
+
+  it("hides the managed-command cancel action when the viewer cannot act", () => {
+    renderPanel({
+      queue: queueState([
+        managedCommandQueuedItem("queue-managed", "bun test"),
+      ]),
+      readOnly: false,
+      canAct: false,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(
+      within(managedRow).queryByRole("button", {
+        name: "Cancel queued command output",
+      }),
+    ).toBeNull();
   });
 
   it("does not label a received A2A response with the user steer affordance", () => {
@@ -667,7 +831,7 @@ function renderPanel(input: {
         onPause={() => null}
         onResume={() => null}
         onEdit={vi.fn()}
-        onCancel={vi.fn()}
+        onCancel={onCancelSpy}
         onAbortSteer={onAbortSteerSpy}
         onReorder={input.onReorder ?? vi.fn()}
         onSteerNow={vi.fn()}
@@ -692,8 +856,9 @@ function queuedItem(
   queueItemId: string,
   text: string,
   status: ChatQueuedItem["status"],
-): ChatQueuedItem {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId: `${queueItemId}-message`,
     message: {
@@ -713,7 +878,28 @@ function queuedItem(
   };
 }
 
-function agentQueuedItem(queueItemId: string, text: string): ChatQueuedItem {
+function managedCommandQueuedItem(
+  queueItemId: string,
+  description: string,
+): ChatQueuedManagedCommandItem {
+  return {
+    kind: "managed-command",
+    queueItemId,
+    commandId: `${queueItemId}-command`,
+    description,
+    monitoring: true,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function agentQueuedItem(
+  queueItemId: string,
+  text: string,
+): ChatQueuedPromptItem {
   return {
     ...queuedItem(queueItemId, text, "pending"),
     sender: {

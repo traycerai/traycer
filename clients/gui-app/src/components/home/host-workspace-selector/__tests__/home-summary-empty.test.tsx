@@ -1,7 +1,7 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,13 +10,14 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
-import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
-import { useLandingComposerStore } from "@/stores/composer/landing-composer-store";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -29,11 +30,15 @@ import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 
 interface MockSummariesQuery {
   readonly data:
     | {
-        readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+        readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
       }
     | undefined;
   readonly isFetching: boolean;
@@ -109,7 +114,7 @@ const mocks = vi.hoisted(() => {
 
 const GIT_REPO_IDENTIFIER = { owner: "acme", repo: "app" };
 
-const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
+const GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   workspacePath: "/workspace/app",
   isGitRepo: true,
   repoIdentifier: GIT_REPO_IDENTIFIER,
@@ -124,16 +129,18 @@ const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
     },
   ],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
 };
 
-const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   workspacePath: "/workspace/app",
   isGitRepo: false,
   repoIdentifier: null,
   mainBranch: null,
   worktrees: [],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
 };
 
@@ -247,14 +254,18 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
-  preparedWorkspaceFolderToWorkspaceFolderInfo: (folder: {
-    readonly workspacePath: string;
-    readonly workspaceName: string;
-    readonly repoIdentifier: unknown;
-  }) => ({
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (
+    folder: {
+      readonly workspacePath: string;
+      readonly workspaceName: string;
+      readonly repoIdentifier: unknown;
+    },
+    hostId: string | null,
+  ) => ({
     path: folder.workspacePath,
     name: folder.workspaceName,
     repoIdentifier: folder.repoIdentifier,
+    hostId,
   }),
   useWorkspaceFolderActions: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,
@@ -262,6 +273,12 @@ vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
   useWorkspaceFolderActionsForClient: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,
   }),
+}));
+
+// Deterministic auto-default branch names so next-use prefix assertions can
+// pin exact composed values instead of matching a random friendly slug.
+vi.mock("@/lib/worktree/random-friendly-name", () => ({
+  pickFriendlyBranchSuffix: () => "swift-otter",
 }));
 
 function renderControl(layout: "inline" | "stacked") {
@@ -272,6 +289,7 @@ function renderControl(layout: "inline" | "stacked") {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          disabled={false}
           stagingKey={{ surface: "landing", draftId: null }}
           workspaceSeed={null}
           seedIntent={null}
@@ -290,6 +308,7 @@ function DelayedBranchValidationHarness() {
   return (
     <>
       <ActiveHostWorkspaceControls
+        disabled={false}
         stagingKey={{ surface: "landing", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}
@@ -301,7 +320,9 @@ function DelayedBranchValidationHarness() {
         type="button"
         onClick={() => {
           actions.submit({
+            draftId: null,
             editor: editorHandleForPrompt("Investigate the worktree race"),
+            slashCatalog: null,
             toolbar: {
               selection: {
                 harnessId: "codex",
@@ -311,7 +332,6 @@ function DelayedBranchValidationHarness() {
               reasoning: "high",
               serviceTier: "",
               permission: "supervised",
-              agentMode: "regular",
             },
           });
         }}
@@ -368,7 +388,7 @@ describe("landing workspace summary empty state", () => {
     };
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useLandingComposerStore.getState().reset();
+    draftRuntimeRegistry.resetForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -383,13 +403,16 @@ describe("landing workspace summary empty state", () => {
     });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
+    useSettingsStore.setState({
+      worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+    });
   });
 
   afterEach(() => {
     cleanup();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useLandingComposerStore.getState().reset();
+    draftRuntimeRegistry.resetForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -404,6 +427,9 @@ describe("landing workspace summary empty state", () => {
     });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
+    useSettingsStore.setState({
+      worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+    });
     window.localStorage.clear();
   });
 
@@ -412,6 +438,11 @@ describe("landing workspace summary empty state", () => {
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
     expect(screen.getByTestId("composer-host-trigger")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("composer-host-local-chip-host-home")
+        .className.includes("[[data-slot=select-trigger]_&]:hidden"),
+    ).toBe(true);
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",
@@ -571,6 +602,7 @@ describe("landing workspace summary empty state", () => {
           path: GIT_SUMMARY.workspacePath,
           name: "app",
           repoIdentifier: GIT_SUMMARY.repoIdentifier,
+          hostId: null,
         },
       },
       primaryPath: GIT_SUMMARY.workspacePath,
@@ -672,6 +704,164 @@ describe("landing workspace summary empty state", () => {
 
     queryClient.clear();
   });
+
+  // Next-use-only contract for worktreeBranchPrefix:
+  // 1) a folder that resolves under the default seeds with traycer/<suffix>
+  // 2) changing the setting mid-session does NOT retrofit already-seeded names
+  // 3) a folder that resolves AFTER the change seeds with the new prefix
+  it("applies worktree branch prefix next-use-only across mid-session resolves", async () => {
+    const folderAPath = GIT_SUMMARY.workspacePath;
+    const folderBPath = "/workspace/lib";
+    const folderBRepo = { owner: "acme", repo: "lib" };
+    const folderBSummary: WorktreeWorkspaceSummaryV14 = {
+      workspacePath: folderBPath,
+      isGitRepo: true,
+      repoIdentifier: folderBRepo,
+      mainBranch: "development",
+      worktrees: [
+        {
+          worktreePath: folderBPath,
+          branch: "development",
+          head: null,
+          isMain: true,
+          isLocked: false,
+        },
+      ],
+      scripts: null,
+      repoBranchPrefix: { status: "absent" },
+      resolvedAt: 1,
+    };
+
+    // Mount with default prefix; only folder A is resolved.
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "resolved",
+          path: folderAPath,
+          name: "app",
+          repoIdentifier: GIT_REPO_IDENTIFIER,
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: { workspaces: [GIT_SUMMARY] },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+    useWorkspaceFoldersStore.setState({
+      folders: [folderAPath],
+      folderInfoByPath: {
+        [folderAPath]: {
+          path: folderAPath,
+          name: "app",
+          repoIdentifier: GIT_REPO_IDENTIFIER,
+          hostId: null,
+        },
+      },
+      primaryPath: folderAPath,
+    });
+
+    const queryClient = renderControl("stacked");
+    const stagingKey = { surface: "landing" as const, draftId: null };
+
+    await waitFor(() => {
+      const staged = readStagedWorktreeIntent(stagingKey);
+      expect(staged?.entries).toHaveLength(1);
+      expect(staged?.entries[0]).toMatchObject({
+        kind: "worktree",
+        workspacePath: folderAPath,
+        branch: {
+          type: "new",
+          name: "traycer/swift-otter",
+        },
+      });
+    });
+
+    // Mid-session prefix change must leave folder A's staged name alone.
+    act(() => {
+      useSettingsStore.setState({ worktreeBranchPrefix: "anurag/" });
+    });
+
+    expect(readStagedWorktreeIntent(stagingKey)?.entries[0]).toMatchObject({
+      kind: "worktree",
+      workspacePath: folderAPath,
+      branch: {
+        type: "new",
+        name: "traycer/swift-otter",
+      },
+    });
+
+    // Folder B resolves after the change → seeds under the new prefix.
+    // With two git folders present, composition inserts the repo slug
+    // (`lib-swift-otter`); folder A stays on its original single-folder seed.
+    act(() => {
+      mocks.resolvedWorkspace.current = {
+        folders: [
+          {
+            kind: "resolved",
+            path: folderAPath,
+            name: "app",
+            repoIdentifier: GIT_REPO_IDENTIFIER,
+          },
+          {
+            kind: "resolved",
+            path: folderBPath,
+            name: "lib",
+            repoIdentifier: folderBRepo,
+          },
+        ],
+      };
+      mocks.summariesQuery.current = {
+        data: { workspaces: [GIT_SUMMARY, folderBSummary] },
+        isFetching: false,
+        isPending: false,
+        isLoading: false,
+      };
+      useWorkspaceFoldersStore.setState({
+        folders: [folderAPath, folderBPath],
+        folderInfoByPath: {
+          [folderAPath]: {
+            path: folderAPath,
+            name: "app",
+            repoIdentifier: GIT_REPO_IDENTIFIER,
+            hostId: null,
+          },
+          [folderBPath]: {
+            path: folderBPath,
+            name: "lib",
+            repoIdentifier: folderBRepo,
+            hostId: null,
+          },
+        },
+        primaryPath: folderAPath,
+      });
+    });
+
+    await waitFor(() => {
+      const staged = readStagedWorktreeIntent(stagingKey);
+      expect(staged?.entries).toHaveLength(2);
+      const entryA = staged?.entries.find(
+        (entry) => entry.workspacePath === folderAPath,
+      );
+      const entryB = staged?.entries.find(
+        (entry) => entry.workspacePath === folderBPath,
+      );
+      expect(entryA).toMatchObject({
+        branch: { type: "new", name: "traycer/swift-otter" },
+      });
+      expect(entryB).toMatchObject({
+        kind: "worktree",
+        workspacePath: folderBPath,
+        branch: {
+          type: "new",
+          name: "anurag/lib-swift-otter",
+        },
+      });
+    });
+
+    queryClient.clear();
+  });
 });
 
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
@@ -684,15 +874,20 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
       },
     ],
   };
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,

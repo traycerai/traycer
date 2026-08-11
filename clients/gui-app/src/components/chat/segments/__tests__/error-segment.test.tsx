@@ -1,7 +1,11 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  knownField,
+  setSupportContextSnapshot,
+  __resetSupportContextRegistryForTests,
+} from "@/lib/support-context-registry";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { ErrorSegment } from "../error-segment";
 
@@ -10,6 +14,7 @@ describe("<ErrorSegment />", () => {
     cleanup();
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
+    __resetSupportContextRegistryForTests();
   });
 
   // Every error - auth included - renders through this component as the
@@ -20,6 +25,7 @@ describe("<ErrorSegment />", () => {
       <ErrorSegment
         message="Boom went the host"
         code="RUNTIME_THROWN"
+        recoverable={false}
         findUnitId={null}
       />,
     );
@@ -31,7 +37,12 @@ describe("<ErrorSegment />", () => {
 
   it("omits the code badge when there is no code", () => {
     render(
-      <ErrorSegment message="Something failed" code={null} findUnitId={null} />,
+      <ErrorSegment
+        message="Something failed"
+        code={null}
+        recoverable={false}
+        findUnitId={null}
+      />,
     );
 
     expect(screen.getByText("Error")).toBeDefined();
@@ -47,6 +58,7 @@ describe("<ErrorSegment />", () => {
         <ErrorSegment
           message="Something failed"
           code={hostileCode}
+          recoverable={false}
           findUnitId={null}
         />
       </TooltipProvider>,
@@ -54,6 +66,188 @@ describe("<ErrorSegment />", () => {
 
     expect(screen.getByText(hostileCode)).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Agent error",
+      message: null,
+      code: null,
+      source: "Chat",
+    });
+  });
+
+  // The public prefill stays null-bodied (host/harness free text is not
+  // redacted there); the transcript message/code reach only the private
+  // diagnostics branch so support can still cluster the real failure.
+  it("carries the transcript message and code in private diagnostics only", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const draftIdBefore = useDesktopDialogStore.getState().reportIssueDraftId;
+
+    render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Boom went the host"
+          code="RUNTIME_THROWN"
+          recoverable={false}
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const state = useDesktopDialogStore.getState();
+    expect(state.reportIssueContext).toEqual({
+      title: "Agent error",
+      message: null,
+      code: null,
+      source: "Chat",
+    });
+    expect(state.reportIssueDraftId).toBe(draftIdBefore + 1);
+    const cause = state.reportIssueDraftContext?.privateDiagnostics.cause;
+    expect(cause).toEqual(
+      expect.objectContaining({
+        type: "AgentError",
+        message: "Boom went the host",
+        errorCode: "RUNTIME_THROWN",
+        sourceAction: "agent-turn",
+        stack: null,
+        componentStack: null,
+      }),
+    );
+    expect(
+      state.reportIssueDraftContext?.privateDiagnostics.fingerprint,
+    ).toMatch(/^fp:v1:/);
+  });
+
+  // The runtime accumulator can replace a same-blockId error's fields while
+  // the row stays mounted (blockId is the React key), so the report draft
+  // must follow the props, not freeze at mount.
+  it("reports the updated cause after a mounted row's error is replaced", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    const { rerender } = render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="First failure"
+          code="RUNTIME_THROWN"
+          recoverable={false}
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+    rerender(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Please re-authenticate"
+          code="auth"
+          recoverable
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+    expect(cause).toEqual(
+      expect.objectContaining({
+        type: "AgentErrorRecoverable",
+        message: "Please re-authenticate",
+        errorCode: "auth",
+      }),
+    );
+  });
+
+  // This row is durable transcript, so it mounts on chat-open - BEFORE
+  // `SupportContextRegistryBridge`'s effects publish the chat/harness it
+  // belongs to. Building the draft at render froze the previously-open chat
+  // into the private diagnostics, and (because the harness id is the
+  // fingerprint's `causalProvider`) clustered the report under the wrong
+  // provider too. The draft must be built from the click.
+  it("captures support context at report time, not at row mount", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    // What the bridge had published when the row mounted: the chat the user
+    // was looking at a moment ago.
+    setSupportContextSnapshot({
+      chatId: knownField("chat-previously-open"),
+      harnessId: knownField("codex"),
+    });
+
+    render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Boom went the host"
+          code="RUNTIME_THROWN"
+          recoverable={false}
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    // The bridge's effects land after that commit and name this row's chat.
+    setSupportContextSnapshot({
+      chatId: knownField("chat-this-row-belongs-to"),
+      harnessId: knownField("claude"),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    const diagnostics =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics;
+    expect(diagnostics?.registry.chatId).toEqual(
+      knownField("chat-this-row-belongs-to"),
+    );
+    expect(diagnostics?.registry.harnessId).toEqual(knownField("claude"));
+    // The fingerprint is derived from the same snapshot, so a stale read
+    // misfiles the report's cluster as well as its labels: the two harnesses
+    // must not produce the same fingerprint.
+    expect(diagnostics?.fingerprint).toMatch(/^fp:v1:/);
+    const fingerprintUnderStaleHarness = (() => {
+      __resetSupportContextRegistryForTests();
+      setSupportContextSnapshot({ harnessId: knownField("codex") });
+      cleanup();
+      render(
+        <TooltipProvider>
+          <ErrorSegment
+            message="Boom went the host"
+            code="RUNTIME_THROWN"
+            recoverable={false}
+            findUnitId={null}
+          />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+      return useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.fingerprint;
+    })();
+    expect(diagnostics?.fingerprint).not.toBe(fingerprintUnderStaleHarness);
+  });
+
+  it("marks a recoverable agent error with the AgentErrorRecoverable type", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Please re-authenticate"
+          code="auth"
+          recoverable
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+    expect(cause).toEqual(
+      expect.objectContaining({
+        type: "AgentErrorRecoverable",
+        message: "Please re-authenticate",
+        errorCode: "auth",
+        sourceAction: "agent-turn",
+      }),
+    );
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Agent error",
       message: null,

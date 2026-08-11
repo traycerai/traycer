@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -35,6 +34,12 @@ describe("AttachmentStrip", () => {
     expect(
       screen.getByRole("button", { name: "Remove Image#3: image.png" }),
     ).toBeTruthy();
+
+    const strip = document.querySelector("[data-composer-attachment-strip]");
+    expect(strip?.className).toContain("overflow-x-auto");
+    expect(strip?.className).toContain("flex-1");
+    expect(strip?.firstElementChild?.className).toContain("w-max");
+    expect(strip?.firstElementChild?.className).not.toContain("flex-wrap");
   });
 });
 

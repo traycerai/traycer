@@ -2,6 +2,8 @@ import type { ClipboardEventHandler, DragEventHandler, Ref } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
+import { isMac, modLabel } from "@/lib/keybindings/platform";
 import { useIsComposerNarrow } from "@/components/home/composer/composer-narrow-hooks";
 
 import {
@@ -17,8 +19,13 @@ import type { ComposerPickerStore } from "./picker/composer-picker-store";
 const PLACEHOLDER =
   "Ask anything, @tag files/folder, or use / to show available commands";
 const NARROW_PLACEHOLDER = "Ask anything…";
+// Mid-turn steer discovery hint (decision 8): shown as the empty-composer
+// placeholder while a steer-capable turn runs, naming both keys.
+const STEER_HINT_PLACEHOLDER = isMac()
+  ? "Enter to queue · ⌘Enter to steer this turn"
+  : "Enter to queue · Ctrl+Enter to steer this turn";
+const NARROW_STEER_HINT_PLACEHOLDER = `${modLabel()}+Enter to steer`;
 const NOOP = (): void => undefined;
-
 interface ChatComposerEditorSlotProps {
   readonly ref: Ref<ComposerPromptEditorHandle>;
   readonly pickerStore: ComposerPickerStore;
@@ -32,15 +39,20 @@ interface ChatComposerEditorSlotProps {
       ) => ReadonlyArray<PastedComposerImageOutcome>)
     | null;
   readonly isActive: boolean;
-  readonly onSnapshot: (
+  readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
   ) => void;
-  readonly onSubmit: () => void;
+  readonly onSelectionChange: (selection: { from: number; to: number }) => void;
+  readonly onSubmit: (source: ChatComposerSubmitSource) => void;
+  /** True while a Cmd+Enter here would steer the running turn (decision 8 hint). */
+  readonly steerHintActive: boolean;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
   readonly onEditorReady: (() => void) | null;
+  /** Fired when the user focuses this composer. */
+  readonly onFocus: () => void;
 }
 
 /**
@@ -58,14 +70,24 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     hasPastedImageBytes,
     ingestPastedComposerImages,
     isActive,
-    onSnapshot,
+    onDocumentChange,
+    onSelectionChange,
     onSubmit,
+    steerHintActive,
     onPaste,
     onDragOver,
     onDrop,
     onEditorReady,
+    onFocus,
   } = props;
   const isNarrow = useIsComposerNarrow();
+  const basePlaceholder = isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER;
+  let placeholder = basePlaceholder;
+  if (steerHintActive) {
+    placeholder = isNarrow
+      ? NARROW_STEER_HINT_PLACEHOLDER
+      : STEER_HINT_PLACEHOLDER;
+  }
   return (
     <ComposerPromptEditor
       ref={ref}
@@ -77,16 +99,17 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       ingestPastedComposerImages={ingestPastedComposerImages}
       isActive={isActive}
       disabled={false}
-      placeholder={isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER}
+      placeholder={placeholder}
       editorClassName="max-h-[3.5lh] min-h-9"
       stabilizeImageAttachmentCaret
-      onSnapshot={onSnapshot}
+      onDocumentChange={onDocumentChange}
+      onSelectionChange={onSelectionChange}
       onSubmit={onSubmit}
       onPaste={onPaste}
       onDragOver={onDragOver}
       onDrop={onDrop}
       onKeyDown={undefined}
-      onFocus={NOOP}
+      onFocus={onFocus}
       onBlur={NOOP}
       onEditorReady={onEditorReady}
     />

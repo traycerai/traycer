@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +7,7 @@ import {
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import type { ChatAccess } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -25,6 +24,17 @@ const MONITOR_ITEM = {
   blockId: "block-1",
   parentTaskId: null,
   scheduledFor: null,
+};
+
+// A shell outlives the turn that started it, so the chat around it reads idle.
+const RUNNING_SHELL: ManagedCommand = {
+  id: "cmd-1",
+  monitoring: false,
+  description: "dev server",
+  status: { state: "running", pid: 4242, startedAtMs: 1 },
+  chatId: CHAT_ID,
+  createdAtMs: 1,
+  updatedAtMs: 1,
 };
 
 // Awareness reports a TIER per working agent, not bare membership: a host that
@@ -51,6 +61,7 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
 
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const createdHandles: ChatSessionStoreHandle[] = [];
 
 afterEach(() => {
@@ -70,7 +81,9 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the static chat icon when an unopened chat is not active", () => {
@@ -144,7 +157,9 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the muted background indicator instead of the turn spinner when only background work runs", () => {
@@ -167,6 +182,51 @@ describe("<ChatProgressIcon />", () => {
     expect(
       screen.getByTestId(BACKGROUND_TEST_ID).getAttribute("class"),
     ).toContain("lucide-message-square-clock");
+    expect(
+      screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeNull();
+  });
+
+  it("shows the background indicator for a running shell while the agent is idle", () => {
+    const handle = createHandle();
+    handle.store.setState({ managedCommands: [RUNNING_SHELL] });
+    mockSessionState.existingHandle = handle;
+
+    renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(tooltipTextNear(screen.getByTestId(BACKGROUND_TEST_ID))).toBe(
+      BACKGROUND_RUNNING_LABEL,
+    );
+    expect(
+      screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeNull();
+  });
+
+  it("keeps the static chat icon once the chat's shell has exited", () => {
+    const handle = createHandle();
+    handle.store.setState({
+      managedCommands: [
+        {
+          ...RUNNING_SHELL,
+          status: {
+            state: "exited",
+            exitCode: 0,
+            signal: null,
+            exitedAtMs: 2,
+          },
+        },
+      ],
+    });
+    mockSessionState.existingHandle = handle;
+
+    renderIcon();
+
+    expect(
+      screen.queryByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeNull();
     expect(
       screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
     ).toBeNull();
@@ -203,7 +263,9 @@ describe("<ChatProgressIcon />", () => {
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
-    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the background glyph for an UNOPENED chat the host reports as background-only", () => {
@@ -263,6 +325,7 @@ function createHandle(): ChatSessionStoreHandle {
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: () => ({
       sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
       close: () => undefined,
     }),
   });

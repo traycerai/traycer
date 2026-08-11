@@ -1,17 +1,22 @@
+import {
+  readableModelMatch,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import {
-  findPermissionLabel,
   findReasoningLabel,
   isFastModeEnabled,
   modelDisplayLabel,
   type ModelOption,
+  type PermissionMode,
   type ProviderId,
 } from "@/components/home/data/landing-options";
 import {
+  profileAccentDotInput,
   profileCommitId,
-  profileDisplayLabel,
+  type ProfileAccentDotInput,
 } from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 
@@ -19,9 +24,9 @@ import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-c
  * The resolved run-settings header shown atop the chat/terminal-agent hover
  * card. Every field is already display-ready: labels are resolved against the
  * live GUI harness catalog with a raw-slug fallback, so the view never needs
- * the catalog again. Terminal agents carry only `harness` + `model` (they have
- * no permission / reasoning / fast-mode / profile settings), so those fields
- * are always `null` for them.
+ * the catalog again. Chat-only permission/service-tier fields remain absent
+ * for terminal agents; their persisted reasoning, profile, and agent mode fill
+ * the equivalent identity slots instead.
  */
 export interface OwnerSettingsHeaderView {
   readonly harnessId: ProviderId;
@@ -29,8 +34,19 @@ export interface OwnerSettingsHeaderView {
   readonly modelLabel: string | null;
   readonly reasoningLabel: string | null;
   readonly fastMode: boolean;
-  readonly profileLabel: string | null;
-  readonly permissionLabel: string | null;
+  /** Corner badge for the harness mark, NOT a text segment: the profile name
+   *  used to ride at the end of the line, where a long label ("Anthropic work
+   *  account") wrapped the row onto a second line and pushed the permission
+   *  mode - the one value here with a safety consequence - out of first sight.
+   *  Same `AccentDot` projection the composer's model-picker trigger uses, so
+   *  the same profile reads as the same mark on both surfaces. */
+  readonly profileAccentDot: ProfileAccentDotInput | null;
+  /** The raw mode, not a pre-resolved label: the header needs BOTH the label
+   *  and the mode's icon, and `findPermissionOption` is the single source of
+   *  truth for that pair (`landing-options`). Resolving only the label here is
+   *  what let this surface drift into hardcoding one padlock for all three
+   *  modes. */
+  readonly permissionMode: PermissionMode | null;
 }
 
 export interface OwnerSettingsHeaderInput {
@@ -42,13 +58,18 @@ export interface OwnerSettingsHeaderInput {
   readonly tuiHarnessId: ProviderId | null;
   /** Terminal agent's selected model slug, if any (`null` for GUI chats). */
   readonly tuiModel: string | null;
+  /** Terminal agent's persisted reasoning effort (`null` for GUI chats). */
+  readonly tuiReasoningEffort: string | null;
+  /** Terminal agent's persisted provider profile (`null` means ambient). */
+  readonly tuiProfileId: string | null;
   /** Live GUI harness catalog entries - the dynamic label source. Empty while
    *  the catalog is cold or the host is unreachable, which drives the
    *  raw-slug fallback. */
   readonly harnesses: ReadonlyArray<GuiHarnessCatalogEntry>;
-  /** The chat host's provider profiles, flattened across providers. Used only
-   *  to resolve the chat's `profileId` to a label; when it cannot be resolved
-   *  the profile row is omitted rather than showing the opaque id. */
+  /** The chat harness's OWN profiles - not every provider's, flattened. The
+   *  accent dot is gated on this list crossing the 2-profile mark, and that
+   *  gate only means "this provider has more than one account" if the list is
+   *  scoped to the provider in question. */
   readonly profiles: ReadonlyArray<ProviderProfile>;
 }
 
@@ -81,8 +102,11 @@ function deriveChatHeader(
     modelLabel: model === null ? settings.model : modelDisplayLabel(model),
     reasoningLabel: resolveReasoningLabel(settings.reasoningEffort, model),
     fastMode: isFastModeEnabled(settings.serviceTier),
-    profileLabel: resolveProfileLabel(settings.profileId, input.profiles),
-    permissionLabel: findPermissionLabel(settings.permissionMode),
+    profileAccentDot: resolveProfileAccentDot(
+      settings.profileId,
+      input.profiles,
+    ),
+    permissionMode: settings.permissionMode,
   };
 }
 
@@ -98,10 +122,15 @@ function deriveTerminalAgentHeader(
     harnessId,
     harnessName: entry?.label ?? harnessId,
     modelLabel: model === null ? input.tuiModel : modelDisplayLabel(model),
-    reasoningLabel: null,
+    reasoningLabel: resolveReasoningLabel(input.tuiReasoningEffort, model),
     fastMode: false,
-    profileLabel: null,
-    permissionLabel: null,
+    // Terminal `null` is the unbadged ambient identity. A tombstoned managed
+    // id also resolves to null below rather than leaking an opaque id.
+    profileAccentDot:
+      input.tuiProfileId === null
+        ? null
+        : resolveProfileAccentDot(input.tuiProfileId, input.profiles),
+    permissionMode: null,
   };
 }
 
@@ -112,12 +141,14 @@ function findHarnessEntry(
   return harnesses.find((harness) => harness.id === harnessId) ?? null;
 }
 
+// Read-only: the row is only read for its label and reasoning options, so an
+// ambiguous alias match is fine here (see `readableModelMatch`).
 function findModel(
   entry: GuiHarnessCatalogEntry | null,
   slug: string,
 ): ModelOption | null {
   if (entry === null) return null;
-  return entry.models.find((model) => model.slug === slug) ?? null;
+  return readableModelMatch(resolveModelBySlug(entry.models, slug));
 }
 
 // `findReasoningLabel` falls back to the raw level when the model (or its
@@ -136,19 +167,25 @@ function resolveReasoningLabel(
   );
 }
 
-// Ambient (`null`) omits the row, and so does an id we cannot resolve to a
-// human name (profiles not cached, host unreachable, or a removed profile).
-// Unlike the harness/model slugs - which are themselves readable ("claude",
-// "gpt-5.5-codex") - a raw `profileId` is an opaque host-generated string, so
-// showing it under a "Profile" label would be noise rather than a degraded
-// answer.
-function resolveProfileLabel(
+// Deliberately the same three lines as the model picker's own badge resolution
+// (`deriveHarnessModelPickerPresentation`), including the shape of what it
+// declines to show:
+//
+//   - Fewer than 2 profiles is the progressive-disclosure gate. A dot that is
+//     always present signals nothing; it earns its pixels only once the
+//     provider actually has more than one account to be confused between.
+//   - `null` here is AMBIENT, not "no profile" - it matches the ambient row via
+//     `profileCommitId`, so a chat running on the Terminal account gets its own
+//     mark rather than silently reading as an unconfigured one.
+//   - An id matching nothing (cold provider cache, host unreachable, deleted
+//     profile) omits the badge rather than guessing a color from an opaque id.
+export function resolveProfileAccentDot(
   profileId: string | null,
   profiles: ReadonlyArray<ProviderProfile>,
-): string | null {
-  if (profileId === null) return null;
+): ProfileAccentDotInput | null {
+  if (profiles.length < 2) return null;
   const profile =
     profiles.find((candidate) => profileCommitId(candidate) === profileId) ??
     null;
-  return profile === null ? null : profileDisplayLabel(profile);
+  return profile === null ? null : profileAccentDotInput(profile);
 }

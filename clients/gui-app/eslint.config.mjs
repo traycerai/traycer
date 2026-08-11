@@ -58,6 +58,49 @@ const reactForwardRefCallBan = {
   message:
     "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in React.forwardRef.",
 };
+// Native `title=` is a browser tooltip: ~700ms delay we do not control, no
+// styling, no touch support, invisible to most screen readers as anything more
+// than a duplicate of the accessible name, and it clips at the OS window edge.
+// `TooltipWrapper` is the app's one tooltip surface.
+//
+// SCOPE: lowercase names only, i.e. real DOM tags. `title` is an ordinary React
+// prop on plenty of components here (`SettingsPanelShell`, `SectionHeading`,
+// `ConfirmDestructiveDialog`, …) where it is a heading, not a tooltip - a
+// blanket ban on the attribute name would flag ~65 of those. The exceptions
+// below are the tags where `title` is SEMANTIC rather than a hover hint:
+// `iframe` (its accessible name - `jsx-a11y/iframe-has-title` actively requires
+// it), `abbr`/`dfn` (expansion of the term), and the metadata/option tags that
+// never render a hoverable box at all.
+//
+// Components that merely forward `title` to a DOM node (`Button`, `Badge`, …)
+// are covered by the companion ban below - they are native tooltips wearing a
+// capital letter.
+const nativeTitleTooltipDomBan = {
+  selector:
+    "JSXOpeningElement[name.name=/^(?!(iframe|abbr|dfn|optgroup|option|track|link|style|meta)$)[a-z][a-zA-Z0-9-]*$/] > JSXAttribute[name.name='title']",
+  message:
+    "Do not use the native `title` attribute as a tooltip. Wrap the element in <TooltipWrapper label={...}> (@/components/ui/tooltip-wrapper), and keep `aria-label` for the accessible name.",
+};
+
+// The shared primitives that spread their props onto a real DOM node, so a
+// `title` passed to them lands as a native tooltip exactly as if it had been
+// written on a `<button>`. Hand-maintained on purpose: it is the price of
+// letting `title` stay a legitimate prop name elsewhere. Add a component here
+// when it starts forwarding `title` to the DOM.
+//
+// The app's OWN wrappers are deliberately absent: rather than police a `title`
+// prop on each of them, they were renamed to take `tooltip` and now own a
+// `TooltipWrapper` internally (`StopButtonShell`, `RoleBadge`,
+// `PillToggleButton`, `ReferenceChipButton`, `IndicatorSpan`). A prop literally
+// named `tooltip` cannot be confused with the native attribute, so those need
+// no rule at all.
+const nativeTitleTooltipForwardingBan = {
+  selector:
+    "JSXOpeningElement[name.name=/^(Button|Badge|DropdownMenuItem|DropdownMenuTrigger|DialogTrigger|PopoverTrigger|SelectTrigger|Switch|ToolbarIconButton|ToolbarPillButton|StartTruncatedText|NodeViewWrapper|WorktreePickerTrigger)$/] > JSXAttribute[name.name='title']",
+  message:
+    "This component forwards `title` to a DOM node, making it a native tooltip. Wrap it in <TooltipWrapper label={...}> (@/components/ui/tooltip-wrapper) instead.",
+};
+
 const epicTabRouteConstructionBan = {
   selector: "CallExpression[callee.name='epicTabRoute']",
   message:
@@ -72,6 +115,8 @@ const tabNavigationStoreActionBans = tabNavigationStoreActionRestrictions([]);
 const generalCustomSyntaxRestrictions = [
   jsxKeyNullishCoalesceLiteral,
   jsxKeyNullishCoalesceTemplate,
+  nativeTitleTooltipDomBan,
+  nativeTitleTooltipForwardingBan,
   forwardRefImportBan,
   forwardRefCallBan,
   reactForwardRefCallBan,
@@ -218,6 +263,27 @@ export default tseslint.config(
     },
   },
   {
+    // Rendered MARKDOWN, not app chrome. A Markdown link title is written by
+    // the document author and belongs on the anchor as `title` - that is the
+    // attribute the syntax maps to. Routing it through `TooltipWrapper` would
+    // restyle author content as app UI and drop the attribute from the DOM.
+    // The ban stays on for every other tooltip in this directory.
+    files: ["src/markdown/components/markdown-anchor.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) =>
+            restriction !== nativeTitleTooltipDomBan &&
+            restriction !== nativeTitleTooltipForwardingBan,
+        ),
+        ...nestedFocusBoundaryRestrictions([]),
+      ],
+    },
+  },
+  {
     // shadcn/ui generated primitives follow library conventions that
     // intentionally diverge from app-code rules.
     files: ["src/components/ui/**/*.tsx"],
@@ -230,18 +296,10 @@ export default tseslint.config(
     },
   },
   {
-    // Tab navigation seam + store definitions own the primitives the
-    // codebase-wide rules ban; only the type-safety + full-store bans apply.
-    files: [
-      "src/lib/tab-navigation.ts",
-      "src/lib/routes.ts",
-      "src/stores/epics/canvas/store.ts",
-      "src/stores/home/landing-draft-store.ts",
-      "src/stores/tabs/kinds/draft.tsx",
-      "src/stores/tabs/kinds/epic.tsx",
-      "src/stores/tabs/kinds/history.tsx",
-      "src/stores/tabs/kinds/settings.tsx",
-    ],
+    // The activation module owns raw tabActivate. Every other caller reaches
+    // activateTabIntent, which binds the coordinated layout commit to the
+    // history-entry envelope before navigating.
+    files: ["src/lib/tab-navigation.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",
@@ -251,15 +309,101 @@ export default tseslint.config(
     },
   },
   {
+    // Plan §2/§3 puts source activation inside this reservation-first command.
+    // The coordinator may call the two legacy source selectors while its
+    // ledger is installed; raw registry.tabActivate remains banned here.
+    files: ["src/stores/tabs/tab-command-coordinator.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) => !tabNavigationStoreActionBans.includes(restriction),
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+          "useLandingDraftStore.setActiveDraft",
+        ]),
+      ],
+    },
+  },
+  {
+    // These kind descriptors implement the source half of tab-navigation's
+    // single activation boundary. Keep raw tabActivate restricted here while
+    // allowing only the descriptor's own legacy projection action.
+    files: ["src/stores/tabs/kinds/draft.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) => !tabNavigationStoreActionBans.includes(restriction),
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useLandingDraftStore.setActiveDraft",
+        ]),
+      ],
+    },
+  },
+  {
+    // The Epic descriptor owns its canonical route construction and source
+    // projection; callers still cannot access raw tabActivate here.
+    files: ["src/stores/tabs/kinds/epic.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) =>
+            !tabNavigationStoreActionBans.includes(restriction) &&
+            restriction !== epicTabRouteConstructionBan,
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+        ]),
+      ],
+    },
+  },
+  {
     // Test fixtures construct the full router interface and seed stores via
-    // setActiveTab / setActiveDraft as part of arrange / act setup.
+    // setActiveTab / setActiveDraft as part of arrange / act setup, so ONLY
+    // those two legacy source actions are allowed here. Raw `tabActivate`
+    // access stays banned - tests must activate through activateTabIntent like
+    // production, so a raw `tabActivate` call can never lint clean in a test.
     files: ["src/**/__tests__/**/*.{ts,tsx}", "**/__tests__/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-syntax": [
         "error",
         ...traycerTypeSafetyRestrictions,
         noFullStoreSubscription,
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+          "useLandingDraftStore.setActiveDraft",
+        ]),
       ],
+    },
+  },
+  {
+    // These hooks build a remote host transport (Architecture §4 / S1's
+    // shared `(hostId, userId)` session cache) inside a `useEffect`,
+    // deliberately NOT a `useMemo`: only an effect's cleanup is guaranteed to
+    // pair with exactly the committed acquire (a `useMemo` factory can run
+    // more than once per commit - StrictMode dev double-invoke, or a
+    // discarded concurrent render - silently orphaning a live reference on
+    // the shared session). This is React's own documented "connecting to an
+    // external system" pattern (react.dev/reference/react/useEffect), which
+    // this rule's heuristic cannot distinguish from an avoidable
+    // derived-state effect.
+    files: [
+      "src/hooks/host/use-host-client-for.ts",
+      "src/hooks/host/use-host-stream-client-for.ts",
+      "src/lib/host/stream-runtime.tsx",
+    ],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
     },
   },
   {

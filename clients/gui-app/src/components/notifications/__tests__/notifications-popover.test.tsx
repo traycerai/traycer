@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -40,6 +39,7 @@ import {
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -50,12 +50,16 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
@@ -65,11 +69,19 @@ const hostBindingState = vi.hoisted(() => ({
       readonly request: typeof hostRequestMock;
       readonly getActiveHostId: () => string | null;
     };
+    readonly directory?: {
+      readonly findById: (hostId: string) => typeof mockLocalHostEntry | null;
+      readonly selectById: (hostId: string) => void;
+    };
   } | null,
 }));
 
 const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
+}));
+
+const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
+  value: "local",
 }));
 
 const directoryRef = vi.hoisted(() => ({
@@ -95,6 +107,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
     if (hostId.length === 0 || directoryRef.value === null) return null;
     return directoryRef.value.findById(hostId);
   },
+}));
+
+vi.mock("@/lib/notifications/notification-feed-mode", () => ({
+  useNotificationFeedMode: () => notificationFeedMode.value,
 }));
 
 vi.mock("@/lib/host-error-toast", async (importActual) => {
@@ -336,6 +352,37 @@ function hostDone(
   });
 }
 
+function cloudDone(
+  entryId: string,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: mockLocalHostEntry.hostId,
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: 200,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        agentName: "Cloud agent",
+        taskTitle: "Cloud task",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud task", chatTitle: "Cloud agent" },
+  };
+}
+
 function threadEntry(
   id: string,
   epicId: string,
@@ -413,6 +460,11 @@ function bindHostClient(): void {
     hostClient: {
       request: hostRequestMock,
       getActiveHostId: () => mockLocalHostEntry.hostId,
+    },
+    directory: {
+      findById: (hostId: string) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      selectById: () => {},
     },
   };
 }
@@ -553,6 +605,7 @@ function resolveCallOccurrences(): ReadonlyArray<{
 
 describe("NotificationsPopover", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
@@ -561,6 +614,8 @@ describe("NotificationsPopover", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     __resetAppLocalNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedMode.value = "local";
     resetPopoverFilters();
     activeHostIdRef.value = mockLocalHostEntry.hostId;
     directoryRef.value = {
@@ -582,8 +637,254 @@ describe("NotificationsPopover", () => {
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedMode.value = "local";
+  });
+
+  it("shows loading instead of caught up before the first cloud snapshot", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().setConnectionState("connecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const status = await screen.findByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Loading notifications");
+    expect(status.textContent).toContain("Fetching your notification history.");
+    expect(
+      screen.getByTestId("notifications-feed-status-spinner"),
+    ).toBeDefined();
+    expect(screen.queryByText("You're all caught up")).toBeNull();
+  });
+
+  it("shows unavailable instead of caught up when cloud bootstrap fails", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().setConnectionState("unavailable");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const status = await screen.findByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Notifications unavailable");
+    expect(status.textContent).toContain("We’ll keep trying to reconnect.");
+    expect(
+      screen.queryByTestId("notifications-feed-status-spinner"),
+    ).toBeNull();
+    expect(screen.queryByText("You're all caught up")).toBeNull();
+  });
+
+  it("shows reconnecting instead of caught up when an empty cloud snapshot becomes stale", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const status = await screen.findByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Reconnecting to notifications");
+    expect(status.textContent).toContain(
+      "Refreshing your notification history.",
+    );
+    expect(
+      screen.getByTestId("notifications-feed-status-spinner"),
+    ).toBeDefined();
+    expect(screen.queryByText("You're all caught up")).toBeNull();
+  });
+
+  it("keeps the last cloud snapshot visible while showing reconnecting", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    expect(await screen.findByTestId("notification-entry")).toBeDefined();
+    const status = screen.getByTestId("notifications-feed-status");
+    expect(status.textContent).toContain("Reconnecting to notifications");
+  });
+
+  it("shows caught up only after an authoritative empty cloud snapshot", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+
+    renderRouter(router);
+
+    const empty = await screen.findByTestId("notifications-empty");
+    expect(empty.textContent).toContain("You're all caught up");
+    expect(screen.queryByTestId("notifications-feed-status")).toBeNull();
+  });
+
+  it("routes a cloud row through its activation button to the owning chat", async () => {
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationId).toBe("cloud:entry-cloud");
+    const activationButton = activateButtonFor(row);
+    expect(activationButton.disabled).toBe(false);
+    fireEvent.click(activationButton);
+
+    await waitFor(() => {
+      expect(captured.epicId).toBe("epic-cloud");
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+    expect(hostRequestMock).toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.markRead",
+      { entryId: "entry-cloud" },
+    );
+  });
+
+  it("does not render a trailing tick for an already-read cloud row", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-read", 100)],
+      summary: { totalCount: 1, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationRead).toBe("true");
+    expect(
+      within(row).queryByRole("button", { name: "Mark as read" }),
+    ).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(within(row).queryByTestId("notification-unread-rail")).toBeNull();
+  });
+
+  it("does not render a row-level Clear action for an unread cloud row", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud-unread", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationRead).toBe("false");
+    expect(within(row).queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Mark as read" }),
+    ).not.toBeNull();
+  });
+
+  it("requires confirmation before clearing the cloud feed", async () => {
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeDefined();
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.clearAll",
+      expect.anything(),
+    );
+
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.clearAll",
+      expect.anything(),
+    );
+
+    fireEvent.click(screen.getByTestId("notifications-clear-all"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.clearAll",
+        { observedVersion: 1 },
+      );
+    });
   });
 
   it("renders a relative timestamp on every notification row", async () => {
@@ -684,6 +985,9 @@ describe("NotificationsPopover", () => {
       expect.arrayContaining([
         "hover:bg-muted/70",
         "has-[:focus-visible]:bg-muted/70",
+        "py-2.5",
+        "pl-6",
+        "pr-4",
       ]),
     );
     // Unread rows prepend an absolute rail span; the glyph holder is the
@@ -962,6 +1266,9 @@ describe("NotificationsPopover", () => {
     // Desktop-pass subordination: micro/muted sentence case, not overline caps.
     for (const separator of separators) {
       expect(separator.className).toContain("text-micro");
+      expect(separator.className).toContain("sticky");
+      expect(separator.className).toContain("top-5");
+      expect(separator.className).toContain("bg-popover");
       expect(separator.className).not.toContain("uppercase");
       expect(separator.className).not.toContain("font-semibold");
       expect(separator.className).not.toContain("text-overline");
@@ -970,6 +1277,9 @@ describe("NotificationsPopover", () => {
     expect(recentHeader.className).toContain("text-overline");
     expect(recentHeader.className).toContain("uppercase");
     expect(recentHeader.className).toContain("font-semibold");
+    expect(recentHeader.className).toContain("sticky");
+    expect(recentHeader.className).toContain("top-0");
+    expect(recentHeader.className).toContain("bg-popover");
   });
 
   it("renders failed host outcomes and stalled rows as failure severity", async () => {
@@ -1092,6 +1402,57 @@ describe("NotificationsPopover", () => {
         .getState()
         .entries.find((item) => item.id === "route-1")?.readAt,
     ).toBeTypeOf("number");
+  });
+
+  it("navigates a TUI completion row to its terminal agent", async () => {
+    applyHostSnapshot(
+      [
+        {
+          id: "agent.stopped:tui-1",
+          updatedAt: 10,
+          readAt: null,
+          kind: "agent.stopped",
+          sourceRef: "tui-1",
+          severity: "done",
+          outcome: "completed",
+          epicId: "epic-tui",
+          chatId: "tui-1",
+          payload: {
+            kind: "epic",
+            epicId: "epic-tui",
+            tuiAgentId: "tui-1",
+            agentName: "Terminal agent",
+            taskTitle: "TUI task",
+            outcome: "completed",
+          },
+        },
+      ],
+      { unreadCount: 1, attentionCount: 0 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const onNavigate = vi.fn();
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const entry = await screen.findByTestId("notification-entry");
+    const trigger = within(entry).getByRole<HTMLButtonElement>("button", {
+      name: /TUI task/,
+    });
+
+    await act(async () => {
+      fireEvent.click(trigger);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(captured.epicId).toBe("epic-tui");
+    expect(captured.focusArtifactId).toBe("tui-1");
+    expect(onNavigate).toHaveBeenCalledTimes(1);
   });
 
   it("marks every notification as read when Mark all read is clicked", async () => {
@@ -1476,7 +1837,7 @@ describe("NotificationsPopover", () => {
     expect(stillThere).not.toBeUndefined();
   });
 
-  it("renders Dismiss on blocking Attention rows, including already-read ones", async () => {
+  it("renders trailing tick actions only on unread rows", async () => {
     applyHostSnapshot(
       [
         hostPrompt("prompt-unread", 120, null),
@@ -1509,12 +1870,13 @@ describe("NotificationsPopover", () => {
     const failure = findRow("host:fail-unread");
     const recentRead = findRow("host:recent-read");
 
-    // Core fix: blocking Attention keeps Dismiss even after navigation read.
+    // Read rows do not reuse the unread-state tick for another disposition.
     expect(readPrompt.dataset.notificationRead).toBe("true");
-    const readDismiss = within(readPrompt).getByTestId("notification-dismiss");
-    expect(readDismiss.getAttribute("aria-label")).toBe("Dismiss");
     expect(
-      within(readPrompt).queryByTestId("notification-mark-read"),
+      within(readPrompt).queryByRole("button", { name: "Dismiss" }),
+    ).toBeNull();
+    expect(
+      within(readPrompt).queryByRole("button", { name: "Mark as read" }),
     ).toBeNull();
 
     expect(
@@ -1544,8 +1906,8 @@ describe("NotificationsPopover", () => {
   it("Dismiss resolves without activating and moves the row to Recent as read", async () => {
     bindHostClient();
     applyHostSnapshot(
-      [hostPrompt("prompt-dismiss", 100, 50), hostDone("done", 90, null)],
-      { unreadCount: 1, attentionCount: 1 },
+      [hostPrompt("prompt-dismiss", 100, null), hostDone("done", 90, null)],
+      { unreadCount: 2, attentionCount: 1 },
     );
 
     const onNavigate = vi.fn();

@@ -5,13 +5,18 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
 } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 export interface PerWindowStateBridgeSurface {
   get(): Promise<PerWindowSnapshot>;
-  update(patch: PerWindowStatePatch): Promise<void>;
+  capabilities(): Promise<PerWindowStateCapabilities>;
+  update(
+    patch: PerWindowStatePatch,
+  ): Promise<PerWindowStateUpdateAcknowledgement | void>;
   clear(): Promise<void>;
   onChange(handler: Listener<PerWindowSnapshot>): Disposable;
 }
@@ -22,11 +27,15 @@ export function buildPerWindowStateBridge(): PerWindowStateBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.perWindowStateGet,
       ) as Promise<PerWindowSnapshot>,
+    capabilities: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.perWindowStateCapabilities,
+      ) as Promise<PerWindowStateCapabilities>,
     update: (patch) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.perWindowStateUpdate,
         patch,
-      ) as Promise<void>,
+      ) as Promise<PerWindowStateUpdateAcknowledgement | void>,
     clear: () =>
       ipcRenderer.invoke(RunnerHostInvoke.perWindowStateClear) as Promise<void>,
     onChange: (handler) =>

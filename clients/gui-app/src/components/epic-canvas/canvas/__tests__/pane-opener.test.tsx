@@ -1,10 +1,10 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type {
@@ -61,6 +61,32 @@ const INNER_SUBPAGE: CommandSubpage = {
       actionId: null,
       subpage: null,
       run: () => undefined,
+    },
+    {
+      id: "open:cat:badged",
+      label: "Badged Leaf",
+      description: null,
+      keywords: ["badged"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () => undefined,
+      hostBadge: "Remote Box",
+    },
+    {
+      id: "open:cat:status",
+      label: "Unavailable Leaf",
+      description: null,
+      keywords: ["unavailable"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () => undefined,
+      statusBadge: "Unavailable: Remote Box",
     },
     {
       id: "open:cat:nested",
@@ -180,6 +206,34 @@ describe("PaneOpener", () => {
     expect(document.activeElement).not.toBe(input);
   });
 
+  it("wraps arrow-key selection around both ends of the root list", async () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-loop"
+        groupId="group-loop"
+        active
+      />,
+    );
+    const rows = screen.getAllByRole("option");
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+
+    await waitFor(() => {
+      expect(first.getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(searchInput(), { key: "ArrowUp" });
+    await waitFor(() => {
+      expect(last.getAttribute("data-selected")).toBe("true");
+    });
+
+    fireEvent.keyDown(searchInput(), { key: "ArrowDown" });
+    await waitFor(() => {
+      expect(first.getAttribute("data-selected")).toBe("true");
+    });
+  });
+
   it("selecting a leaf opens into THIS pane's group", () => {
     render(
       <PaneOpener
@@ -251,6 +305,25 @@ describe("PaneOpener", () => {
     });
   });
 
+  it("includes a deep row's status badge in its accessible name", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-status"
+        groupId="group-status"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "unavailable" } });
+
+    expect(
+      screen.getByRole("option", {
+        name: "Category → Unavailable Leaf → Unavailable: Remote Box",
+      }),
+    ).not.toBeNull();
+  });
+
   it("selecting a deep row that bears a sub-page drills into it", () => {
     render(
       <PaneOpener
@@ -299,5 +372,25 @@ describe("PaneOpener", () => {
     expect(within(paneA).getByText("Inner Leaf")).not.toBeNull();
     expect(within(paneB).queryByText("Inner Leaf")).toBeNull();
     expect(within(paneB).getByText("Category")).not.toBeNull();
+  });
+
+  it("renders a host badge only on a sub-page row that carries one", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-badge"
+        groupId="group-badge"
+        active={false}
+      />,
+    );
+    fireEvent.click(screen.getByText("Category"));
+
+    expect(screen.getByText("Badged Leaf")).not.toBeNull();
+    expect(screen.getByText("Remote Box")).not.toBeNull();
+    // The unbadged row's own container carries no badge text.
+    const innerLeafRow = screen
+      .getByText("Inner Leaf")
+      .closest('[data-slot="command-item"]');
+    expect(innerLeafRow?.textContent).not.toContain("Remote Box");
   });
 });

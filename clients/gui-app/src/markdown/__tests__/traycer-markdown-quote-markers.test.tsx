@@ -10,6 +10,10 @@ const STREAMING_CONTENT = [
   "Tail paragraph.",
 ].join("\n");
 
+// Tailmark marks the open streaming tail with `data-md-streaming` (empty
+// attribute) on a `display: contents` wrapper. Settled blocks omit the attr.
+const STREAMING_TAIL_SELECTOR = "[data-md-streaming]";
+
 function renderMarkdown(content: string, isStreaming: boolean) {
   return render(
     <TraycerMarkdown
@@ -26,7 +30,7 @@ function renderMarkdown(content: string, isStreaming: boolean) {
   );
 }
 
-describe("<TraycerMarkdown /> quote markers", () => {
+describe("<TraycerMarkdown /> streaming tail markers", () => {
   afterEach(() => {
     cleanup();
   });
@@ -34,27 +38,27 @@ describe("<TraycerMarkdown /> quote markers", () => {
   it("wraps only blocks at or after the frozen-prefix boundary while streaming", () => {
     const { container } = renderMarkdown(STREAMING_CONTENT, true);
 
-    expect(container.querySelectorAll("[data-md-unstable]")).toHaveLength(1);
+    expect(container.querySelectorAll(STREAMING_TAIL_SELECTOR)).toHaveLength(1);
     expect(
       screen
         .getByRole("heading", { name: "Title" })
-        .closest("[data-md-unstable]"),
+        .closest(STREAMING_TAIL_SELECTOR),
     ).toBeNull();
     expect(
-      screen.getByText("Stable paragraph.").closest("[data-md-unstable]"),
+      screen.getByText("Stable paragraph.").closest(STREAMING_TAIL_SELECTOR),
     ).toBeNull();
 
     const tailWrapper = screen
       .getByText("Tail paragraph.")
-      .closest<HTMLElement>("[data-md-unstable]");
+      .closest<HTMLElement>(STREAMING_TAIL_SELECTOR);
     expect(tailWrapper).not.toBeNull();
-    expect(tailWrapper?.className).toContain("contents");
+    expect(tailWrapper?.style.display).toBe("contents");
   });
 
-  it("removes every unstable-tail wrapper after streaming completes", () => {
+  it("removes every streaming-tail marker after streaming completes", () => {
     const { container, rerender } = renderMarkdown(STREAMING_CONTENT, true);
 
-    expect(container.querySelectorAll("[data-md-unstable]")).toHaveLength(1);
+    expect(container.querySelectorAll(STREAMING_TAIL_SELECTOR)).toHaveLength(1);
 
     rerender(
       <TraycerMarkdown
@@ -70,6 +74,6 @@ describe("<TraycerMarkdown /> quote markers", () => {
       </TraycerMarkdown>,
     );
 
-    expect(container.querySelectorAll("[data-md-unstable]")).toHaveLength(0);
+    expect(container.querySelectorAll(STREAMING_TAIL_SELECTOR)).toHaveLength(0);
   });
 });

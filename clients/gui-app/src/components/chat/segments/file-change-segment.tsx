@@ -29,12 +29,17 @@ interface FileChangeSegmentProps {
   segment: FileChangeSegmentModel;
   variant: "card" | "row";
   headerFindUnitId: string | null;
+  // Seeds the disclosure at mount, once. Open state is local here, so the copy
+  // of this row inside the bounded live activity window cannot hand its own
+  // over: a click there promotes, and this is how the copy that replaces it
+  // knows it was the row asked for.
+  initiallyOpen: boolean;
 }
 
 export function FileChangeSegment(props: FileChangeSegmentProps) {
   const { segment, variant } = props;
   const { filePath, operation, reason, isStreaming, endState } = segment;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(props.initiallyOpen);
   // Counts come precomputed on the segment (computed at capture time); no
   // content fetch is needed to render the collapsed header.
   const hasDiff = segment.additions > 0 || segment.deletions > 0;
@@ -181,6 +186,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
       banner={null}
       scrollContainerRef={null}
       onScroll={null}
+      fileIdentity={null}
     >
       <DiffContentPrimitive
         patch={patch}
@@ -191,6 +197,7 @@ function FileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
         lineNumbers={false}
         indicatorStyle="bars"
         fileHeaders={false}
+        isEmptyFile={false}
       />
     </DiffContentFrame>
   );

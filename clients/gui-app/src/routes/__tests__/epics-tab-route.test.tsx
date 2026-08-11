@@ -14,6 +14,8 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 
+const recordViewed = vi.hoisted(() => vi.fn());
+
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: (props: { readonly children: ReactNode }) => (
     <div data-testid="app-shell">{props.children}</div>
@@ -59,12 +61,12 @@ vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
 
-vi.mock("@/stores/tabs/use-deep-link-tab-sync", () => ({
-  useDeepLinkTabSync: () => undefined,
-}));
-
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
 vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
@@ -159,6 +161,7 @@ describe("/epics/$epicId/$tabId route", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    recordViewed.mockReset();
     seedSignedInAuth();
     // Past the one-time tour, so RootComponent's global onboarding gate is inert.
     useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
@@ -171,20 +174,21 @@ describe("/epics/$epicId/$tabId route", () => {
     useOnboardingStore.setState({ completedAt: null });
   });
 
-  it("renders an existing tab route without the parent creating another tab", async () => {
+  it("adapts an existing tab route without creating another tab body", async () => {
     seedOpenEpicTab();
 
     const router = renderAt(`/epics/${EPIC_ID}/${TAB_ID}`);
 
-    await screen.findByTestId("epic-route-session-body");
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(
         `/epics/${EPIC_ID}/${TAB_ID}`,
       );
     });
+    expect(screen.queryByTestId("epic-route-session-body")).toBeNull();
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);
+    expect(recordViewed).toHaveBeenCalledWith({ epicId: EPIC_ID });
   });
 
   it("repairs a stale tab route to a sibling tab without carrying nested focus params", async () => {
@@ -203,9 +207,6 @@ describe("/epics/$epicId/$tabId route", () => {
       focusedAt: 123,
       focusArtifactId: "artifact-1",
       focusThreadId: "thread-1",
-      migrationSource: "phase",
-      focusPaneId: undefined,
-      focusTileInstanceId: undefined,
     });
   });
 

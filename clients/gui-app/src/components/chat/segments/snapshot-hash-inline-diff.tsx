@@ -73,6 +73,7 @@ export function SnapshotHashInlineDiff(props: {
         banner={null}
         scrollContainerRef={null}
         onScroll={null}
+        fileIdentity={null}
       >
         <DiffContentPrimitive
           patch={patch}
@@ -83,6 +84,7 @@ export function SnapshotHashInlineDiff(props: {
           lineNumbers={false}
           indicatorStyle="bars"
           fileHeaders={false}
+          isEmptyFile={false}
         />
       </DiffContentFrame>
     </div>

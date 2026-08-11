@@ -1,5 +1,10 @@
 import { app } from "electron";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import {
+  classifyLaunchctlPrintResult,
+  deriveWedgeVerdict,
+  type ProbeCommandResult,
+} from "@traycer-clients/shared/host-lifecycle";
 import { access, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
@@ -463,9 +468,109 @@ async function removeCliLabelManifest(): Promise<
 export type LaunchCompetingRegistrationRepair =
   | "not-applicable"
   | "agent-not-enabled"
+  // The agent reads `enabled` but its `launchctl print` carries positive
+  // wedge markers (spawn failed / EX_CONFIG / LWCR mismatch) - or the
+  // probe could not answer. The CLI registration below may be the only
+  // host that works on this machine (including one installed via
+  // `service install --takeover`), so the retirement is skipped.
+  | "agent-possibly-wedged"
   | "nothing-to-retire"
   | "retired"
   | "retire-failed";
+
+// Real spawn observation for the retirement gate: classify the agent's own
+// `launchctl print` through the shared wedge predicate. Only POSITIVE
+// markers report `wedged` - at launch the agent may legitimately not have
+// spawned yet, so the loaded-but-no-pid heuristic stays disarmed
+// (`loginItemEnabled: null`).
+export type AgentWedgeProbeResult = "wedged" | "not-wedged" | "unknown";
+
+type AgentPrintRunner = (target: string) => Promise<ProbeCommandResult>;
+
+// Test seam, mirroring `runLaunchctlBootout`'s injected spawn: the suite
+// must never read the developer's real launchd domain. Production always
+// runs the real execFile.
+let agentPrintRunnerOverride: AgentPrintRunner | null = null;
+
+export function overrideAgentPrintRunnerForTests(
+  runner: AgentPrintRunner | null,
+): void {
+  agentPrintRunnerOverride = runner;
+}
+
+// execFile's rejection shape: numeric `code` for a non-zero exit (output
+// still captured), string errno for a spawn failure, `killed` on timeout.
+type ExecFileProbeFailure = {
+  readonly code: string | number | undefined;
+  readonly killed: boolean | undefined;
+  readonly signal: NodeJS.Signals | undefined;
+};
+
+function runAgentPrint(target: string): Promise<ProbeCommandResult> {
+  if (agentPrintRunnerOverride !== null) {
+    return agentPrintRunnerOverride(target);
+  }
+  return new Promise((resolve) => {
+    execFile(
+      "/bin/launchctl",
+      ["print", target],
+      { timeout: BOOTOUT_TIMEOUT_MS, encoding: "utf8" },
+      (error, stdout, stderr) => {
+        if (error === null) {
+          resolve({
+            exitCode: 0,
+            stdout,
+            stderr,
+            timedOut: false,
+            spawnFailed: false,
+            signal: null,
+          });
+          return;
+        }
+        const failure = error as ExecFileProbeFailure;
+        if (typeof failure.code === "string") {
+          resolve({
+            exitCode: -1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            spawnFailed: true,
+            signal: null,
+          });
+          return;
+        }
+        resolve({
+          exitCode: typeof failure.code === "number" ? failure.code : -1,
+          stdout,
+          stderr,
+          timedOut: failure.killed === true,
+          spawnFailed: false,
+          signal: failure.signal ?? null,
+        });
+      },
+    );
+  });
+}
+
+async function probeAgentWedgeForRetirement(): Promise<AgentWedgeProbeResult> {
+  if (typeof process.getuid !== "function") return "unknown";
+  const target = `gui/${process.getuid()}/${HOST_AGENT_LABEL}`;
+  let result: ProbeCommandResult;
+  try {
+    result = await runAgentPrint(target);
+  } catch {
+    return "unknown";
+  }
+  const probe = classifyLaunchctlPrintResult(result, null, HOST_AGENT_LABEL);
+  if (probe.kind === "absent") return "not-wedged";
+  if (probe.kind === "indeterminate") return "unknown";
+  const verdict = deriveWedgeVerdict(probe, {
+    loginItemEnabled: null,
+    hasPidMetadata: false,
+    hasAttemptProgress: false,
+  });
+  return verdict.kind === "wedged" ? "wedged" : "not-wedged";
+}
 
 /**
  * Remove a `~/Library/LaunchAgents/<cli-label>.plist` that would start a
@@ -492,18 +597,21 @@ export type LaunchCompetingRegistrationRepair =
  *      `findLiveIncumbentHost` in the CLI: never leave a machine with no
  *      host to prevent a duplicate.
  *
- *      ACCEPTED GAP: `enabled` proves the agent is REGISTERED and enabled,
- *      not that launchd can actually spawn it. An agent wedged by a stale
- *      BTM Lightweight Code Requirement (the LWCR / `EX_CONFIG` failure
- *      documented on `registerHostLoginItem` above) also reads `enabled`
- *      while every spawn is SIGKILLed inside dyld init - and that is the
- *      same v1.1.7 cohort this repair targets. On such a machine the CLI
- *      registration may be the only one that works, and this deletes it.
- *      Accepted rather than gated harder: distinguishing a wedged agent
- *      needs a real spawn observation this code has no access to at launch,
- *      and the damage self-heals on the next app launch, whose register
- *      cycle does the bootout + re-register that clears the LWCR. Revisit
- *      if the wedge is seen in the field alongside a dual registration.
+ *      GAP CLOSED (formerly accepted): `enabled` proves the agent is
+ *      REGISTERED and enabled, not that launchd can actually spawn it. An
+ *      agent wedged by a stale BTM Lightweight Code Requirement (the LWCR
+ *      / `EX_CONFIG` failure documented on `registerHostLoginItem` above)
+ *      also reads `enabled` while every spawn is SIGKILLed inside dyld
+ *      init - and on such a machine the CLI registration may be the only
+ *      one that works (including one the user just installed with
+ *      `service install --takeover`). The "real spawn observation this
+ *      code has no access to" now exists: the agent's own `launchctl
+ *      print` classified through the shared wedge predicate
+ *      (`probeAgentWedgeForRetirement`). Positive wedge markers - or an
+ *      unanswerable probe - skip the retirement: wrongly keeping a
+ *      duplicate costs one more login of dual-host (which Layer 0 makes
+ *      data-safe), wrongly deleting costs the machine its only working
+ *      host.
  *   2. Removes the manifest but does NOT bootout the running job. Boot-out
  *      would kill a host that may be serving this session's tabs right now
  *      - and at launch we have no idea whether the competing host or the
@@ -532,6 +640,14 @@ async function retireCompetingCliRegistrationUnserialized(): Promise<LaunchCompe
   // alone once the sentinel is set.
   if (await isHostRemovedByUser()) return "not-applicable";
   if (readHostLoginItemStatus() !== "enabled") return "agent-not-enabled";
+  const wedge = await probeAgentWedgeForRetirement();
+  if (wedge !== "not-wedged") {
+    log.warn(
+      "[host-login-item] skipping competing-CLI retirement - the agent may not be spawnable",
+      { probe: wedge },
+    );
+    return "agent-possibly-wedged";
+  }
   const outcome = await removeCliLabelManifest();
   if (outcome === "absent") return "nothing-to-retire";
   if (outcome === "failed") return "retire-failed";

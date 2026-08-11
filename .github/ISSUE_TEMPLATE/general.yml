@@ -1,0 +1,16 @@
+# Field ids on this template are not yet targeted by
+# clients/shared/support/issue-reporter.ts, but "something else" reports will
+# route here by id once the app's type-chip routing ships (ticket 07). Treat
+# ids and `required` flags as frozen for the same reason as bug_report.yml -
+# see clients/shared/support/__tests__/issue-template-contract.test.ts.
+name: Something else
+description: Anything that isn't a bug report or a feature request
+labels: ["triage"]
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Tell us what's going on.
+    validations:
+      required: true

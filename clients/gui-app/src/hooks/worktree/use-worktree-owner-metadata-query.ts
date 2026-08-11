@@ -6,12 +6,11 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  LEGACY_HOST_RESOLVED_AT,
-  type WorktreeBinding,
-  type WorktreeBindingOwnerKind,
-  type WorktreeHostEntryV14,
-  type WorktreeWorkspaceSummaryV13,
+import type {
+  WorktreeBinding,
+  WorktreeBindingOwnerKind,
+  WorktreeHostEntryV14,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
@@ -22,9 +21,10 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { queryKeys, worktreeMutationKeys } from "@/lib/query-keys";
+import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
 
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV14[] = [];
-const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV13[] = [];
+const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV14[] = [];
 
 type WorktreeListAllForHostResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -35,23 +35,6 @@ type WorktreeListByWorkspacePathsResponse = ResponseOfMethod<
   HostRpcRegistry,
   "worktree.listByWorkspacePaths"
 >;
-
-/**
- * The host's derive time for whatever is on screen, or `null` when nothing has
- * been derived yet.
- *
- * The OLDEST stamp across every row wins: the card is only as fresh as its
- * stalest folder. `LEGACY_HOST_RESOLVED_AT` (the literal `1`, stamped for rows
- * bridged from a host that predates `resolvedAt`) is dropped rather than
- * rendered - it is a resolved-marker, not a time, and an age computed from it
- * reads as 1970.
- */
-function oldestResolvedAt(stamps: ReadonlyArray<number | null>): number | null {
-  const real = stamps.flatMap((stamp) =>
-    stamp === null || stamp === LEGACY_HOST_RESOLVED_AT ? [] : [stamp],
-  );
-  return real.length === 0 ? null : Math.min(...real);
-}
 
 /**
  * Splits an owner's binding into the two path sets that need two DIFFERENT
@@ -160,7 +143,7 @@ export interface WorktreeOwnerMetadata {
    * the owner runs in directly never appears there and has no branch without
    * this.
    */
-  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly isPending: boolean;
   readonly error: HostRpcError | null;
   /**

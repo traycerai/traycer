@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -102,6 +101,15 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }

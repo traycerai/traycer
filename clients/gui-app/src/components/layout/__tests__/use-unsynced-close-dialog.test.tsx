@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced-close-dialog";
@@ -20,6 +19,7 @@ const EPIC_TAB: HeaderTab = {
   name: "Alpha",
   route: "/epics/epic-1/tab-1",
   icon: null,
+  canClose: true,
   canDuplicate: true,
   canOpenInNewWindow: true,
 };

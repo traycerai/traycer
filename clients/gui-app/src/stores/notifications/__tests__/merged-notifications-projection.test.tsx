@@ -1,9 +1,11 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import * as Y from "yjs";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
-import type { HostNotificationsSummary } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+  HostNotificationsSummary,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
   NOTIFICATION_EVENT_TYPES,
@@ -29,6 +31,10 @@ import {
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
+import {
   appLocalFeedId,
   globalFeedId,
   hostFeedId,
@@ -36,6 +42,7 @@ import {
   useAttentionNotificationIds,
   useMergedNotificationIds,
   useMergedNotificationRow,
+  useMergedNotificationUnreadCount,
   useNotificationBellState,
   useNotificationCenterHostState,
   useRecentNotificationIds,
@@ -47,6 +54,14 @@ import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+
+const notificationFeedModeRef = vi.hoisted(() => ({
+  value: "local",
+}));
+
+vi.mock("@/lib/notifications/notification-feed-mode", () => ({
+  useNotificationFeedMode: () => notificationFeedModeRef.value,
+}));
 
 const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
@@ -176,6 +191,36 @@ function hostDone(
   };
 }
 
+function cloudDone(
+  entryId: string,
+  createdAt: number,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-cloud",
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
+  };
+}
+
 function appLocalEntry(
   id: string,
   updatedAt: number,
@@ -296,6 +341,8 @@ describe("merged notification projection (Attention / Recent)", () => {
     __resetHostNotificationsStoreForTests();
     __resetAppLocalNotificationsStoreForTests();
     __resetNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedModeRef.value = "local";
     resetPopoverFilters();
     activeHostIdRef.value = mockLocalHostEntry.hostId;
     directoryRef.value = {
@@ -325,6 +372,19 @@ describe("merged notification projection (Attention / Recent)", () => {
       hostFeedId("alpha"),
       hostFeedId("zebra"),
     ]);
+  });
+
+  it("stamps local interactive rows with their connected host origin", () => {
+    applyHostSnapshot([hostPrompt("prompt-origin", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("prompt-origin")),
+    );
+
+    expect(result.current?.originHostId).toBe(mockLocalHostEntry.hostId);
   });
 
   it("places each row in exactly one of Attention or Recent", () => {
@@ -492,6 +552,105 @@ describe("merged notification projection (Attention / Recent)", () => {
       hostFeedId("newer-failure"),
       hostFeedId("mid-failure"),
     ]);
+  });
+});
+
+describe("cloud feed projection authority", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedModeRef.value = "cloud";
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    notificationFeedModeRef.value = "local";
+    useCloudNotificationsStore.getState().reset();
+  });
+
+  it("uses only the cloud snapshot when retained local replicas still contain rows", () => {
+    applyHostSnapshot([hostDone("local-host", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    seedAppLocal([appLocalEntry("local-app", 90, null)]);
+    seedGlobal([globalEntry("local-global", 80, null)]);
+    const cloud = cloudDone("entry-cloud", 7, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloud],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      row: useMergedNotificationRow(cloudNotificationFeedId(cloud.entryId)),
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      hostState: useNotificationCenterHostState(),
+    }));
+
+    expect(result.current.ids).toEqual([
+      cloudNotificationFeedId(cloud.entryId),
+    ]);
+    expect(result.current.row?.sourceId).toBe("entry-cloud");
+    expect(result.current.unreadCount).toBe(1);
+    expect(result.current.bell).toEqual({ kind: "quietDot" });
+    expect(result.current.hostState.isPartial).toBe(false);
+  });
+
+  it("keys a row by entryId alone - originHostId is display metadata, not identity", () => {
+    const cloud = cloudDone("entry-cloud", 7, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloud],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() =>
+      useMergedNotificationRow(cloudNotificationFeedId("entry-cloud")),
+    );
+
+    // The feed id embeds no host, so the same entry resolves whichever host
+    // relays it - and a mutation for it addresses the entry, never the host.
+    expect(result.current?.feedId).toBe("cloud:entry-cloud");
+    expect(result.current?.originHostId).toBe("host-cloud");
+  });
+
+  it("surfaces a reopened entry as its own unread row while the entry it superseded disappears", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, 500)],
+      summary: { totalCount: 1, unreadCount: 0, attentionCount: 0 },
+      version: 7,
+    });
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      superseded: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      reopened: useMergedNotificationRow(cloudNotificationFeedId("entry-b")),
+    }));
+    expect(result.current.superseded?.readAt).toBe(500);
+
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 8,
+      });
+    });
+
+    // Nothing was un-read: the read marker still belongs to `entry-a`, which
+    // is simply no longer visible. The reopen is a different entry with its
+    // own null markers, so it is unread by construction.
+    expect(result.current.ids).toEqual([cloudNotificationFeedId("entry-b")]);
+    expect(result.current.reopened?.readAt).toBeNull();
+    expect(result.current.superseded).toBeNull();
   });
 });
 
@@ -805,6 +964,7 @@ describe("host unavailable / partial center state", () => {
 
 describe("row category and resolvedAt projection fields", () => {
   beforeEach(() => {
+    notificationFeedModeRef.value = "local";
     __resetHostNotificationsStoreForTests();
     __resetAppLocalNotificationsStoreForTests();
     __resetNotificationsStoreForTests();
@@ -851,5 +1011,18 @@ describe("row category and resolvedAt projection fields", () => {
       expect(item.row?.category).toBe(item.category);
       expect(item.row?.resolvedAt).toBe(item.resolvedAt);
     }
+  });
+
+  it("hides all seeded local sources while upgrade is required", () => {
+    notificationFeedModeRef.value = "upgrade-required";
+    applyHostSnapshot([hostFailure("host", 30, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    seedAppLocal([appLocalEntry("app", 20, null)]);
+    seedGlobal([globalEntry("global", 10, null)]);
+
+    const { result } = renderHook(() => useMergedNotificationIds());
+    expect(result.current).toEqual([]);
   });
 });

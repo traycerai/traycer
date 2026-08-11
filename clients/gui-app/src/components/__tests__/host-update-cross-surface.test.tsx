@@ -43,6 +43,21 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// This suite is about the SHARED update lane across two surfaces, not about
+// host scoping, so it mocks at the scope boundary rather than standing up a
+// host runtime for the Settings page's machine header.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: null }),
+  };
+});
+
+vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
+  AddHostDialog: () => null,
+}));
+
 const READY_STATUS: HostControllerStatus = {
   download: null,
   mutation: null,
@@ -84,7 +99,7 @@ function makeManagement(overrides: {
     activateInstalled: vi.fn(notImplemented("activateInstalled")),
     installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
-    restartHost: vi.fn(() => Promise.resolve()),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),

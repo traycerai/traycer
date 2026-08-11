@@ -39,6 +39,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
@@ -47,6 +48,7 @@ import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
 import { GitRootsUnavailable } from "./empty-states/git-roots-unavailable";
 import { NoGitWorktrees } from "./empty-states/no-git-worktrees";
 import { GitDiffRepoSwitcher } from "./git-diff-repo-switcher";
+import { GitWatcherStatusNotice } from "./git-watcher-status-notice";
 import { SelectedRepoChanges } from "./selected-repo-changes";
 
 const GIT_REFERENCE_REFRESH_TIMEOUT_MS = 10_000;
@@ -137,15 +139,26 @@ export function GitDiffPanelBodyLive(
     epicId: props.epicId,
     enabled: true,
   });
-  const rows = useMemo(
-    () => bindingsQuery.data?.rows ?? [],
-    [bindingsQuery.data?.rows],
-  );
-  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
-
   const selectedRepo = useGitPanelStore(
     (s) => selectGitPanelEpicState(props.epicId)(s).selectedRepo,
   );
+  // Host-proven-missing rows are hidden (no git surface can use them); the
+  // current selection is exempt so a just-deleted selected root routes through
+  // the existing unavailable-roots machinery instead of vanishing.
+  const rows = useMemo(
+    () =>
+      withoutResolvedMissingRows(
+        bindingsQuery.data?.rows ?? [],
+        selectedRepo === null
+          ? null
+          : {
+              hostId: selectedRepo.hostId,
+              runningDir: selectedRepo.rootRunningDir,
+            },
+      ),
+    [bindingsQuery.data?.rows, selectedRepo],
+  );
+  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
@@ -469,28 +482,41 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border/60 px-2 pt-1.5 pb-1">
-        <WorkspacePickerWithOpener
-          picker={
-            <GitDiffRepoSwitcher
-              open={repoSwitcherOpen}
-              onOpenChange={setRepoSwitcherOpen}
-              roots={roots}
-              activeRootSubmodules={submoduleNodes}
-              selected={workspaceSelected}
-              onSelectRoot={handleSelectRoot}
-              hostSection={<WorktreePickerHostSection />}
-              autoFocusSearch={repoSwitcherOpen}
-              triggerClassName={undefined}
-              contentClassName={undefined}
-              triggerTestId="git-diff-repo-switcher-trigger"
-              contentTestId="git-diff-repo-switcher-popover"
-            />
-          }
-          openTarget={{
-            workspacePath: selectedRootRow.runningDir,
-            hostId: selectedRootRow.hostId,
-          }}
+      <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 pt-1.5 pb-1">
+        {/* `min-w-0 flex-1` on the WRAPPER, not the picker: the picker's own
+            `flex-1` governs its inner layout only, so as a bare flex item it
+            would shrink to its content and leave the header half empty -
+            most visibly when the watcher is healthy and renders nothing. */}
+        <div className="min-w-0 flex-1">
+          <WorkspacePickerWithOpener
+            picker={
+              <GitDiffRepoSwitcher
+                open={repoSwitcherOpen}
+                onOpenChange={setRepoSwitcherOpen}
+                roots={roots}
+                activeRootSubmodules={submoduleNodes}
+                selected={workspaceSelected}
+                onSelectRoot={handleSelectRoot}
+                hostSection={<WorktreePickerHostSection />}
+                autoFocusSearch={repoSwitcherOpen}
+                triggerClassName={undefined}
+                contentClassName={undefined}
+                triggerTestId="git-diff-repo-switcher-trigger"
+                contentTestId="git-diff-repo-switcher-popover"
+              />
+            }
+            openTarget={{
+              workspacePath: selectedRootRow.runningDir,
+              hostId: selectedRootRow.hostId,
+            }}
+          />
+        </div>
+        {/* Sits beside the repo switcher because it qualifies THIS repo's
+            freshness - watcher health is per-repo, not per-host. */}
+        <GitWatcherStatusNotice
+          status={subscription.watcherStatus}
+          className={undefined}
+          compact={false}
         />
       </div>
       <CapabilityGate

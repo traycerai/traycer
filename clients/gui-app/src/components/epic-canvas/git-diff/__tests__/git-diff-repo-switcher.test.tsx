@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import {
   buildGitDiffRepoSwitcherModel,
   type GitDiffRepoSelection,
@@ -188,13 +189,13 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
       screen.getByTestId("repo-switcher-trigger").textContent,
     ).not.toContain("vendor/traycer");
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain(`Path: /repo`);
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain("1 changed submodule");
     expect(
-      screen.getByTestId("repo-switcher-trigger").getAttribute("title"),
+      tooltipTextNear(screen.getByTestId("repo-switcher-trigger")),
     ).toContain("6 changed files");
     expect(
       screen.getByRole("button", {
@@ -261,7 +262,7 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     expect(trigger.getAttribute("data-unavailable")).toBe("true");
     expect(trigger.getAttribute("aria-invalid")).toBeNull();
     expect(trigger.getAttribute("aria-label")).toContain("unavailable");
-    expect(trigger.getAttribute("title")).toContain("Status: unavailable");
+    expect(tooltipTextNear(trigger)).toContain("Status: unavailable");
   });
 
   it("renders workspace rows only with stable path subtext", () => {

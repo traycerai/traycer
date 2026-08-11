@@ -52,10 +52,19 @@ export function fixActionLabel(fixAction: string): string {
   }
 }
 
+// `declined` mirrors `HostRestartRequestResult`: the restart fix resolved
+// without restarting because the host deliberately refused (busy with
+// in-progress work, removed-by-user, lock contention). The card must not
+// announce "Fix applied" for it - and must not route it through the
+// reportable error toast either, since the condition clears on its own.
+export type FixActionResult =
+  | { readonly kind: "applied" }
+  | { readonly kind: "declined"; readonly message: string };
+
 export async function runFixAction(
   management: IHostManagement,
   issue: HostDoctorIssue,
-): Promise<void> {
+): Promise<FixActionResult> {
   switch (issue.fixAction) {
     case "host-install-latest": {
       // No "install latest" intent survives the two-lane cutover - the
@@ -66,29 +75,33 @@ export async function runFixAction(
       if (outcome.kind !== "ok") {
         throw new Error(outcome.message);
       }
-      return;
+      return { kind: "applied" };
     }
     case "service-install": {
       const outcome = await management.registerService();
       if (outcome.kind !== "ok") {
         throw new Error(outcome.message);
       }
-      return;
+      return { kind: "applied" };
     }
     case "host-start":
-    case "host-restart":
-      await management.restartHost();
-      return;
+    case "host-restart": {
+      const result = await management.restartHost();
+      if (result.kind === "declined") {
+        return { kind: "declined", message: result.message };
+      }
+      return { kind: "applied" };
+    }
     case "host-logs":
       await management.getHostLogs({ tailLines: 200 });
-      return;
+      return { kind: "applied" };
     case "host-free-port-and-restart": {
       const input = parseFreePortInput(issue);
       if (input === null) {
         throw new Error("Doctor issue is missing a valid conflicting port.");
       }
       await management.freePortAndRestart(input);
-      return;
+      return { kind: "applied" };
     }
     default:
       throw new Error(`Unknown fix action: ${issue.fixAction}`);

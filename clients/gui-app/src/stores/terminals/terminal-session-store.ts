@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
 import type {
   CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
@@ -31,8 +32,19 @@ export type TerminalStreamClientFactory = (
 ) => TerminalStreamClientHandle;
 
 export type TerminalReattachMode = "fresh" | "live";
+/**
+ * `"lost"` - the stream closed for an unknown/recoverable reason (transport
+ * drop, host restart, etc.) - the session MAY still be alive server-side
+ * (within its detach-linger window, T13); auto-recovery
+ * (`useTerminalSessionRecovery`) is worth attempting.
+ * `"reaped"` - the host explicitly confirmed via `TERMINAL_NOT_FOUND` that
+ * this session no longer exists (linger expired + reaped, or the host
+ * restarted and lost it) - a DEFINITIVE dead end. Retrying is guaranteed to
+ * fail identically every time, so this bypasses auto-recovery entirely and
+ * maps to the terminal "Session lost" tile state (Journey 4).
+ */
 export type TerminalLifecycleStatus =
-  "creating" | "running" | "exited" | "lost";
+  "creating" | "running" | "exited" | "lost" | "reaped";
 
 const MAX_PENDING_ACTIONS = 64;
 // Cap the pre-writer queue so a misconfigured tile that never registers a
@@ -84,7 +96,17 @@ export type TerminalDataWriter = (write: TerminalWrite) => void;
 
 export interface PendingTerminalAction {
   readonly clientActionId: string;
-  readonly action: "write" | "resize";
+  /**
+   * The exact client frame originally sent for this action (T13 terminal
+   * action protocol). Kept so a reconnect can replay it verbatim - the
+   * client's own bounded buffer is the only place this data survives; the
+   * host's per-session idempotency window dedupes a replay that already
+   * landed instead of re-applying it.
+   */
+  readonly frame: Extract<
+    TerminalSubscribeClientFrame,
+    { kind: "write" | "resize" }
+  >;
 }
 
 export interface TerminalSessionState {
@@ -114,8 +136,24 @@ export interface TerminalSessionState {
   readonly kind: TerminalSessionKind;
   readonly pendingActions: Readonly<Record<string, PendingTerminalAction>>;
   readonly lastOutputPreview: string | null;
+  /**
+   * Wall-clock time (`Date.now()`) the pending-action ring last evicted an
+   * unacked action to make room (T13's honest overflow signal - see
+   * {@link AppendPendingActionResult}). `null` until the first eviction.
+   * Tiles watch this to surface an "input may have been lost" notice rather
+   * than silently swallowing it.
+   */
+  readonly lastInputLostAt: number | null;
   readonly title: string | null;
   readonly activeProcessName: string | null;
+  readonly currentCwd: string | null;
+  /**
+   * Whether a negotiated stream frame has explicitly carried `currentCwd`.
+   * This distinguishes a pre-1.5/absent field from an explicit empty value,
+   * which is normalized to `currentCwd: null` but must still clear cached
+   * `terminal.list` metadata.
+   */
+  readonly currentCwdReported: boolean;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
   setWriter: (writer: TerminalDataWriter | null) => void;
@@ -144,21 +182,41 @@ export interface TerminalSessionStoreHandle {
   readonly dispose: () => void;
 }
 
+/**
+ * Result of appending to the pending-action ring: the updated map, plus
+ * whether an unacked action was evicted to make room (T13's overflow
+ * policy - drop-oldest + an honest "input lost" signal, Architecture §3/§8).
+ * An evicted action never got an `actionAck` and never will - it fell out of
+ * the buffer that would have replayed it on reconnect, so the caller must
+ * surface this rather than dropping it silently.
+ */
+interface AppendPendingActionResult {
+  readonly pendingActions: Readonly<Record<string, PendingTerminalAction>>;
+  readonly evicted: boolean;
+}
+
 function appendPendingAction(
   pendingActions: Readonly<Record<string, PendingTerminalAction>>,
   next: PendingTerminalAction,
-): Readonly<Record<string, PendingTerminalAction>> {
+): AppendPendingActionResult {
   // Cap the ring with FIFO eviction so a never-acked action can't leak.
   const keys = Object.keys(pendingActions);
   if (keys.length < MAX_PENDING_ACTIONS) {
-    return { ...pendingActions, [next.clientActionId]: next };
+    return {
+      pendingActions: { ...pendingActions, [next.clientActionId]: next },
+      evicted: false,
+    };
   }
-  const trimmed: Record<string, PendingTerminalAction> = {};
-  for (const key of keys.slice(keys.length - MAX_PENDING_ACTIONS + 1)) {
-    trimmed[key] = pendingActions[key];
-  }
+  const trimmed = Object.fromEntries(
+    keys
+      .slice(keys.length - MAX_PENDING_ACTIONS + 1)
+      .map((key): [string, PendingTerminalAction] => [
+        key,
+        pendingActions[key],
+      ]),
+  );
   trimmed[next.clientActionId] = next;
-  return trimmed;
+  return { pendingActions: trimmed, evicted: true };
 }
 
 function removePendingAction(
@@ -171,6 +229,40 @@ function removePendingAction(
   const next: Record<string, PendingTerminalAction> = { ...pendingActions };
   delete next[clientActionId];
   return next;
+}
+
+/**
+ * `TERMINAL_NOT_FOUND` (see `terminal-stream-resolver.ts`'s subscribe-time
+ * catch) is the host authoritatively confirming this session id no longer
+ * exists - reattaching to it can never succeed. Every other closed reason
+ * (a plain transport drop, another fatal code, or no reason at all) is
+ * treated as recoverable: the session may simply be unreachable right now.
+ */
+function isDefinitiveSessionLoss(reason: StreamCloseReason | null): boolean {
+  return (
+    reason !== null &&
+    reason.kind === "fatalError" &&
+    reason.details.code === "TERMINAL_NOT_FOUND"
+  );
+}
+
+function nextLifecycleStatusAfterConnectionStatus(
+  status: StreamConnectionStatus,
+  current: TerminalLifecycleStatus,
+  reason: StreamCloseReason | null,
+): TerminalLifecycleStatus {
+  if (status !== "closed" || current === "exited") {
+    return current;
+  }
+  if (isDefinitiveSessionLoss(reason)) {
+    return "reaped";
+  }
+  return "lost";
+}
+
+/** No PTY to address: the session has exited, or the tile has already dead-ended on `"lost"`/`"reaped"`. */
+function isTerminalOrDead(status: TerminalLifecycleStatus): boolean {
+  return status === "exited" || status === "lost" || status === "reaped";
 }
 
 const textDecoder = new TextDecoder();
@@ -235,6 +327,16 @@ function activeProcessNameFromSession(
   if (name === undefined || name === null) return null;
   const trimmed = name.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function currentCwdFromSession(
+  session:
+    | CanonicalTerminalSessionInfoWithCurrentCwd
+    | CanonicalTerminalSessionInfo
+    | TerminalSessionInfo,
+): string | null | undefined {
+  if (!("currentCwd" in session)) return undefined;
+  return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
 export function createTerminalSessionStore(
@@ -364,7 +466,7 @@ export function createTerminalSessionStore(
       // with the host's stale serialized size. Re-check after both events so a
       // remembered resize is not stranded behind the xterm engine's dedupe.
       const state = get();
-      if (state.status === "exited" || state.status === "lost") return;
+      if (isTerminalOrDead(state.status)) return;
       if (state.connectionStatus !== "open") return;
       if (
         state.requestedCols === state.effectiveCols &&
@@ -373,25 +475,74 @@ export function createTerminalSessionStore(
         return;
       }
       const clientActionId = uuidv4();
-      set((current) => ({
-        pendingActions: appendPendingAction(current.pendingActions, {
-          clientActionId,
-          action: "resize",
-        }),
-      }));
-      dispatchClientFrame({
+      const frame: TerminalSubscribeClientFrame = {
         kind: "resize",
         hasBinaryPayload: false,
         sessionId: options.sessionId,
         clientActionId,
         cols: state.requestedCols,
         rows: state.requestedRows,
+      };
+      recordPendingAction({ clientActionId, frame });
+      dispatchClientFrame(frame);
+    };
+
+    /**
+     * Appends to the pending-action ring and, on eviction, stamps
+     * `lastInputLostAt` in the SAME `set()` call (T13's honest overflow
+     * signal) so a tile watching either field never observes them out of
+     * sync.
+     */
+    const recordPendingAction = (next: PendingTerminalAction): void => {
+      set((current) => {
+        const { pendingActions, evicted } = appendPendingAction(
+          current.pendingActions,
+          next,
+        );
+        return {
+          pendingActions,
+          lastInputLostAt: evicted ? Date.now() : current.lastInputLostAt,
+        };
       });
+    };
+
+    /**
+     * Replays every still-unacked `write` action after a reconnect (T13
+     * terminal action protocol - Architecture §3/§8's "in-flight keystrokes
+     * replay exactly-once-effect on reattach"). The host's per-session
+     * idempotency window dedupes by `clientActionId`, so a write the old
+     * subscriber already applied (only its `actionAck` was lost) just gets
+     * re-acked, not re-typed into the PTY.
+     *
+     * Stale `resize` entries are dropped rather than replayed verbatim:
+     * `flushRequestedResize` already reissues a fresh resize reflecting the
+     * CURRENT pane size on every reconnect, which supersedes whatever size
+     * was requested before the drop - replaying the old value would just
+     * race a more-correct one.
+     */
+    const replayPendingActionsAfterReconnect = (): void => {
+      const pendingActions = get().pendingActions;
+      const staleResizeIds = Object.values(pendingActions)
+        .filter((pending) => pending.frame.kind === "resize")
+        .map((pending) => pending.clientActionId);
+      if (staleResizeIds.length > 0) {
+        set((current) => ({
+          pendingActions: staleResizeIds.reduce(
+            (acc, id) => removePendingAction(acc, id),
+            current.pendingActions,
+          ),
+        }));
+      }
+      for (const pending of Object.values(pendingActions)) {
+        if (pending.frame.kind !== "write") continue;
+        dispatchClientFrame(pending.frame);
+      }
     };
 
     const callbacks: TerminalStreamCallbacks = {
       onSnapshot: (frame, scrollback) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         // First host frame for this session: the scrollback is in hand even
         // if xterm hasn't registered its writer yet (it lands in pendingWrites).
         markTerminalLoad(options.sessionId, "snapshot");
@@ -452,6 +603,9 @@ export function createTerminalSessionStore(
           lastOutputPreview,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
         flushRequestedResize();
       },
@@ -506,16 +660,20 @@ export function createTerminalSessionStore(
       },
       onSessionUpdated: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
+        const currentCwd = currentCwdFromSession(frame.session);
         set({
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
+          currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
+          currentCwdReported:
+            currentCwd === undefined ? get().currentCwdReported : true,
         });
       },
       onConnectionStatus: (
         status: StreamConnectionStatus,
-        _reason: StreamCloseReason | null,
+        reason: StreamCloseReason | null,
       ) => {
         if (disposed) return;
         if (status !== "open") {
@@ -529,14 +687,21 @@ export function createTerminalSessionStore(
           connectionStatus: status,
           // If the stream drops before a snapshot, "creating" would otherwise
           // survive forever and leave the tile stuck on its loading state.
-          // Exited sessions remain exited; every other closed stream is a lost
-          // renderer attachment until the registry reacquires it.
-          status:
-            status === "closed" && state.status !== "exited"
-              ? "lost"
-              : state.status,
+          // Exited sessions remain exited. A closed stream otherwise splits on
+          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal is a definitive
+          // "this session is gone" ("reaped") - anything else is a recoverable
+          // "lost" renderer attachment worth auto-retrying.
+          status: nextLifecycleStatusAfterConnectionStatus(
+            status,
+            state.status,
+            reason,
+          ),
         }));
         if (status !== "open") return;
+        // Replay stale pending actions from BEFORE this reconnect first, so the
+        // fresh resize `flushRequestedResize` is about to dispatch isn't
+        // immediately swept up and removed as one of those stale entries.
+        replayPendingActionsAfterReconnect();
         flushRequestedResize();
       },
     };
@@ -564,8 +729,11 @@ export function createTerminalSessionStore(
       kind: options.kind,
       pendingActions: {},
       lastOutputPreview: null,
+      lastInputLostAt: null,
       title: null,
       activeProcessName: null,
+      currentCwd: null,
+      currentCwdReported: false,
 
       setWriter: (next) => {
         writer = next;
@@ -576,7 +744,7 @@ export function createTerminalSessionStore(
       writeInput: (data) => {
         if (disposed || streamClient === null) return null;
         const state = get();
-        if (state.status === "exited" || state.status === "lost") return null;
+        if (isTerminalOrDead(state.status)) return null;
         if (state.connectionStatus !== "open") {
           return null;
         }
@@ -588,19 +756,14 @@ export function createTerminalSessionStore(
           clientActionId,
           data,
         };
-        set((current) => ({
-          pendingActions: appendPendingAction(current.pendingActions, {
-            clientActionId,
-            action: "write",
-          }),
-        }));
+        recordPendingAction({ clientActionId, frame });
         dispatchClientFrame(frame);
         return clientActionId;
       },
       requestResize: (cols, rows) => {
         if (disposed || streamClient === null) return null;
         const state = get();
-        if (state.status === "exited") return null;
+        if (state.status === "exited" || state.status === "reaped") return null;
         // Dedupe only a size that is BOTH already requested and already the
         // effective grid. Skipping on requested alone stranded the xterm
         // engine's latch self-heal: a resize frame lost in flight leaves
@@ -638,14 +801,18 @@ export function createTerminalSessionStore(
           cols,
           rows,
         };
-        set((current) => ({
-          requestedCols: cols,
-          requestedRows: rows,
-          pendingActions: appendPendingAction(current.pendingActions, {
-            clientActionId,
-            action: "resize",
-          }),
-        }));
+        set((current) => {
+          const { pendingActions, evicted } = appendPendingAction(
+            current.pendingActions,
+            { clientActionId, frame },
+          );
+          return {
+            requestedCols: cols,
+            requestedRows: rows,
+            pendingActions,
+            lastInputLostAt: evicted ? Date.now() : current.lastInputLostAt,
+          };
+        });
         dispatchClientFrame(frame);
         return clientActionId;
       },

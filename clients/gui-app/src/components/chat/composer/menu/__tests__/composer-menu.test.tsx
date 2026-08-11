@@ -1,4 +1,3 @@
-import "../../../../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,
@@ -36,6 +35,7 @@ function openSlashPicker(store: ComposerPickerStore): void {
     range: { from: 1, to: 2 },
     query: "",
     commit: () => {},
+    dismiss: null,
     clientRect: null,
   });
 }

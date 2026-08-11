@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   useWorkspaceFoldersStore,
@@ -8,7 +7,12 @@ import {
 const STORAGE_KEY = "traycer-gui-app:workspace-folders";
 
 function folderInfo(path: string): WorkspaceFolderInfo {
-  return { path, name: path.split("/").pop() ?? path, repoIdentifier: null };
+  return {
+    path,
+    name: path.split("/").pop() ?? path,
+    repoIdentifier: null,
+    hostId: null,
+  };
 }
 
 beforeEach(() => {

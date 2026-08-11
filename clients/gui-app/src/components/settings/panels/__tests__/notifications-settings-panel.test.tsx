@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,
@@ -6,10 +5,11 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -18,8 +18,45 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
+import {
+  NotificationsSettingsPanel,
+  NotificationsSettingsPanelForClient,
+} from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+  hostId: string | null;
+  /** `null` uses the fixture's default (`following`). */
+  status: HostScope["status"] | null;
+} = vi.hoisted(() => ({
+  client: null,
+  hostId: "host-a",
+  status: null,
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals. The
+// host OPTION is built from the mock's hostId so `scope.host.hostId` — the
+// gate's remount key — tracks it, not just `scope.hostId`.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        host:
+          hostScopeMocks.hostId === null
+            ? null
+            : hostScopeOptionFixture({ hostId: hostScopeMocks.hostId }),
+        ...(hostScopeMocks.status === null
+          ? {}
+          : { status: hostScopeMocks.status }),
+      }),
+  };
+});
 
 type NotificationConfig = ResponseOfMethod<
   HostRpcRegistry,
@@ -29,26 +66,84 @@ type SetConfigRequest = RequestOfMethod<
   HostRpcRegistry,
   "host.notifications.setConfig"
 >;
+type HooksStatus = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.notificationHooks.status"
+>;
+type HookEntry = HooksStatus["hooks"][number];
+type SaveHooksRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "host.notificationHooks.save"
+>;
+type TestHookRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "host.notificationHooks.test"
+>;
+type TestHookResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.notificationHooks.test"
+>;
+
+type RenderNotificationsOptions = {
+  readonly hooksStatus: HooksStatus | undefined;
+  readonly hooksStatusError: string | undefined;
+  readonly deferTest: boolean | undefined;
+};
+
+const HOOKS_CONFIG_PATH = "/Users/me/.traycer/notification-hooks.json";
 
 afterEach(() => {
   cleanup();
+  hostScopeMocks.hostId = "host-a";
+  hostScopeMocks.client = null;
+  hostScopeMocks.status = null;
 });
 
-describe("<NotificationsSettingsPanel />", () => {
-  it("reflects the severity channel matrix and writes toggles through setConfig", async () => {
-    const fixture = renderNotificationsSettings();
+describe("<NotificationsSettingsPanel /> severity policy", () => {
+  it("renders three single-channel severity rows, not a channel matrix", async () => {
+    renderNotificationsSettings(undefined);
 
-    const needsActionRenderer = await screen.findByRole("switch", {
+    const needsAction = await screen.findByRole("switch", {
       name: "Needs action In-app notifications",
     });
-    const doneRenderer = screen.getByRole("switch", {
+    const failure = screen.getByRole("switch", {
+      name: "Failure In-app notifications",
+    });
+    const done = screen.getByRole("switch", {
       name: "Done In-app notifications",
     });
+    const policy = screen.getByTestId("notifications-severity-policy");
 
-    expect(needsActionRenderer.getAttribute("data-state")).toBe("checked");
-    expect(doneRenderer.getAttribute("data-state")).toBe("checked");
-    // Neither the removed webhook channel nor the host-only email channel
-    // has a column.
+    expect(
+      within(policy).getByRole("heading", {
+        name: "In-app notifications",
+      }),
+    ).toBeTruthy();
+    expect(needsAction.getAttribute("data-state")).toBe("checked");
+    expect(failure.getAttribute("data-state")).toBe("checked");
+    expect(done.getAttribute("data-state")).toBe("checked");
+    expect(
+      within(policy).getByTestId("notifications-severity-needs_action"),
+    ).toBeTruthy();
+    expect(
+      within(policy).getByTestId("notifications-severity-failure"),
+    ).toBeTruthy();
+    expect(
+      within(policy).getByTestId("notifications-severity-done"),
+    ).toBeTruthy();
+    expect(within(policy).getByText("Approvals and interviews.")).toBeTruthy();
+    expect(
+      within(policy).getByText(
+        "Errored turns, stalls, crashes, and rate limits.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(policy).getByText("Completed or intentionally stopped turns."),
+    ).toBeTruthy();
+
+    // One switch per severity only - no channel-by-severity matrix cells.
+    expect(within(policy).getAllByRole("switch")).toHaveLength(3);
+    expect(screen.queryByTestId(/notifications-matrix-/)).toBeNull();
     expect(
       screen.queryByRole("switch", { name: /webhook notifications/i }),
     ).toBeNull();
@@ -57,7 +152,14 @@ describe("<NotificationsSettingsPanel />", () => {
       screen.queryByRole("switch", { name: /email notifications/i }),
     ).toBeNull();
     expect(screen.queryByLabelText("SMTP password")).toBeNull();
+  });
 
+  it("writes severity toggles through setConfig while preserving email channel state", async () => {
+    const fixture = renderNotificationsSettings(undefined);
+
+    const doneRenderer = await screen.findByRole("switch", {
+      name: "Done In-app notifications",
+    });
     fireEvent.click(doneRenderer);
 
     await waitFor(() => {
@@ -76,7 +178,7 @@ describe("<NotificationsSettingsPanel />", () => {
     });
   });
 
-  it("keeps matrix toggles disabled while a post-save config refetch is in flight", async () => {
+  it("keeps severity toggles disabled while a post-save config refetch is in flight", async () => {
     const fixture = renderNotificationsSettingsWithDeferredRefetch();
 
     const doneRenderer = await screen.findByRole("switch", {
@@ -112,12 +214,488 @@ describe("<NotificationsSettingsPanel />", () => {
   });
 });
 
-function renderNotificationsSettings(): {
+describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
+  it("shows the empty state with an Add hook action when no hooks exist", async () => {
+    renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({ hooks: [] }),
+      hooksStatusError: undefined,
+      deferTest: undefined,
+    });
+
+    expect(await screen.findByText("No notification hooks")).toBeTruthy();
+    const manager = screen.getByTestId("notification-hooks-manager");
+    expect(
+      within(manager).getByRole("heading", { name: "Notification hooks" }),
+    ).toBeTruthy();
+    expect(within(manager).getByText("0 hooks")).toBeTruthy();
+    expect(
+      within(manager).getByText(
+        /Hooks run a script or send an HTTP request for enabled/,
+      ),
+    ).toBeTruthy();
+    // Toolbar Add + empty-state Add.
+    expect(
+      within(manager).getAllByRole("button", { name: /Add hook/ }),
+    ).toHaveLength(2);
+    const emptyState = within(manager).getByTestId(
+      "notification-hooks-empty-state",
+    );
+    expect(emptyState.className).toContain("h-full");
+    expect(emptyState.className).toContain("items-center");
+    expect(emptyState.className).toContain("justify-center");
+    const configPath = within(manager).getByText(HOOKS_CONFIG_PATH);
+    expect(configPath.className).toContain("min-w-0");
+    expect(configPath.className).toContain("flex-1");
+    expect(configPath.className).not.toContain("max-w-48");
+  });
+
+  it("shows host-unavailable policy and manager states with both group boundaries", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSettingsPanelForClient client={null} />
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText("Notification settings unavailable"),
+    ).toBeTruthy();
+    const policy = screen.getByTestId("notifications-severity-policy");
+    const manager = screen.getByTestId("notification-hooks-manager");
+
+    expect(
+      within(policy).getByRole("heading", {
+        name: "In-app notifications",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(manager).getByRole("heading", { name: "Notification hooks" }),
+    ).toBeTruthy();
+    expect(
+      within(policy).getByText("Connect to a host to configure delivery."),
+    ).toBeTruthy();
+    expect(
+      within(manager).getByText("Notification hooks unavailable"),
+    ).toBeTruthy();
+    expect(
+      within(manager).getByText(
+        "Reconnect to the current host to view and manage hooks.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(manager)
+        .getByRole("button", { name: /Add hook/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps policy and manager boundaries when hooks status query errors", async () => {
+    renderNotificationsSettings({
+      hooksStatus: undefined,
+      hooksStatusError: "host offline",
+      deferTest: undefined,
+    });
+
+    expect(
+      await screen.findByText("Couldn't load notification hooks"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", {
+        name: "In-app notifications",
+      }),
+    ).toBeTruthy();
+    const manager = screen.getByTestId("notification-hooks-manager");
+    expect(
+      within(manager).getByRole("heading", { name: "Notification hooks" }),
+    ).toBeTruthy();
+    expect(within(manager).getByText("host offline")).toBeTruthy();
+    expect(
+      within(manager)
+        .getByRole("button", { name: /Add hook/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("disables editing when the hooks file is invalid and preserves path copy", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    const previousClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      renderNotificationsSettings({
+        hooksStatus: makeHooksStatus({
+          configError: "Unexpected token } in JSON at position 12",
+          hooks: [],
+        }),
+        hooksStatusError: undefined,
+        deferTest: undefined,
+      });
+
+      expect(
+        await screen.findByText(
+          /Hooks are disabled and editing is unavailable until the file parses/,
+        ),
+      ).toBeTruthy();
+      const manager = screen.getByTestId("notification-hooks-manager");
+      expect(
+        within(manager).getByText(/Unexpected token } in JSON at position 12/),
+      ).toBeTruthy();
+      expect(within(manager).getByText(HOOKS_CONFIG_PATH)).toBeTruthy();
+      expect(
+        within(manager)
+          .getByRole("button", { name: /Add hook/ })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(
+        within(manager).queryByRole("button", { name: "Test" }),
+      ).toBeNull();
+
+      fireEvent.click(
+        within(manager).getByRole("button", {
+          name: "Copy config file path",
+        }),
+      );
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(HOOKS_CONFIG_PATH);
+      });
+    } finally {
+      if (previousClipboard === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", previousClipboard);
+      }
+    }
+  });
+
+  it("presents per-row destination, severity filter, and latest test results", async () => {
+    renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({
+        hooks: [
+          makeHook({
+            id: "script-hook",
+            name: "Phone alerts",
+            severities: ["needs_action", "failure"],
+            action: {
+              type: "command",
+              command: "/usr/local/bin/notify",
+              args: ["--loud"],
+            },
+            lastResult: {
+              at: 1,
+              ok: true,
+              detail: "Last test delivered",
+            },
+          }),
+          makeHook({
+            id: "http-hook",
+            name: "Incident webhook",
+            severities: ["failure"],
+            action: {
+              type: "http",
+              url: "https://hooks.example.com/incidents",
+              headers: {},
+            },
+            lastResult: {
+              at: 2,
+              ok: false,
+              detail: "HTTP 500 from endpoint",
+            },
+          }),
+          makeHook({
+            id: "untested-hook",
+            name: "Untested",
+            lastResult: null,
+          }),
+        ],
+      }),
+      hooksStatusError: undefined,
+      deferTest: undefined,
+    });
+
+    expect(await screen.findByText("Phone alerts")).toBeTruthy();
+    const manager = screen.getByTestId("notification-hooks-manager");
+    expect(within(manager).getByText("3 hooks")).toBeTruthy();
+
+    const scriptRow = within(manager).getByTestId(
+      "notification-hook-row-script-hook",
+    );
+    expect(within(scriptRow).getByText("Script")).toBeTruthy();
+    expect(
+      within(scriptRow).getByText("/usr/local/bin/notify --loud"),
+    ).toBeTruthy();
+    expect(within(scriptRow).getByText("Needs action, Failure")).toBeTruthy();
+    expect(within(scriptRow).getByText("Last test delivered")).toBeTruthy();
+
+    const httpRow = within(manager).getByTestId(
+      "notification-hook-row-http-hook",
+    );
+    expect(within(httpRow).getByText("Incident webhook")).toBeTruthy();
+    expect(within(httpRow).getByText("HTTP")).toBeTruthy();
+    expect(
+      within(httpRow).getByText("https://hooks.example.com/incidents"),
+    ).toBeTruthy();
+    expect(within(httpRow).getByText("HTTP 500 from endpoint")).toBeTruthy();
+
+    const untestedRow = within(manager).getByTestId(
+      "notification-hook-row-untested-hook",
+    );
+    expect(within(untestedRow).getByText("No test yet")).toBeTruthy();
+  });
+
+  it("shows running feedback on the tested hook row only", async () => {
+    const fixture = renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({
+        hooks: [
+          makeHook({ id: "a", name: "Alpha" }),
+          makeHook({ id: "b", name: "Beta" }),
+        ],
+      }),
+      hooksStatusError: undefined,
+      deferTest: true,
+    });
+
+    const alphaRow = await screen.findByTestId("notification-hook-row-a");
+    const betaRow = screen.getByTestId("notification-hook-row-b");
+
+    fireEvent.click(within(alphaRow).getByRole("button", { name: /Test/ }));
+
+    await waitFor(() => {
+      expect(fixture.testRequests).toHaveLength(1);
+    });
+    expect(fixture.testRequests[0].hookId).toBe("a");
+
+    // Spinner only on the tested row; both Test buttons share the pending gate.
+    expect(screen.getByTestId("notification-hook-test-spinner-a")).toBeTruthy();
+    expect(screen.queryByTestId("notification-hook-test-spinner-b")).toBeNull();
+    expect(
+      within(alphaRow)
+        .getByRole("button", { name: /Test/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      within(betaRow)
+        .getByRole("button", { name: /Test/ })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    await act(async () => {
+      fixture.resolveTest({
+        outcome: "ok",
+        detail: "delivered",
+      });
+      await fixture.testPromise;
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("notification-hook-test-spinner-a"),
+      ).toBeNull();
+    });
+  });
+
+  it("opens the focused Add and Edit hook editors", async () => {
+    renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({
+        hooks: [makeHook({ id: "edit-me", name: "Pager" })],
+      }),
+      hooksStatusError: undefined,
+      deferTest: undefined,
+    });
+
+    expect(await screen.findByText("Pager")).toBeTruthy();
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: /Add hook/ }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save hook" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "Add hook" })).toBeNull();
+    });
+
+    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    expect(
+      await screen.findByRole("heading", { name: "Edit hook" }),
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue("Pager")).toBeTruthy();
+  });
+
+  // The flip tests render the SCOPE-BOUND panel, not the ForClient variant
+  // the shared harness uses: `NotificationsSettingsPanelForClient` passes
+  // `scope={null}` (its caller owns the gating), so it never mounts the
+  // `HostScopeGate` whose hidden-`<Activity>` preservation is under test.
+  function renderScopedPanel(): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly rerender: () => void;
+  } {
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-retention",
+        handlers: {
+          "host.notifications.getConfig": () => makeNotificationConfig(),
+          "host.notificationHooks.status": () => makeHooksStatus({ hooks: [] }),
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok" }),
+    );
+    hostScopeMocks.client = client;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    // A FRESH element per (re)render: with a referentially identical element
+    // React bails out of the whole subtree and never re-reads the mutated
+    // scope mock, so the flip under test silently would not happen.
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSettingsPanel />
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+    return {
+      client,
+      rerender: () => {
+        view.rerender(makeUi());
+      },
+    };
+  }
+
+  it("preserves a typed hook draft across a transient same-host disconnect", async () => {
+    // The gate holds this section in a hidden `<Activity>` while its host is
+    // unreachable. For a TRANSIENT same-host loss (restart, sleep, relay
+    // blip) the returning panel must still hold the typed draft — destruction
+    // is only correct for a real host switch, covered by the next test.
+    const view = renderScopedPanel();
+    await screen.findByTestId("notification-hooks-empty-state");
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(
+      within(manager).getAllByRole("button", { name: /Add hook/ })[0],
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Typed mid-disconnect" },
+    });
+
+    // The host drops out: same host, no client. The gate reports the outage
+    // instead of the section, and the open dialog — portaled DOM included —
+    // is concealed rather than destroyed, so nothing invisible is actionable.
+    hostScopeMocks.client = null;
+    hostScopeMocks.status = "unreachable";
+    view.rerender();
+    expect(screen.getByTestId("host-scope-unreachable")).toBeTruthy();
+    const concealed = screen.queryByDisplayValue("Typed mid-disconnect");
+    expect(concealed === null || isConcealed(concealed)).toBe(true);
+
+    // The host returns: the dialog is still open and the name still typed.
+    hostScopeMocks.client = view.client;
+    hostScopeMocks.status = null;
+    view.rerender();
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue("Typed mid-disconnect")).toBeTruthy();
+  });
+
+  it("destroys an open draft when the scope moves to a different host", async () => {
+    // A draft is armed against one machine's hooks file. The preservation
+    // that survives a same-host blip must not follow the user to another
+    // host: the host-keyed remount destroys it.
+    const view = renderScopedPanel();
+    await screen.findByTestId("notification-hooks-empty-state");
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(
+      within(manager).getAllByRole("button", { name: /Add hook/ })[0],
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Add hook" }),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Belongs to host-a" },
+    });
+
+    hostScopeMocks.hostId = "host-b";
+    view.rerender();
+
+    await screen.findByTestId("notification-hooks-empty-state");
+    expect(screen.queryByRole("heading", { name: "Add hook" })).toBeNull();
+    expect(screen.queryByDisplayValue("Belongs to host-a")).toBeNull();
+  });
+
+  it("requires confirmation before deleting a hook", async () => {
+    const fixture = renderNotificationsSettings({
+      hooksStatus: makeHooksStatus({
+        hooks: [makeHook({ id: "doomed", name: "Doomed hook" })],
+      }),
+      hooksStatusError: undefined,
+      deferTest: undefined,
+    });
+
+    expect(await screen.findByText("Doomed hook")).toBeTruthy();
+    const manager = screen.getByTestId("notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(within(dialog).getByText("Delete hook?")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        /"Doomed hook" will be removed from the hooks file/,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      expect(fixture.saveRequests).toHaveLength(1);
+    });
+    expect(fixture.saveRequests[0].hooks).toEqual([]);
+  });
+});
+
+function renderNotificationsSettings(
+  options: RenderNotificationsOptions | undefined,
+): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly setRequests: SetConfigRequest[];
+  readonly saveRequests: SaveHooksRequest[];
+  readonly testRequests: TestHookRequest[];
+  readonly testPromise: Promise<TestHookResponse>;
+  readonly resolveTest: (value: TestHookResponse) => void;
 } {
   const setRequests: SetConfigRequest[] = [];
+  const saveRequests: SaveHooksRequest[] = [];
+  const testRequests: TestHookRequest[] = [];
   let config = makeNotificationConfig();
+  let hooksStatus =
+    options === undefined || options.hooksStatus === undefined
+      ? makeHooksStatus(undefined)
+      : options.hooksStatus;
+  let resolveTest: (value: TestHookResponse) => void = () => undefined;
+  const testPromise = new Promise<TestHookResponse>((resolve) => {
+    resolveTest = resolve;
+  });
+
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -130,6 +708,31 @@ function renderNotificationsSettings(): {
           setRequests.push(params);
           config = responseFromSetRequest(config, params);
           return config;
+        },
+        "host.notificationHooks.status": () => {
+          if (options !== undefined && options.hooksStatusError !== undefined) {
+            throw new Error(options.hooksStatusError);
+          }
+          return hooksStatus;
+        },
+        "host.notificationHooks.save": (params) => {
+          saveRequests.push(params);
+          hooksStatus = {
+            ...hooksStatus,
+            configError: null,
+            hooks: params.hooks.map((hook) => ({
+              ...hook,
+              lastResult: null,
+            })),
+          };
+          return hooksStatus;
+        },
+        "host.notificationHooks.test": (params) => {
+          testRequests.push(params);
+          if (options !== undefined && options.deferTest === true) {
+            return testPromise;
+          }
+          return { outcome: "ok", detail: "delivered" };
         },
       },
     }),
@@ -157,7 +760,14 @@ function renderNotificationsSettings(): {
     wrapper,
   });
 
-  return { client, setRequests };
+  return {
+    client,
+    setRequests,
+    saveRequests,
+    testRequests,
+    testPromise,
+    resolveTest,
+  };
 }
 
 function renderNotificationsSettingsWithDeferredRefetch(): {
@@ -192,6 +802,7 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
           config.value = responseFromSetRequest(config.value, params);
           return config.value;
         },
+        "host.notificationHooks.status": () => makeHooksStatus(undefined),
       },
     }),
   });
@@ -228,6 +839,78 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
   };
 }
 
+/**
+ * The hooks editor holds an open draft and an armed pending-delete, and a save
+ * rebuilds the host's ENTIRE hooks file from the list on screen. Nothing here
+ * unmounts when the scope moves to another host, so without a key that state
+ * outlived the machine it was armed against while every mutation prop
+ * re-pointed at the new client.
+ */
+describe("<NotificationsSettingsPanel /> host scope changes", () => {
+  afterEach(() => {
+    cleanup();
+    hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.client = null;
+  });
+
+  it("disarms a pending hook delete when the scoped host changes", async () => {
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-scope",
+        handlers: {
+          "host.notifications.getConfig": () => makeNotificationConfig(),
+          "host.notifications.setConfig": () => makeNotificationConfig(),
+          "host.notificationHooks.status": () =>
+            makeHooksStatus({ hooks: [makeHook({ id: "hook-1" })] }),
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    hostScopeMocks.client = client;
+    hostScopeMocks.hostId = "host-a";
+    const { rerender } = render(<NotificationsSettingsPanel />, { wrapper });
+
+    // Arm a delete against host-a's hook.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      expect(screen.getByText("Delete hook?")).toBeDefined();
+    });
+
+    // Move the scope to another machine. The client and its cached data stay
+    // put, which is precisely the case that used to leave this armed: the
+    // confirm stayed on screen while the save mutation re-pointed at the new
+    // host, so confirming rewrote host-b's whole hooks file to delete a hook
+    // chosen on host-a.
+    hostScopeMocks.hostId = "host-b";
+    rerender(<NotificationsSettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Delete hook?")).toBeNull();
+    });
+  });
+});
+
 function makeNotificationConfig(): NotificationConfig {
   return {
     matrix: {
@@ -261,6 +944,35 @@ function makeNotificationConfig(): NotificationConfig {
         lastError: "previous email failed",
       },
     },
+  };
+}
+
+function makeHooksStatus(
+  overrides: Partial<HooksStatus> | undefined,
+): HooksStatus {
+  return {
+    configPath: HOOKS_CONFIG_PATH,
+    configError: null,
+    hooks: [],
+    ...(overrides === undefined ? {} : overrides),
+  };
+}
+
+function makeHook(
+  overrides: Partial<HookEntry> & Pick<HookEntry, "id">,
+): HookEntry {
+  return {
+    id: overrides.id,
+    name: overrides.name ?? overrides.id,
+    enabled: overrides.enabled ?? true,
+    severities: overrides.severities ?? ["failure"],
+    action: overrides.action ?? {
+      type: "command",
+      command: "/bin/echo",
+      args: [],
+    },
+    lastResult:
+      overrides.lastResult === undefined ? null : overrides.lastResult,
   };
 }
 

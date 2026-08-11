@@ -11,6 +11,22 @@ import type {
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  ListUserSessionsResponse,
+  MintHostCredentialRequest,
+} from "@traycer/protocol/auth/devices-sessions";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
+import type {
+  MintHostCredentialFetchResult,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -75,6 +91,19 @@ export interface AuthSessionSnapshot {
   readonly token: string | null;
   readonly profile: AuthProfile | null;
   readonly contextMetadata: AuthContextMetadata | null;
+}
+
+/**
+ * The identity and credential authority that started an account-scoped
+ * operation. `identityGeneration` alone cannot distinguish a projected or
+ * reconciled account replacement, so callers also retain the live credential
+ * object and bearer they are allowed to use.
+ */
+interface LiveSessionAuthority {
+  readonly credentials: OpenFrameBearerSource;
+  readonly userId: string;
+  readonly bearer: string;
+  readonly generation: number;
 }
 
 export type AuthSessionSnapshotListener = (
@@ -195,6 +224,13 @@ export interface DeviceFlowProgress {
   readonly verificationUri: string;
   readonly verificationUriComplete: string;
   readonly expiresAtMs: number;
+  /**
+   * `waiting-approval` while the `/device/token` poll is outstanding;
+   * `finalizing` once the poll returned `authorized` and the token is being
+   * validated/persisted - the surface must stop saying "Waiting for approval"
+   * the moment the approval has actually landed.
+   */
+  readonly phase: "waiting-approval" | "finalizing";
 }
 
 export type DeviceFlowProgressListener = (
@@ -277,6 +313,13 @@ export class AuthService {
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
   private currentForceRefresh: Promise<void> | null = null;
+  private currentForceRefreshAuthority: LiveSessionAuthority | null = null;
+  // The bearer `fetchUserSessions()` already spent a repair refresh on without
+  // reaching an identified current session. Skips repeating that rotation on
+  // every 30s poll/focus refetch for an unchanging bearer; a bearer change
+  // (sign-in, sign-out, or any other rotation) naturally clears this by no
+  // longer matching.
+  private unrepairableSessionsBearer: string | null = null;
   // §4 reconcile worker: single-flight + trailing re-run so overlapping watcher
   // events never interleave applies. Never writes, never spends.
   private currentReconcile: Promise<void> | null = null;
@@ -708,6 +751,48 @@ export class AuthService {
     );
   }
 
+  private captureLiveSessionAuthority(): LiveSessionAuthority | null {
+    const ctx = this.contextProvider.current();
+    const bearer = this.currentBearer;
+    if (ctx === null || ctx.credentials.isReleased || bearer === null) {
+      return null;
+    }
+    return {
+      credentials: ctx.credentials,
+      userId: ctx.identity.userId,
+      bearer,
+      generation: this.identityGeneration,
+    };
+  }
+
+  private isLiveSessionAuthority(expected: LiveSessionAuthority): boolean {
+    const ctx = this.contextProvider.current();
+    return (
+      !this.disposed &&
+      this.identityGeneration === expected.generation &&
+      ctx !== null &&
+      ctx.identity.userId === expected.userId &&
+      ctx.credentials === expected.credentials &&
+      !ctx.credentials.isReleased &&
+      this.currentBearer === expected.bearer
+    );
+  }
+
+  private captureUpdatedSessionAuthority(
+    expected: LiveSessionAuthority,
+  ): LiveSessionAuthority | null {
+    const current = this.captureLiveSessionAuthority();
+    if (
+      current === null ||
+      current.generation !== expected.generation ||
+      current.userId !== expected.userId ||
+      current.credentials !== expected.credentials
+    ) {
+      return null;
+    }
+    return current;
+  }
+
   /**
    * Primary (and only) interactive sign-in: the OAuth 2.0 Device Authorization
    * Grant (RFC 8628). `beginAttempt` first supersedes any in-flight attempt (a
@@ -774,6 +859,7 @@ export class AuthService {
       verificationUri: authorization.verificationUri,
       verificationUriComplete: authorization.verificationUriComplete,
       expiresAtMs: Date.now() + authorization.expiresInSeconds * 1000,
+      phase: "waiting-approval",
     });
     // The attempt times out at the `device_code` TTL (`expires_in`); the handler
     // is epoch-scoped so a superseded attempt's timer can't kill a newer one.
@@ -1068,6 +1154,227 @@ export class AuthService {
     throw new Error("Couldn't reach Traycer to load your subscription.");
   }
 
+  /**
+   * Fetches the signed-in user's host registry + live status via the runner
+   * host (`GET /api/v3/hosts`, run in Electron main for CORS). Mirrors
+   * {@link fetchAuthenticatedUser}: the raw bearer stays inside this service
+   * (the auth boundary), so the My Hosts query hook consumes the parsed
+   * envelope without ever touching the token.
+   *
+   *   - signed-out / no bearer → `null` (the panel renders its signed-out state).
+   *   - `unauthorized`         → `null` (a rare mid-rotation 401; the proactive
+   *                              refresh keeps the bearer fresh and the ~15s poll
+   *                              recovers on the next tick — no forced sign-out
+   *                              from a background list poll).
+   *   - `network-error`        → throws so TanStack Query surfaces a retriable
+   *                              error instead of a misleading empty list.
+   */
+  async fetchRegisteredHosts(): Promise<HostListResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listRegisteredHosts(
+      this.currentBearer,
+    );
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your hosts.");
+    }
+    return result.response;
+  }
+
+  /**
+   * Fetches the signed-in user's device/session list via authn-v3. The raw
+   * bearer remains inside this auth boundary; callers consume a parsed DTO from
+   * TanStack Query and render signed-out as an empty state.
+   *
+   * `signal` is the reading query's cancellation, and it is load-bearing for
+   * more than the request: the repair below spends a single-use refresh
+   * rotation. Identity fencing alone does not cover this, because the common
+   * cancellations - a revoke invalidating the list, a panel unmount, a poll
+   * superseded by a focus refetch - leave the SAME account live, so every
+   * authority check still passes while nobody is waiting for the answer.
+   * Aborting is therefore checked on entry and after each list await, and
+   * throws rather than returning `null`, so a cancelled read can never be
+   * mistaken for the signed-out empty state.
+   */
+  async fetchUserSessions(
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsResponse | null> {
+    signal.throwIfAborted();
+    const initialAuthority = this.captureLiveSessionAuthority();
+    if (initialAuthority === null) {
+      return null;
+    }
+    const initial = await this.runnerHost.listUserSessions(
+      initialAuthority.bearer,
+      signal,
+    );
+    // This is the fence that keeps a cancelled read out of the repair below:
+    // everything between here and the rotation is synchronous, so bailing here
+    // is the same as bailing there.
+    //
+    // Ordered before the authority check on purpose: an aborted read is a
+    // non-answer, not an account change, and the two shells disagree on how an
+    // aborted request surfaces (in-process `fetch` collapses it into
+    // `network-error`; the desktop bridge rejects). Checking here makes both
+    // reach the caller as the same cancellation.
+    signal.throwIfAborted();
+    if (!this.isLiveSessionAuthority(initialAuthority)) {
+      return null;
+    }
+    if (initial.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    if (
+      initial.kind === "ok" &&
+      initial.response.sessions.some(
+        (session) => session.current && session.clientKind !== "unknown",
+      )
+    ) {
+      this.unrepairableSessionsBearer = null;
+      return initial.response;
+    }
+
+    // A prior repair already rotated this exact bearer without reaching an
+    // identified current session (e.g. the server-side condition is stuck,
+    // not transient). Repeating the rotate on every 30s poll/focus refetch
+    // would keep spending `/api/v3/auth/refresh` against an unchanging bearer
+    // forever and permanently error the panel; return what we have instead.
+    if (
+      initial.kind === "ok" &&
+      this.unrepairableSessionsBearer === initialAuthority.bearer
+    ) {
+      return initial.response;
+    }
+
+    // A still-valid credential from before individual session tracking has no
+    // row/family yet, and the original upgrader recorded an existing desktop
+    // row as `unknown`. Listing used to turn either case into an authoritative
+    // empty/unknown UI. One locked refresh lets authn create or enrich the row;
+    // then read again with the rotated bearer. The existing single-flight +
+    // cross-process credential lock keeps this from double-spending a refresh.
+    const repairedAuthority =
+      await this.forceRefreshExpectedSession(initialAuthority);
+    if (repairedAuthority === null) {
+      return null;
+    }
+
+    const repaired = await this.runnerHost.listUserSessions(
+      repairedAuthority.bearer,
+      signal,
+    );
+    signal.throwIfAborted();
+    if (!this.isLiveSessionAuthority(repairedAuthority)) {
+      return null;
+    }
+    if (repaired.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    if (repaired.kind === "unauthorized") {
+      if (useAuthStore.getState().status === "signed-in") {
+        throw new Error("Couldn't refresh your signed-in session.");
+      }
+      return null;
+    }
+    const hasIdentifiedCurrentSession = repaired.response.sessions.some(
+      (session) => session.current && session.clientKind !== "unknown",
+    );
+    if (!hasIdentifiedCurrentSession) {
+      this.unrepairableSessionsBearer = repairedAuthority.bearer;
+      throw new Error("Couldn't register this signed-in session yet.");
+    }
+    this.unrepairableSessionsBearer = null;
+    return repaired.response;
+  }
+
+  /**
+   * Revokes one session family. `useStepUpCredential` is false for the first
+   * attempt; if authn responds `step-up-required`, the UI verifies an OTP and
+   * retries by asking the runner-host boundary to attach its retained step-up
+   * bearer internally.
+   */
+  async revokeUserSession(
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeUserSession(
+      this.currentBearer,
+      familyId,
+      useStepUpCredential,
+    );
+  }
+
+  /**
+   * Global sign-out is intentionally tighter than per-session cleanup: callers
+   * verify a fresh step-up challenge for each invocation, then the runner-host
+   * boundary attaches and clears the retained step-up bearer internally.
+   */
+  async revokeAllSessions(): Promise<RevokeAllSessionsFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeAllSessions(this.currentBearer);
+  }
+
+  /**
+   * Mints a device credential for a connected host. A single attempt on the
+   * ordinary bearer: unlike `revokeUserSession` there is no step-up retry,
+   * because the mint is not step-up gated (see the mint route's doc comment).
+   */
+  async mintHostCredential(
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintHostCredential(this.currentBearer, request);
+  }
+
+  async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.requestStepUpChallenge(this.currentBearer);
+  }
+
+  async verifyStepUpChallenge(
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.verifyStepUpChallenge(this.currentBearer, code);
+  }
+
+  /**
+   * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` via the
+   * runner host (run in Electron main for CORS, mirroring
+   * {@link fetchRegisteredHosts}). Never returns `null` on signed-out —
+   * mutating while signed out is a caller bug, so this throws instead of
+   * silently no-oping (unlike the read path, which has a legitimate
+   * signed-out empty state to render).
+   */
+  async updateHostVersionPolicy(
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    if (this.currentBearer === null) {
+      throw new Error("Sign in to update this host.");
+    }
+    return this.runnerHost.updateHostVersionPolicy(
+      this.currentBearer,
+      hostId,
+      input,
+    );
+  }
+
   private async revalidateCurrentContextOnce(
     expected: OpenFrameBearerSource,
   ): Promise<ValidationOutcome | null> {
@@ -1097,6 +1404,14 @@ export class AuthService {
     }
 
     if (outcome.kind === "valid") {
+      // Subscription entitlement can change without a bearer rotation (for
+      // example after a purchase or restore). Project every successful
+      // validation so entitlement-gated surfaces react without an app restart.
+      useAuthStore
+        .getState()
+        .setSubscriptionStatus(
+          outcome.user.userSubscription.subscriptionStatus,
+        );
       if (outcome.user.user.id !== currentUserId) {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.
@@ -1416,63 +1731,86 @@ export class AuthService {
    * two can't both drive a rotate on the same base; a no-op when signed out.
    */
   private forceRefresh(): Promise<void> {
-    if (this.currentForceRefresh !== null) {
-      return this.currentForceRefresh;
+    const expected = this.captureLiveSessionAuthority();
+    if (expected === null) {
+      return Promise.resolve();
     }
-    const op = this.forceRefreshOnce().finally(() => {
+    return this.forceRefreshExpectedSession(expected).then(() => undefined);
+  }
+
+  /**
+   * Refresh only the session authority supplied by the caller. This is used by
+   * the session-list repair so a late response for account A cannot rotate or
+   * clear the credential that account B installed in the meantime.
+   */
+  private async forceRefreshExpectedSession(
+    expected: LiveSessionAuthority,
+  ): Promise<LiveSessionAuthority | null> {
+    if (!this.isLiveSessionAuthority(expected)) {
+      return null;
+    }
+    if (this.currentForceRefresh !== null) {
+      const activeAuthority = this.currentForceRefreshAuthority;
+      if (
+        activeAuthority === null ||
+        activeAuthority.generation !== expected.generation ||
+        activeAuthority.userId !== expected.userId ||
+        activeAuthority.credentials !== expected.credentials
+      ) {
+        return null;
+      }
+      await this.currentForceRefresh;
+      return this.captureUpdatedSessionAuthority(expected);
+    }
+    const op = this.forceRefreshOnce(expected).finally(() => {
       if (this.currentForceRefresh === op) {
         this.currentForceRefresh = null;
+        this.currentForceRefreshAuthority = null;
       }
     });
     this.currentForceRefresh = op;
-    return op;
+    this.currentForceRefreshAuthority = expected;
+    await op;
+    return this.captureUpdatedSessionAuthority(expected);
   }
 
-  private async forceRefreshOnce(): Promise<void> {
-    if (this.isDisposed()) {
+  private async forceRefreshOnce(
+    expected: LiveSessionAuthority,
+  ): Promise<void> {
+    if (!this.isLiveSessionAuthority(expected)) {
       return;
     }
-    // A sign-out (or newer sign-in) that lands during any await below owns the
-    // state from that point on - this tail must not re-project the identity it
-    // started with.
-    const generation = this.identityGeneration;
     // Defer to an in-flight reactive revalidation. Both paths drive the locked
     // `rotate`; awaiting here serializes the proactive and reactive refreshes
     // within this process, and the file lock serializes across processes - so at
     // most one process ever spends a given refresh token.
     if (this.currentRevalidation !== null) {
       await this.currentRevalidation;
-      if (!this.isIdentityCurrent(generation)) {
+      if (!this.isLiveSessionAuthority(expected)) {
         return;
       }
     }
-    const ctx = this.contextProvider.current();
-    if (ctx === null || this.currentBearer === null) {
-      return;
-    }
-    const userId = ctx.identity.userId;
-    const currentToken = this.currentBearer;
     let rotated: TokenRotateResult;
     try {
       rotated = await this.tokenStore.rotate({
-        userId,
-        token: currentToken,
+        userId: expected.userId,
+        token: expected.bearer,
       });
     } catch (error) {
-      if (!this.isIdentityCurrent(generation)) {
+      if (!this.isLiveSessionAuthority(expected)) {
         return;
       }
       this.markStoreUnavailable("proactive.rotate", error);
       return;
     }
-    if (!this.isIdentityCurrent(generation)) {
+    if (!this.isLiveSessionAuthority(expected)) {
       return;
     }
     // `superseded` here adopts a sibling's rotation without spending; `deleted`/
     // `user-mismatch`/`tombstoned` clear the UI session (no resurrection);
     // `refresh-rejected` is the genuine expiry; transient outcomes leave the
     // bearer for the reactive path. Identical handling to the reactive rotate.
-    this.applyLiveRotateOutcome(rotated, userId, generation);
+    this.applyLiveRotateOutcome(rotated, expected.userId, expected.generation);
   }
 
   /**
@@ -1615,6 +1953,23 @@ export class AuthService {
       return;
     }
     if (result.kind === "authorized") {
+      // Set BEFORE the first await, like every other terminal outcome below:
+      // an overlapping start() invoked after this attempt's signIn() shares
+      // its identityGeneration (nothing bumps it again until a fresh sign-in
+      // /out), so the generation fence alone cannot stop a straggling
+      // rehydration from clobbering the identity applyTokenInternal is about
+      // to establish. `authResolvedDuringStart` is the only guard for that.
+      if (this.starting) {
+        this.authResolvedDuringStart = true;
+      }
+      // The approval has landed; only token validation/persistence remains.
+      // Flip the surface off "Waiting for approval" NOW - validation can take
+      // seconds (network retries, credentials-file lock), and through that
+      // window the panel would otherwise claim the approval never arrived.
+      const progress = this.deviceProgress;
+      if (progress !== null) {
+        this.setDeviceProgress({ ...progress, phase: "finalizing" });
+      }
       await this.applyTokenInternal(
         result.token,
         result.refreshToken,
@@ -1845,11 +2200,24 @@ export class AuthService {
   }
 
   /**
-   * Mints a fresh `RequestContext` for the validated identity AND projects
-   * the corresponding signed-in state into the store + persistence
-   * snapshot. The provider's `setSignedIn` aborts any previously-active
-   * context (cross-user transition or same-user re-sign-in), so host /
-   * runtime consumers see a single emit for the new identity.
+   * Projects the validated identity into the request context, store and
+   * persistence snapshot. Which context operation that means depends on who
+   * is already live:
+   *
+   *  - SAME user already signed in -> rotate the live credential lease in
+   *    place. "Same user => same context object" is a load-bearing invariant:
+   *    the remote-session cache keys its auth epoch on the lease SOURCE
+   *    object, and stream owners do not rebuild their transports on a
+   *    same-user event - so minting a fresh context here would retire the
+   *    epoch under every live session while its holders keep using it, then
+   *    duplicate the physical connection on the next acquire. The rotate
+   *    paths (locked rotate, reconcile, session restore) already hold this
+   *    invariant; this branch closes the last two ways around it (the
+   *    cross-window snapshot projection and a same-user device-flow
+   *    re-sign-in).
+   *  - Signed out, or a DIFFERENT user -> mint a fresh context. The
+   *    provider's `setSignedIn` aborts any previously-active context, so
+   *    host / runtime consumers see a single emit for the new identity.
    */
   private applySignedIn(
     bearerToken: string,
@@ -1860,12 +2228,34 @@ export class AuthService {
       return;
     }
     this.setDeviceProgress(null);
-    this.contextProvider.setSignedIn({
-      user,
-      bearerToken,
-      operationId: undefined,
-      externalAbortSignal: undefined,
-    });
+    const liveUserId = this.contextProvider.current()?.identity.userId;
+    let rotatedInPlace = false;
+    if (liveUserId !== undefined && liveUserId === user.user.id) {
+      try {
+        this.contextProvider.rotateCurrentBearer({
+          userId: liveUserId,
+          bearerToken,
+        });
+        rotatedInPlace = true;
+      } catch {
+        // The provider's own contract: rotation refusals (no current context,
+        // a released lease, an identity mismatch) are translated by
+        // auth-boundary callers into a clean sign-out + re-sign-in
+        // transition. Falling through to `setSignedIn` IS that transition -
+        // without it, a refused rotation would abort the whole sign-in
+        // projection mid-way (device progress already cleared, store never
+        // updated).
+        rotatedInPlace = false;
+      }
+    }
+    if (!rotatedInPlace) {
+      this.contextProvider.setSignedIn({
+        user,
+        bearerToken,
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+    }
     const profile = profileOverride ?? this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
     this.currentBearer = bearerToken;

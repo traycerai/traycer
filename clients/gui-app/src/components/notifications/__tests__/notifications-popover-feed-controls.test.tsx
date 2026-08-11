@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -1239,6 +1238,9 @@ describe("NotificationsPopover feed controls (T05)", () => {
 
       const pill = await screen.findByTestId("notifications-new-arrivals");
       expect(pill.textContent).toMatch(/1 new notification$/);
+      expect(pill.className).toContain("sticky");
+      expect(pill.className).toContain("top-2");
+      expect(pill.className).toContain("z-30");
 
       const scrollToSpy = vi.fn();
       scrollport.scrollTo = scrollToSpy as typeof scrollport.scrollTo;

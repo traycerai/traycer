@@ -31,9 +31,10 @@ import {
   type ComposerMentionProviderContext,
   type MentionEpicRequest,
   type MentionFlowStep,
-  type MentionMenuEntry,
+  type MentionStepEntries,
   type MentionWorkspaceRequest,
 } from "@/lib/composer/mentions";
+import { shouldCloseMentionForNoMatches } from "@/lib/composer/mentions/mention-dismissal";
 import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/local-epic-suggestions";
 import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
@@ -42,8 +43,13 @@ import type {
   EpicChatMentionEntry,
   EpicMentionEntry,
   EpicTerminalAgentMentionEntry,
+  EpicTerminalMentionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
+import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
+import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 import type {
   ComposerPickerItem,
@@ -56,6 +62,10 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 const EMPTY_WORKSPACE_ENTRIES: ReadonlyArray<WorkspaceEntry> = [];
 const EMPTY_EPIC_ENTRIES: ReadonlyArray<EpicMentionEntry> = [];
+const EMPTY_STEP_ENTRIES: MentionStepEntries = {
+  entries: [],
+  matchedCount: null,
+};
 
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -110,9 +120,10 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // root when there is no open Epic) keeps the legacy raw-root RPC. Gated on the
   // picker being open with a current Epic so a closed composer holds no
   // bindings subscription.
+  const epicIdOrEmpty = currentEpicId ?? "";
   const bindingsQuery = useWorktreeListBindingsForEpicForClient({
     client: hostClient,
-    epicId: currentEpicId ?? "",
+    epicId: epicIdOrEmpty,
     enabled: active && currentEpicId !== null,
   });
   const epicAttachedRoots = useMemo<ReadonlySet<string>>(() => {
@@ -137,6 +148,36 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     // the list only changes if an Agent is added/removed while the picker is
     // open, which re-snapshots on the next open.
   }, [active, handle, currentEpicId]);
+
+  // Plain terminals are the one Task entity that never reaches the Y.Doc - the
+  // host's `terminal.list` is their source of truth - so unlike the Agent and
+  // artifact lists above this one cannot be read off the open-epic store. It
+  // goes through the SAME query the Terminals panel uses, which means the two
+  // surfaces share one cache entry and can never disagree about what exists.
+  // A null client is `useTerminalListFor`'s disable switch, so a closed picker
+  // (or a composer with no open Task) holds no terminal subscription at all.
+  // "Requested" mirrors the query's real enable condition, including the
+  // client: with no hostClient the query is disabled and no rows are ever
+  // coming, so the zero-match verdict must not wait on it (a disabled query
+  // pends forever - gating on isPending would pin the menu open offline).
+  const terminalsRequested =
+    active && currentEpicId !== null && hostClient !== null;
+  const terminalListQuery = useTerminalListFor(
+    terminalsRequested ? hostClient : null,
+    { kind: "epic", epicId: epicIdOrEmpty },
+  );
+  const terminalSessions = terminalListQuery.data?.sessions;
+  const epicTerminalEntries = useMemo<
+    ReadonlyArray<EpicTerminalMentionEntry>
+  >(() => {
+    if (terminalSessions === undefined || currentEpicId === null) {
+      return EMPTY_TERMINAL_ENTRIES;
+    }
+    return epicTerminalMentionEntriesFromSessions(
+      terminalSessions,
+      currentEpicId,
+    );
+  }, [terminalSessions, currentEpicId]);
 
   // The current epic's COMPLETE local artifact set, read the same churn-free way
   // (via `getState`) as the chats above. Cloud `epic.mention*` returns at most
@@ -192,6 +233,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
+      terminalEntries: EMPTY_TERMINAL_ENTRIES,
       epicAttachedRoots,
     }),
     [currentEpicId, epicAttachedRoots, mentionRoots, query],
@@ -206,6 +248,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
+      terminalEntries: EMPTY_TERMINAL_ENTRIES,
       epicAttachedRoots,
     }),
     [currentEpicId, debouncedQuery, epicAttachedRoots, mentionRoots],
@@ -231,11 +274,13 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     data: workspaceEntries,
     isLoading: workspaceLoading,
     isFetching: workspaceFetching,
+    error: workspaceError,
   } = useWorkspaceEntries({ requests: workspaceRequests, client: hostClient });
   const {
     data: remoteEpicEntries,
     isLoading: epicLoading,
     isFetching: epicFetching,
+    error: epicError,
   } = useEpicMentionEntries({
     requests: epicRequests,
   });
@@ -302,11 +347,13 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: epicRequests.length > 0 ? epicEntries : EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: epicAgentEntries,
+      terminalEntries: epicTerminalEntries,
       epicAttachedRoots,
     }),
     [
       currentEpicId,
       epicAgentEntries,
+      epicTerminalEntries,
       epicAttachedRoots,
       epicEntries,
       epicRequests.length,
@@ -317,11 +364,14 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     ],
   );
 
-  const entries = useMemo<ReadonlyArray<MentionMenuEntry>>(
+  const stepEntries = useMemo<MentionStepEntries>(
     () =>
-      active ? mentionProviderRegistry.entries(step, resolvedContext) : [],
+      active
+        ? mentionProviderRegistry.entriesWithMatches(step, resolvedContext)
+        : EMPTY_STEP_ENTRIES,
     [active, resolvedContext, step],
   );
+  const entries = stepEntries.entries;
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
     () =>
@@ -366,9 +416,106 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     if (!active) return;
     pickerStore.getState().setFetching(fetching);
   }, [active, fetching, pickerStore]);
+
+  // Zero-real-match dismissal: once every source has settled for the CURRENT
+  // query (debounce flushed, nothing loading or refetching) and the ranked
+  // root search matched nothing, the menu closes the way Escape would.
+  // Session-scoped close, so a session that already yielded cannot shut its
+  // successor's menu.
+  const dismissForNoMatches = mentionNoMatchDismissVerdict({
+    active,
+    stepKind: step.kind,
+    query,
+    debouncedQuery,
+    matchedCount: stepEntries.matchedCount,
+    loading,
+    fetching,
+    workspaceRequestCount: workspaceRequests.length,
+    workspaceError,
+    epicRequestCount: epicRequests.length,
+    epicError,
+    // The terminal list feeds root-search entries but lives outside the
+    // aggregated loading/fetching flags above (those cover only the
+    // query-driven workspace/epic requests) - so its state gates the
+    // zero-match verdict separately.
+    terminalRequested: terminalsRequested,
+    terminalLoading: terminalListQuery.isLoading,
+    terminalFetching: terminalListQuery.isFetching,
+    terminalError: terminalListQuery.error,
+  });
+
+  useEffect(() => {
+    if (!dismissForNoMatches || sessionId === null) return;
+    const state = pickerStore.getState();
+    // A stale effect must never fire the CURRENT session's dismiss handle:
+    // this verdict was computed for `sessionId`, but the store may already
+    // belong to a successor session by the time the effect runs.
+    if (state.sessionId !== sessionId) return;
+    // Prefer the session's dismissal handle: it also ends the tiptap
+    // suggestion session, so the zero-match close cannot leak into the next
+    // `@` occurrence. Bare `closeSession` is the fallback for owners that
+    // registered no handle.
+    if (state.dismiss !== null) {
+      state.dismiss();
+      return;
+    }
+    state.closeSession(sessionId);
+  }, [dismissForNoMatches, pickerStore, sessionId]);
+}
+
+interface MentionNoMatchVerdictInput {
+  readonly active: boolean;
+  readonly stepKind: "root" | "provider";
+  readonly query: string;
+  readonly debouncedQuery: string;
+  readonly matchedCount: number | null;
+  readonly loading: boolean;
+  readonly fetching: boolean;
+  readonly workspaceRequestCount: number;
+  readonly workspaceError: Error | null;
+  readonly epicRequestCount: number;
+  readonly epicError: Error | null;
+  readonly terminalRequested: boolean;
+  readonly terminalLoading: boolean;
+  readonly terminalFetching: boolean;
+  readonly terminalError: Error | null;
+}
+
+/**
+ * Whether the open mention picker should close because a fully settled search
+ * genuinely matched nothing. A source is "errored" only when it was actually
+ * asked for rows (request count > 0, or the terminal list enabled) — a failed
+ * search proves nothing empty, so it blocks this close and only this close.
+ * The terminal list is folded into the settled/errored aggregates here: its
+ * rows feed root search, so a still-loading or failed terminal query must
+ * hold the menu open exactly like the workspace and epic sources do.
+ */
+export function mentionNoMatchDismissVerdict(
+  input: MentionNoMatchVerdictInput,
+): boolean {
+  const sourcesErrored =
+    (input.workspaceRequestCount > 0 && input.workspaceError !== null) ||
+    (input.epicRequestCount > 0 && input.epicError !== null) ||
+    (input.terminalRequested && input.terminalError !== null);
+  const terminalPending =
+    input.terminalRequested &&
+    (input.terminalLoading || input.terminalFetching);
+  return (
+    input.active &&
+    shouldCloseMentionForNoMatches({
+      stepKind: input.stepKind,
+      query: input.query,
+      debouncedQuery: input.debouncedQuery,
+      matchedCount: input.matchedCount,
+      loading: input.loading || terminalPending,
+      fetching: input.fetching,
+      sourcesErrored,
+    })
+  );
 }
 
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
+const EMPTY_TERMINAL_ENTRIES: ReadonlyArray<EpicTerminalMentionEntry> = [];
 const EMPTY_ATTACHED_ROOTS: ReadonlySet<string> = new Set();
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];
 const EMPTY_TITLE_MAP: ReadonlyMap<string, string> = new Map();
@@ -469,6 +616,47 @@ export function epicAgentMentionEntriesFromEpic(
     ...terminalEntries,
   ];
   return entries.length === 0 ? EMPTY_AGENT_ENTRIES : entries;
+}
+
+/**
+ * Pure projection of the host's `terminal.list` rows into @-mention terminal
+ * suggestions for one Task.
+ *
+ * Filtered by `isVisibleEpicTerminalSession` - the same predicate the Terminals
+ * panel applies - so the picker lists a terminal exactly while that panel does.
+ * That is the whole visibility rule: it also keeps the host's `terminal-agent`
+ * backing PTYs out (they are Agents, listed under Agents) and drops sessions
+ * belonging to another Task or to the host's landing scope.
+ */
+export function epicTerminalMentionEntriesFromSessions(
+  sessions: ReadonlyArray<CanonicalTerminalSessionInfo>,
+  epicId: string,
+): ReadonlyArray<EpicTerminalMentionEntry> {
+  const entries = sessions.flatMap((session) => {
+    if (!isVisibleEpicTerminalSession(session, epicId)) return [];
+    return [buildTerminalMentionEntry(session, epicId)];
+  });
+  return entries.length === 0 ? EMPTY_TERMINAL_ENTRIES : entries;
+}
+
+function buildTerminalMentionEntry(
+  session: CanonicalTerminalSessionInfo,
+  epicId: string,
+): EpicTerminalMentionEntry {
+  return {
+    kind: "epic-terminal",
+    id: `terminal:${epicId}:${session.sessionId}`,
+    token: `terminal:${epicId}/${session.sessionId}`,
+    epicId,
+    terminalId: session.sessionId,
+    label: terminalSessionLabel(session),
+    // The chip's tooltip and the row's secondary line: where this shell is.
+    description: session.cwd,
+    cwd: session.cwd,
+    // Terminals carry no "updated" clock, so recency ranking falls back to
+    // start time - newest shell first, which is the one just opened.
+    updatedAt: session.createdAt,
+  };
 }
 
 function matchesMentionQuery(label: string, normalizedQuery: string): boolean {

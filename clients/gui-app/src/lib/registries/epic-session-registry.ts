@@ -8,13 +8,38 @@ import type {
   EpicStreamClientFactory,
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
 
 export const EpicSessionContext = createContext<OpenEpicStoreHandle | null>(
   null,
 );
 
+/**
+ * The RPC client resolved for the same host that owns `EpicSessionContext`.
+ * Session-level provisioning prevents sidebar rows from independently mounting
+ * host-directory subscriptions just to address the same Epic host.
+ */
+export const EpicSessionHostClientContext =
+  createContext<HostClient<HostRpcRegistry> | null>(null);
+
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
+// Owner-identity discriminator (R-1), tracked separately from `handleHostIds`
+// so a same-host remote public-key rotation - which `activeHostId` alone
+// cannot see - also forces the acquire effect to close the stale durable
+// stream and mount a fresh session, instead of leaving it pinned to the
+// stale key.
+export const handleOwnerIdentityKeys = new WeakMap<
+  OpenEpicStoreHandle,
+  string | null
+>();
+
+export function getEpicSessionHandleHostId(
+  handle: OpenEpicStoreHandle,
+): string | null {
+  return handleHostIds.get(handle) ?? null;
+}
 
 /**
  * Registry is module-scoped so background Epic tabs survive route transitions

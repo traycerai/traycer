@@ -52,6 +52,9 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
   const modelPickerShortcut = useKeybindingStore(
     (state) => state.bindings["composer.model-picker.toggle"],
   );
+  const stashShortcut = useKeybindingStore(
+    (state) => state.bindings["composer.stash"],
+  );
   // Live snapshot of the active composer picker - the top-of-stack controller,
   // or null. The "Change model…" row dispatches `composer.model-picker.toggle`,
   // which no-ops on an empty stack (a locked/pending composer registers its
@@ -73,7 +76,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     if (kind === null) return NO_ITEMS;
-    const items: Array<CommandItem> = [];
+    const items: Array<CommandItem> = [buildStashPromptItem(stashShortcut)];
     if (activeModelPicker !== null) {
       items.push(
         buildChangeModelItem(
@@ -102,6 +105,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     ctx.activeEpicId,
     ctx.activeTabId,
     modelPickerShortcut,
+    stashShortcut,
     activeModelPicker,
   ]);
 }
@@ -110,6 +114,21 @@ export const composerSource: ReactCommandSource = {
   id: "composer",
   useItems: useComposerItems,
 };
+
+function buildStashPromptItem(shortcut: ChordString | null): CommandItem {
+  return {
+    id: "composer:stash-prompt",
+    label: "Stash prompt",
+    description: "Save this prompt so it can be restored in any composer.",
+    keywords: ["stash", "save", "prompt", "draft"],
+    group: "suggested",
+    scope: "actions",
+    shortcut,
+    actionId: "composer.stash",
+    subpage: null,
+    run: () => undefined,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Change model (open the focused composer's picker popover)
@@ -186,7 +205,7 @@ function openNewConversationModal(
   useNewConversationModalStore.getState().setComposerMode(epicId, mode);
   useNewConversationModalOpenStore
     .getState()
-    .open({ epicId, tabId, placement, parentId: null });
+    .open({ epicId, tabId, placement, parentId: null, hostId: null });
 }
 
 function buildNewChatReplaceItem(args: {

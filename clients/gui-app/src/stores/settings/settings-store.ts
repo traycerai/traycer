@@ -3,13 +3,11 @@ import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   DEFAULT_PERMISSION,
-  DEFAULT_AGENT_MODE,
   DEFAULT_COMPOSER_MODE,
   DEFAULT_REASONING,
   DEFAULT_SELECTION,
   DEFAULT_SERVICE_TIER,
   type PermissionMode,
-  type AgentMode,
   type ComposerMode,
   type HarnessModelSelection,
   type ReasoningLevel,
@@ -28,15 +26,19 @@ import {
   type DiffViewerPreferencesPatch,
 } from "@/lib/diff/diff-viewer-preferences";
 import { type EditorId } from "@traycer/protocol/host";
+import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
+export type ChatTurnMinimapSide = "left" | "right";
+export type ChatTurnMinimapPlacement = ChatTurnMinimapSide | "hide";
 // Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
 // surface doesn't take a value import from `@xterm/xterm`.
 export type TerminalCursorStyle = "block" | "bar" | "underline";
 
 export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
+export const DEFAULT_CHAT_TURN_MINIMAP_SIDE: ChatTurnMinimapPlacement = "right";
 
 // Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
 // which never blinks). Bar/underline mirror the chosen shape so the cursor
@@ -56,6 +58,11 @@ export function inactiveCursorStyleFor(
 export const DEFAULT_UI_FONT_SIZE = 15;
 export const DEFAULT_CODE_FONT_SIZE = 12;
 
+// Default worktree branch prefix, shared with the General panel so its
+// reset-to-default affordance and the store's initial state stay a single
+// source of truth.
+export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
+
 export interface SettingsState {
   theme: ThemeMode;
   themePreset: ThemePreset;
@@ -63,7 +70,6 @@ export interface SettingsState {
   defaultReasoning: ReasoningLevel;
   defaultServiceTier: ServiceTier;
   defaultPermission: PermissionMode;
-  defaultAgentMode: AgentMode;
   /**
    * Landing composer surface (chat vs. terminal-agent launcher). Persisted like
    * the other composer defaults so the chosen mode survives restarts.
@@ -80,6 +86,8 @@ export interface SettingsState {
    * reliable context-window data still render nothing.
    */
   pinContextUsageBreakdown: boolean;
+  /** Transcript edge used by the turn minimap, or `hide` to disable it. */
+  chatTurnMinimapSide: ChatTurnMinimapPlacement;
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
@@ -109,11 +117,25 @@ export interface SettingsState {
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
   /**
+   * Prefix prepended verbatim to the branch name pre-filled when creating a
+   * new worktree (no separator is auto-appended - the user types it, e.g.
+   * `traycer/`, `anurag/`, `feat-`). Empty string means no prefix.
+   */
+  worktreeBranchPrefix: string;
+  /**
    * Quote-to-composer affordance. Opt-out: enabling it (default) surfaces a
    * quote button when selecting assistant text, inserting the selection into
    * the chat composer as a blockquote.
    */
   quoteReplyEnabled: boolean;
+  /**
+   * Cmd/Ctrl+Enter mid-turn steering. Opt-out (default ON): when enabled,
+   * pressing Cmd+Enter while a turn is running on a steer-capable harness sends
+   * the composer text as a same-turn steering message that jumps the pending
+   * queue; plain Enter keeps queueing. Disabling it reverts Cmd+Enter to the
+   * plain-Enter submit alias. Idle behavior is identical either way.
+   */
+  steerOnModEnterEnabled: boolean;
   /**
    * Shared, user-level diff viewer configuration consumed by every git and
    * snapshot diff renderer. Persisted globally so the choice survives restarts
@@ -123,12 +145,12 @@ export interface SettingsState {
   diffViewerPreferences: DiffViewerPreferences;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
-  setDefaultAgentMode: (mode: AgentMode) => void;
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
   setShowNavigatorResourceStats: (value: boolean) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
+  setChatTurnMinimapSide: (value: ChatTurnMinimapPlacement) => void;
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
   setCodeFontSize: (value: number) => void;
@@ -144,7 +166,9 @@ export interface SettingsState {
   setDefaultEditor: (id: EditorId | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
+  setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
+  setSteerOnModEnterEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
 }
@@ -157,12 +181,12 @@ type PersistedSettingsState = Pick<
   | "defaultReasoning"
   | "defaultServiceTier"
   | "defaultPermission"
-  | "defaultAgentMode"
   | "composerMode"
   | "preventSleepWhileRunning"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
   | "pinContextUsageBreakdown"
+  | "chatTurnMinimapSide"
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
@@ -177,7 +201,9 @@ type PersistedSettingsState = Pick<
   | "defaultEditor"
   | "voiceInputEnabled"
   | "voiceLanguage"
+  | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
+  | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
 >;
 
@@ -223,12 +249,12 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultReasoning: state.defaultReasoning,
     defaultServiceTier: state.defaultServiceTier,
     defaultPermission: state.defaultPermission,
-    defaultAgentMode: state.defaultAgentMode,
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
     showGlobalResourceMonitor: state.showGlobalResourceMonitor,
     showNavigatorResourceStats: state.showNavigatorResourceStats,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
+    chatTurnMinimapSide: state.chatTurnMinimapSide,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
@@ -243,7 +269,9 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultEditor: state.defaultEditor,
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
+    worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
+    steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
   };
 }
@@ -257,12 +285,12 @@ export const useSettingsStore = create<SettingsState>()(
       defaultReasoning: DEFAULT_REASONING,
       defaultServiceTier: DEFAULT_SERVICE_TIER,
       defaultPermission: DEFAULT_PERMISSION,
-      defaultAgentMode: DEFAULT_AGENT_MODE,
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
       showGlobalResourceMonitor: true,
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
+      chatTurnMinimapSide: DEFAULT_CHAT_TURN_MINIMAP_SIDE,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
       codeFontSize: DEFAULT_CODE_FONT_SIZE,
@@ -277,11 +305,12 @@ export const useSettingsStore = create<SettingsState>()(
       defaultEditor: "vscode",
       voiceInputEnabled: true,
       voiceLanguage: "auto",
+      worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
+      steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
-      setDefaultAgentMode: makeSetter(set, "defaultAgentMode"),
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
       setShowGlobalResourceMonitor: makeSetter(
@@ -293,6 +322,7 @@ export const useSettingsStore = create<SettingsState>()(
         "showNavigatorResourceStats",
       ),
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
+      setChatTurnMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(
         set,
@@ -342,7 +372,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
+      setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
+      setSteerOnModEnterEnabled: makeSetter(set, "steerOnModEnterEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),
       patchDiffViewerPreferences: (patch) => {
         set((s) => ({
@@ -356,6 +388,38 @@ export const useSettingsStore = create<SettingsState>()(
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
       partialize: partializeSettingsState,
+      // Defensive re-derivation of `worktreeBranchPrefix` on every rehydration
+      // (mirrors `workspace-folders-store.ts`'s `merge`): a hand-edited or
+      // otherwise corrupted localStorage value would otherwise rehydrate
+      // verbatim (the default shallow merge takes persisted fields as-is),
+      // flow straight into branch composition, and still mount the editor
+      // showing it as healthy. Every other field keeps the default shallow
+      // merge behavior.
+      merge: (persistedState, currentState) => {
+        const persisted: Record<string, unknown> = isRecord(persistedState)
+          ? persistedState
+          : {};
+        const persistedMinimapSide = persisted.chatTurnMinimapSide;
+        const merged: SettingsState = { ...currentState, ...persisted };
+        return {
+          ...merged,
+          worktreeBranchPrefix:
+            typeof merged.worktreeBranchPrefix === "string" &&
+            worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
+              ? merged.worktreeBranchPrefix
+              : DEFAULT_WORKTREE_BRANCH_PREFIX,
+          chatTurnMinimapSide:
+            persistedMinimapSide === "left" ||
+            persistedMinimapSide === "right" ||
+            persistedMinimapSide === "hide"
+              ? persistedMinimapSide
+              : DEFAULT_CHAT_TURN_MINIMAP_SIDE,
+        };
+      },
     },
   ),
 );
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

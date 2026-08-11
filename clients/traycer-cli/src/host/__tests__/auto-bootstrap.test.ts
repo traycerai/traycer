@@ -175,6 +175,7 @@ beforeEach(() => {
     lifecycle: {
       beforeSwap: vi.fn(),
       afterSwap: vi.fn(),
+      swapLockRecovery: null,
     },
   }));
 });

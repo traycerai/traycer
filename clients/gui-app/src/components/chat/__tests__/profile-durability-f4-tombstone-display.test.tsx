@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schemas";
@@ -75,6 +74,15 @@ function claudeStateWithoutProfile(): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     // The provider HAS enumerated profiles (non-empty, so
     // `resolveTombstonedProfileLabel` doesn't bail out as "flag off / not
     // enumerated") - the removed profile is simply absent from that list,

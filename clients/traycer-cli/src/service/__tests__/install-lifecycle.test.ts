@@ -5,10 +5,13 @@ import type {
   ServiceLabel,
 } from "../index";
 import {
+  createBytesOnlyInstallLifecycle,
   createServiceInstallLifecycle,
   type BootstrapServiceOptions,
   type ServiceInstallLifecycleState,
 } from "../install-lifecycle";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
+import type { SwapLockRecovery } from "../../installer";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -16,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   resolveServiceCliInvocationMock: vi.fn(),
   readRegisteredCliInvocationMock: vi.fn(),
   cliLoggerWarnMock: vi.fn(),
+  killLingeringSlotProcessesMock: vi.fn(),
+  describeSlotLockHoldersMock: vi.fn(),
 }));
 
 // The externally-managed branch reports an unforeseen repair failure through
@@ -49,6 +54,14 @@ vi.mock("../cli-binary", () => ({
 // registration.
 vi.mock("../platforms/macos", () => ({
   readRegisteredCliInvocation: mocks.readRegisteredCliInvocationMock,
+}));
+
+// The Windows swap-lock recovery functions shell out to schtasks /
+// powershell / taskkill - stub the module so the wiring tests can assert
+// the lifecycle hands the label through without touching the OS.
+vi.mock("../platforms/windows", () => ({
+  killLingeringSlotProcesses: mocks.killLingeringSlotProcessesMock,
+  describeSlotLockHolders: mocks.describeSlotLockHoldersMock,
 }));
 
 const label: ServiceLabel = {
@@ -95,7 +108,17 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     start,
     restart,
+    stopForRestart: vi.fn(async () => {
+      await stop();
+      return { forcedRecycle: false };
+    }),
+    relaunchAfterRestart: vi.fn(async () => {
+      await start();
+    }),
     retireCompetingRegistration,
+    takeoverDesktopRegistration: vi.fn(async () => ({
+      kind: "not-applicable" as const,
+    })),
   };
   return {
     controller,
@@ -242,30 +265,100 @@ describe("service install lifecycle re-registration", () => {
     expect(harness.restart).not.toHaveBeenCalled();
   });
 
-  it("leaves an externally-managed (SMAppService-owned) registration itself untouched, even with bootstrap options", async () => {
-    // Desktop owns this label. Any stop / manifest rewrite / bootstrap from
-    // the CLI would either corrupt the BTM registration or run into
-    // installService's SMAppService refusal - the swapped bytes go live at
-    // Desktop's next register cycle instead.
+  it("leaves an externally-managed (SMAppService-owned) REGISTRATION untouched while cooperatively cycling the host on macOS", async () => {
+    // Desktop owns this label. Any manifest rewrite / bootstrap from the
+    // CLI would either corrupt the BTM registration or run into
+    // installService's SMAppService refusal - that half is unchanged. What
+    // changed: on macOS the host PROCESS is now stopped through its own
+    // lifecycle RPCs before the swap (an honest install, instead of
+    // printing "stopping service" and swapping under the live host) and
+    // kickstarted back on the new bytes after.
     const { state, harness } = await runLifecycle(
       "externally-managed",
       bootstrap,
     );
 
     expect(state.priorState).toBe("externally-managed");
-    expect(state.postSwapAction).toBe("none");
     expect(state.postSwapError).toBeNull();
     expect(harness.install).not.toHaveBeenCalled();
-    expect(harness.start).not.toHaveBeenCalled();
     expect(harness.restart).not.toHaveBeenCalled();
     expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
-    if (process.platform !== "win32") {
-      // win32 always stops in beforeSwap (stray-process cleanup before the
-      // dir swap); everywhere else an externally-managed host must not be
-      // killed by a CLI update.
-      expect(harness.stop).not.toHaveBeenCalled();
+    if (process.platform === "darwin") {
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+      expect(harness.start).toHaveBeenCalledTimes(1);
+      expect(state.postSwapAction).toBe("start");
+    } else {
+      expect(state.postSwapAction).toBe("none");
+      expect(harness.start).not.toHaveBeenCalled();
+      if (process.platform !== "win32") {
+        // win32 always stops in beforeSwap (stray-process cleanup before
+        // the dir swap); Linux has no Desktop-managed arm at all.
+        expect(harness.stop).not.toHaveBeenCalled();
+      }
     }
   });
+
+  it.runIf(process.platform === "darwin")(
+    "aborts the swap when the Desktop-managed host denies the shutdown claim (busy)",
+    async () => {
+      // Never swap the install dir out from under live work: a busy denial
+      // from the cooperative stop is a user-visible refusal, not a
+      // degradation to swap-anyway.
+      const harness = makeController("externally-managed");
+      harness.stop.mockRejectedValue(
+        new CliError({
+          code: CLI_ERROR_CODES.HOST_BUSY,
+          message:
+            "host stop: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
+          details: null,
+          exitCode: 1,
+        }),
+      );
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap,
+      });
+
+      await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(handle.state.stoppedBeforeSwap).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "degrades to swap-under-live-host when the cooperative stop is unreachable",
+    async () => {
+      // A host too broken to answer its own RPC must not make the install
+      // refuse - that is the lockout shape this epic exists to end. The
+      // swap proceeds exactly as it did before the cooperative era, the
+      // degradation is logged, and no post-swap kickstart fires (we never
+      // stopped anything).
+      const harness = makeController("externally-managed");
+      harness.stop.mockRejectedValue(
+        new CliError({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: "host stop: RPC endpoint unreachable (dial timeout)",
+          details: null,
+          exitCode: 1,
+        }),
+      );
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap,
+      });
+
+      await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
+      expect(handle.state.stoppedBeforeSwap).toBe(false);
+      expect(mocks.cliLoggerWarnMock).toHaveBeenCalled();
+
+      await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+      expect(handle.state.postSwapAction).toBe("none");
+      expect(harness.start).not.toHaveBeenCalled();
+    },
+  );
 
   // The repair half: leaving Desktop's registration alone must NOT mean
   // leaving a competing CLI-label registration alone. This is the one
@@ -293,7 +386,12 @@ describe("service install lifecycle re-registration", () => {
     await handle.lifecycle.beforeSwap();
 
     await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
-    expect(handle.state.postSwapAction).toBe("none");
+    // The repair throw never aborts the lifecycle; on macOS the
+    // cooperative stop still gets its kickstart-back, elsewhere the
+    // service is left alone.
+    expect(handle.state.postSwapAction).toBe(
+      process.platform === "darwin" ? "start" : "none",
+    );
     // Caught, but never silent. Every failure the repair anticipates is
     // logged at its own seam, so the only way into that catch is an
     // unforeseen throw - exactly the case that escaped the logging.
@@ -365,5 +463,87 @@ describe("service install lifecycle re-registration", () => {
     });
     expect(harness.start).not.toHaveBeenCalled();
     expect(harness.restart).not.toHaveBeenCalled();
+  });
+});
+
+describe("swap-lock recovery wiring", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+    mocks.killLingeringSlotProcessesMock.mockResolvedValue(undefined);
+    mocks.describeSlotLockHoldersMock.mockResolvedValue([]);
+  });
+
+  function withPlatform(platform: string, run: () => void): void {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    if (original === undefined) {
+      throw new Error("process.platform descriptor missing");
+    }
+    Object.defineProperty(process, "platform", {
+      value: platform,
+      configurable: true,
+    });
+    try {
+      run();
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+  }
+
+  it("wires Windows recovery to the platform kill and detail scan on both lifecycle factories", async () => {
+    let recoveries: (SwapLockRecovery | null)[] = [];
+    withPlatform("win32", () => {
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const serviceHandle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+      });
+      const bytesOnly = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+      );
+      recoveries = [
+        serviceHandle.lifecycle.swapLockRecovery,
+        bytesOnly.swapLockRecovery,
+      ];
+    });
+
+    for (const recovery of recoveries) {
+      // A null here is exactly the quiet regression this test exists to
+      // catch: the installer would silently run without re-kill or
+      // holder diagnostics on the only platform that needs them.
+      expect(recovery).not.toBeNull();
+      if (recovery === null) throw new Error("unreachable");
+      await recovery.killLingeringProcesses();
+      const holders = [
+        { pid: 7, name: "orphan.exe", executablePath: "C:\\orphan.exe" },
+      ];
+      mocks.describeSlotLockHoldersMock.mockResolvedValueOnce(holders);
+      await expect(recovery.describeLockHolders()).resolves.toEqual(holders);
+    }
+    expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledTimes(2);
+    expect(mocks.killLingeringSlotProcessesMock).toHaveBeenCalledWith(
+      label,
+      null,
+    );
+    expect(mocks.describeSlotLockHoldersMock).toHaveBeenCalledWith(label, null);
+  });
+
+  it("carries no swap-lock recovery off Windows", () => {
+    withPlatform("darwin", () => {
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const serviceHandle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+      });
+      const bytesOnly = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+      );
+      expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
+      expect(bytesOnly.swapLockRecovery).toBeNull();
+    });
   });
 });

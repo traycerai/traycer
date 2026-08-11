@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanup,
@@ -54,6 +53,9 @@ function makeMessengerFactory(): (args: {
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
           }),
       },
     });
@@ -97,7 +99,9 @@ function mountMenu(
             messengerFactory={makeMessengerFactory()}
             invalidator={null}
             requestId={null}
-            remoteFetcher={() => Promise.resolve([])}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
             fallback={<div data-testid="runtime-fallback">…</div>}
           >
             <TooltipProvider>{children}</TooltipProvider>

@@ -19,29 +19,41 @@ export function activationResultHandler(input: {
   readonly row: MergedNotificationRow | null;
   readonly feedId: string;
   readonly surface: AnalyticsNotificationSurface;
-  readonly markAsRead: (feedId: string) => void;
+  readonly markAsRead: (row: MergedNotificationRow | string) => void;
   readonly onSuccess: (() => void) | null;
 }): (outcome: NotificationActivationOutcome) => void {
   return (outcome) => {
-    if (input.row !== null) {
-      Analytics.getInstance().track(
-        AnalyticsEvent.NotificationActivationCompleted,
-        {
-          category: input.row.category,
-          section: classifyNotificationLifecycle(input.row).section,
-          surface: input.surface,
-          outcome,
-        },
-      );
+    if (input.row === null) {
+      if (outcome !== "success") return;
+      // Local feed mutations are keyed by the stable feed id, so a native
+      // click can still acknowledge a row that was pruned from the rendered
+      // projection between emission and activation. Cloud mutations need the
+      // captured immutable occurrence row; never substitute a potentially
+      // reopened entry with the same id.
+      if (!input.feedId.startsWith("cloud:")) {
+        input.markAsRead(input.feedId);
+      }
+      input.onSuccess?.();
+      return;
     }
-    if (outcome !== "success") return;
-    if (input.row !== null) {
-      Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+    Analytics.getInstance().track(
+      AnalyticsEvent.NotificationActivationCompleted,
+      {
         category: input.row.category,
-        acknowledgment_source: "activation",
-      });
-    }
-    input.markAsRead(input.feedId);
+        section: classifyNotificationLifecycle(input.row).section,
+        surface: input.surface,
+        outcome,
+      },
+    );
+    if (outcome !== "success") return;
+    Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+      category: input.row.category,
+      acknowledgment_source: "activation",
+    });
+    // Preserve the occurrence captured at activation time. A cloud row may
+    // reopen under the same feed id before this callback runs. Local feeds
+    // retain their legacy feed-id dispatch contract.
+    input.markAsRead(input.row.source === "cloud" ? input.row : input.feedId);
     input.onSuccess?.();
   };
 }

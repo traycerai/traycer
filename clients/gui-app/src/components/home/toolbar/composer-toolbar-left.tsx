@@ -2,16 +2,11 @@ import { memo, useCallback, useRef, type ChangeEvent } from "react";
 import { ImagePlus } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
-import type {
-  PermissionMode,
-  AgentMode,
-} from "@/components/home/data/landing-options";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
+import type { PermissionMode } from "@/components/home/data/landing-options";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ComposerToolbarLeftProps {
   onAttachImages: (files: ReadonlyArray<File>) => void;
-  agentMode: AgentMode;
-  onAgentModeChange: (next: AgentMode) => void;
   permission: PermissionMode;
   onPermissionChange: (next: PermissionMode) => void;
   /**
@@ -28,21 +23,17 @@ interface ComposerToolbarLeftProps {
    */
   harnessLabel: string | null;
   showNextTurnPermissionNote: boolean;
-  showAgentModeTooltip: boolean;
   settingsLocked: boolean;
 }
 
 function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
   const {
     onAttachImages,
-    agentMode,
-    onAgentModeChange,
     permission,
     onPermissionChange,
     supportedPermissionModes,
     harnessLabel,
     showNextTurnPermissionNote,
-    showAgentModeTooltip,
     settingsLocked,
   } = props;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -76,25 +67,25 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         className="hidden"
         onChange={handleImageChange}
       />
-      <ToolbarIconButton
-        aria-label="Attach image"
-        title="Attach image"
-        onClick={handleOpenImagePicker}
+      <TooltipWrapper
+        label="Attach image"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <ImagePlus className="size-4" />
-      </ToolbarIconButton>
+        <ToolbarIconButton
+          aria-label="Attach image"
+          onClick={handleOpenImagePicker}
+        >
+          <ImagePlus className="size-4" />
+        </ToolbarIconButton>
+      </TooltipWrapper>
       <PermissionsPicker
         value={permission}
         disabled={settingsLocked}
         onChange={onPermissionChange}
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
-      />
-      <AgentModeToggle
-        value={agentMode}
-        disabled={settingsLocked}
-        showTooltip={showAgentModeTooltip}
-        onChange={onAgentModeChange}
       />
       {showNextTurnPermissionNote ? (
         <output

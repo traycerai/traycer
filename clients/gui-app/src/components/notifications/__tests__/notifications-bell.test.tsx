@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -144,6 +143,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");
@@ -477,6 +477,20 @@ describe("NotificationsBell", () => {
     expect(
       (await screen.findByTestId("notifications-subtitle")).textContent,
     ).toBe(`Task activity from ${mockLocalHostEntry.label}`);
+  });
+
+  it("omits the subtitle row in cloud mode", async () => {
+    const streamClient = new MockWsStreamClient();
+    streamClient.methodSupportByName.set(
+      "host.notifications.cloudFeed.subscribe",
+      "supported",
+    );
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, { wsStreamClient: streamClient });
+
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(screen.queryByTestId("notifications-subtitle")).toBeNull();
   });
 
   describe("notification center opened analytics", () => {

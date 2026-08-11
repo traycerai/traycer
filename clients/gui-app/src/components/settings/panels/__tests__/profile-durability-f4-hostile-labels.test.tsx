@@ -1,5 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -22,40 +20,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the hostile-labeled row without fighting Radix's pointerdown-based open
 // gesture in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
-vi.mock("@/components/ui/dropdown-menu", () => {
-  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
-    props.children;
-  return {
-    DropdownMenu: passthrough,
-    DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
-    DropdownMenuItem: (props: {
-      readonly children: ReactNode;
-      readonly onSelect: (() => void) | undefined;
-      readonly "aria-label": string | undefined;
-      readonly "aria-current": "true" | undefined;
-      readonly className: string | undefined;
-    }): ReactNode => (
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={props["aria-label"]}
-        aria-current={props["aria-current"]}
-        className={props.className}
-        onClick={props.onSelect}
-      >
-        {props.children}
-      </button>
-    ),
-    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
-    DropdownMenuShortcut: (props: {
-      readonly children: ReactNode;
-      readonly "data-testid": string | undefined;
-    }): ReactNode => (
-      <span data-testid={props["data-testid"]}>{props.children}</span>
-    ),
-  };
-});
+vi.mock("@/components/ui/dropdown-menu", async () => ({
+  ...(await import("./dropdown-menu-passthrough-mock")),
+}));
 
 const providerMocks = vi.hoisted(() => ({
   listResult: {
@@ -69,6 +36,13 @@ const providerMocks = vi.hoisted(() => ({
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));
+// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
+// goes through TanStack Query. Mocked here alongside the other provider
+// mutations so this panel test keeps rendering without a QueryClientProvider.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -235,6 +209,15 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
+// Panels depend on the host SCOPE, not on the hooks it composes.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({ client: null }),
+  };
+});
+
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -245,13 +228,17 @@ function renderProvidersSettingsPanel() {
       mutations: { retry: false },
     },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  // Profiles render on the `usage` tab - labelled "Profiles & Limits" - not on the CLI
+  // tab. Radix Tabs activate on mouseDown, not click.
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
+  return view;
 }
 
 const VERY_LONG_LABEL = "C".repeat(2000);
@@ -324,6 +311,15 @@ function claudeStateWithProfiles(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...profiles],
   };
 }

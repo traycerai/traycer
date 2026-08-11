@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";

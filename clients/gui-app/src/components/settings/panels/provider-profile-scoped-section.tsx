@@ -105,6 +105,13 @@ interface ProviderProfileScopedSectionProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  /**
+   * Why sign-in is unavailable, or null when it is available. Supplied rather
+   * than reconstructed here: the panel owns the three facts that decide it
+   * (host locality, browser-sign-in capability, managed-pack readiness), and a
+   * second derivation is how the previous hardcoded sentence went stale.
+   */
+  readonly signInUnavailableHint: string | null;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
@@ -138,6 +145,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    signInUnavailableHint,
     startInReauth,
     failedAttempt,
     onAddProfile,
@@ -164,9 +172,11 @@ export function ProviderProfileScopedSection(
     ) ?? orderedProfiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile || !isSelectedHostLocal;
+  // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
+  // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
     ? "Add profiles from a local host with browser sign-in available."
-    : undefined;
+    : null;
   const duplicateLabel = duplicateProfileLabel(selectedProfile, profiles);
   const driftKey = profileDriftKey(state.providerId, selectedProfile);
   const driftDismissed =
@@ -195,18 +205,29 @@ export function ProviderProfileScopedSection(
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
           <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="shrink-0"
-              disabled={addProfileDisabled}
-              title={addProfileDisabledReason}
-              onClick={onAddProfile}
+            <TooltipWrapper
+              label={addProfileDisabledReason}
+              side="top"
+              sideOffset={6}
+              align="start"
             >
-              <Plus className="size-3.5" />
-              Add profile
-            </Button>
+              {/* Span between the tooltip and the button because a `disabled`
+                  button emits no pointer events for Radix to hover-detect -
+                  and the reason it is disabled is exactly what this says. */}
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={addProfileDisabled}
+                  onClick={onAddProfile}
+                >
+                  <Plus className="size-3.5" />
+                  Add profile
+                </Button>
+              </span>
+            </TooltipWrapper>
             <ProviderProfilesRefreshButton
               providerId={state.providerId}
               profileId={profileCommitId(selectedProfile)}
@@ -225,12 +246,13 @@ export function ProviderProfileScopedSection(
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
-          createProfileDisabledReason={addProfileDisabledReason}
+          createProfileDisabledReason={addProfileDisabledReason ?? undefined}
           // ⌘⇧-digit isn't wired to Settings - no picker leader scope here.
           shortcutHintForIndex={noProfileShortcutHint}
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
+          admissionByProfileId={null}
         />
         <div
           data-slot="profile-summary-actions"
@@ -241,22 +263,26 @@ export function ProviderProfileScopedSection(
             profile={selectedProfile}
           />
           {selectedProfile.auth.status === "unauthenticated" ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              className="shrink-0"
-              disabled={!canAddProfile}
-              title={
-                canAddProfile
-                  ? undefined
-                  : "Sign in requires a local host with browser sign-in available."
-              }
-              onClick={openProfileSignIn}
+            <TooltipWrapper
+              label={canAddProfile ? null : signInUnavailableHint}
+              side="top"
+              sideOffset={6}
+              align="start"
             >
-              <LogIn data-icon="inline-start" />
-              Sign in
-            </Button>
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="secondary"
+                  className="shrink-0"
+                  disabled={!canAddProfile}
+                  onClick={openProfileSignIn}
+                >
+                  <LogIn data-icon="inline-start" />
+                  Sign in
+                </Button>
+              </span>
+            </TooltipWrapper>
           ) : null}
           <TooltipWrapper
             label="Change the profile name and accent color, sign in again, or remove this profile."
@@ -376,9 +402,14 @@ function ProfileSummary({
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 text-ui-xs text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center gap-1">
-        <span className="min-w-0 truncate" title={email ?? undefined}>
-          {emailText}
-        </span>
+        <TooltipWrapper
+          label={emailRevealed ? email : null}
+          side="top"
+          sideOffset={undefined}
+          align="start"
+        >
+          <span className="min-w-0 truncate">{emailText}</span>
+        </TooltipWrapper>
         {email !== null ? (
           <button
             type="button"
@@ -403,13 +434,19 @@ function ProfileSummary({
         {profileAuthStatusText(profile)}
       </Badge>
       {planText !== null ? (
-        <Badge
-          variant="outline"
-          className="h-5 max-w-[min(28vw,14rem)] shrink-0 px-1.5 text-[10px]"
-          title={planText}
+        <TooltipWrapper
+          label={planText}
+          side="top"
+          sideOffset={undefined}
+          align="end"
         >
-          <span className="truncate">{planText}</span>
-        </Badge>
+          <Badge
+            variant="outline"
+            className="h-5 max-w-[min(28vw,14rem)] shrink-0 px-1.5 text-[10px]"
+          >
+            <span className="truncate">{planText}</span>
+          </Badge>
+        </TooltipWrapper>
       ) : null}
     </div>
   );
@@ -640,31 +677,42 @@ function ProfileEditDialog({
                 onDone={() => setSwitchingAccount(false)}
               />
             ) : (
-              <button
-                type="button"
-                aria-label="Switch account"
-                className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canOauth || savePending || invalid}
-                title={
+              <TooltipWrapper
+                label={
                   canOauth
-                    ? undefined
+                    ? null
                     : "Switch account requires a local host with browser sign-in available."
                 }
-                onClick={switchAccount}
+                side="top"
+                sideOffset={6}
+                align={undefined}
               >
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
-                  <RefreshCw className="size-4" />
+                {/* `flex w-full` on the span, not `inline-flex`: the button it
+                    guards is full-width, and an inline-flex wrapper would
+                    collapse the row. */}
+                <span className="flex w-full">
+                  <button
+                    type="button"
+                    aria-label="Switch account"
+                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!canOauth || savePending || invalid}
+                    onClick={switchAccount}
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
+                      <RefreshCw className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-ui-sm font-medium text-foreground">
+                        Switch account
+                      </span>
+                      <span className="block text-ui-xs text-muted-foreground">
+                        Sign in with a different account for this profile.
+                      </span>
+                    </span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </button>
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Switch account
-                  </span>
-                  <span className="block text-ui-xs text-muted-foreground">
-                    Sign in with a different account for this profile.
-                  </span>
-                </span>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-              </button>
+              </TooltipWrapper>
             )}
 
             <ProfileEditErrors
@@ -688,10 +736,7 @@ function ProfileEditDialog({
                 sideOffset={6}
                 align="start"
               >
-                <span
-                  className="inline-flex"
-                  title={removeProfileDisabledReason ?? undefined}
-                >
+                <span className="inline-flex">
                   <Button
                     type="button"
                     size="sm"

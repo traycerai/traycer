@@ -1,5 +1,14 @@
 import { execFile, execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { uptime } from "node:os";
+import {
+  compareProcessStartIdentity,
+  formatDarwinProcessStartIdentity,
+  formatLinuxProcessStartIdentity,
+  formatWindowsProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 
 // Cross-platform process liveness + identity probing. Shared by the CLI's
 // `cli-lock` hardening (holder identity - Host Update Layer Redesign Tech
@@ -93,95 +102,123 @@ export function readLiveProcessStartTimeMs(pid: number): number | null {
     : null;
 }
 
-// pid.json is published only after the host has started. A process whose OS
-// start time is later than that publication cannot be the publisher - the PID
-// has been recycled onto an unrelated occupant. Keep a small allowance for
-// whole-second process-start probes and clock granularity; it never admits a
-// process that began meaningfully after the metadata was written.
-const PID_METADATA_PUBLICATION_ALLOWANCE_MS = 1_250;
-
-export function isPublishedProcessIdentityCurrent(
-  pid: number,
-  publishedAt: string | null,
-): boolean {
-  if (publishedAt === null) return false;
-  const publishedAtMs = Date.parse(publishedAt);
-  if (!Number.isFinite(publishedAtMs)) return false;
-  const processStartedAtMs = readLiveProcessStartTimeMs(pid);
-  if (processStartedAtMs === null) return false;
-  return (
-    processStartedAtMs <= publishedAtMs + PID_METADATA_PUBLICATION_ALLOWANCE_MS
-  );
-}
-
 export type PublishedProcessIdentityVerdict =
   "current" | "mismatch" | "dead" | "indeterminate";
 
-// Electron-main checks an advertised endpoint first. Once the handshake has
-// established positive liveness, identity only rules out a positively
-// demonstrated recycled-PID impostor; a failed OS probe is deliberately
-// inconclusive rather than evidence the healthy endpoint is down.
+/**
+ * Electron-main checks an advertised endpoint first. Once the handshake has
+ * established positive liveness, identity only rules out a positively
+ * demonstrated recycled-PID impostor; a failed OS probe is deliberately
+ * inconclusive rather than evidence the healthy endpoint is down.
+ *
+ * `publishedStartIdentity` is `pid.json`'s `processStartIdentity` - the
+ * kernel's own record of when the publishing process was created (see
+ * `@traycer/protocol/host/lifecycle`'s `process-start-identity`). It is
+ * compared byte-for-byte against the same value read now.
+ *
+ * ### What this used to do, and why it had to stop
+ *
+ * The previous test was a *causality* one: derive the process's start time as
+ * `Date.now() - <elapsed since start>` and call it a recycled pid if that
+ * landed more than 1.25s after `pid.json`'s publication timestamp. The
+ * derivation reads the elapsed term from the boot clock and the anchor from
+ * the realtime clock, so a `CLOCK_REALTIME` step between publication and this
+ * read shifts the result by the whole step. Past 1.25s of shift the verdict
+ * became `"mismatch"` - permanently, since every later read re-derived the
+ * same shifted value - for a completely healthy process.
+ *
+ * traycerai/traycer#740 is what that costs. On WSL2, whose realtime clock is
+ * resynchronised when the VM resumes from an idle pause, one such verdict
+ * both told `isPublishedHostEndpointReachable` that a host answering in 8ms
+ * was unreachable AND told the recovery governor's liveness gate that a
+ * running process was dead - manufacturing an outage and disabling the guard
+ * against acting on it, in a single value. The user's session was torn down
+ * every few minutes until the respawn budget ran out and the app wedged on
+ * "Traycer Host became unavailable".
+ *
+ * So there is no wall-clock fallback here on purpose. When the clock-immune
+ * comparison cannot be made - a `pid.json` written by a host that predates
+ * the field, or a platform probe that failed - the honest answer is
+ * `"indeterminate"`, and every caller already routes that to its fail-open
+ * branch. Losing recycled-pid detection for those records is a real cost, but
+ * it is bounded (the user is asked to click Retry) where the false positive
+ * is not (a healthy host is killed on a loop). New hosts publish the field
+ * and get exact detection back.
+ */
 export async function getPublishedProcessIdentityVerdict(
   pid: number,
-  publishedAt: string | null,
+  publishedStartIdentity: ProcessStartIdentity | null,
 ): Promise<PublishedProcessIdentityVerdict> {
   const liveness = await asyncProcessLivenessReader(pid);
   if (liveness === "dead") return "dead";
   if (liveness !== "alive") return "indeterminate";
-  if (publishedAt === null) return "indeterminate";
-  const publishedAtMs = Date.parse(publishedAt);
-  if (!Number.isFinite(publishedAtMs)) return "indeterminate";
-  const processStartedAtMs = await asyncProcessStartTimeReader(pid);
-  if (processStartedAtMs === null) return "indeterminate";
-  return processStartedAtMs >
-    publishedAtMs + PID_METADATA_PUBLICATION_ALLOWANCE_MS
-    ? "mismatch"
-    : "current";
+  // Nothing was recorded to compare against, so probing the live process
+  // cannot change the answer - `compareProcessStartIdentity` would return
+  // "unknown" whatever comes back. Skipping it matters: this predicate runs on
+  // every health tick, and every pid.json in the field today predates the
+  // field, so the probe would be a subprocess spawn per tick, forever, for a
+  // result that is discarded.
+  if (publishedStartIdentity === null) return "indeterminate";
+  const observed = await asyncProcessStartIdentityReader(pid);
+  switch (compareProcessStartIdentity(publishedStartIdentity, observed)) {
+    case "same":
+      return "current";
+    case "different":
+      return "mismatch";
+    case "unknown":
+      return "indeterminate";
+  }
 }
 
-// ---- Identity (pid + process-start-time) -----------------------------------
+// ---- Identity (pid + process creation stamp) -------------------------------
 
 export interface ProcessIdentityToken {
   readonly pid: number;
-  // Milliseconds since epoch, best-effort. `null` when the platform probe
-  // failed at capture time (permissions, missing tooling, or a legacy
-  // token written before this field existed) - a token with a null start
-  // time can never positively confirm "same process", only "some process
-  // is alive at this pid" via `isProcessAlive`.
+  /**
+   * Milliseconds since epoch, best-effort.
+   *
+   * NO LONGER READ by any verdict in this module - `startIdentity` replaced
+   * it, for the reasons in `computeProcessIdentityVerdict`. It is still
+   * WRITTEN so that a token produced by this version stays fully usable by an
+   * older process reading the same on-disk lock: dropping it would make older
+   * readers see a legacy token, answer "indeterminate", and refuse to break a
+   * genuinely stale lock - trading a rare wrong break for a permanent wedge.
+   * Delete it only once no supported version reads it.
+   */
   readonly startedAtMs: number | null;
+  /**
+   * The kernel's creation stamp for this process - the operand every verdict
+   * below actually compares. `null` when the platform probe failed, or when
+   * the token was written before this field existed; both mean "cannot
+   * compare", never "different process".
+   */
+  readonly startIdentity: ProcessStartIdentity | null;
 }
 
 export function currentProcessIdentityToken(): ProcessIdentityToken {
   return {
     pid: process.pid,
     startedAtMs: readProcessStartTimeMs(process.pid),
+    startIdentity: readProcessStartIdentity(process.pid),
   };
 }
 
-// Two independent reads of the same still-running process's start time can
-// differ by a couple of seconds: POSIX `ps -o etime=` has whole-second
-// resolution, and each read floors the elapsed time as of a different
-// wall-clock moment. This tolerance absorbs that jitter without risking a
-// false "same identity" match against a genuinely different process - a
-// real pid-reuse collision landing inside a 5s window of the original
-// process's start is not a realistic adversary for this mechanism.
-const START_TIME_MATCH_TOLERANCE_MS = 5000;
 const POSIX_ELAPSED_UPTIME_SLACK_SECONDS = 1;
 const POSIX_PROCESS_START_TIME_MAX_RETRIES = 3;
 
 export type ProcessIdentityVerdict =
   // The token's pid is provably not running any more.
   | "dead"
-  // The token's pid is running, and a fresh start-time read positively
+  // The token's pid is running, and a fresh identity read positively
   // matches the recorded token - the same process.
   | "alive-same"
-  // The token's pid is running, but a fresh start-time read positively
+  // The token's pid is running, but a fresh identity read positively
   // differs from the recorded token - the OS recycled the pid onto an
   // unrelated process.
   | "alive-different"
-  // Liveness or start-time could not be established either way (probe
-  // failure, missing tooling, or a legacy token with no recorded start
-  // time). Never a basis for breaking a lock or sweeping a temp dir -
+  // Liveness or identity could not be established either way (probe
+  // failure, missing tooling, or a legacy token with no recorded creation
+  // stamp). Never a basis for breaking a lock or sweeping a temp dir -
   // only positive evidence (dead / alive-different) is.
   | "indeterminate";
 
@@ -194,39 +231,60 @@ export type ProcessIdentityVerdict =
 // "dead" break evidence.
 //
 // Deliberately does NOT short-circuit on `liveness === "indeterminate"`:
-// the liveness probe (`kill`/`tasklist`) and the start-time probe (`ps`/
-// `Get-Process`) are independent OS queries, and one can fail while the
-// other succeeds. A start-time read that positively SUCCEEDS despite an
+// the liveness probe (`kill`/`tasklist`) and the identity probe (`/proc`,
+// `ps`, `Get-Process`) are independent OS queries, and one can fail while
+// the other succeeds. An identity read that positively SUCCEEDS despite an
 // indeterminate liveness result is still real evidence - a mismatch means
 // whatever now occupies that pid is not the recorded holder (breakable),
-// and a match means it plausibly still is. Only when the start-time
+// and a match means it plausibly still is. Only when the identity
 // comparison itself has nothing to go on (a failed read, or no recorded
 // identity) does the result fall back to "indeterminate".
+//
+// ### Why this compares stamps and not timestamps
+//
+// It used to take two epoch-millisecond start times and call them the same
+// process within a symmetric 5s tolerance. Both were derived as
+// `Date.now() - <elapsed since start>` - an elapsed term measured from boot,
+// anchored to the realtime clock - and taken at two different moments. A
+// `CLOCK_REALTIME` step larger than the tolerance between recording a token
+// and verifying it therefore moved one operand and not the other, and the
+// function answered "alive-different": positive, confident evidence that a
+// live lock holder was a recycled pid. Callers act on exactly that by
+// BREAKING the holder's lock, so on a machine whose clock steps - WSL2
+// resuming a paused VM, a laptop waking, NTP correcting - two processes
+// could end up inside the same critical section.
+//
+// This is the same defect as traycerai/traycer#740, which reached users
+// through `getPublishedProcessIdentityVerdict`. The tolerance was never the
+// problem and no value for it would have helped; the operands were.
+// `ProcessStartIdentity` is recorded once by the kernel and only read back,
+// so the comparison is exact equality and no clock can reach it.
 export function computeProcessIdentityVerdict(
   liveness: ProcessLivenessVerdict,
-  recordedStartedAtMs: number | null,
-  currentStartedAtMs: number | null,
+  recordedIdentity: ProcessStartIdentity | null,
+  observedIdentity: ProcessStartIdentity | null,
 ): ProcessIdentityVerdict {
   if (liveness === "dead") return "dead";
-  if (recordedStartedAtMs === null || currentStartedAtMs === null) {
-    return "indeterminate";
+  switch (compareProcessStartIdentity(recordedIdentity, observedIdentity)) {
+    case "same":
+      return "alive-same";
+    case "different":
+      return "alive-different";
+    case "unknown":
+      return "indeterminate";
   }
-  const driftMs = Math.abs(currentStartedAtMs - recordedStartedAtMs);
-  return driftMs <= START_TIME_MATCH_TOLERANCE_MS
-    ? "alive-same"
-    : "alive-different";
 }
 
-// This process's own start time, read once and cached for the life of
-// the process (a process's own start time never changes). Backs the
-// own-pid identity check below - unlike the general cross-pid path,
-// there is nothing to gain from re-probing on every call.
-let cachedOwnStartTimeMs: number | null | "unread" = "unread";
-function ownProcessStartTimeMs(): number | null {
-  if (cachedOwnStartTimeMs === "unread") {
-    cachedOwnStartTimeMs = readProcessStartTimeMs(process.pid);
+// This process's own creation stamp, read once and cached for the life of
+// the process (a process's own stamp never changes - that is the whole
+// point of it). Backs the own-pid identity check below; unlike the general
+// cross-pid path there is nothing to gain from re-probing on every call.
+let cachedOwnStartIdentity: ProcessStartIdentity | null | "unread" = "unread";
+function ownProcessStartIdentity(): ProcessStartIdentity | null {
+  if (cachedOwnStartIdentity === "unread") {
+    cachedOwnStartIdentity = readProcessStartIdentity(process.pid);
   }
-  return cachedOwnStartTimeMs;
+  return cachedOwnStartIdentity;
 }
 
 // A token recorded under our own pid still needs an identity check, not
@@ -234,22 +292,28 @@ function ownProcessStartTimeMs(): number | null {
 // since the token was written (the token's process is a dead
 // predecessor, not this process), returning "alive-same" would wedge a
 // lock/temp forever under a holder that no longer exists. Positive
-// evidence either way is drawn from comparing the recorded start time
-// against our own, positively-known start time - never from re-probing
-// our own liveness, which is trivially always "alive" and therefore
-// uninformative here.
+// evidence either way is drawn from comparing the recorded creation stamp
+// against our own, positively-known one - never from re-probing our own
+// liveness, which is trivially always "alive" and therefore uninformative
+// here.
+//
+// This arm mattered most for the clock bug: it maps a difference to "dead",
+// so under the old timestamp comparison a clock step could make a process
+// declare its OWN live token that of a dead predecessor.
 function verifyOwnProcessIdentity(
   token: ProcessIdentityToken,
 ): ProcessIdentityVerdict {
-  if (token.startedAtMs === null) {
-    // Could be our own write after a failed start-time probe - no
-    // identity claim was ever recorded to check against.
-    return "indeterminate";
+  const ownIdentity = ownProcessStartIdentity();
+  switch (compareProcessStartIdentity(token.startIdentity, ownIdentity)) {
+    case "same":
+      return "alive-same";
+    case "unknown":
+      // Our own write after a failed probe, or a token written before the
+      // field existed - no identity claim to check against either way.
+      return "indeterminate";
+    case "different":
+      break;
   }
-  const ownStartedAtMs = ownProcessStartTimeMs();
-  if (ownStartedAtMs === null) return "indeterminate";
-  const driftMs = Math.abs(ownStartedAtMs - token.startedAtMs);
-  if (driftMs <= START_TIME_MATCH_TOLERANCE_MS) return "alive-same";
   // The recorded identity doesn't match ours - the pid was recycled onto
   // us since that token was written, so its writer is positively gone.
   return "dead";
@@ -260,16 +324,20 @@ export function verifyProcessIdentity(
 ): ProcessIdentityVerdict {
   if (token.pid === process.pid) return verifyOwnProcessIdentity(token);
   const liveness = probeProcessLiveness(token.pid);
-  // Attempt the start-time read whenever liveness didn't already prove the
-  // pid dead - including "indeterminate" liveness, since a successful
-  // start-time read is independent positive evidence (see
-  // `computeProcessIdentityVerdict`'s comment).
-  const currentStartedAtMs =
-    liveness === "dead" ? null : processStartTimeReader(token.pid);
+  // Attempt the identity read whenever liveness didn't already prove the pid
+  // dead - including "indeterminate" liveness, since a successful identity
+  // read is independent positive evidence (see
+  // `computeProcessIdentityVerdict`'s comment). Skip it when the token
+  // carries nothing to compare against: the verdict would be "indeterminate"
+  // either way, and this runs per candidate on every lock acquisition.
+  const observedIdentity =
+    liveness === "dead" || token.startIdentity === null
+      ? null
+      : readProcessStartIdentity(token.pid);
   return computeProcessIdentityVerdict(
     liveness,
-    token.startedAtMs,
-    currentStartedAtMs,
+    token.startIdentity,
+    observedIdentity,
   );
 }
 
@@ -286,12 +354,14 @@ export async function verifyProcessIdentityAsync(
 ): Promise<ProcessIdentityVerdict> {
   if (token.pid === process.pid) return verifyOwnProcessIdentity(token);
   const liveness = await asyncProcessLivenessReader(token.pid);
-  const currentStartedAtMs =
-    liveness === "dead" ? null : await asyncProcessStartTimeReader(token.pid);
+  const observedIdentity =
+    liveness === "dead" || token.startIdentity === null
+      ? null
+      : await asyncProcessStartIdentityReader(token.pid);
   return computeProcessIdentityVerdict(
     liveness,
-    token.startedAtMs,
-    currentStartedAtMs,
+    token.startIdentity,
+    observedIdentity,
   );
 }
 
@@ -442,16 +512,199 @@ function readWindowsProcessStartTimeMs(pid: number): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// ---- Clock-immune start identity ------------------------------------------
+//
+// Every reader above answers "when did this process start?" with a value
+// derived from the wall clock at read time, which is why none of them survives
+// a `CLOCK_REALTIME` step (see `getPublishedProcessIdentityVerdict`). The
+// readers below answer a narrower question - "which process instance is
+// this?" - by fetching a stamp the kernel wrote once at process creation and
+// never recomputes. Two reads return identical bytes however the clock has
+// been adjusted in between, so the comparison is exact equality and needs no
+// tolerance at all.
+//
+// The macOS reader deliberately reverses the `etime`-over-`lstart` choice
+// documented above `parseElapsedSeconds`. Avoiding `ps`'s locale-dependent
+// date formatting is right for the elapsed-time question; for this one it is
+// the disease, because elapsed time is precisely the thing that has to be
+// re-anchored to a clock. So `lstart` is read under a pinned locale and
+// timezone and compared AS TEXT - never parsed into a timestamp, which would
+// let a locale change or a tzdata update reintroduce the drift by the back
+// door.
+
+const LINUX_BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+
+// The stored stamp has to format identically on every read, so the probe pins
+// locale and timezone instead of inheriting the user's shell.
+const DETERMINISTIC_FORMAT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  LC_ALL: "C",
+  TZ: "UTC",
+};
+
+// A boot id cannot change within a boot, and a `/proc` that could not be read
+// once (masked in a container, an exotic mount namespace) will not start
+// working later - so both the value and the failure are cached.
+let cachedLinuxBootId: string | null | "unread" = "unread";
+
+function readLinuxBootId(): string | null {
+  if (cachedLinuxBootId === "unread") {
+    try {
+      cachedLinuxBootId = readFileSync(LINUX_BOOT_ID_PATH, "utf8").trim();
+    } catch {
+      cachedLinuxBootId = null;
+    }
+  }
+  return cachedLinuxBootId;
+}
+
+// Field 22 of `/proc/<pid>/stat`. Field 2 is `comm` - the executable name in
+// parentheses, which may itself contain spaces and ')' - so the only safe
+// place to begin splitting is the LAST ')' in the record. The field after it
+// is #3, which puts field N at index N - 3.
+function parseLinuxStartTicks(stat: string): number | null {
+  const commEnd = stat.lastIndexOf(")");
+  if (commEnd < 0) return null;
+  const fields = stat
+    .slice(commEnd + 1)
+    .trim()
+    .split(/\s+/u);
+  const raw = fields[19];
+  if (raw === undefined) return null;
+  const ticks = Number(raw);
+  return Number.isInteger(ticks) && ticks >= 0 ? ticks : null;
+}
+
+function buildLinuxProcessStartIdentity(
+  stat: string,
+): ProcessStartIdentity | null {
+  const bootId = readLinuxBootId();
+  if (bootId === null) return null;
+  const ticks = parseLinuxStartTicks(stat);
+  return ticks === null ? null : formatLinuxProcessStartIdentity(bootId, ticks);
+}
+
+function linuxProcStatPath(pid: number): string {
+  return `/proc/${String(pid)}/stat`;
+}
+
+function windowsCreationTimeArgs(pid: number): readonly string[] {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `(Get-Process -Id ${String(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToString("o")`,
+  ];
+}
+
+function darwinLstartArgs(pid: number): readonly string[] {
+  return ["-p", String(pid), "-o", "lstart="];
+}
+
+function readProcessStartIdentityImpl(
+  pid: number,
+): ProcessStartIdentity | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === "linux") {
+      return buildLinuxProcessStartIdentity(
+        readFileSync(linuxProcStatPath(pid), "utf8"),
+      );
+    }
+    if (process.platform === "win32") {
+      return formatWindowsProcessStartIdentity(
+        execFileSync("powershell", windowsCreationTimeArgs(pid), {
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 5000,
+          env: DETERMINISTIC_FORMAT_ENV,
+        }),
+      );
+    }
+    return formatDarwinProcessStartIdentity(
+      execFileSync("ps", darwinLstartArgs(pid), {
+        encoding: "utf8",
+        timeout: 3000,
+        env: DETERMINISTIC_FORMAT_ENV,
+      }),
+    );
+  } catch {
+    // A dead pid, a denied probe, missing tooling: no token, and every caller
+    // reads the absence as "cannot compare", never as evidence of anything.
+    return null;
+  }
+}
+
+async function readProcessStartIdentityAsyncImpl(
+  pid: number,
+): Promise<ProcessStartIdentity | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "linux") {
+    try {
+      return buildLinuxProcessStartIdentity(
+        await readFile(linuxProcStatPath(pid), "utf8"),
+      );
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === "win32") {
+    const stdout = await execFileOutput(
+      "powershell",
+      windowsCreationTimeArgs(pid),
+      5_000,
+      DETERMINISTIC_FORMAT_ENV,
+    );
+    return stdout === null ? null : formatWindowsProcessStartIdentity(stdout);
+  }
+  const stdout = await execFileOutput(
+    "ps",
+    darwinLstartArgs(pid),
+    3_000,
+    DETERMINISTIC_FORMAT_ENV,
+  );
+  return stdout === null ? null : formatDarwinProcessStartIdentity(stdout);
+}
+
+let asyncProcessStartIdentityReader: (
+  pid: number,
+) => Promise<ProcessStartIdentity | null> = readProcessStartIdentityAsyncImpl;
+
+// Test-only seam - pass `null` to restore the default reader. Returns the
+// previous reader so tests can save/restore symmetrically.
+export function __setAsyncProcessStartIdentityReaderForTest(
+  next: ((pid: number) => Promise<ProcessStartIdentity | null>) | null,
+): (pid: number) => Promise<ProcessStartIdentity | null> {
+  const previous = asyncProcessStartIdentityReader;
+  asyncProcessStartIdentityReader =
+    next === null ? readProcessStartIdentityAsyncImpl : next;
+  return previous;
+}
+
+/**
+ * The kernel's creation stamp for `pid`, or `null` when this platform could
+ * not produce one. Stable across any wall-clock adjustment; see the section
+ * comment above.
+ */
+export function readProcessStartIdentity(
+  pid: number,
+): ProcessStartIdentity | null {
+  return readProcessStartIdentityImpl(pid);
+}
+
 function execFileOutput(
   command: string,
   args: readonly string[],
   timeout: number,
+  // `undefined` inherits this process's environment. Only the start-identity
+  // probes override it, to pin the formatting of a stored stamp.
+  env: NodeJS.ProcessEnv | undefined,
 ): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(
       command,
       args,
-      { encoding: "utf8", windowsHide: true, timeout },
+      { encoding: "utf8", windowsHide: true, timeout, env },
       (err, stdout) => resolve(err === null ? stdout : null),
     );
   });
@@ -475,6 +728,7 @@ async function probeProcessLivenessAsyncImpl(
     "tasklist",
     ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
     3_000,
+    undefined,
   );
   if (stdout === null) return "indeterminate";
   const trimmed = stdout.trim();
@@ -496,6 +750,7 @@ async function readProcessStartTimeMsAsyncImpl(
         `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString("o")`,
       ],
       5_000,
+      undefined,
     );
     if (stdout === null) return null;
     const parsed = Date.parse(stdout.trim());
@@ -510,6 +765,7 @@ async function readProcessStartTimeMsAsyncImpl(
       "ps",
       ["-p", String(pid), "-o", "etime="],
       3_000,
+      undefined,
     );
     if (stdout === null) return null;
     const elapsedSeconds = parseElapsedSeconds(stdout.trim());

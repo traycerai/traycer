@@ -28,12 +28,21 @@ function state(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
     auth: {
       status: "authenticated",
       badgeText: null,
       label: null,
       detail: null,
+    },
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
     },
     ...overrides,
   };

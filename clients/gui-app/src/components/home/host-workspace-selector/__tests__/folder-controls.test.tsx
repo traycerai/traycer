@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -77,6 +76,7 @@ import { WorkspaceFolderSummaryControl } from "../workspace-folder-summary-contr
 import { WorkspaceSummaryTrigger } from "../workspace-summary-trigger";
 import type { WorkspaceRunItem } from "../workspace-run-item";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 const EMPTY_COUNTS: ReadonlyMap<string, number> = new Map();
@@ -138,6 +138,7 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     summary: GIT_SUMMARY,
     currentIntent: null,
     defaultNewBranchName: "traycer/swift-otter",
+    branchPrefixWarning: null,
     repoIdentifier: { owner: "acme", repo: "app" },
     isPrimary: true,
     canChangePrimary: true,
@@ -378,6 +379,45 @@ describe("FolderRow", () => {
     expect(screen.queryByLabelText("Copy folder path")).toBeNull();
   });
 
+  it("shows the branch-prefix fallback warning on a new-worktree row", () => {
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: null,
+        branchPrefixWarning:
+          'Repository branch prefix "has spaces" in /repo/.traycer/environment.json is invalid: Prefix can\'t contain spaces. Using the global default.',
+      },
+      NOOP,
+    );
+    expect(screen.getByTestId("folder-row-branch-prefix-warning")).toBeTruthy();
+  });
+
+  it("hides the branch-prefix warning when there is nothing to warn about", () => {
+    renderRow(
+      { mode: "worktree", currentIntent: null, branchPrefixWarning: null },
+      NOOP,
+    );
+    expect(screen.queryByTestId("folder-row-branch-prefix-warning")).toBeNull();
+  });
+
+  it("hides the branch-prefix warning for an imported (existing) worktree - nothing was generated to fall back on", () => {
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: {
+          kind: "import",
+          workspacePath: "/repo",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          isPrimary: true,
+          worktreePath: "/wt/feat-login",
+        },
+        branchPrefixWarning: "some warning that should not render here",
+      },
+      NOOP,
+    );
+    expect(screen.queryByTestId("folder-row-branch-prefix-warning")).toBeNull();
+  });
+
   it("keeps the copy-path icon's default state free of stacked opacity attenuation and >=3:1 against the popover in every theme preset", () => {
     renderRow(
       { mode: "local", displayPath: "/repo", currentIntent: null },
@@ -429,7 +469,10 @@ describe("FolderRow", () => {
     expect(identity.children[1].className).toContain("text-foreground/90");
     expect(location.className).toContain("var(--color-muted-foreground)");
     expect(branch.className).toContain("text-foreground/75");
-    expect(identity.getAttribute("title")).toBe("/repo");
+    // The path tooltip is scoped to the NAME now, not the whole chip - the
+    // chip also carries the copy-path button and missing-folder warning, each
+    // with a tooltip of its own.
+    expect(tooltipTextNear(identity.children[1])).toBe("/repo");
   });
 
   it("reserves two stable trailing action slots", () => {
@@ -1282,6 +1325,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1311,6 +1355,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1390,6 +1435,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1427,6 +1473,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1458,6 +1505,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1505,6 +1553,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1532,6 +1581,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1561,6 +1611,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1585,6 +1636,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1617,6 +1669,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1641,6 +1694,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
+          refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />

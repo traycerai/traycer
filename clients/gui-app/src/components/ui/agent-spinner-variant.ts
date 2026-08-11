@@ -1,4 +1,5 @@
 export type AgentSpinnerVariant =
+  | "typing"
   | "dots"
   | "dots2"
   | "dots3"

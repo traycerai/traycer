@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
@@ -38,7 +37,7 @@ function makeFixture(): {
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: submitHolder,
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,

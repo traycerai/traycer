@@ -309,6 +309,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -343,7 +344,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
       await Promise.race([
-        lifecycle.bootstrap(),
+        lifecycle.bootstrap({ hostInstalled: true }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("timeout")), 5000),
         ),
@@ -365,6 +366,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -413,6 +415,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -437,7 +440,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     );
     try {
       await Promise.race([
-        lifecycle.bootstrap(),
+        lifecycle.bootstrap({ hostInstalled: true }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("timeout")), 5000),
         ),
@@ -446,6 +449,181 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors[0]?.code).toBe("HOST_NOT_READY");
       expect(errors[0]?.message.toLowerCase()).toContain("doctor");
     } finally {
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // traycer#961 / #996 / #1001, int #4845: on a machine where no host has
+  // EVER been installed, the launch converge refuses to provision before
+  // sign-in, so no provisioning lane exists to re-arm the quiet budget - the
+  // wait below could only ever run to completion and then report that a host
+  // "did not start" when nothing asked it to. That ERROR rides in the
+  // desktop.log attached to every fresh-install support report (it misdirected
+  // three field investigations) and holding bootstrap open delays the deferred
+  // work gated on it.
+  //
+  // The budget here is 30s against a 3s race: a regression to the waiting path
+  // fails this test outright rather than merely slowing it down.
+  it("skips the readiness wait entirely when no host is installed on this machine", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    // A never-installed machine has NO host root at all - the CLI creates it
+    // during provisioning. Rooting the layout at an absent nested directory
+    // is what makes this the real fresh-install shape: watching an existing
+    // `mkdtemp` root would pass even with the ENOENT bug present.
+    const dir = join(parent, "host");
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      environment: "production" as const,
+    };
+    const websocketUrl = "ws://127.0.0.1:54322/rpc";
+    let reachable = false;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 30_000,
+      reachabilityProbe: (url) =>
+        Promise.resolve(url === websocketUrl && reachable),
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: false }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("bootstrap waited")), 3_000),
+        ),
+      ]);
+      // No host, but also no failure to report: nothing was asked to start.
+      expect(errors).toEqual([]);
+      expect(lifecycle.getSnapshot()).toBeNull();
+
+      // The watcher still went in - against a root that did not exist when
+      // bootstrap started. That is what picks the host up once the user signs
+      // in and provisioning runs; skipping the wait must not cost the
+      // auto-heal, and an ENOENT here would leave the desktop blind to a host
+      // that appears later.
+      reachable = true;
+      // Exactly what provisioning does after sign-in: create the host root,
+      // then publish pid.json into it. Creating it HERE rather than in the
+      // fixture is what isolates the watcher - if bootstrap failed to install
+      // one, these writes land silently and the snapshot never converges.
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        layout.pidMetadataFile,
+        JSON.stringify({
+          hostId: "post-signin-host",
+          websocketUrl,
+          version: config.version,
+          pid: 4321,
+        }),
+        "utf8",
+      );
+      // Comfortably inside this test's own 10s budget so a missing watcher
+      // fails on the snapshot assertion below - naming the actual cause -
+      // rather than as an opaque test timeout. The watcher fires in
+      // milliseconds when it exists; the margin is for a loaded CI box where
+      // event-loop and fs.watch latency spike.
+      const deadline = Date.now() + 5_000;
+      while (lifecycle.getSnapshot() === null && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(lifecycle.getSnapshot()?.hostId).toBe("post-signin-host");
+      expect(errors).toEqual([]);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      // `parent`, not `dir` - the layout is rooted one level down, so removing
+      // only `dir` would leave an empty temp directory behind on every run.
+      await rm(parent, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  // traycer#862: a fresh install downloaded ~800MB and extracted a 2.2GB
+  // runtime tree - 3m17s on that machine - and the flat wall-clock budget
+  // reported "Could not start Traycer Host" at the 60s mark, over an install
+  // that was still visibly running. The budget is quiet-time, not wall-clock:
+  // installer progress re-arms it, and only silence spends it.
+  it("holds the startup budget open while host provisioning reports progress", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      environment: "production" as const,
+    };
+    const readyTimeoutMs = 300;
+    const progressWindowMs = 900;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs,
+      reachabilityProbe: undefined,
+    });
+    const errors: { code: string; message: string }[] = [];
+    lifecycle.on("error", (err) =>
+      errors.push({ code: err.code, message: err.message }),
+    );
+    // Stand in for the CLI's NDJSON progress stream: events well inside the
+    // quiet budget, for three times as long as that budget.
+    let lastProgressAt = Date.now();
+    const ticker = setInterval(() => {
+      lastProgressAt = Date.now();
+      lifecycle.notifyProvisioningActivity();
+    }, 50);
+    const stopTicker = setTimeout(
+      () => clearInterval(ticker),
+      progressWindowMs,
+    );
+    const startedAt = Date.now();
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 10_000),
+        ),
+      ]);
+      const elapsedMs = Date.now() - startedAt;
+      // No host ever appeared, so it still ends in HOST_NOT_READY - but only
+      // after the installer went quiet. Under a flat budget this fired at
+      // ~`readyTimeoutMs`, long before the progress stream stopped.
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HOST_NOT_READY");
+      expect(elapsedMs).toBeGreaterThanOrEqual(progressWindowMs);
+      // ...and the budget is still a BUDGET once progress stops. Outliving the
+      // progress window alone cannot tell "re-armed, then spent the full quiet
+      // budget" apart from "re-armed, then fired the instant the stream went
+      // quiet" - which is the regression a quiet-time deadline can actually
+      // have. Measuring from the last event is what separates them.
+      expect(Date.now() - lastProgressAt).toBeGreaterThanOrEqual(
+        readyTimeoutMs,
+      );
+    } finally {
+      clearTimeout(stopTicker);
+      clearInterval(ticker);
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }
@@ -461,6 +639,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -495,7 +674,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
       await Promise.race([
-        lifecycle.bootstrap(),
+        lifecycle.bootstrap({ hostInstalled: true }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("timeout")), 5000),
         ),
@@ -521,6 +700,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -573,6 +753,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -607,7 +788,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
       await Promise.race([
-        lifecycle.bootstrap(),
+        lifecycle.bootstrap({ hostInstalled: true }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("timeout")), 5000),
         ),
@@ -627,6 +808,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -659,7 +841,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
       await Promise.race([
-        lifecycle.bootstrap(),
+        lifecycle.bootstrap({ hostInstalled: true }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("timeout")), 5000),
         ),
@@ -678,6 +860,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -710,7 +893,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
       await Promise.race([
-        lifecycle.bootstrap(),
+        lifecycle.bootstrap({ hostInstalled: true }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("timeout")), 5000),
         ),
@@ -728,6 +911,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     const layout = {
       rootDir: dir,
       pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -768,7 +952,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       changes.push(snapshot?.hostId ?? null);
     });
     try {
-      await lifecycle.bootstrap();
+      await lifecycle.bootstrap({ hostInstalled: true });
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host"]);
 

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
@@ -33,7 +32,7 @@ function makeFixture(): {
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: submitHolder,
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,

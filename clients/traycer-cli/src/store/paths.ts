@@ -23,6 +23,7 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 //   ~/.traycer/host/                         - prod host runtime root
 //   ~/.traycer/host/host.log               - prod host stdout + bootstrap markers
 //   ~/.traycer/host/pid.json                 - prod host pid metadata
+//   ~/.traycer/host/update-progress.json     - prod cross-process `host update` outcome marker
 //   ~/.traycer/host/install/                 - prod host install dir (atomic-swap target)
 //   ~/.traycer/host/install/install.json     - prod host install record
 //   ~/.traycer/host/staging/                 - prod host staging root (verify-before-replace)
@@ -69,6 +70,13 @@ const HOST_LOG_FILENAME = "host.log";
 // an archive (see `host-log-rotation.ts`).
 const HOST_LOG_BACKUP_FILENAME = "host.log.1";
 const HOST_PID_FILENAME = "pid.json";
+const HOST_UPDATE_PROGRESS_FILENAME = "update-progress.json";
+const HOST_SUBSTRATE_FILENAME = "substrate.json";
+const HOST_TRANSITION_FILENAME = "transition.json";
+const HOST_TRANSITION_PROBE_FILENAME = "transition-probe.json";
+const HOST_ACTIVATION_FILENAME = "activation.json";
+const HOST_PENDING_ACTIVATION_FILENAME = "pending-activation.json";
+const HOST_STOP_INTENT_FILENAME = "stop-intent.json";
 
 function environmentSubdir(base: string, environment: Environment): string {
   // production → base; dev → base/dev (the slot dir name is the environment
@@ -161,6 +169,48 @@ export function hostLogBackupPath(
 ): string {
   return join(hostHomeDir(environment), HOST_LOG_BACKUP_FILENAME);
 }
+/** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
+export function hostSubstratePath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_SUBSTRATE_FILENAME);
+}
+/** Durable lifecycle transition journal, including the governor snapshot. */
+export function hostTransitionJournalPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_TRANSITION_FILENAME);
+}
+/** Dedicated correlated probe marker; intentionally not appended to host.log. */
+export function hostTransitionProbeMarkerPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_TRANSITION_PROBE_FILENAME);
+}
+/** Durable activation journal; distinct from the substrate transition journal. */
+export function hostActivationJournalPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_ACTIVATION_FILENAME);
+}
+/** Busy activation intent, retained until activation reaches a terminal journal. */
+export function hostPendingActivationPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_PENDING_ACTIVATION_FILENAME);
+}
+/**
+ * Deliberate-stop intent, written by whoever is about to stop the host and read
+ * by the supervisor before it relaunches a dead child. Cross-process by
+ * necessity: the stopper (`traycer host stop`, an installer, Desktop's
+ * `host restart`) is never the supervisor process itself, and on Windows the
+ * supervisor survives the stop it is being asked not to fight.
+ */
+export function hostStopIntentPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_STOP_INTENT_FILENAME);
+}
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);
 }
@@ -180,6 +230,15 @@ export function hostStagingRoot(environment: Environment): string {
 export function hostInstallRecordPath(environment: Environment): string {
   return join(hostInstallDir(environment), HOST_INSTALL_RECORD_FILENAME);
 }
+// Cross-process handoff marker `traycer host update` writes before it
+// touches anything and clears/rewrites on outcome - see
+// `host/update-progress-marker.ts`. Deliberately mirrored (by contract, not
+// by import) at `traycer-host/src/paths.ts::hostHomeDir` so the daemon
+// polls the exact same path this CLI writes.
+export function hostUpdateProgressMarkerPath(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_UPDATE_PROGRESS_FILENAME);
+}
+
 export function hostDownloadCacheDir(environment: Environment): string {
   return join(hostHomeDir(environment), HOST_DOWNLOAD_CACHE_SUBDIR);
 }

@@ -22,3 +22,26 @@ export interface DesktopTrayEpic {
 }
 
 export type DesktopTrayIndicatorState = "idle" | "active" | "attention";
+
+/**
+ * Desktop IPC re-export of the shared host-list / version-policy and
+ * Devices & Sessions result contracts consumed by `auth-bridge.ts`. The
+ * canonical definitions live in `@traycer-clients/shared/host-client/*` and
+ * `@traycer-clients/shared/auth/devices-sessions-fetcher`; this file lets the
+ * Electron preload bridge import them from `src/ipc-contracts/` (per the
+ * preload boundary rule) rather than reaching into the shared package.
+ */
+export type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+export type {
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+export type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+export type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";

@@ -215,6 +215,7 @@ function suggestionForTrigger(args: {
       kind: "slash",
       slashTrigger: args.trigger,
       slashScopeForProps: args.slashScopeForProps,
+      suggestionPluginKey: null,
     }),
     command: ({ editor, range, props }) => {
       const item = props as ComposerPickerItem;

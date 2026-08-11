@@ -7,6 +7,7 @@ import type {
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type { ProviderManagedInstallState } from "@traycer/protocol/host/provider-schemas";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -82,6 +83,76 @@ export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 800,
   maxDelayMs: 30 * SECOND_MS,
 };
+/**
+ * A managed provider pack is actively downloading. Mirrors the speech model's
+ * download lane below (1.5s → 5s), for the same reason: `providers.list` is
+ * the ONLY source of install progress, so its cadence IS the progress bar's
+ * frame rate.
+ *
+ * A tighter cap than `providers.pending` on purpose. A shell probe that has
+ * not settled after half a minute is genuinely worth backing off from; a
+ * download is not - the wire sits at `downloading` with a full fraction
+ * through the entire extract-and-verify phase, so a 30s (let alone 15min)
+ * cadence leaves a finished-looking bar frozen on screen for the exact stretch
+ * where the user is most likely to conclude the install is hung.
+ */
+export const PROVIDERS_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "providers.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+/**
+ * A managed pack failed and the host has scheduled another attempt.
+ *
+ * Without this lane an `error` cell falls straight to `providers.steady`, so a
+ * wifi blip that the host recovers from in a minute keeps "Setup failed" on
+ * screen for up to fifteen. That is the wrong direction for a transient
+ * failure: the steady lane's cadence is chosen for state that is not expected
+ * to change, and a cell carrying `retryAtMs` is state that is.
+ *
+ * Deliberately looser than the installing lane. Nothing here has to animate -
+ * this lane exists to notice ONE transition (error → downloading, or error
+ * with a fresh `retryAtMs`) shortly after it happens, and 30s of staleness on
+ * a failure notice is not the same cost as 30s of frozen progress bar.
+ */
+export const PROVIDERS_RETRY_SCHEDULED_POLL_LANE: ConditionPollLane = {
+  id: "providers.retry-scheduled",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+
+/**
+ * How long after `retryAtMs` the lane keeps watching.
+ *
+ * A window is needed rather than a bare `retryAtMs > now` because nothing on
+ * the host fires AT `retryAtMs`. The field is the manager's backoff memo -
+ * "this cell becomes eligible again at T" - and the attempt itself rides on
+ * the next kick: a turn resolving the provider, an explicit `ensurePack`, or
+ * the reconvergence tick. So the transition this lane exists to see lands
+ * shortly AFTER `retryAtMs`, never before it, and dropping to the steady lane
+ * the instant eligibility arrives would miss precisely the moment it was
+ * added for.
+ *
+ * It is also what bounds the lane. Past the window the cell is not "about to
+ * heal", it is waiting for a kick nobody has scheduled - and the kick's own
+ * arrival (a turn) already refreshes the list through
+ * `useRefreshProvidersListOnTurn`. Polling a quiescent failure every 30
+ * seconds forever would buy nothing and cost it on every wedged host.
+ */
+export const PROVIDERS_RETRY_OBSERVATION_GRACE_MS = 60 * SECOND_MS;
+
+function isRetryWorthWatching(
+  state: ProviderManagedInstallState | null | undefined,
+  nowMs: number,
+): boolean {
+  if (state === null || state === undefined) return false;
+  if (state.status !== "error") return false;
+  // `retryAtMs: null` is the terminal case - `unrepairable`, or a failure the
+  // manager deliberately declined to memo. Nothing is coming, so watching is
+  // not cheaper than the steady lane, it is only more expensive.
+  if (state.retryAtMs === null) return false;
+  return nowMs < state.retryAtMs + PROVIDERS_RETRY_OBSERVATION_GRACE_MS;
+}
 export const PROVIDERS_LIMITED_POLL_LANE: ConditionPollLane = {
   id: "providers.limited",
   initialDelayMs: 30 * SECOND_MS,
@@ -255,6 +326,33 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Cloud-feed dispositions persist in the replicated feed and must retain
+  // their invocation order at the host boundary.
+  "host.notifications.cloudFeed.markRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.markAllRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.clear": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.clearAll": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.notifications.indicatorState": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("host.notifications.indicatorState", {
@@ -281,6 +379,33 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Shell lifecycle from the Shells list and the output window header.
+  // `fifo` is what buys these three the guarantees the
+  // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
+  // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
+  // refuses to cancel one. A delete destroys the command's entire output
+  // history, so it must never be collapsed into another in-flight request or
+  // silently dropped on a host swap - the human pressed it once and it either
+  // happens or reports why.
+  //
+  // (Not for cross-method ordering: the coordinator keys queues by
+  // [hostId, userId, method, params], so a start and a stop never share a
+  // queue and fifo cannot sequence one against the other.)
+  "managedCommand.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "agent.gui.listHarnesses": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("agent.gui.listHarnesses", {
@@ -309,6 +434,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Read-only cross-profile fork-admission preflight; no host-side state
+  // changes, but each call answers a specific candidate profile so requests
+  // are not superseded by one another.
+  "agent.tui.validateForkProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Generating a title writes the result to the terminal-agent record.
   "agent.tui.generateTitle": {
     mode: "fifo",
@@ -323,6 +456,14 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Activity hooks update the host's terminal-agent activity oracle.
   "agent.tui.recordActivity": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Optional replacement for the recordActivity start edge: records the
+  // activity edge and pulls the role-registry digest cursor forward when
+  // behind (roles-snapshot-delivery). Same scheduling as its sibling hooks.
+  "agent.tui.promptSubmitted": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -368,8 +509,28 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
+  "agent.inbox.ack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Claiming a role persists responsibility and broadcasts awareness.
+  "agent.roles.claim": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.roles.list": { ...LATEST_SCHEDULING, poll: null },
+  // Relinquishing a role removes persisted responsibility and broadcasts awareness.
+  "agent.roles.relinquish": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Forking an agent persists a new collaboration record, like agent.create.
+  "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",
@@ -377,6 +538,12 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
+  // Recording a view updates the user's central task ordering preference.
+  "epic.recordViewed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
@@ -392,7 +559,15 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "workspace.listFileTree": { ...LATEST_SCHEDULING, poll: null },
   "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.browseFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
+  // Saving a file writes to disk and each attempt carries the revision
+  // acknowledged by the previous save, so writes must not be coalesced.
+  "workspace.writeFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "workspace.mentionFiles": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionWorktrees": { ...LATEST_SCHEDULING, poll: null },
@@ -572,12 +747,21 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
   "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
+  "git.getFileContents": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // A read of the local checkout, requested when the PR Files tab opens.
+  // No poll: the PR detail stream is what notices a new push, and a re-render
+  // off a changed `headRefOid` re-keys the query on its own.
+  "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.
   "terminal.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "terminal.list": { ...LATEST_SCHEDULING, poll: null },
+  // A read that materializes the terminal's output to a file on the host.
+  // Latest-wins with no poll: it is issued on demand, and a superseded read
+  // has nothing worth waiting for - the next one rewrites the same file.
+  "terminal.readOutput": { ...LATEST_SCHEDULING, poll: null },
   // Renaming a terminal persists its display name.
   "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "worktree.listByWorkspacePaths": { ...LATEST_SCHEDULING, poll: null },
@@ -619,6 +803,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Setting the repo branch-prefix override persists worktree naming config.
+  "worktree.setRepoBranchPrefix": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "worktree.getBinding": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("worktree.getBinding", {
@@ -642,6 +832,21 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("providers.list", {
       classify: (data) => {
         if (data === undefined) return false;
+        // `providers.list` is also the carrier for the native (MCP/plugins/
+        // skills) queries, which cache a MAPPED shape under their own
+        // `cacheKeyIdentity` rather than the raw response. Those entries have
+        // no `providers` array; they opt out of table-owned polling
+        // (`poll: false`) and must never drive the classic lanes. This guard
+        // has to precede every `data.providers` read below.
+        if (!Array.isArray(data.providers)) return false;
+        // Ahead of the probe lane deliberately. Both can be true at once on a
+        // first boot, and `providers.pending` decays to 30s while an install
+        // needs a bounded 5s - taking the faster, tighter-capped lane while
+        // bytes are moving is the only ordering that keeps progress readable.
+        const hasInstallInFlight = data.providers.some(
+          (provider) => provider.managedInstallState?.status === "downloading",
+        );
+        if (hasInstallInFlight) return PROVIDERS_INSTALLING_POLL_LANE;
         const hasPendingProbe = data.providers.some(
           (provider) =>
             provider.enabled &&
@@ -652,6 +857,13 @@ export const HOST_METHOD_POLL_TABLE = {
               )),
         );
         if (hasPendingProbe) return PROVIDERS_PENDING_POLL_LANE;
+        // After the probe lane, which is faster off the mark and caps at the
+        // same 30s, and before the rate-limit lane, which starts there.
+        const nowMs = Date.now();
+        const hasScheduledRetry = data.providers.some((provider) =>
+          isRetryWorthWatching(provider.managedInstallState, nowMs),
+        );
+        if (hasScheduledRetry) return PROVIDERS_RETRY_SCHEDULED_POLL_LANE;
         const hasLimitedProfile = data.providers.some((provider) =>
           provider.profiles.some(
             (profile) =>
@@ -716,6 +928,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Opening a sign-in terminal kills the previous one and spawns a PTY, so
+  // ordering is load-bearing: a "latest wins" policy could drop the call that
+  // actually left a terminal behind. Concurrent clicks are collapsed
+  // host-side, which is where that decision belongs.
+  "providers.startTerminalLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an API key changes persisted credentials.
   "providers.setApiKey": {
     mode: "fifo",
@@ -752,6 +973,44 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Native MCP/plugins/skills mutations write provider config files, so they
+  // are `fifo` for the same reason as the classic provider mutations above:
+  // two rapid toggles must both land, in order, not be coalesced into one.
+  "providers.nativeMutate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // MCP auth actions (login/submitCode/logout/clearAuth/forceReauth) mutate
+  // stored credentials and must not be coalesced.
+  "providers.mcpAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Bounded status poll for an in-flight MCP auth - a pure read, so `latest`
+  // (a superseded poll carries no information the newer one lacks).
+  "providers.awaitMcpAuth": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Cancelling an in-flight MCP auth tears down host-side pending state.
+  "providers.cancelMcpAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A user-initiated "get this provider's managed pack ready" kick. `fifo`
+  // because it mutates host-side scheduling state (clears the cell's backoff,
+  // promotes it to the front of the install queue) and two rapid retry taps
+  // must not be coalesced into one. `poll: null` because the method is a kick,
+  // not a status source - progress is read from `providers.list`, which
+  // already carries `managedInstallState`.
+  "providers.ensurePack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
   "speech.getModelStatus": {
     ...LATEST_SCHEDULING,
@@ -775,6 +1034,23 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.getProviderProfileRateLimits": { ...LATEST_SCHEDULING, poll: null },
   // Configuring an agent persists its execution settings.
   "agent.configure": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Shutdown claim, commit, and release change admission state and must be
+  // ordered against one another.
+  "lifecycle.claimShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.commitShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.releaseShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
 } satisfies HostMethodPolicyTable;
 
 const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;

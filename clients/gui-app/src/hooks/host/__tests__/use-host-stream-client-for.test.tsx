@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -24,6 +24,10 @@ vi.mock("@/lib/host/runtime", () => ({
     }
     return globalClientRef.value;
   },
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
 }));
 
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
@@ -155,6 +159,23 @@ describe("useHostStreamClientFor", () => {
     await Promise.resolve();
     expect(closeSpy).toHaveBeenCalledTimes(2);
     expect(closeSpy.mock.contexts[1]).toBe(second);
+  });
+
+  it("replaces a client that closes while its host identity remains unchanged", async () => {
+    globalClientRef.value = buildGlobalClient(true);
+    const { result } = renderHook(() => useHostStreamClientFor(TARGET_B, null));
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+
+    act(() => {
+      first?.close("unexpected-terminal-close");
+    });
+
+    await waitFor(() => {
+      expect(result.current).toBeInstanceOf(WsStreamClient);
+      expect(result.current).not.toBe(first);
+      expect(result.current?.isClosed()).toBe(false);
+    });
   });
 
   it("keeps the same stream client across a byte-identical directory re-emit (benign onLocalHostChange churn)", () => {

@@ -14,6 +14,7 @@
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { displayTitle } from "@/lib/display-title";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -28,8 +29,15 @@ import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-su
 import type { CommandContext } from "@/lib/commands/types";
 
 export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
-  const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const activeHostId = useReactiveActiveHostId();
+  const defaultHostId = activeHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
+  const directoryList = useHostDirectoryList();
+  const hostLabelById = useMemo(() => {
+    return new Map(
+      (directoryList.data ?? []).map((entry) => [entry.hostId, entry.label]),
+    );
+  }, [directoryList.data]);
 
   return useMemo<OpenerInterfaceItems>(() => {
     const newChat = openerActionLeaf({
@@ -47,22 +55,49 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
           tabId: ctx.activeTabId,
           placement: { kind: "target-group", groupId: ctx.targetGroupId },
           parentId: null,
+          hostId: null,
         });
       },
     });
     if (projection === null) return { create: newChat, existing: [] };
     const existing = projection.chats.allIds.map((id) => {
       const chat = projection.chats.byId[id];
-      return openerExistingLeaf("chats", ctx, {
-        id: chat.id,
-        instanceId: uuidv4(),
-        type: "chat",
-        // Read surface: an untitled Agent renders the render-tier "Untitled
-        // agent" fallback, NOT the creation-tier "New chat" default title.
-        name: displayTitle(chat.title, "agent"),
-        hostId: chat.hostId ?? defaultHostId,
-      });
+      // A chat with no recorded hostId falls back to (and thus matches) the
+      // active host, so only a real, differing hostId ever earns a badge.
+      // Requires `activeHostId` to be genuinely resolved first - while it's
+      // still `null` (boot, host reconnect window) `defaultHostId` would be
+      // the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can
+      // ever equal, false-badging every chat as cross-host.
+      const hostBadge =
+        activeHostId !== null &&
+        chat.hostId !== null &&
+        chat.hostId !== activeHostId
+          ? chatHostBadgeLabel(hostLabelById, chat.hostId)
+          : null;
+      return openerExistingLeaf(
+        "chats",
+        ctx,
+        {
+          id: chat.id,
+          instanceId: uuidv4(),
+          type: "chat",
+          // Read surface: an untitled Agent renders the render-tier "Untitled
+          // agent" fallback, NOT the creation-tier "New chat" default title.
+          name: displayTitle(chat.title, "agent"),
+          hostId: chat.hostId ?? defaultHostId,
+        },
+        hostBadge,
+      );
     });
     return { create: newChat, existing };
-  }, [ctx, projection, defaultHostId]);
+  }, [ctx, projection, activeHostId, defaultHostId, hostLabelById]);
+}
+
+/** Falls back to the raw hostId when the directory has no (or a blank) label for it. */
+function chatHostBadgeLabel(
+  hostLabelById: ReadonlyMap<string, string>,
+  hostId: string,
+): string {
+  const label = hostLabelById.get(hostId);
+  return label !== undefined && label.length > 0 ? label : hostId;
 }

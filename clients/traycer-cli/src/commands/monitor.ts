@@ -5,11 +5,17 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   agentInboxSubscribeServerFrameSchema,
+  agentInboxSubscribeServerFrameSchemaV10,
+  agentInboxSubscribeServerFrameSchemaV11,
   type AgentInboxMessage,
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
-import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import type { RoleAwarenessEvent } from "@traycer/protocol/host/agent/roles";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  MutableBearerLease,
+  readLeaseBearer,
+} from "../../../shared/auth/bearer-source";
 import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
 import {
   createProactiveRefreshScheduler,
@@ -32,7 +38,14 @@ import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
 } from "../host/pid-metadata";
+import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
+import { callHostRpc } from "../internal/host-rpc";
+import {
+  writeStderr,
+  writeStdout,
+  writeStdoutForAck,
+} from "../runner/std-write";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -113,9 +126,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     logger.warn("Monitor missing epic id", {
       environment: config.environment,
     });
-    throw new Error(
-      "traycer monitor: epic id required — pass --epic-id or set TRAYCER_EPIC_ID.",
-    );
+    throw new Error("traycer monitor: epic id required — set TRAYCER_EPIC_ID.");
   }
   const auth = await resolveHostAuth();
   if (auth === null) {
@@ -194,6 +205,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    // Delegated host-credential provisioning. `monitor` is the CLI command that
+    // most needs it: the host it watches should keep serving after this process
+    // exits. Provisioning is silent, so this works the same whether `monitor` is
+    // run from a terminal or as the background command it usually is.
+    hostCredentialMint: createCliHostCredentialMintFlow({
+      authnBaseUrl: auth.authnBaseUrl,
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => diag(message),
+    }),
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -256,25 +276,6 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   }
 }
 
-/**
- * Reads the lease's current bearer, mapping the "no bearer" throw
- * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so the
- * refresh scheduler treats it as "signed out, nothing to schedule".
- */
-function readLeaseBearer(lease: MutableBearerLease): string | null {
-  try {
-    return lease.getBearerToken();
-  } catch (cause) {
-    // Only the "no bearer / signed out" signal maps to null. Any other lease
-    // failure is a real bug; rethrow it rather than silently disabling the
-    // refresh scheduler and masking it as a benign signed-out state.
-    if (cause instanceof CredentialLeaseReleasedError) {
-      return null;
-    }
-    throw cause;
-  }
-}
-
 type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
 type InboxRevalidator = {
@@ -305,6 +306,7 @@ function runInboxSubscription(
     let healthTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
     let settled = false;
+    const acknowledgements = new InboxAcknowledgementQueue(target, logger);
 
     const clearHealthTimer = (): void => {
       if (healthTimer !== null) {
@@ -335,6 +337,7 @@ function runInboxSubscription(
       );
       clearHealthTimer();
       clearRetryTimer();
+      acknowledgements.dispose();
       session?.close();
       reject(error);
     };
@@ -357,7 +360,13 @@ function runInboxSubscription(
       session = next;
       next.onServerFrame((envelope) => {
         markHealthy();
-        handleServerFrame(envelope, target, logger);
+        void handleServerFrame(
+          envelope,
+          client,
+          target,
+          logger,
+          acknowledgements,
+        );
       });
       next.onStatusChange((status, reason) => {
         void onStatusChange(status, reason);
@@ -430,7 +439,7 @@ function runInboxSubscription(
           // blaming the bearer.
           fail(
             new Error(
-              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id/--epic-id).`,
+              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
             ),
           );
           return;
@@ -463,44 +472,267 @@ function runInboxSubscription(
   });
 }
 
-function handleServerFrame(
+/**
+ * Coalesces durable inbox acknowledgements into bounded unary RPCs. A replay
+ * may deliver many frames concurrently; opening one authenticated RPC per
+ * printed message otherwise creates a connection storm and turns a transient
+ * hiccup into another replay. Failed batches remain pending and retry locally;
+ * the inbox's at-least-once contract also redelivers them after reconnect.
+ */
+class InboxAcknowledgementQueue {
+  private static readonly MAX_EVENT_IDS_PER_ACK = 500;
+  private static readonly INITIAL_RETRY_DELAY_MS = 1_000;
+  private static readonly MAX_RETRY_DELAY_MS = 60_000;
+  private readonly pendingEventIds = new Set<string>();
+  private flushing = false;
+  private flushScheduled = false;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private retryDelayMs = InboxAcknowledgementQueue.INITIAL_RETRY_DELAY_MS;
+  private disposed = false;
+
+  constructor(
+    private readonly target: InboxTarget,
+    private readonly logger: ILogger,
+  ) {}
+
+  enqueue(eventId: string): void {
+    if (this.disposed) return;
+    this.pendingEventIds.add(eventId);
+    this.scheduleFlush();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.pendingEventIds.clear();
+  }
+
+  private scheduleFlush(): void {
+    if (
+      this.flushScheduled ||
+      this.flushing ||
+      this.pendingEventIds.size === 0 ||
+      this.retryTimer !== null ||
+      this.disposed
+    ) {
+      return;
+    }
+    this.flushScheduled = true;
+    queueMicrotask(() => {
+      this.flushScheduled = false;
+      void this.flush();
+    });
+  }
+
+  private async flush(): Promise<void> {
+    if (this.flushing || this.disposed) return;
+    this.flushing = true;
+    try {
+      while (this.pendingEventIds.size > 0 && !this.disposed) {
+        const eventIds = Array.from(this.pendingEventIds).slice(
+          0,
+          InboxAcknowledgementQueue.MAX_EVENT_IDS_PER_ACK,
+        );
+        try {
+          await callHostRpc("agent.inbox.ack", {
+            epicId: this.target.epicId,
+            agentId: this.target.agentId,
+            eventIds,
+          });
+          this.retryDelayMs = InboxAcknowledgementQueue.INITIAL_RETRY_DELAY_MS;
+          for (const eventId of eventIds) this.pendingEventIds.delete(eventId);
+        } catch (error) {
+          this.logger.warn("Monitor failed to acknowledge inbox messages", {
+            environment: config.environment,
+            agentId: this.target.agentId,
+            epicId: this.target.epicId,
+            eventIds: eventIds.length,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.scheduleRetry();
+          return;
+        }
+      }
+    } finally {
+      this.flushing = false;
+      this.scheduleFlush();
+    }
+  }
+
+  private scheduleRetry(): void {
+    if (this.retryTimer !== null || this.disposed) return;
+    const delayMs = this.retryDelayMs;
+    this.retryDelayMs = Math.min(
+      delayMs * 2,
+      InboxAcknowledgementQueue.MAX_RETRY_DELAY_MS,
+    );
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.scheduleFlush();
+    }, delayMs);
+  }
+}
+
+/**
+ * A server frame normalized to the shape `handleServerFrame` acts on,
+ * independent of which minor it was parsed against. `eventId` is `null` for
+ * a "message" parsed against the `@1.0`/`@1.1` trees - those have no
+ * `eventId` field at all, so there is nothing this monitor could ack; the
+ * host applies its own compatibility ack for a connection at that minor
+ * (see `agentInboxSubscribeServerFrameSchemaV12`'s doc comment).
+ */
+type NormalizedServerFrame =
+  | {
+      readonly kind: "message";
+      readonly item: AgentInboxMessage;
+      readonly eventId: string | null;
+    }
+  | { readonly kind: "notice"; readonly notice: AgentInboxNotice }
+  | { readonly kind: "role-awareness"; readonly event: RoleAwarenessEvent }
+  | { readonly kind: "pong" };
+
+/**
+ * Parses against the schema tree matching the NEGOTIATED minor, not always
+ * the latest one this build knows. A new monitor talking to an old host
+ * negotiates `@1.0`/`@1.1`; parsing its frames against the latest `@1.2`
+ * schema would fail outright (`eventId` is required there) and silently
+ * drop every message - the exact bug this guards against.
+ */
+function parseServerFrame(
   envelope: StreamFrameEnvelope,
+  negotiated: SchemaVersion | null,
+): NormalizedServerFrame | null {
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor === 0) {
+    const parsed = agentInboxSubscribeServerFrameSchemaV10.safeParse(envelope);
+    if (!parsed.success) return null;
+    if (parsed.data.kind === "message") {
+      return { kind: "message", item: parsed.data.item, eventId: null };
+    }
+    if (parsed.data.kind === "notice") {
+      return { kind: "notice", notice: parsed.data.notice };
+    }
+    return { kind: "pong" };
+  }
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor === 1) {
+    const parsed = agentInboxSubscribeServerFrameSchemaV11.safeParse(envelope);
+    if (!parsed.success) return null;
+    if (parsed.data.kind === "message") {
+      return { kind: "message", item: parsed.data.item, eventId: null };
+    }
+    if (parsed.data.kind === "notice") {
+      return { kind: "notice", notice: parsed.data.notice };
+    }
+    if (parsed.data.kind === "role-awareness") {
+      return { kind: "role-awareness", event: parsed.data.event };
+    }
+    return { kind: "pong" };
+  }
+  const parsed = agentInboxSubscribeServerFrameSchema.safeParse(envelope);
+  if (!parsed.success) return null;
+  if (parsed.data.kind === "message") {
+    return {
+      kind: "message",
+      item: parsed.data.item,
+      eventId: parsed.data.item.eventId,
+    };
+  }
+  if (parsed.data.kind === "notice") {
+    return { kind: "notice", notice: parsed.data.notice };
+  }
+  if (parsed.data.kind === "role-awareness") {
+    return { kind: "role-awareness", event: parsed.data.event };
+  }
+  return { kind: "pong" };
+}
+
+async function handleServerFrame(
+  envelope: StreamFrameEnvelope,
+  client: WsStreamClient<HostStreamRpcRegistry>,
   target: InboxTarget,
   logger: ILogger,
-): void {
-  const parsed = agentInboxSubscribeServerFrameSchema.safeParse(envelope);
-  if (!parsed.success) {
+  acknowledgements: InboxAcknowledgementQueue,
+): Promise<void> {
+  const negotiated = client.getMethodSchemaVersion(SUBSCRIBE_METHOD);
+  const frame = parseServerFrame(envelope, negotiated);
+  if (frame === null) {
     diag(`dropping unrecognized frame kind=${String(envelope.kind)}`);
     logger.warn("Monitor dropped unrecognized inbox frame", {
       environment: config.environment,
       frameKind: String(envelope.kind),
-      issueCount: parsed.error.issues.length,
+      negotiatedMinor: negotiated?.minor ?? null,
       agentId: target.agentId,
       epicId: target.epicId,
     });
     return;
   }
-  if (parsed.data.kind === "message") {
+  if (frame.kind === "message") {
     logger.debug("Monitor received inbox message frame", {
       environment: config.environment,
       agentId: target.agentId,
       epicId: target.epicId,
-      fromAgentId: parsed.data.item.fromAgentId,
-      hasReply: parsed.data.item.reply !== null,
+      fromAgentId: frame.item.fromAgentId,
+      hasReply: frame.item.reply.expectsReply,
     });
-    printInboxMessage(parsed.data.item);
+    const printed = printInboxMessage(frame.item);
+    if (frame.eventId === null) {
+      // Negotiated below @1.2 - no eventId to ack; the host retires this
+      // row itself (server-side compatibility ack). Still await the print
+      // so this frame's output has landed before the next one is handled.
+      await printed.confirmation;
+      return;
+    }
+    const eventId = frame.eventId;
+    // The durable row must only be acknowledged once THIS write was
+    // CONFIRMED to reach the OS - not merely handed to `process.stdout`
+    // (asynchronous whenever stdout is a pipe - see `std-write.ts`), and not
+    // merely "flushStdio resolved": that helper is deliberately
+    // non-rejecting and can resolve after its own bounded timeout with the
+    // write still incomplete or failed, which previously let an ack fire for
+    // text that was never actually written. `writeStdoutForAck` reports
+    // this exact write's own outcome instead.
+    const delivered = await printed.confirmation;
+    if (!delivered) {
+      void printed.eventualOutcome.then((eventuallyDelivered) => {
+        if (eventuallyDelivered) acknowledgements.enqueue(eventId);
+      });
+      logger.warn(
+        "Monitor: stdout write for inbox message did not confirm before the timeout; waiting for its eventual outcome",
+        {
+          environment: config.environment,
+          agentId: target.agentId,
+          epicId: target.epicId,
+          eventId,
+        },
+      );
+      return;
+    }
+    acknowledgements.enqueue(eventId);
     return;
   }
-  if (parsed.data.kind === "notice") {
+  if (frame.kind === "notice") {
     logger.debug("Monitor received inbox notice frame", {
       environment: config.environment,
       agentId: target.agentId,
       epicId: target.epicId,
-      receiverAgentId: parsed.data.notice.receiverAgentId,
-      reason: parsed.data.notice.reason,
-      droppedReceiverCount: parsed.data.notice.droppedReceivers?.length ?? 0,
+      receiverAgentId: frame.notice.receiverAgentId,
+      reason: frame.notice.reason,
+      droppedReceiverCount: frame.notice.droppedReceivers?.length ?? 0,
     });
-    printInboxNotice(parsed.data.notice);
+    printInboxNotice(frame.notice);
+    return;
+  }
+  if (frame.kind === "role-awareness") {
+    logger.debug("Monitor received role awareness frame", {
+      environment: config.environment,
+      agentId: target.agentId,
+      epicId: target.epicId,
+      eventKind: frame.event.kind,
+      claimAgentId: frame.event.claim.agentId,
+    });
+    printRoleAwareness(frame.event);
   }
 }
 
@@ -555,7 +787,15 @@ function logEndpointResolution(
   write();
 }
 
-function printInboxMessage(item: AgentInboxMessage): void {
+/**
+ * Returns both the bounded confirmation used for timely diagnostics and the
+ * write's eventual outcome. A callback that succeeds after the bound still
+ * permits the caller to acknowledge the durable row; an error never does.
+ */
+function printInboxMessage(item: AgentInboxMessage): {
+  readonly confirmation: Promise<boolean>;
+  readonly eventualOutcome: Promise<boolean>;
+} {
   const output = formatAgentMessage({
     receiverChannel: "cli",
     sender: {
@@ -566,7 +806,7 @@ function printInboxMessage(item: AgentInboxMessage): void {
     reply: item.reply,
     body: item.prompt,
   });
-  process.stdout.write(`${output}\n`);
+  return writeStdoutForAck(`${output}\n`);
 }
 
 /**
@@ -620,7 +860,20 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     `[traycer inbox] based on your judgment decide how to proceed — read transcript, follow up, launch a new agent, etc.`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
+}
+
+/**
+ * Role awareness is ambient coordination state, not a message — a single
+ * compact line informs the transcript without crowding it. Role and scope are
+ * normalized non-empty text by schema, so both always render.
+ */
+function printRoleAwareness(event: RoleAwarenessEvent): void {
+  const verb =
+    event.kind === "role-claimed" ? "claimed role" : "relinquished role";
+  writeStdout(
+    `[traycer roles] agent ${event.claim.agentId} ${verb} "${event.claim.role}" (scope: ${event.claim.scope})\n`,
+  );
 }
 
 /**
@@ -656,9 +909,9 @@ function printReceiverCancelledNotice(
     `[traycer inbox] if you are working on the user's behalf, wait for their next instruction; if you are working on behalf of another agent, let that agent know`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
 }
 
 function diag(message: string): void {
-  process.stderr.write(`[traycer monitor] ${message}\n`);
+  writeStderr(`[traycer monitor] ${message}\n`);
 }

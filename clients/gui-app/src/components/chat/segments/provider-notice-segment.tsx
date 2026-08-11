@@ -4,7 +4,6 @@ import type {
   ProviderNoticeDetail,
   ProviderNoticeTone,
 } from "@traycer/protocol/persistence/epic/content-blocks";
-import { useChatMeasuredBooleanToggle } from "@/components/chat/chat-measured-item-change-context";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +30,7 @@ export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   const { status, tone, title, message, details, findUnitId } = props;
   const isStreaming = status === "streaming";
   const [expanded, setExpanded] = useState(false);
-  const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded);
+  const toggleExpanded = (): void => setExpanded((current) => !current);
 
   const hasDetails = details.length > 0;
   const Icon = TONE_ICON[tone];

@@ -7,6 +7,7 @@ import {
   providerIdSchema,
   providerIdSchemaV40,
   providerIdSchemaV50,
+  providerIdSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -89,6 +90,7 @@ export const rateLimitCapableProviderIdSchema = z.enum([
   "openrouter",
   "kilocode",
   "grok",
+  "huggingface",
 ]);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
@@ -174,6 +176,32 @@ const openRouterRateLimitsSchema = z.object({
   totalCredits: z.number().nullable(),
   totalUsage: z.number().nullable(),
   balance: z.number().nullable(),
+});
+
+// Hugging Face arm - httpFetch-class provider (a plain GET against
+// `huggingface.co/api/settings/billing/usage-v2` with the personal token, no
+// subprocess). A CREDIT provider, not a windowed one: HF reports money, never a
+// percentage of a rolling window, so `providerRateLimitWindows` returns [] for
+// it exactly as it does for openrouter.
+//
+// Every field is nullable except `usedUsd` because the endpoint is
+// OpenAPI-listed but schema-less, and the two allowance fields genuinely do not
+// exist for every account: an account with no included allowance and no spend
+// limit reports usage alone. `remainingIncludedUsd` / `remainingLimitUsd` are
+// therefore only derivable when their base is present, and the host sends null
+// rather than a misleading zero. Values are USD floats - the wire carries
+// nano-USD integers and the host divides, so no consumer has to know the unit.
+const huggingFaceRateLimitsSchema = z.object({
+  provider: z.literal(rateLimitCapableProviderIdSchema.enum.huggingface),
+  available: z.literal(true),
+  includedUsd: z.number().nullable(),
+  usedUsd: z.number(),
+  remainingIncludedUsd: z.number().nullable(),
+  limitUsd: z.number().nullable(),
+  remainingLimitUsd: z.number().nullable(),
+  numRequests: z.number().nullable(),
+  periodStart: z.string().nullable(),
+  periodEnd: z.string().nullable(),
 });
 
 // Kilo Code arm - httpFetch-class provider (reads its own credential file,
@@ -381,9 +409,31 @@ export const providerRateLimitsSchema = z.union([
   openRouterRateLimitsSchema,
   kiloCodeRateLimitsSchema,
   grokRateLimitsSchema,
+  huggingFaceRateLimitsSchema,
   unavailableProviderRateLimitsSchemaV2,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
+
+// Frozen v3.0-line union - the live union as `cli-v1.1.8` first shipped it and
+// every release through `cli-v1.1.10` has carried it: codex-with-per-credit-
+// detail + claude-code + openrouter + kilocode + grok + unavailableV2, WITHOUT
+// the Hugging Face arm. Feeds `rateLimitUsageResponseSchemaV30` only.
+//
+// This line pointed at the LIVE union until the Hugging Face arm was added,
+// which is exactly how grok grew the released v2.1 line before it. A new
+// available arm is NOT strippable by the within-major skew handler - a released
+// client's frozen union has no such variant and strict-decodes the frame - so
+// the arm travels on v4.0 with a bridge that degrades it. Do NOT widen this
+// schema.
+export const providerRateLimitsSchemaV30 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV2,
+]);
+export type ProviderRateLimitsV30 = z.infer<typeof providerRateLimitsSchemaV30>;
 
 // Single home for the grok available -> unavailable degrade every downgrade
 // bridge below the v3.0 line applies. A grok-available snapshot has no
@@ -405,6 +455,30 @@ export function mapGrokAvailableToUnavailable(
   ) {
     return {
       provider: "grok",
+      available: false,
+      reason: "unsupported_provider",
+    };
+  }
+  return providerRateLimits;
+}
+
+// The Hugging Face analogue of `mapGrokAvailableToUnavailable`, for every
+// bridge below the v4.0 line. A Hugging-Face-available snapshot has no
+// representation in any frozen union, so it degrades to the unavailable
+// `unsupported_provider` shape - the exact row a pre-Hugging-Face host returns
+// for it today. `"huggingface"` IS in the unavailable arm's live `provider`
+// enum, so the result reparses cleanly through the older union. Any other
+// snapshot (or `null`) passes through unchanged.
+export function mapHuggingFaceAvailableToUnavailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available &&
+    providerRateLimits.provider === "huggingface"
+  ) {
+    return {
+      provider: "huggingface",
       available: false,
       reason: "unsupported_provider",
     };
@@ -479,6 +553,47 @@ export const providerRateLimitsSchemaV50 = z.union([
 ]);
 export type ProviderRateLimitsV50 = z.infer<typeof providerRateLimitsSchemaV50>;
 
+// Frozen pre-Hugging-Face unavailable arm: same v2 reason enum, but `provider`
+// is pinned to `providerIdSchemaV60` (the provider id set as shipped in
+// cli-v1.1.9 / host-v1.1.9, with omp and before Hugging Face) so an
+// already-shipped `agent.getProviderProfileRateLimits@3.0` caller's strict
+// decode never sees `"huggingface"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV60 = z.object({
+  provider: providerIdSchemaV60,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+/**
+ * Frozen pre-Hugging-Face provider union - identical to the latest
+ * `providerRateLimitsSchema` except the `available: false` arm's `provider` is
+ * pinned to `providerIdSchemaV60`. Like the v5.0 union it KEEPS the grok
+ * available arm (grok rate limits long predate the v1.1.9 tags).
+ *
+ * Feeds only `agent.getProviderProfileRateLimits@3.0`'s frozen response (see
+ * `host/agent/profiles.ts`) so that released line never receives
+ * `huggingface`; the v4.0 line carries it via the live
+ * `providerRateLimitsSchema` above, with a v4->v3 downgrade bridge that fails
+ * closed for such a rate-limit read instead of silently mis-decoding it. Do
+ * NOT widen this schema - extend the latest schema and use that v4 bridge
+ * instead.
+ *
+ * Hugging Face appears in NEITHER arm of this union: it has no available arm
+ * here, and `providerIdSchemaV60` cannot name it in the unavailable one.
+ * Pinning that arm's enum is what closes the second door - left live, a
+ * degraded Hugging Face snapshot would still reach a v3.0 caller as an
+ * `available: false` row naming a provider that line has never heard of.
+ */
+export const providerRateLimitsSchemaV60 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV60,
+]);
+export type ProviderRateLimitsV60 = z.infer<typeof providerRateLimitsSchemaV60>;
+
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see
 // `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
@@ -531,10 +646,23 @@ export type RateLimitUsageResponseV21 = z.infer<
 // grok-available snapshot to the unavailable `unsupported_provider` shape.
 export const rateLimitUsageResponseSchemaV30 =
   rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchema.nullable(),
+    providerRateLimits: providerRateLimitsSchemaV30.nullable(),
   });
 export type RateLimitUsageResponseV30 = z.infer<
   typeof rateLimitUsageResponseSchemaV30
+>;
+
+// v4.0 response - identical to v3.0 except the provider-account snapshot ranges
+// over the live `providerRateLimitsSchema`, which adds the Hugging Face
+// available arm. Same reasoning as the v3.0 cut for grok: a new available union
+// arm needs an explicit downgrade bridge, so it is a major rather than a v3.1
+// minor. The request shape is unchanged from v1.2/v2.x/v3.0.
+export const rateLimitUsageResponseSchemaV40 =
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  });
+export type RateLimitUsageResponseV40 = z.infer<
+  typeof rateLimitUsageResponseSchemaV40
 >;
 
 /**

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { LazyMotion, domAnimation } from "motion/react";
@@ -32,6 +31,7 @@ describe("OnboardingDiorama", () => {
       "OpenCode",
       "Traycer Inference",
       "OpenRouter",
+      "Hugging Face",
       "Droid",
       "Cursor",
       "Copilot",

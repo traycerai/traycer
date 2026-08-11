@@ -28,11 +28,15 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
+import {
+  useFocusEpicTerminalSession,
+  type EpicTerminalRefOverrides,
+} from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
+import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
@@ -195,7 +199,7 @@ export function SetupCardSegment(props: {
           epicId: aggregate.epicId,
           ownerId: aggregate.ownerId,
           ownerKind: aggregate.ownerKind,
-          entries: [workspace.retryFolderIntent],
+          entries: worktreeCreateEntries([workspace.retryFolderIntent]),
         },
         {
           // A failed entry does NOT reject the RPC - it rides `perEntry` on a
@@ -375,6 +379,7 @@ interface SharedHandlers {
   readonly focusTerminal: (
     terminalSessionId: string | null,
     cwd: string,
+    overrides: EpicTerminalRefOverrides | null,
   ) => void;
   readonly livenessFor: (sessionId: string | null) => TerminalLiveness;
   readonly onRetry: (workspace: SetupCardWorkspace) => void;
@@ -464,6 +469,7 @@ function WorkspaceSetupDetail(
               focusTerminal(
                 entry.terminalSessionId,
                 entry.worktreePath ?? entry.workspacePath,
+                null,
               )
             }
           />

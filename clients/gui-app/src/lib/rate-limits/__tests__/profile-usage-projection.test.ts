@@ -60,6 +60,24 @@ function openRouter(
   };
 }
 
+function huggingFace(
+  includedUsd: number | null,
+  usedUsd: number,
+): Extract<ProviderRateLimits, { provider: "huggingface"; available: true }> {
+  return {
+    provider: "huggingface",
+    available: true,
+    includedUsd,
+    usedUsd,
+    remainingIncludedUsd: includedUsd === null ? null : includedUsd - usedUsd,
+    limitUsd: null,
+    remainingLimitUsd: null,
+    numRequests: null,
+    periodStart: null,
+    periodEnd: null,
+  };
+}
+
 function claude(
   fiveHour: ProviderRateLimitWindow | null,
   sevenDay: ProviderRateLimitWindow | null,
@@ -138,6 +156,40 @@ describe("projectProfileUsage", () => {
     expect(projection.severity).toBe("running_low");
     expect(projection.compactWindow?.id).toBe("five-hour");
     expect(projection.compactWindow?.severity).toBe("running_low");
+  });
+
+  it("projects Hugging Face included credits as a Credits meter with the projected severity", () => {
+    // Regression guard: `classifyProviderRateLimits` answers "unknown" for a
+    // credit provider (it has no windows by design), so taking severity from
+    // there instead of from the projected window discarded the bar entirely and
+    // reported the profile as unavailable.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(huggingFace(2, 1.8), NOW),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "credits",
+        name: "Included credits",
+        severity: "limited",
+        window: { usedPercent: 90, durationMinutes: null, resetsAt: null },
+      },
+    });
+  });
+
+  it("projects no Hugging Face window when the account has no included allowance", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(huggingFace(null, 5), NOW),
+      false,
+    );
+    // No denominator, so nothing to meter - not a failure state.
+    expect(projection.compactWindow).toBeNull();
   });
 
   it("projects OpenRouter hard limits as an equivalent Credits meter", () => {

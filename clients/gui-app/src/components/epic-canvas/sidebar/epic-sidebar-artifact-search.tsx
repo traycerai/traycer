@@ -115,8 +115,11 @@ interface ArtifactPanelSearchShellProps {
  * so the tree returns in the same update cycle, not after the 200 ms delay.
  */
 export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
-  const searchOpen = usePanelHeaderSearchOpen(ARTIFACTS_PANEL_ID);
-  const searchQuery = usePanelHeaderSearchQuery(ARTIFACTS_PANEL_ID);
+  const searchOpen = usePanelHeaderSearchOpen(props.tabId, ARTIFACTS_PANEL_ID);
+  const searchQuery = usePanelHeaderSearchQuery(
+    props.tabId,
+    ARTIFACTS_PANEL_ID,
+  );
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   const searchAvailable = useArtifactSearchAvailable();
 
@@ -162,11 +165,11 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
       }
       if (!isTypeToFilterKey(event)) return;
       event.preventDefault();
-      openSearch(ARTIFACTS_PANEL_ID, event.key);
+      openSearch(props.tabId, ARTIFACTS_PANEL_ID, event.key);
     };
     region.addEventListener("keydown", onKeyDown);
     return () => region.removeEventListener("keydown", onKeyDown);
-  }, [searchAvailable, searchOpen, openSearch]);
+  }, [props.tabId, searchAvailable, searchOpen, openSearch]);
 
   return (
     // `overflow-hidden` overrides SidebarContent's default `overflow-auto` so the
@@ -222,12 +225,12 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   const activeHostId = useReactiveActiveHostId();
   const filter = useArtifactFilter(epicId);
   const inputRef = useRef<HTMLInputElement>(null);
-  const headerSlot = usePanelHeaderSearchSlot(ARTIFACTS_PANEL_ID);
+  const headerSlot = usePanelHeaderSearchSlot(tabId, ARTIFACTS_PANEL_ID);
   const setSearchQuery = usePanelHeaderSearchStore((s) => s.setSearchQuery);
   const closeSearch = usePanelHeaderSearchStore((s) => s.closeSearch);
   const onSearchQueryChange = useCallback(
-    (value: string) => setSearchQuery(ARTIFACTS_PANEL_ID, value),
-    [setSearchQuery],
+    (value: string) => setSearchQuery(tabId, ARTIFACTS_PANEL_ID, value),
+    [setSearchQuery, tabId],
   );
 
   const searchActive = debouncedQuery.trim().length > 0;
@@ -378,8 +381,8 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
   // unconditional (not "clear first, then exit"): the mode is the thing the
   // user wants out of, and an empty box has no separate resting state now.
   const exitSearch = useCallback(() => {
-    closeSearch(ARTIFACTS_PANEL_ID);
-  }, [closeSearch]);
+    closeSearch(tabId, ARTIFACTS_PANEL_ID);
+  }, [closeSearch, tabId]);
 
   // Focus the portaled input as soon as the header slot exists, so both entry
   // paths (header icon, type-to-filter) land the caret without a mouse click.

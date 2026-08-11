@@ -180,7 +180,7 @@ vi.mock("../../runner/runner", async (importOriginal) => {
   };
 });
 
-import { buildProgram } from "../../index";
+import { buildProgram, buildProgramWithAgentRoles } from "../../index";
 
 // Native-packaging follow-up bug: previously `traycer-cli/src/index.ts`
 // only wired up `login`, `logout`, `whoami`, `host start`,
@@ -232,7 +232,20 @@ function expectRunnerFlags(cmd: Command, label: string): void {
   }
 }
 
+function collectOptionFlags(command: Command): Array<string | undefined> {
+  return [
+    ...command.options.map((option) => option.long),
+    ...command.commands.flatMap(collectOptionFlags),
+  ];
+}
+
 describe("traycer CLI entrypoint registration", () => {
+  it("keeps epic and sender context env-only across the entire command tree", () => {
+    const flags = collectOptionFlags(buildProgramWithAgentRoles(true));
+    expect(flags).not.toContain("--epic-id");
+    expect(flags).not.toContain("--sender-agent-id");
+  });
+
   it("registers every command module the Desktop host-management IPC bridge spawns", () => {
     const program = buildProgram();
     // The set below matches the spawn call-sites in
@@ -647,6 +660,26 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--name");
   });
 
+  it("agent stop requires --agent-id and exposes --cascade", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["agent", "stop"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--agent-id");
+    expect(flags).toContain("--cascade");
+    const required = cmd.options.filter((o) => o.mandatory).map((o) => o.long);
+    expect(required).toContain("--agent-id");
+  });
+
+  it("agent archive requires --agent-id and exposes --unarchive", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["agent", "archive"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--agent-id");
+    expect(flags).toContain("--unarchive");
+    const required = cmd.options.filter((o) => o.mandatory).map((o) => o.long);
+    expect(required).toContain("--agent-id");
+  });
+
   it("limits readonly agent CLI help to inspection commands", () => {
     const originalSurface = process.env.TRAYCER_AGENT_CLI_SURFACE;
     process.env.TRAYCER_AGENT_CLI_SURFACE = "readonly";
@@ -662,6 +695,8 @@ describe("traycer CLI entrypoint registration", () => {
       expect(help).not.toContain("list-harness-models [options]");
       expect(help).not.toContain("send [options]");
       expect(help).not.toContain("inbox [options]");
+      expect(help).not.toContain("stop [options]");
+      expect(help).not.toContain("archive [options]");
       expect(program.helpInformation()).not.toContain("monitor [options]");
     } finally {
       if (originalSurface === undefined) {

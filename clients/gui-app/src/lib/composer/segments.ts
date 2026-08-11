@@ -5,8 +5,13 @@
 import type { ComposerPromptSegment } from "./types";
 
 export const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
+// `terminal-agent` and `terminal` can be listed in either order: the pattern is
+// anchored at both ends, so a `terminal:` match on a `@terminal-agent:…` token
+// leaves `-agent` unconsumed, fails the anchor, and backtracks into the longer
+// arm. What the anchors buy is exactly that - no partial prefix can be
+// mistaken for a whole token.
 const COMPLETE_ENTITY_TOKEN_REGEX =
-  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent):[^/\s]+\/[^\s]+)$/u;
+  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal):[^/\s]+\/[^\s]+)$/u;
 
 interface MentionTokenMatch {
   path: string;

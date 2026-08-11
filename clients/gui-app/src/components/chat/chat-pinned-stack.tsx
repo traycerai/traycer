@@ -170,8 +170,9 @@ function PinnedTodoPanel(props: {
       <CollapsibleContent>
         <div
           data-testid="pinned-todo-list"
+          data-native-scrollbar="true"
           className={cn(
-            "overflow-y-auto border-t border-border/50 px-2 py-1.5 chat-scrollbar-native-thin",
+            "overflow-y-auto border-t border-border/50 px-2 py-1.5",
             props.scrollRegionMaxHeightClass,
           )}
         >

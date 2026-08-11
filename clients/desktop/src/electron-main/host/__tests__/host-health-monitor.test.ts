@@ -88,6 +88,7 @@ function fakeHost(overrides: Partial<IpcHostLifecycle>): IpcHostLifecycle {
     respawn: vi.fn(async () => {}),
     notifyRespawning: vi.fn(),
     pidMetadataFile: "/fake/pid.json",
+    identityEnrollmentFile: "/fake/identity/enrollment.json",
     isDisposed: false,
     reloadSnapshotFromDisk: vi.fn(async () => null),
     ensureWatcherInstalled: vi.fn(),

@@ -29,11 +29,30 @@ const floorConfig = supportFloorSchema.parse(
 );
 
 const remote = process.argv[2] ?? "origin";
-const lsRemote = spawnSync("git", ["ls-remote", "--tags", remote], {
-  encoding: "utf8",
-  timeout: 30_000,
-  maxBuffer: 16 * 1024 * 1024,
-});
+function listRemoteTags() {
+  let attempt = 1;
+  let result = spawnSync("git", ["ls-remote", "--tags", remote], {
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+
+  while (attempt < 3 && result.error?.message.includes("ETIMEDOUT")) {
+    attempt += 1;
+    console.error(
+      `git ls-remote timed out while reading '${remote}'; retrying (${attempt}/3).`,
+    );
+    result = spawnSync("git", ["ls-remote", "--tags", remote], {
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  }
+
+  return result;
+}
+
+const lsRemote = listRemoteTags();
 if (lsRemote.error !== undefined) {
   console.error(`Failed to spawn 'git ls-remote': ${lsRemote.error.message}`);
   process.exit(1);
@@ -43,7 +62,8 @@ if (lsRemote.status !== 0) {
   process.exit(lsRemote.status ?? 1);
 }
 
-const stableTagPattern = /^refs\/tags\/(host|cli|desktop)-v(\d+)\.(\d+)\.(\d+)$/;
+const stableTagPattern =
+  /^refs\/tags\/(host|cli|desktop)-v(\d+)\.(\d+)\.(\d+)$/;
 const rcTagPattern =
   /^refs\/tags\/(host|cli|desktop)-v(\d+)\.(\d+)\.(\d+)-rc\.\d+$/;
 

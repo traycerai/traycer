@@ -67,6 +67,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "pi",
   "hermes",
   "omp",
+  "huggingface",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -193,6 +194,38 @@ export const guiHarnessIdSchemaV50 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
 
+/**
+ * Frozen harness id set as shipped in protocol v6.0 (with omp, before
+ * Hugging Face).
+ *
+ * This line IS released - `cli-v1.1.9` (tagged 2026-07-29) shipped v6.0, so a
+ * client in the field strict-decodes exactly these 18 ids. `huggingface`
+ * therefore could not join v6.0 and opened v7.0 instead, with v7→v6 … v7→v1
+ * bridges that drop post-v6.0 ids. Do NOT add new harnesses here - extend the
+ * latest `guiHarnessIdSchema` and use the existing v7 bridge instead.
+ */
+export const guiHarnessIdSchemaV60 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+]);
+export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",
@@ -222,6 +255,27 @@ export function canParticipateInA2A(target: {
 }): boolean {
   if (target.surface === "gui") return true;
   return target.harnessId === "claude";
+}
+
+// ─── Shared A2A message-size gate ──────────────────────────────────────────
+//
+// One accepted message is either stored in full or the send is rejected
+// before delivery/capture - truncation is never a recovery strategy. The
+// ceiling is shared (not host-domain-private) so every surface that
+// composes an A2A send body - today's host domain, and any future
+// pre-flight client check - agrees on the exact same byte count.
+
+/** Shared UTF-8 byte ceiling for a single A2A message body. */
+export const A2A_MESSAGE_MAX_UTF8_BYTES = 16 * 1024 * 1024;
+
+const UTF8_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of `value`. Uses `TextEncoder` (not `Buffer`) so this
+ * stays callable from browser-hosted surfaces, not just Node.
+ */
+export function utf8ByteLength(value: string): number {
+  return UTF8_ENCODER.encode(value).length;
 }
 
 // ─── Agent-to-agent unary surface (`agent.create` / `agent.list` /
@@ -257,6 +311,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "pi",
   "hermes",
   "omp",
+  "huggingface",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -440,6 +495,15 @@ export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
  * callers always send a concrete mode. Making the field required keeps the
  * released v2.0 wire immutable.
  */
+/**
+ * `agentMode` is RETAINED here even though Epic Mode was removed from the
+ * product. v3.0 is itself released (it shipped in the v1.1.8 tags), so a
+ * current client and a v1.1.8 host both negotiate 3.0 and NO bridge runs
+ * between them - dropping the key would simply be rejected by that host, which
+ * still requires it. Callers state the one remaining mode; the field goes when
+ * the released client/host floor passes this version, together with the
+ * equally-blocked `prepareTuiLaunch` / `createTuiAgent` request shapes.
+ */
 export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
   permissionMode: permissionModeSchema.nullable(),
 });
@@ -604,7 +668,7 @@ export type ListHarnessModelsResponse = z.infer<
  * (`agent.sendMessage`) reject them with `RECEIVER_NOT_LOCAL` until the
  * relay/mailbox transport lands.
  */
-export const agentSummarySchema = z.object({
+const releasedAgentSummarySchema = z.object({
   id: z.string(),
   parentId: z.string().nullable(),
   hostId: z.string(),
@@ -646,6 +710,20 @@ export const agentSummarySchema = z.object({
    */
   isWorktree: z.boolean(),
 });
+
+export const agentRunConfigSchema = z.object({
+  model: z.union([
+    z.object({ kind: z.literal("concrete"), slug: z.string() }),
+    z.object({ kind: z.literal("provider-default") }),
+  ]),
+  reasoningEffort: z.string().nullable(),
+  fastMode: z.boolean().nullable(),
+});
+export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
+
+export const agentSummarySchema = releasedAgentSummarySchema.extend({
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 
 export const listAgentsScopeSchema = z.enum(["user", "all"]);
@@ -674,7 +752,7 @@ export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 // build time, so an old CLI would hit a strict enum on those rows. v1.0 is
 // frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
 // callers. Do not add new harnesses here - use the existing v2 bridge.
-export const agentSummarySchemaV10 = agentSummarySchema.extend({
+export const agentSummarySchemaV10 = releasedAgentSummarySchema.extend({
   harnessId: harnessIdSchema
     .extract(["claude", "codex", "opencode", "traycer", "cursor"])
     .nullable(),
@@ -690,7 +768,7 @@ export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 // predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
 // actually shipped (before Amp). Do not add new harnesses here - use the
 // existing version bridges.
-export const agentSummarySchemaV20 = agentSummarySchema.extend({
+export const agentSummarySchemaV20 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV20.nullable(),
 });
 export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
@@ -704,7 +782,7 @@ export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 // would hit a strict enum on those rows. v3.0 is frozen here as actually
 // shipped (with Amp). Do not add new harnesses here - use the existing
 // version bridges.
-export const agentSummarySchemaV30 = agentSummarySchema.extend({
+export const agentSummarySchemaV30 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV30.nullable(),
 });
 export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
@@ -719,7 +797,7 @@ export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
 // shipped (with Devin/Pi); the v5.0 line carries Hermes/omp rows and v5→v4 /
 // v5→v3 / v5→v2 / v5→v1 bridges drop them for older callers. Do not add new
 // harnesses here - use the existing v5 bridge.
-export const agentSummarySchemaV40 = agentSummarySchema.extend({
+export const agentSummarySchemaV40 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV40.nullable(),
 });
 export const listAgentsResponseSchemaV40 = listAgentsResponseSchema.extend({
@@ -735,13 +813,29 @@ export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
 // shipped; the v6.0 line carries omp rows and v6→v5 … v6→v1 bridges drop them
 // for older callers. Do not add new harnesses here - use the existing v6
 // bridge.
-export const agentSummarySchemaV50 = agentSummarySchema.extend({
+export const agentSummarySchemaV50 = releasedAgentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV50.nullable(),
 });
 export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV50),
 });
 export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
+
+// ── Frozen protocol-v6.0 agent.list response (with omp, pre-Hugging Face) ───
+// `agent.list` enumerates every agent in the epic - including Hugging Face GUI
+// harness chats a newer client created - so an already-shipped v6.0 client
+// would hit a strict enum on those rows. This line IS released (`cli-v1.1.9` /
+// `host-v1.1.9`, both tagged 2026-07-29), so it is frozen here as actually
+// shipped; the v7.0 line carries Hugging Face rows and v7→v6 … v7→v1 bridges
+// drop them for older callers. Do not add new harnesses here - use the
+// existing v7 bridge.
+export const agentSummarySchemaV60 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV60.nullable(),
+});
+export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV60),
+});
+export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
@@ -851,3 +945,87 @@ export const stopAgentResponseSchema = z.object({
   stoppedAgentIds: z.array(z.string()),
 });
 export type StopAgentResponse = z.infer<typeof stopAgentResponseSchema>;
+
+/**
+ * `agent.fork`'s omit-default profile override. Deliberately NOT
+ * `profileSelectionSchema` above: that union's omit-default is `last_used`
+ * (a preference lookup for a freshly-minted agent) and it also carries the
+ * version-bridge-only `inherit_sender` arm, neither of which fits a fork -
+ * there is no "sender" being inherited (the source is an arbitrary existing
+ * agent, not the caller), and a fork's natural default is byte-for-byte
+ * continuation of whatever profile the SOURCE is already running under.
+ * Mirrors `AgentForkProfileSelection`
+ * (`traycer-host/src/domain/agent/agent-fork-service.ts`) field-for-field:
+ *
+ *   - `inherit` - omit-default. Keep running under the source's own profile.
+ *   - `ambient` - explicitly use the provider's ambient CLI login.
+ *   - `profile` - pin to a specific managed profile by id.
+ *
+ * Shares `managedProfileIdSchema`'s reserved-`"ambient"`-sentinel rejection:
+ * a `profile` arm can never name the literal ambient sentinel as a managed
+ * profile id - that intent is expressed exclusively through `{ kind:
+ * "ambient" }`.
+ */
+export const forkAgentProfileSelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("inherit") }),
+  z.object({ kind: z.literal("ambient") }),
+  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
+]);
+export type ForkAgentProfileSelection = z.infer<
+  typeof forkAgentProfileSelectionSchema
+>;
+
+/**
+ * `agent.fork@1.0` - clone an existing local agent (GUI chat or Claude Code
+ * terminal session) into a NEW agent seeded from the source's latest
+ * available checkpoint. Wraps the same core `forkAgentFromRequest` service
+ * (`traycer-host/src/domain/agent/agent-fork-service.ts`) the
+ * `traycer_fork_agent` A2A tool calls, so a wire caller (the CLI, or any
+ * future client) gets the transactional latest-checkpoint fork without
+ * recomposing the GUI's client-side orchestration
+ * (`validateForkProfile` → `prepareLaunch` → `createTuiAgent`, or
+ * `createChat` + `forkSource`).
+ *
+ *   - `senderAgentId` - the calling agent; the fork is parented to it (same
+ *     convention as `agent.create`). The service additionally asserts the
+ *     caller owns this agent (`assertAuthorizedSenderAgent`) - it just
+ *     names the fork's parent, so any agent the caller owns is fine here.
+ *   - `agentId` - the source to fork; may equal `senderAgentId`. Accepts an
+ *     unambiguous id PREFIX (`resolveAgentIdPrefix`), like the rest of the
+ *     A2A id-addressed surface.
+ *   - `permissionMode` - GUI forks only; a fork does NOT inherit the
+ *     source's mode. Terminal forks ignore it (no Traycer permission mode
+ *     exists on that surface).
+ *   - `workspace` - `null` inherits the SOURCE agent's binding (the fork
+ *     continues in the same directories); explicit entries bind the fork
+ *     elsewhere.
+ *   - `profileSelection` - see `forkAgentProfileSelectionSchema` above.
+ *
+ * Latest-checkpoint only, like the MCP tool: there is no boundary-selection
+ * parameter (a client-chosen fork point stays a GUI `createChat` +
+ * `forkSource` feature). Terminal forks stay Claude-only; other harnesses
+ * are refused for lacking a native session fork.
+ */
+export const forkAgentRequestSchema = z.object({
+  epicId: z.string(),
+  senderAgentId: z.string(),
+  agentId: z.string(),
+  name: z.string().min(1).nullable().default(null),
+  permissionMode: permissionModeSchema,
+  workspace: createAgentWorkspaceSchema,
+  profileSelection: forkAgentProfileSelectionSchema,
+});
+export type ForkAgentRequest = z.infer<typeof forkAgentRequestSchema>;
+
+/**
+ * Mirrors `AgentForkResponse` (`agent-fork-service.ts`) field-for-field.
+ */
+export const forkAgentResponseSchema = z.object({
+  agentId: z.string(),
+  sourceAgentId: z.string(),
+  forkedFromMessageId: z.string().nullable(),
+  warnings: z.array(z.string()),
+  effectiveProfileId: z.string().nullable(),
+  profileOverrideApplied: z.boolean(),
+});
+export type ForkAgentResponse = z.infer<typeof forkAgentResponseSchema>;

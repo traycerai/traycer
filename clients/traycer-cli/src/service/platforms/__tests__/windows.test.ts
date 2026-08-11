@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildScheduledTaskXml,
+  buildWindowsSlotProcessDetailScanScript,
   buildWindowsSlotProcessScanScript,
   createWindowsController,
+  describeSlotLockHolders,
+  killLingeringSlotProcesses,
   parseSchtasksLastRunResult,
+  parseWindowsProcessDetailJson,
   parseWindowsProcessIdJson,
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskInstallDepsForTests,
@@ -105,6 +110,100 @@ describe("Windows service stale host cleanup", () => {
       "c:\\users\\traycer dev\\.traycer\\host\\install\\",
     );
     expect(script).not.toContain("'c:\\users\\traycer dev\\.traycer\\host'");
+  });
+
+  it("builds a detail scan sharing the pid scan's filter but projecting name and executable path", () => {
+    const options = {
+      hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
+      currentPid: 1234,
+    };
+    const detail = buildWindowsSlotProcessDetailScanScript(options);
+    expect(detail).toContain("$excluded = @(1234, $PID)");
+    expect(detail).toContain(
+      "c:\\users\\traycer dev\\.traycer\\host\\install\\",
+    );
+    expect(detail).toContain("Select-Object ProcessId, Name, ExecutablePath");
+    // Everything but the projection line is byte-identical to the pid scan
+    // - the filter must never drift between the kill and the diagnostic.
+    const pidScan = buildWindowsSlotProcessScanScript(options);
+    expect(detail.split("\n").slice(0, -1)).toEqual(
+      pidScan.split("\n").slice(0, -1),
+    );
+  });
+
+  it("parses PowerShell process detail JSON in both array and single-object shape", () => {
+    expect(
+      parseWindowsProcessDetailJson(
+        '[{"ProcessId":401,"Name":"claude.exe","ExecutablePath":"C:\\\\clients\\\\claude.exe"},{"ProcessId":402,"Name":"","ExecutablePath":null}]',
+      ),
+    ).toEqual([
+      {
+        pid: 401,
+        name: "claude.exe",
+        executablePath: "C:\\clients\\claude.exe",
+      },
+      { pid: 402, name: null, executablePath: null },
+    ]);
+    // Windows PowerShell 5.1 emits a bare object for a single match even
+    // under `@(...)`.
+    expect(
+      parseWindowsProcessDetailJson(
+        '{"ProcessId":401,"Name":"node.exe","ExecutablePath":"C:\\\\node.exe"}',
+      ),
+    ).toEqual([{ pid: 401, name: "node.exe", executablePath: "C:\\node.exe" }]);
+    expect(parseWindowsProcessDetailJson("")).toEqual([]);
+    expect(parseWindowsProcessDetailJson("not-json")).toEqual([]);
+    expect(parseWindowsProcessDetailJson('{"Name":"no-pid.exe"}')).toEqual([]);
+  });
+
+  it("describes slot lock holders via the detail scan", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success(
+        '[{"ProcessId":88,"Name":"orphan.exe","ExecutablePath":"C:\\\\orphan.exe"}]',
+      );
+    };
+
+    const holders = await describeSlotLockHolders(
+      serviceLabelFor("staging"),
+      runner,
+    );
+
+    expect(holders).toEqual([
+      { pid: 88, name: "orphan.exe", executablePath: "C:\\orphan.exe" },
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("powershell.exe");
+    expect(calls[0]?.args.at(-1)).toContain(
+      "Select-Object ProcessId, Name, ExecutablePath",
+    );
+  });
+
+  it("reports no lock holders when the detail scan cannot run", async () => {
+    const runner: ProcessRunner = async () => {
+      throw new Error("spawn failed");
+    };
+
+    await expect(
+      describeSlotLockHolders(serviceLabelFor("staging"), runner),
+    ).resolves.toEqual([]);
+  });
+
+  it("re-kills scan-verified processes through killLingeringSlotProcesses", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return command === "powershell.exe" ? success("[401]") : success("");
+    };
+
+    await killLingeringSlotProcesses(serviceLabelFor("staging"), runner);
+
+    expect(
+      calls
+        .filter((call) => call.command === "taskkill")
+        .map((call) => call.args),
+    ).toEqual([["/T", "/F", "/PID", "401"]]);
   });
 
   it("kills slot-scanned processes when pid metadata is missing", async () => {
@@ -225,6 +324,35 @@ describe("Windows service stale host cleanup", () => {
     await controller.stop(serviceLabelFor("staging"));
 
     expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+});
+
+describe("Scheduled Task XML identity", () => {
+  it("names Traycer as the task Author", () => {
+    // Probed live on Windows 11: a task registered from this XML without an
+    // <Author> shows `Author: N/A` in `schtasks /Query /V` and in the Task
+    // Scheduler UI - anonymous provenance for the one entry that starts a
+    // background process at every login. Same defect class as the macOS
+    // "sh from Unknown Developer" login item, one field cheaper to fix.
+    const prevDomain = process.env.USERDOMAIN;
+    const prevUser = process.env.USERNAME;
+    process.env.USERDOMAIN = "TESTBOX";
+    process.env.USERNAME = "testuser";
+    try {
+      const xml = buildScheduledTaskXml({
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      });
+      expect(xml).toContain("<Author>Traycer</Author>");
+    } finally {
+      if (prevDomain === undefined) delete process.env.USERDOMAIN;
+      else process.env.USERDOMAIN = prevDomain;
+      if (prevUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = prevUser;
+    }
   });
 });
 

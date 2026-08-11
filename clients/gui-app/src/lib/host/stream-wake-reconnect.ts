@@ -1,10 +1,46 @@
 import { useEffect } from "react";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
+
+/** The two OS-wake triggers a wake subscriber can fire on. */
+export type WakeSignalReason = "wake-online" | "wake-resume";
+
+/**
+ * Subscribes `onWake` to the two OS-wake triggers - `window 'online'`
+ * (`onWakeReconnect`) and `IRunnerHost.onSystemResumed` (Electron
+ * `powerMonitor` bridged from the shell) - and returns a disposer. The shared
+ * primitive under every renderer-side wake consumer (stream re-dial, closed
+ * chat-session retry), so a new consumer cannot wire only one trigger and miss
+ * the same-network lid-open (`online` never fires) or the web shell (no OS
+ * resume signal).
+ */
+export function subscribeWakeSignals(
+  runnerHost: IRunnerHost,
+  onWake: (reason: WakeSignalReason) => void,
+): () => void {
+  const offOnline = onWakeReconnect(() => {
+    onWake("wake-online");
+  });
+  try {
+    const resumeSubscription = runnerHost.onSystemResumed(() => {
+      onWake("wake-resume");
+    });
+    return () => {
+      offOnline();
+      resumeSubscription.dispose();
+    };
+  } catch (cause) {
+    // Roll back the already-registered 'online' listener if wiring the OS-resume
+    // subscription throws, so a failed open never leaks a dangling reconnect
+    // callback (the disposer is never returned to the caller in that case).
+    offOnline();
+    throw cause;
+  }
+}
 
 /**
  * Non-hook core of the wake-reconnect wiring. Subscribes a stream client to the
@@ -14,32 +50,16 @@ import { useRunnerHost } from "@/providers/use-runner-host";
  * created with the transport and torn down when it closes, not on tile unmount.
  */
 export function subscribeStreamWakeReconnect(
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   runnerHost: IRunnerHost,
 ): () => void {
-  const offOnline = onWakeReconnect(() => {
-    appLogger.debug("[stream] wake reconnect requested", {
-      reason: "wake-online",
-    });
-    client.reconnectAll("wake-online");
-  });
   try {
-    const resumeSubscription = runnerHost.onSystemResumed(() => {
-      appLogger.debug("[stream] wake reconnect requested", {
-        reason: "wake-resume",
-      });
-      client.reconnectAll("wake-resume");
+    return subscribeWakeSignals(runnerHost, (reason) => {
+      appLogger.debug("[stream] wake reconnect requested", { reason });
+      client.reconnectAll(reason);
     });
-    return () => {
-      offOnline();
-      resumeSubscription.dispose();
-    };
   } catch (cause) {
     appLogger.error("[stream] wake reconnect subscription failed", {}, cause);
-    // Roll back the already-registered 'online' listener if wiring the OS-resume
-    // subscription throws, so a failed open never leaks a dangling reconnect
-    // callback (the disposer is never returned to the caller in that case).
-    offOnline();
     throw cause;
   }
 }
@@ -66,7 +86,7 @@ export function subscribeStreamWakeReconnect(
  * calling this hook. Must be called inside a `<RunnerHostProvider>`.
  */
 export function useStreamWakeReconnect(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
+  client: IHostStreamClient<HostStreamRpcRegistry> | null,
 ): void {
   const runnerHost = useRunnerHost();
 

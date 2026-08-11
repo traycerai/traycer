@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getFocusedComposerControls,

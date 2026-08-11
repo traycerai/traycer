@@ -11,14 +11,14 @@ import {
   type ChatCollapsibleKey,
 } from "@/components/chat/chat-collapsible-key";
 import {
-  chatScrollLocationForMessage,
+  chatTimelineLocationForMessage,
   selectActiveUserMessageId,
-} from "@/components/chat/chat-messages-virtuoso-helpers";
+  type ChatTimelineNavigationLocation,
+} from "@/components/chat/chat-messages-scroll-helpers";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { useSetChatFindForcedOpen } from "@/stores/chats/chat-find-force-store-context";
 import { arrayShallowEq } from "@/stores/epics/open-epic/projection-helpers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ItemLocation } from "@virtuoso.dev/message-list";
 import {
   use,
   useCallback,
@@ -41,24 +41,30 @@ interface ChatFindControllerArgs {
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /** Latest transcript, read lazily by the adapter's getRows supplier. */
   readonly messagesRef: RefObject<ReadonlyArray<ChatMessageModel>>;
+  /**
+   * Live background-tool promotion set. Drives the notify-rows-changed
+   * lifecycle alongside `messages`: promotion changes which runs group
+   * together, so it changes unit ids and owning chains even when no message
+   * did, and a projection that missed it would be stale in exactly the way
+   * that produces unpaintable matches.
+   */
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
+  /** Latest promotion set, read lazily by the adapter's getRows supplier. */
+  readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
   readonly messageIndexByIdRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
-  readonly scrollToItem: (location: ItemLocation) => void;
-  /** Component-owned measured-item-change trigger, read through a ref. */
-  readonly requestMeasuredItemChangeRef: RefObject<() => void>;
-  readonly setBottomFollowingIfChanged: (next: boolean) => void;
+  readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
+  /** Manual-navigation cancel (decision #21: find performs it first). */
+  readonly cancelManualNavigation: () => void;
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,
   ) => void;
-  readonly cancelScrollRestorationRetry: () => void;
-  /** Clears the last user scroll-gesture direction before a programmatic move. */
-  readonly resetScrollGesture: () => void;
 }
 
 interface ChatFindController {
   /** Repaint the mounted highlight after a measured-item layout change. */
   readonly scheduleMountedHighlightSync: () => void;
-  /** Find-side follow-up to Virtuoso's onRenderedDataChange. */
+  /** Find-side follow-up to the timeline's rendered-data change. */
   readonly onRenderedDataChange: () => void;
 }
 
@@ -76,14 +82,13 @@ export function useChatFindController(
     instanceId,
     messages,
     messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
     messageIndexByIdRef,
     getScroller,
-    scrollToItem,
-    requestMeasuredItemChangeRef,
-    setBottomFollowingIfChanged,
+    scrollToLocation,
+    cancelManualNavigation,
     setScrolledActiveUserMessageIdIfChanged,
-    cancelScrollRestorationRetry,
-    resetScrollGesture,
   } = args;
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
@@ -145,27 +150,23 @@ export function useChatFindController(
 
   const scrollToMessageForFind = useCallback(
     (messageId: string): void => {
-      resetScrollGesture();
-      cancelScrollRestorationRetry();
-      setBottomFollowingIfChanged(false);
+      cancelManualNavigation();
       setScrolledActiveUserMessageIdIfChanged(
         selectActiveUserMessageId(messagesRef.current, messageId, false),
       );
-      const location = chatScrollLocationForMessage(
+      const location = chatTimelineLocationForMessage(
         messageId,
         messageIndexByIdRef.current,
-        "auto",
+        false,
       );
       if (location === null) return;
-      scrollToItem(location);
+      scrollToLocation(location);
     },
     [
-      cancelScrollRestorationRetry,
+      cancelManualNavigation,
       messageIndexByIdRef,
       messagesRef,
-      resetScrollGesture,
-      scrollToItem,
-      setBottomFollowingIfChanged,
+      scrollToLocation,
       setScrolledActiveUserMessageIdIfChanged,
     ],
   );
@@ -231,6 +232,9 @@ export function useChatFindController(
         previousTarget.unitId !== target.unitId ||
         !arrayShallowEq(previousTarget.chainKeyIds, chainKeyIds);
       if (!forceApply && !targetChanged) return false;
+      // LegendList's own `maintainVisibleContentPosition` is the sole passive
+      // stability mechanism (behavior contract) - the chain-open flows
+      // directly into it, with no bespoke scroll-preservation wrapper.
       applyFindOpenedChain(target.owningChain);
       findOpenedTargetRef.current = {
         messageId: target.messageId,
@@ -336,14 +340,17 @@ export function useChatFindController(
       activeFindRevealRef.current = target;
       findRevealAnchorMissCountRef.current = 0;
       findRevealSkipUnitScrollRef.current = sameUnit;
+      // LegendList remeasures a row's height via its own per-row
+      // ResizeObserver, so the chain-open below picks up the target row's OWN
+      // layout change without an explicit nudge. Content ABOVE the viewport
+      // changing size (a deeply nested chain-open) is corrected by LegendList's
+      // own `maintainVisibleContentPosition`, unconditionally enabled - no
+      // bespoke scroll-preservation wrapper needed here.
       applyFindOpenedTarget(target, true);
       cancelFindRevealFrame();
       findRevealFrameRef.current = window.requestAnimationFrame(() => {
         findRevealFrameRef.current = null;
         if (findRevealGenerationRef.current !== generation) return;
-        // Always remeasure: it is position-maintaining, and a manual collapse
-        // followed by next() re-opens the same unit (a real height change).
-        requestMeasuredItemChangeRef.current();
         if (!sameUnit) scrollToMessageForFind(target.messageId);
         scheduleFindRevealStep(generation, sameUnit);
       });
@@ -351,7 +358,6 @@ export function useChatFindController(
     [
       applyFindOpenedTarget,
       cancelFindRevealFrame,
-      requestMeasuredItemChangeRef,
       scheduleFindRevealStep,
       scrollToMessageForFind,
     ],
@@ -359,23 +365,27 @@ export function useChatFindController(
 
   const requestFindReconcile = useCallback(
     (target: ChatFindReconcileTarget): void => {
-      const applied = applyFindOpenedTarget(target, false);
-      if (!applied) return;
-      requestMeasuredItemChangeRef.current();
+      // Passive streaming resync of an already-active target.
+      applyFindOpenedTarget(target, false);
     },
-    [applyFindOpenedTarget, requestMeasuredItemChangeRef],
+    [applyFindOpenedTarget],
   );
 
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
-  }, [messages]);
+  }, [backgroundToolBlockIds, messages]);
 
   useLayoutEffect(() => {
     if (tileFindContext === null) return undefined;
 
     const adapter = createChatFindAdapter({
       tileInstanceId: instanceId,
-      getRows: () => buildChatFindRows(messagesRef.current, instanceId),
+      getRows: () =>
+        buildChatFindRows(
+          messagesRef.current,
+          instanceId,
+          backgroundToolBlockIdsRef.current,
+        ),
       revealMatch: requestFindReveal,
       reconcileMatch: requestFindReconcile,
       clearReveal: clearFindReveal,
@@ -394,6 +404,7 @@ export function useChatFindController(
       adapter.dispose();
     };
   }, [
+    backgroundToolBlockIdsRef,
     clearFindReveal,
     getMountedMessageRoot,
     instanceId,

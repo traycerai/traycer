@@ -9,9 +9,14 @@ import {
 import {
   mergeWorktreeIntentEntry,
   removeWorktreeIntentEntry,
+  setWorktreeIntentEntryBranchName,
   setWorktreeIntentEntryScripts,
 } from "@/components/home/host-workspace-selector/worktree-intent-merge";
 import { basePersistOptions, worktreeIntentStagingKey } from "@/lib/persist";
+import {
+  worktreeFolderIntentReferencesRemoved,
+  type RemovedWorktreeRefs,
+} from "@/lib/worktree/removed-worktree-refs";
 
 /**
  * The *current, not-yet-created* worktree intent for a surface - the pending
@@ -183,6 +188,22 @@ interface WorktreeIntentStagingStore {
     workspacePath: string,
   ) => void;
   /**
+   * Move `fromKey`'s staged intent (and its suspended-paths metadata) onto
+   * `toKey`, for a slot whose identity changes out from under it - e.g. the
+   * landing composer's `draftId` flipping `null` -> a minted uuid mid-setup,
+   * which changes `{surface:"landing", draftId}`'s serialized key. Without
+   * this the destination key reads as freshly empty until the seed effect
+   * re-derives a default for it, and anything reading `resolved.kind` off
+   * that gap (the Environment dialog's `key={seedKey}`) sees a transient
+   * "nothing staged" and remounts. No-op when `fromKey` has nothing staged,
+   * or when `toKey` already has its own staged intent (never clobber a real
+   * pick the destination slot already made).
+   */
+  readonly migrateKey: (
+    fromKey: WorktreeStagingKey,
+    toKey: WorktreeStagingKey,
+  ) => void;
+  /**
    * Set the `scripts` override on the staged `worktree` entry for
    * `workspacePath`, preserving its branch. No-op when the folder has no staged
    * `worktree` entry (the Environment override only rides a worktree intent).
@@ -192,12 +213,34 @@ interface WorktreeIntentStagingStore {
     workspacePath: string,
     scripts: WorktreeEntryScripts | null,
   ) => void;
+  /**
+   * Replaces the `name` of the staged `worktree` entry's `type: "new"`
+   * branch selection for `workspacePath`, preserving everything else.
+   * No-op when the folder has no staged `worktree` entry with a `"new"`
+   * branch. Used by the Environment dialog's repository-defaults section to
+   * offer regenerating one picker's proposed branch name after a repo
+   * prefix save.
+   */
+  readonly stageBranchName: (
+    key: WorktreeStagingKey,
+    workspacePath: string,
+    name: string,
+  ) => void;
   /** Fail-closed metadata paths whose staged create/import cannot execute. */
   readonly setSuspendedWorkspacePaths: (
     key: WorktreeStagingKey,
     workspacePaths: readonly string[],
   ) => void;
   readonly clear: (key: WorktreeStagingKey) => void;
+  /**
+   * Drops staged entries that reference just-removed worktrees across EVERY
+   * staging slot. Staged picks are deliberately never re-validated by the
+   * seeding tiers ("a folder the user already touched is never overwritten"),
+   * so without this a pick staged before a worktree was swept keeps offering
+   * the deleted worktree verbatim. A slot left empty is cleared like
+   * `setIntent(null)`.
+   */
+  readonly purgeRemovedWorktreeIntents: (removed: RemovedWorktreeRefs) => void;
   readonly resetForTests: () => void;
 }
 
@@ -308,6 +351,36 @@ export const useWorktreeIntentStagingStore =
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
+        migrateKey: (fromKey, toKey) =>
+          set((state) => {
+            const fromId = worktreeStagingKeyString(fromKey);
+            const toId = worktreeStagingKeyString(toKey);
+            if (fromId === toId) return state;
+            const existing = state.intentByKey[fromId];
+            if (existing === undefined) return state;
+            if (state.intentByKey[toId] !== undefined) return state;
+
+            const intentByKey = { ...state.intentByKey };
+            delete intentByKey[fromId];
+            intentByKey[toId] = existing;
+
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            const suspended = suspendedWorkspacePathsByKey[fromId];
+            if (suspended !== undefined) {
+              delete suspendedWorkspacePathsByKey[fromId];
+              suspendedWorkspacePathsByKey[toId] = suspended;
+            }
+
+            let revisionByKey = incrementStagingRevision(
+              state.revisionByKey,
+              fromId,
+            );
+            revisionByKey = incrementStagingRevision(revisionByKey, toId);
+
+            return { intentByKey, suspendedWorkspacePathsByKey, revisionByKey };
+          }),
         stageScripts: (key, workspacePath, scripts) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -316,6 +389,21 @@ export const useWorktreeIntentStagingStore =
               existing,
               workspacePath,
               scripts,
+            );
+            if (next === existing) return state;
+            return {
+              intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
+          }),
+        stageBranchName: (key, workspacePath, name) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            const existing = state.intentByKey[id] ?? null;
+            const next = setWorktreeIntentEntryBranchName(
+              existing,
+              workspacePath,
+              name,
             );
             if (next === existing) return state;
             return {
@@ -361,6 +449,54 @@ export const useWorktreeIntentStagingStore =
               // old selection back.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
+          }),
+        purgeRemovedWorktreeIntents: (removed) =>
+          set((state) => {
+            let changed = false;
+            const intentByKey = { ...state.intentByKey };
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            let revisionByKey = state.revisionByKey;
+            for (const [id, intent] of Object.entries(intentByKey)) {
+              if (intent === undefined) continue;
+              const entries = intent.entries.filter(
+                (entry) =>
+                  !worktreeFolderIntentReferencesRemoved(entry, removed),
+              );
+              if (entries.length === intent.entries.length) continue;
+              changed = true;
+              if (entries.length === 0) {
+                delete intentByKey[id];
+                delete suspendedWorkspacePathsByKey[id];
+              } else {
+                intentByKey[id] = { entries };
+                // Drop suspended metadata for the entries that just went away,
+                // exactly as `unstageEntry` does. Left behind, a stale
+                // fail-closed path would block a later restage of the same
+                // workspace.
+                const suspended = suspendedWorkspacePathsByKey[id];
+                if (suspended !== undefined) {
+                  const surviving = new Set(
+                    entries.map((entry) => entry.workspacePath),
+                  );
+                  const remaining = suspended.filter((path) =>
+                    surviving.has(path),
+                  );
+                  if (remaining.length === 0) {
+                    delete suspendedWorkspacePathsByKey[id];
+                  } else if (remaining.length !== suspended.length) {
+                    suspendedWorkspacePathsByKey[id] = remaining;
+                  }
+                }
+              }
+              // Bumped like every other slot write so a rejected in-flight
+              // action can't restore the just-purged selection.
+              revisionByKey = incrementStagingRevision(revisionByKey, id);
+            }
+            return changed
+              ? { intentByKey, suspendedWorkspacePathsByKey, revisionByKey }
+              : state;
           }),
         resetForTests: () =>
           set({

@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { create, useStore } from "zustand";
-import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
+import type { ResourceOwnerKindWireV14 } from "@traycer/protocol/host/resources/subscribe";
 import {
   resourceOwnerKey,
   type AppResourceUsage,
@@ -391,7 +391,7 @@ function useResourcesHandle(epicId: string): ResourcesStoreHandle | null {
  */
 export function useOwnerResourceUsage(
   epicId: string,
-  kind: ResourceOwnerKindWire,
+  kind: ResourceOwnerKindWireV14,
   ownerId: string,
 ): OwnerResourceUsage | null {
   const handle = useResourcesHandle(epicId);

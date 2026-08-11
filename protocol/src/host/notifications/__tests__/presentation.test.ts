@@ -78,6 +78,134 @@ const CASES: readonly {
     body: "Rate Limit Banner Implementation • Claude Code rate limit reached",
   },
   {
+    name: "context exhaustion",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Long refactor",
+        taskTitle: "Notification reliability",
+        outcome: "errored",
+        reason: "context_exhausted",
+        providerId: "codex",
+      },
+    },
+    title: "Notification reliability",
+    // Context exhaustion is the session's fault, not the provider's — the copy
+    // stays provider-neutral even when the provider is known.
+    body: "Long refactor • Context limit reached",
+  },
+  {
+    name: "provider-specific rejected request",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Long refactor",
+        taskTitle: "Notification reliability",
+        outcome: "errored",
+        reason: "request_rejected",
+        providerId: "codex",
+      },
+    },
+    title: "Notification reliability",
+    body: "Long refactor • Codex rejected the request",
+  },
+  {
+    name: "rejected request without provider attribution",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Long refactor",
+        taskTitle: "Notification reliability",
+        outcome: "errored",
+        reason: "request_rejected",
+      },
+    },
+    title: "Notification reliability",
+    body: "Long refactor • Provider rejected the request",
+  },
+  {
+    // Compatibility fallback: rows minted before `reason` was persisted still
+    // derive their copy from the stamped code.
+    name: "connection failure derived from a code-only row",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Long refactor",
+        taskTitle: "Notification reliability",
+        outcome: "errored",
+        code: "connection_failed",
+        providerId: "codex",
+      },
+    },
+    title: "Notification reliability",
+    body: "Long refactor • Connection to Codex failed",
+  },
+  {
+    name: "context exhaustion derived from a code-only row",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Long refactor",
+        taskTitle: "Notification reliability",
+        outcome: "errored",
+        code: "context_window_exceeded",
+      },
+    },
+    title: "Notification reliability",
+    body: "Long refactor • Context limit reached",
+  },
+  {
+    name: "rejected request derived from a code-only row",
+    entry: {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Long refactor",
+        taskTitle: "Notification reliability",
+        outcome: "errored",
+        code: "invalid_request",
+        providerId: "claude-code",
+      },
+    },
+    title: "Notification reliability",
+    body: "Long refactor • Claude Code rejected the request",
+  },
+  {
     name: "buffering stall",
     entry: {
       ...BASE,
@@ -243,6 +371,34 @@ describe("formatHostNotificationPresentation", () => {
         outcome: "errored",
         code: "future_sensitive_failure",
         message: "raw provider text must not become presentation copy",
+      },
+    };
+
+    expect(formatHostNotificationPresentation(entry)).toEqual({
+      title: "Private task title",
+      body: "Private chat title • Failed",
+    });
+  });
+
+  // Cross-version degrade: an older renderer reading a row whose `reason` a
+  // NEWER host persisted must fall through to generic copy, never throw or
+  // surface the unrecognised taxonomy string.
+  it("keeps an unknown persisted reason generic", () => {
+    const entry: HostNotificationEntry = {
+      ...BASE,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Private chat title",
+        taskTitle: "Private task title",
+        outcome: "errored",
+        code: "future_code",
+        reason: "future_taxonomy_reason",
+        providerId: "codex",
       },
     };
 

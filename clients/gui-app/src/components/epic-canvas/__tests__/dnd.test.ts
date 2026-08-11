@@ -137,12 +137,14 @@ describe("epic canvas dnd-kit data guards", () => {
         kind: "sidebar-node",
         epicId: "epic-1",
         viewTabId: "view-1",
+        hostId: "host-1",
         nodeId: "node-1",
       }),
     ).toEqual({
       kind: "sidebar-node",
       epicId: "epic-1",
       viewTabId: "view-1",
+      hostId: "host-1",
       nodeId: "node-1",
     });
   });
@@ -291,22 +293,26 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
         panelId: "chats",
         origin: "rail",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
       panelId: "chats",
       origin: "rail",
     });
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
         panelId: "artifacts",
         origin: "panel-section",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
       panelId: "artifacts",
       origin: "panel-section",
     });
@@ -316,6 +322,7 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-b",
         panelId: "",
         origin: "rail",
       }),
@@ -323,6 +330,7 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDragSourceData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-b",
         panelId: "source-control",
         origin: "rail",
       }),
@@ -391,26 +399,32 @@ describe("epic canvas dnd-kit data guards", () => {
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-rail-item",
+        viewTabId: "tab-a",
         panelId: "artifacts",
       }),
     ).toEqual({
       kind: "left-panel-rail-item",
+      viewTabId: "tab-a",
       panelId: "artifacts",
     });
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-rail-list",
+        viewTabId: "tab-a",
       }),
     ).toEqual({
       kind: "left-panel-rail-list",
+      viewTabId: "tab-a",
     });
     expect(
       readEpicCanvasDropTargetData({
         kind: "left-panel-group",
+        viewTabId: "tab-a",
         panelIds: ["chats", "git-diff"],
       }),
     ).toEqual({
       kind: "left-panel-group",
+      viewTabId: "tab-a",
       panelIds: ["chats", "git-diff"],
     });
   });
@@ -747,6 +761,7 @@ describe("getEpicCanvasDropPreview", () => {
       ),
     ).toEqual({
       kind: "empty-shell",
+      viewTabId: "view-1",
     });
   });
 

@@ -11,8 +11,8 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
-  BootstrapMarkerEntry,
   ConvergeReadyOk,
+  HostControllerStatus,
   IRunnerHost,
   LocalHostSnapshot,
   MutationOutcome,
@@ -30,10 +30,18 @@ import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
+import { BootstrapAttemptDetails } from "@/components/host/bootstrap-attempt-details";
+import { summariseBootstrapAttempts } from "@/components/host/bootstrap-attempt-summary";
 import {
   describeHostCompatibilityError,
   useHostCompatibility,
 } from "@/lib/host";
+import {
+  describeVersionSkew,
+  hostAppVersionFromDirectoryEntry,
+  type VersionSkewCopy,
+} from "@/lib/host/version-skew-copy";
+import { getClientAppVersion } from "@/lib/app-version";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
@@ -55,6 +63,7 @@ type HostSetupReason = "launch" | "recovery" | "reinstall" | "update";
 function hostSetupAnalyticsCallbacks(
   reason: HostSetupReason,
   onSuccess: (result: MutationOutcome<ConvergeReadyOk>) => void,
+  onFailure: () => void,
 ): {
   readonly onSuccess: (result: MutationOutcome<ConvergeReadyOk>) => void;
   readonly onError: (error: unknown) => void;
@@ -70,6 +79,7 @@ function hostSetupAnalyticsCallbacks(
       }
     },
     onError: (error) => {
+      onFailure();
       Analytics.getInstance().track(AnalyticsEvent.HostSetupFailed, {
         source: "direct_ui",
         blocker: analyticsBlockerFromError(error),
@@ -85,10 +95,11 @@ function hostSetupAnalyticsCallbacks(
  * during a wedged bootstrap is the user's escape hatch: edit the shell
  * args, restart the host, watch the bootstrap log refill.
  *
- * Consumed by `TraycerAppRouter` to compute the `bypass` prop fed to
- * every gate in the stack (LocalHostGate, MobileHostGate). A single
- * routing-aware computation drives all gates so they agree on whether
- * the current route is host-independent.
+ * Consumed by `DefaultHostReadyGate`, which is now the single gate: one
+ * routing-aware check decides whether the current route is host-independent.
+ * It is also why settings must stay ungated - the gate's own "Configure shell"
+ * action navigates here, so gating it would put the escape hatch behind the
+ * failure it exists to fix.
  */
 export const GATE_BYPASS_PATH_PREFIX = "/settings";
 
@@ -115,10 +126,8 @@ export interface LocalHostGateProps {
   readonly selectedEntry: HostDirectoryEntry | null;
   /**
    * When `true`, the gate always passes children through regardless of
-   * host state. The decision lives in the caller (TraycerAppRouter) so
-   * one routing-aware computation drives every gate in the stack -
-   * `LocalHostGate` and `MobileHostGate` need to agree, otherwise the
-   * inner gate blocks settings even after the outer gate bypassed.
+   * host state. The decision lives in the caller, so one routing-aware
+   * computation drives the gate rather than each layer re-deriving it.
    *
    * Used so users can edit shell config / env overrides while the host
    * is still starting or wedged.
@@ -134,7 +143,8 @@ export interface LocalHostGateProps {
  *     render regardless of host state.
  *   - Shells that do not expose a local-host stream
  *     (`runnerHost.hasLocalHost === false`, e.g. mobile/web) pass through
- *     so the shell-specific UX (`<MobileHostGate />`) can render instead.
+ *     so the shell-specific UX can render instead - now the readiness
+ *     controller's `mobile-no-host` kind.
  *   - Non-local explicit selections (future remote hosts) pass through
  *     without observing the stream.
  *   - For signed-in users on a local-host-capable shell, the gate also
@@ -159,6 +169,16 @@ export interface LocalHostGateProps {
  * contract requires the handler to fire synchronously on subscribe; on a
  * runner that never emits (a future custom host that breaks the contract),
  * the gate stays in `loading` rather than invent a snapshot.
+ *
+ * NOT RENDERED IN PRODUCTION. The split-tab work moved host gating to
+ * `HostReadinessControllerProvider` + `DefaultHostReadyGate`; editing this
+ * component changes nothing a user can see. It is retained ONLY because
+ * `local-host-gate.test.tsx` drives the still-live `useLocalHostGateState` /
+ * `HostProvisioningController` lifecycle through it - provisioning stages,
+ * slow-start promotion, the compatibility probe, force-update and busy-host
+ * paths. Deleting it would delete that coverage, on exactly the machinery
+ * that keeps a user out of a host-startup lockout. Port those tests onto
+ * `HostProvisioningController` + `fallbackContent` first, then remove this.
  */
 export function LocalHostGate(props: LocalHostGateProps) {
   const runnerHost = useRunnerHost();
@@ -222,6 +242,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
     }
     return (
       <HostCompatibilityGate
+        selectedEntry={props.selectedEntry}
         bypass={false}
         source="busy-keep"
         checking={props.loading}
@@ -256,6 +277,7 @@ export function LocalHostGate(props: LocalHostGateProps) {
   if (isReady) {
     return (
       <HostCompatibilityGate
+        selectedEntry={props.selectedEntry}
         bypass={false}
         source="normal-ready"
         checking={props.loading}
@@ -324,6 +346,7 @@ function renderPassThroughGate(args: PassThroughGateArgs): ReactNode {
   }
   return (
     <HostCompatibilityGate
+      selectedEntry={null}
       bypass
       source="normal-ready"
       checking={args.loading}
@@ -370,10 +393,16 @@ interface ProvisioningLoadingProps {
   readonly progress: MutationProgress | null;
 }
 
-interface HostProvisioning {
+export interface HostProvisioning {
   readonly isProvisioning: boolean;
   readonly error: Error | null;
   readonly progress: MutationProgress | null;
+  // Last `progress` event observed during the current provisioning attempt,
+  // non-null ONLY once that attempt has failed (when live `progress` has
+  // already nulled out). Only report surfaces read it - a settled install
+  // failure must still say where it died (traycer#862) - live surfaces keep
+  // rendering `progress`, and an attempt that succeeds leaves nothing behind.
+  readonly lastProgress: MutationProgress | null;
   // True once `convergeReady` returned a `"busy"` outcome: the CLI kept a
   // running host that has work in progress, and the desktop surfaced it for
   // the renderer's compat probe.
@@ -391,6 +420,12 @@ interface HostProvisioning {
   // Reinstall escape hatch from the removed surface: clear the removal
   // sentinel, then re-run convergeReady to provision the host again.
   readonly reinstall: () => void;
+}
+
+export interface HostProvisioningLifecycle {
+  readonly localHostState: "unknown" | "ready" | "unavailable";
+  readonly slowStartStage: "loading" | "slow";
+  readonly provisioning: HostProvisioning;
 }
 
 // Fires `convergeReady` once per session when a signed-in local-host shell
@@ -425,6 +460,53 @@ function useHostProvisioning(args: {
     hostManagementRef.current = runnerHost.hostManagement;
   }, [runnerHost.hostManagement]);
 
+  // The failed attempt's last progress event, captured ONCE at failure
+  // settlement (see `captureFailedProgress`) - never per progress push, so
+  // the per-chunk progress stream drives no extra renders and no ref is read
+  // during render. Cleared on every new attempt (`run`) and on a successful
+  // settle (`markBusyKeep`), so a report filed later against an unrelated
+  // failure can never carry a stale stage from an attempt that succeeded.
+  const [failedProgress, setFailedProgress] = useState<MutationProgress | null>(
+    null,
+  );
+  // `startedAt` of whatever mutation lane was visible when the CURRENT
+  // attempt began: a lane still carrying that identity at failure time is
+  // leftover from a PREVIOUS attempt and must not be reported. Written and
+  // read only in event handlers/mutation callbacks, never during render.
+  const attemptBaselineRef = useRef<string | null>(null);
+
+  // Failure settlement: snapshot the freshest ensure-lane progress straight
+  // from the status query cache. An event-time cache read on purpose - the
+  // render-observed value can miss a progress push that coalesces into the
+  // same render as the settlement (the desktop broadcast collapses bursts to
+  // the latest status), and effect-ordering arguments are exactly what the
+  // hooks rules forbid relying on. The baseline guard drops a lane a
+  // previous attempt left behind, so a retry that fails before its first
+  // event reports nothing rather than the old stage.
+  //
+  // Known limit: the lane carries no requester identity, so this is
+  // best-effort attribution - if ANOTHER window's distinct ensure is already
+  // mid-flight on the shared FIFO lane when this attempt's failure settles,
+  // its stage can be snapshotted here (same ambiguity the live `progress`
+  // display accepts while pending). Positive binding needs the attempt's
+  // identity returned with the converge outcome itself - a
+  // MutationOutcome/IHostManagement contract change, out of scope for this
+  // renderer-only report enrichment. The line is a triage hint beside
+  // auto-attached logs, not a source of truth.
+  const captureFailedProgress = useCallback((): void => {
+    const management = hostManagementRef.current;
+    if (management === null) return;
+    const status = queryClient.getQueryData<HostControllerStatus>(
+      runnerQueryKeys.hostControllerStatus(management),
+    );
+    const lane = status?.mutation ?? null;
+    if (lane === null || lane.kind !== "ensure" || lane.progress === null) {
+      return;
+    }
+    if (lane.startedAt === attemptBaselineRef.current) return;
+    setFailedProgress(lane.progress);
+  }, [queryClient]);
+
   // Latch the busy-keep flow from the settled mutation RESULT (a mutation
   // event, not a render effect or a ref read), so it survives the surfaced
   // host flipping `isReady` true and survives Retry/forced update `reset()`
@@ -438,6 +520,9 @@ function useHostProvisioning(args: {
   const markBusyKeep = useCallback(
     (result: MutationOutcome<ConvergeReadyOk>): void => {
       setInBusyKeepFlow(result.kind === "busy");
+      // Any non-error settle means the attempt did not fail: nothing to
+      // report, and nothing to leak into a later unrelated failure's report.
+      setFailedProgress(null);
       // The desktop refused to reinstall a user-removed host; latch the
       // removed surface. Any other settled result (an `"ok"` outcome with
       // `running: true`, after a reinstall) clears it.
@@ -461,17 +546,38 @@ function useHostProvisioning(args: {
   // Retry/forced update: clear any prior error, then re-run convergeReady.
   // Only `onSuccess` transitions the busy-keep latch; an error leaves it
   // untouched (see markBusyKeep).
-  const run = (force: boolean, reason: HostSetupReason): void => {
-    reset();
-    mutate({ force }, hostSetupAnalyticsCallbacks(reason, markBusyKeep));
-  };
+  const run = useCallback(
+    (force: boolean, reason: HostSetupReason): void => {
+      // New attempt: drop the previous attempt's failure snapshot, and record
+      // which lane identity belongs to the past so this attempt's failure can
+      // only ever report progress the new attempt actually produced.
+      const management = hostManagementRef.current;
+      attemptBaselineRef.current =
+        management === null
+          ? null
+          : (queryClient.getQueryData<HostControllerStatus>(
+              runnerQueryKeys.hostControllerStatus(management),
+            )?.mutation?.startedAt ?? null);
+      setFailedProgress(null);
+      reset();
+      mutate(
+        { force },
+        hostSetupAnalyticsCallbacks(
+          reason,
+          markBusyKeep,
+          captureFailedProgress,
+        ),
+      );
+    },
+    [captureFailedProgress, markBusyKeep, mutate, queryClient, reset],
+  );
 
   // Reinstall from the removed surface: clear the persisted removal sentinel
   // (so the desktop's convergeReady stops short-circuiting to the removed
   // outcome), then re-run a normal convergeReady. Optimistically drop the
   // removed latch so the surface flips to the provisioning spinner
   // immediately.
-  const reinstall = (): void => {
+  const reinstall = useCallback((): void => {
     const management = runnerHost.hostManagement;
     if (management === null) return;
     // Optimistically drop the removed latch so the surface flips to the
@@ -495,7 +601,7 @@ function useHostProvisioning(args: {
         });
       },
     );
-  };
+  }, [queryClient, run, runnerHost.hostManagement]);
 
   useEffect(() => {
     if (!canProvision || args.isReady || attemptedRef.current) {
@@ -504,9 +610,13 @@ function useHostProvisioning(args: {
     attemptedRef.current = true;
     mutate(
       { force: false },
-      hostSetupAnalyticsCallbacks("launch", markBusyKeep),
+      hostSetupAnalyticsCallbacks(
+        "launch",
+        markBusyKeep,
+        captureFailedProgress,
+      ),
     );
-  }, [canProvision, args.isReady, mutate, markBusyKeep]);
+  }, [canProvision, args.isReady, mutate, markBusyKeep, captureFailedProgress]);
 
   // Direct removal-sentinel check, independent of the one-shot `convergeReady`
   // effect above. That effect never re-fires once `attemptedRef` is set -
@@ -529,24 +639,80 @@ function useHostProvisioning(args: {
       ? mutationLane.progress
       : null;
 
-  return {
-    // Report provisioning/error whenever this shell manages the host - NOT
-    // gated on `canProvision`, which collapses to false the instant a busy
-    // host is surfaced (its snapshot flips `isReady` true). Gating on
-    // `canProvision` would hide Retry/forced update progress and swallow
-    // their errors. `convergeReady.isPending`/`.error` are only meaningful
-    // after a mutation that already required management, so `hasManagement`
-    // is the correct gate.
-    isProvisioning: hasManagement && convergeReady.isPending,
-    error: hasManagement ? convergeReady.error : null,
-    progress,
-    hostBusy: hasManagement && inBusyKeepFlow,
-    removed: hasManagement && isRemoved,
-    canManageHost: hasManagement,
-    retry: () => run(false, "recovery"),
-    force: () => run(true, "update"),
-    reinstall,
-  };
+  const retry = useCallback(() => run(false, "recovery"), [run]);
+  const force = useCallback(() => run(true, "update"), [run]);
+
+  // Stable identity: this object is threaded through `HostProvisioningLifecycle`
+  // into the readiness controller's memos. Returning a fresh literal (with
+  // fresh `retry`/`force` arrows) invalidated every one of them on each render,
+  // so the readiness context value churned and re-ran all its consumers.
+  return useMemo(
+    () => ({
+      // Report provisioning/error whenever this shell manages the host - NOT
+      // gated on `canProvision`, which collapses to false the instant a busy
+      // host is surfaced (its snapshot flips `isReady` true). Gating on
+      // `canProvision` would hide Retry/forced update progress and swallow
+      // their errors. `convergeReady.isPending`/`.error` are only meaningful
+      // after a mutation that already required management, so `hasManagement`
+      // is the correct gate.
+      isProvisioning: hasManagement && convergeReady.isPending,
+      error: hasManagement ? convergeReady.error : null,
+      progress,
+      lastProgress: hasManagement ? failedProgress : null,
+      hostBusy: hasManagement && inBusyKeepFlow,
+      removed: hasManagement && isRemoved,
+      canManageHost: hasManagement,
+      retry,
+      force,
+      reinstall,
+    }),
+    [
+      convergeReady.error,
+      convergeReady.isPending,
+      failedProgress,
+      force,
+      hasManagement,
+      inBusyKeepFlow,
+      isRemoved,
+      progress,
+      reinstall,
+      retry,
+    ],
+  );
+}
+
+/**
+ * Mounts the legacy local-host provisioning lifecycle without adding another
+ * route gate. The readiness controller owns this component once per shell;
+ * slot boundaries only consume its projected readiness.
+ */
+export function HostProvisioningController(props: {
+  readonly enabled: boolean;
+  readonly isReady: boolean;
+  readonly children: (lifecycle: HostProvisioningLifecycle) => ReactNode;
+}): ReactNode {
+  const runnerHost = useRunnerHost();
+  const { state, stage } = useLocalHostGateState(runnerHost);
+  const provisioning = useHostProvisioning({
+    enabled: props.enabled && state?.kind === "unavailable",
+    isReady: props.isReady,
+  });
+  const localHostState = localHostLifecycleState(state);
+  // Memoized for the same reason as `provisioning` above: the readiness
+  // controller memoizes on this object, so a fresh literal per render made
+  // that memo - and the context value built from it - recompute every time.
+  const lifecycle = useMemo<HostProvisioningLifecycle>(
+    () => ({ localHostState, slowStartStage: stage, provisioning }),
+    [localHostState, provisioning, stage],
+  );
+  return props.children(lifecycle);
+}
+
+function localHostLifecycleState(
+  state: LocalHostState | null,
+): HostProvisioningLifecycle["localHostState"] {
+  if (state === null) return "unknown";
+  return state.kind === "ready" ? "ready" : "unavailable";
 }
 
 // Shared compat verdict for host-backed launch. The provider owns the
@@ -555,6 +721,7 @@ function useHostProvisioning(args: {
 // initializing-host surface into an update-required card.
 interface HostBusyGateProps {
   readonly children: ReactNode;
+  readonly selectedEntry: HostDirectoryEntry | null;
   readonly source: HostCompatibilityGateSource;
   readonly checking: ReactNode;
   readonly onRefreshBusy: (() => void) | null;
@@ -587,6 +754,11 @@ function HostCompatibilityGate(props: HostBusyGateProps) {
       <GateIncompatibleHost
         source={props.source}
         reason={describeHostCompatibilityError(compat.error)}
+        skew={describeVersionSkew({
+          hostAppVersion: hostAppVersionFromDirectoryEntry(props.selectedEntry),
+          clientAppVersion: getClientAppVersion(),
+          guidance: compat.error.fatalDetails?.upgradeGuidance ?? null,
+        })}
         onRefreshBusy={props.onRefreshBusy}
         onForce={props.onForce}
         restartError={props.restartError}
@@ -611,16 +783,38 @@ function HostCompatibilityGate(props: HostBusyGateProps) {
 interface GateIncompatibleBusyProps {
   readonly source: HostCompatibilityGateSource;
   readonly reason: string;
+  /** Direction-aware copy (R4-D2) — which leg the handshake says is behind. */
+  readonly skew: VersionSkewCopy;
   readonly onRefreshBusy: (() => void) | null;
   readonly onForce: (() => void) | null;
   readonly restartError: Error | null;
 }
 
+function incompatibleHostDescription(
+  hostIsOutdated: boolean,
+  isBusyKeep: boolean,
+): string {
+  if (!hostIsOutdated) {
+    return "This app is running an older version than the host supports. Update Traycer to the latest version to continue.";
+  }
+  if (isBusyKeep) {
+    return "The running host has work in progress and is not compatible with this app update. Refresh to check again, or force update the host. Running work may be interrupted.";
+  }
+  return "This Traycer app update is not compatible with the running host. Update the local host before continuing.";
+}
+
 // Shown when the reachable host is incompatible with this build. Compatible
-// hosts continue automatically; incompatible hosts have one meaningful action:
-// update the local host to the app-compatible version.
+// hosts continue automatically. Above the support floor this should never
+// happen (Architecture §13's two-sided release invariant), so the copy names
+// the leg the handshake's own upgrade guidance says is behind rather than a
+// generic fatal: "Update host" is only offered when the HOST is the outdated
+// side — forcing a host update can never fix an outdated client, so that
+// affordance is hidden when this app itself is the one that needs updating.
 function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
   const isBusyKeep = props.source === "busy-keep";
+  // The host-update actions only make sense when the host is confirmed to be
+  // the outdated side (or direction is unknown, matching today's behavior).
+  const hostIsOutdated = props.skew.direction !== "client-outdated";
   return (
     <div
       data-testid={
@@ -633,13 +827,14 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
         <Card className="w-full max-w-md shadow-sm">
           <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
             <div className="flex flex-col gap-2">
-              <p className="text-ui font-medium text-foreground">
-                Host update required
+              <p
+                className="text-ui font-medium text-foreground"
+                data-testid="local-host-incompatible-title"
+              >
+                {props.skew.title}
               </p>
               <p className="text-muted-foreground">
-                {isBusyKeep
-                  ? "The running host has work in progress and is not compatible with this app update. Refresh to check again, or force update the host. Running work may be interrupted."
-                  : "This Traycer app update is not compatible with the running host. Update the local host before continuing."}
+                {incompatibleHostDescription(hostIsOutdated, isBusyKeep)}
               </p>
               <p
                 className="max-w-full break-words rounded-md bg-muted/50 px-3 py-2 text-left text-ui-xs text-muted-foreground"
@@ -662,7 +857,7 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                 isBusyKeep ? "sm:grid-cols-2" : "sm:flex sm:justify-center",
               )}
             >
-              {isBusyKeep && props.onRefreshBusy !== null ? (
+              {hostIsOutdated && isBusyKeep && props.onRefreshBusy !== null ? (
                 <Button
                   type="button"
                   size="sm"
@@ -674,7 +869,7 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                   Refresh
                 </Button>
               ) : null}
-              {props.onForce !== null ? (
+              {hostIsOutdated && props.onForce !== null ? (
                 <Button
                   type="button"
                   size="sm"
@@ -879,66 +1074,6 @@ export interface LocalHostUnavailableProps {
   readonly message: string;
 }
 
-interface BootstrapAttemptSummary {
-  readonly attempt: BootstrapMarkerEntry;
-  readonly outcome: BootstrapMarkerEntry | null;
-}
-
-/**
- * Picks the most recent `phase=starting` marker and its terminal follow-up
- * (`exited` / `crashed` / `killed` / `failed-to-spawn`). The marker file is
- * append-only, so the relevant pair is "the last `starting` and the next
- * non-`starting` after it". When no follow-up exists, the host is mid-
- * spawn or never published a terminal marker - surface that as `outcome:
- * null` and let the renderer say so.
- */
-function summariseBootstrapAttempts(
-  markers: readonly BootstrapMarkerEntry[],
-): BootstrapAttemptSummary | null {
-  let lastStartIdx = -1;
-  for (let i = markers.length - 1; i >= 0; i--) {
-    if (markers[i]?.phase === "starting") {
-      lastStartIdx = i;
-      break;
-    }
-  }
-  if (lastStartIdx === -1) return null;
-  const attempt = markers[lastStartIdx];
-  for (let i = lastStartIdx + 1; i < markers.length; i++) {
-    const m = markers[i];
-    if (m.phase !== "starting") {
-      return { attempt, outcome: m };
-    }
-  }
-  return { attempt, outcome: null };
-}
-
-function describeOutcome(marker: BootstrapMarkerEntry): string {
-  const fields = marker.fields;
-  switch (marker.phase) {
-    case "exited": {
-      const code = fields.code ?? "?";
-      return `Host exited with code ${code}.`;
-    }
-    case "crashed": {
-      const code = fields.code ?? "?";
-      const signal =
-        fields.signal !== undefined ? ` (signal ${fields.signal})` : "";
-      return `Host crashed with code ${code}${signal}.`;
-    }
-    case "killed": {
-      const signal = fields.signal ?? "unknown";
-      return `Host was killed with signal ${signal}.`;
-    }
-    case "failed-to-spawn": {
-      const error = fields.error ?? "spawn failed";
-      return `Failed to spawn shell: ${error}`;
-    }
-    case "starting":
-      return "";
-  }
-}
-
 /**
  * Default UI for the `LocalHostGate` `unavailable` slot.
  *
@@ -1018,63 +1153,6 @@ export function LocalHostUnavailable(props: LocalHostUnavailableProps) {
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-interface BootstrapAttemptDetailsProps {
-  readonly summary: BootstrapAttemptSummary;
-  readonly bootstrapLogPath: string | null;
-}
-
-function BootstrapAttemptDetails(props: BootstrapAttemptDetailsProps) {
-  const { attempt, outcome } = props.summary;
-  const shell = attempt.fields.shell ?? null;
-  const argsField = attempt.fields.args ?? null;
-  const outcomeText = outcome !== null ? describeOutcome(outcome) : null;
-
-  return (
-    <div
-      data-testid="local-host-bootstrap-details"
-      className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-ui-xs text-muted-foreground"
-    >
-      {shell !== null ? (
-        <div className="flex flex-col">
-          <span className="text-foreground/70">Last attempt</span>
-          <code className="break-all font-mono text-ui-xs">
-            {shell}
-            {argsField !== null ? ` ${argsField}` : ""}
-          </code>
-        </div>
-      ) : null}
-      {outcomeText !== null ? (
-        <div
-          className={cn(
-            "flex flex-col",
-            outcome?.phase === "failed-to-spawn" || outcome?.phase === "crashed"
-              ? "text-destructive"
-              : null,
-          )}
-        >
-          <span>{outcomeText}</span>
-          {outcome?.fields.error !== undefined &&
-          outcome.phase !== "failed-to-spawn" ? (
-            <code className="mt-1 break-all font-mono text-ui-xs">
-              {outcome.fields.error}
-            </code>
-          ) : null}
-        </div>
-      ) : (
-        <span>Host never reported a terminal status.</span>
-      )}
-      {props.bootstrapLogPath !== null ? (
-        <div className="flex flex-col">
-          <span className="text-foreground/70">Full log</span>
-          <code className="break-all font-mono text-ui-xs">
-            {props.bootstrapLogPath}
-          </code>
-        </div>
-      ) : null}
     </div>
   );
 }

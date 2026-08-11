@@ -6,14 +6,14 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameSchema,
-  type HostNotificationEntry,
+  hostNotificationsSubscribeServerFrameSchemaV11,
+  type HostNotificationEntryV21,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrame,
+  type HostNotificationsSubscribeServerFrameV11,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -22,6 +22,10 @@ import {
   subscribeHostNotificationPresence,
   type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 import { compareFeedIdAscending } from "@/lib/notifications/notification-lifecycle";
 
 export const HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT = 50;
@@ -36,10 +40,20 @@ export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
  */
 export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 
-export type HostNotificationFeedEntry = HostNotificationEntry;
+/**
+ * The feed parses against the `@1.1` frame union, not the released `@1.0`
+ * one. Stream versions negotiate to `min(client, host)` per method, so a GUI
+ * built from this protocol tree lands on `@1.1` against a host built from it
+ * too - and parsing those frames with the `@1.0` schema would reject any
+ * `host.operation.finished` row, which this store treats as connection
+ * corruption and answers with a reconnect into a snapshot carrying the same
+ * row. Against an older host the negotiated version drops back to `@1.0`,
+ * whose frames are a strict subset of this union and still parse.
+ */
+export type HostNotificationFeedEntry = HostNotificationEntryV21;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrame,
+  HostNotificationsSubscribeServerFrameV11,
   | { readonly kind: "snapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
@@ -451,7 +465,7 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
 );
 
 export function openHostNotificationsStream(
-  wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   options: {
     readonly windowId: string;
@@ -466,13 +480,32 @@ export function openHostNotificationsStream(
 ): () => void {
   let disposed = false;
   let currentSession: IStreamSession | null = null;
-  let lastPresenceKey: string | null = null;
+  let streamOpen = false;
+  let lastSentPresenceKey: string | null = null;
+  let lastNotifiedPresenceKey: string | null = null;
 
-  // `force` refreshes the host's TTL'd presence record even when nothing
-  // changed locally; change-driven sends stay deduplicated by content.
-  const sendPresence = (force: boolean): void => {
-    const session = currentSession;
-    if (session === null) return;
+  // A terminal close ("closed" + fatalError) DISPOSES the transport session:
+  // `requestReconnect` and wake-time `forceReconnect` are both no-ops on it,
+  // so without this reopen a single bad window (e.g. the host briefly unable
+  // to validate bearers) leaves notifications dead until app restart while
+  // the rest of the app self-heals through per-interaction re-subscribes.
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
+    currentSession?.close();
+    currentSession = null;
+    openSession();
+  }, isReopenableNotificationsStreamClose);
+
+  // Presence has two consumers with deliberately independent gates:
+  //  - `onPresenceChanged` (local): drives entity read-consumption over the
+  //    unary RPC channel, so focusing a tab clears its indicators even while
+  //    this stream is down. Deduplicated by content only.
+  //  - the stream send (host): refreshes the host's TTL'd presence record
+  //    for delivery suppression, and is only possible while subscribed.
+  //    `forceSend` bypasses the content dedupe for the heartbeat/open cases.
+  const emitPresence = (input: {
+    readonly forceSend: boolean;
+    readonly forceNotify: boolean;
+  }): void => {
     const frame = readHostNotificationPresenceFrame({
       windowId: options.windowId,
       now: options.now,
@@ -485,16 +518,23 @@ export function openHostNotificationsStream(
       focused: presence.focused,
       entity: presence.entity,
     });
-    if (!force && presenceKey === lastPresenceKey) return;
-    lastPresenceKey = presenceKey;
+    if (input.forceNotify || presenceKey !== lastNotifiedPresenceKey) {
+      lastNotifiedPresenceKey = presenceKey;
+      options.onPresenceChanged(presence);
+    }
+    const session = currentSession;
+    if (session === null || !streamOpen) return;
+    if (!input.forceSend && presenceKey === lastSentPresenceKey) return;
+    lastSentPresenceKey = presenceKey;
     session.sendClientFrame(presence, null);
-    options.onPresenceChanged(presence);
   };
   const unsubscribePresence = subscribeHostNotificationPresence(() => {
-    sendPresence(false);
+    emitPresence({ forceSend: false, forceNotify: false });
   });
+  // The heartbeat refreshes the host's TTL'd presence record even when
+  // nothing changed locally; it never re-notifies the local consumer.
   const presenceHeartbeat = globalThis.setInterval(() => {
-    sendPresence(true);
+    emitPresence({ forceSend: true, forceNotify: false });
   }, HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
 
   // A stream frame that fails the contract-specific schema is a
@@ -518,6 +558,9 @@ export function openHostNotificationsStream(
     );
     currentSession = session;
     session.onServerFrame((envelope, binaryPayload) => {
+      // A superseded session (replaced by a reopen) must not touch the
+      // replica or the status projection its successor now owns.
+      if (currentSession !== session) return;
       // Notification frames are contractually text-only; an unexpected
       // binary payload is the same connection-integrity failure as a
       // malformed text envelope, not a silently ignorable frame.
@@ -526,7 +569,7 @@ export function openHostNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsSubscribeServerFrameSchema.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV11.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;
@@ -535,6 +578,12 @@ export function openHostNotificationsStream(
       switch (frame.kind) {
         case "snapshot":
           useHostNotificationsStore.getState().applySnapshot(frame);
+          // A schema-valid snapshot — not the raw transport `open` — is the
+          // proof the stream is actually usable; the host resolver's async
+          // init can still terminate the session after `open`, and resetting
+          // there would pin the reopen backoff at its floor through an
+          // init-failure loop.
+          reopenScheduler.resetBackoff();
           options.onFeedFrame(frame);
           return;
         case "upserted":
@@ -578,11 +627,21 @@ export function openHostNotificationsStream(
       }
     });
     session.onStatusChange((status, reason) => {
+      if (currentSession !== session) return;
       useHostNotificationsStore.getState().setConnectionStatus(status);
       if (status === "open") {
-        lastPresenceKey = null;
+        streamOpen = true;
+        lastSentPresenceKey = null;
         options.onStreamOpened();
-        sendPresence(true);
+        // `forceNotify`: `onStreamOpened` just reset the consumer's active
+        // entity, so the focused entity must be re-consumed even though its
+        // content key is unchanged.
+        emitPresence({ forceSend: true, forceNotify: true });
+      } else {
+        streamOpen = false;
+      }
+      if (status === "closed") {
+        reopenScheduler.scheduleAfterClose(reason);
       }
       handleHostNotificationsCloseReason(reason, onAuthError);
     });
@@ -593,6 +652,7 @@ export function openHostNotificationsStream(
   return () => {
     disposed = true;
     globalThis.clearInterval(presenceHeartbeat);
+    reopenScheduler.dispose();
     unsubscribePresence();
     currentSession?.close();
     currentSession = null;

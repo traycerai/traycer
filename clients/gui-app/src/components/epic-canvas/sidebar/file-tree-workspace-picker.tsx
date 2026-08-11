@@ -21,6 +21,7 @@ import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-li
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { CompactWorkspaceSwitcher } from "@/components/epic-canvas/sidebar/compact-workspace-switcher";
 
 export interface FileTreeWorkspacePickerProps {
@@ -40,9 +41,18 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
     epicId: props.epicId,
     enabled: props.hostId !== null,
   });
+  // Host-proven-missing rows are hidden (nothing to browse); the current
+  // selection is exempt so a just-deleted selected root keeps its labeled row
+  // until the user picks a live one.
   const rows = useMemo(
-    () => listQuery.data?.rows ?? [],
-    [listQuery.data?.rows],
+    () =>
+      withoutResolvedMissingRows(
+        listQuery.data?.rows ?? [],
+        props.hostId === null || props.selectedPath === null
+          ? null
+          : { hostId: props.hostId, runningDir: props.selectedPath },
+      ),
+    [listQuery.data?.rows, props.hostId, props.selectedPath],
   );
   const selectedRow =
     rows.find((row) => row.runningDir === props.selectedPath) ?? null;
@@ -80,6 +90,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
           setOpen(false);
         }}
         autoFocusSearch={false}
+        emptyMessage="No worktrees found."
       />
     </CompactWorkspaceSwitcher>
   );

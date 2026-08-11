@@ -101,6 +101,46 @@ export function TerminalDeadTileBanner(
   );
 }
 
+export interface ManagedCommandDeletedBannerProps {
+  /**
+   * Whether the deletion itself was observed. `false` only when the window
+   * never received a snapshot (restored for a shell the host had already
+   * dropped), which is the one case where "deleted" cannot be confirmed -
+   * only that the shell is no longer there.
+   */
+  readonly deletionConfirmed: boolean;
+  readonly onClose: () => void;
+  readonly testId: string;
+}
+
+/**
+ * A shell deleted while its output window was open. Sits ABOVE the timeline
+ * rather than replacing it: the scrollback the viewer already has is the last
+ * trace of a history the host just destroyed, so it stays readable until the
+ * tab is closed. Nothing can be paged in behind it and no lifecycle action
+ * remains - the shell is gone, not merely stopped.
+ */
+export function ManagedCommandDeletedBanner(
+  props: ManagedCommandDeletedBannerProps,
+): ReactNode {
+  return (
+    <div
+      className="flex min-w-0 items-center gap-3 border-b border-border/60 bg-muted/30 px-3 py-2 text-ui-xs text-muted-foreground"
+      data-testid={props.testId}
+      role="status"
+    >
+      <span className="min-w-0 flex-1">
+        {props.deletionConfirmed
+          ? "This shell was deleted. Its output history is gone; what is shown below is only what this window had already read."
+          : "This shell is no longer on this host. Its output history is gone; what is shown below is only what this window had already read."}
+      </span>
+      <Button type="button" variant="outline" size="sm" onClick={props.onClose}>
+        Close tab
+      </Button>
+    </div>
+  );
+}
+
 export interface WorkspaceFileDeadTileBannerProps {
   readonly hostLabel: string;
   /**
@@ -164,6 +204,44 @@ export function GitDiffDeadTileBanner(
           message: "The Git diff's bound host is unavailable.",
           code: null,
           source: "Git changes",
+        })}
+        presentation="text"
+        className={undefined}
+      />
+    </div>
+  );
+}
+
+/**
+ * PR detail tiles subscribe through their OWN bound host's client
+ * (`useHostStreamClientFor`), never the app's active host - so unlike
+ * `GitDiffDeadTileBanner` there is no "inactive" reason, only "the bound
+ * host itself is unreachable." The heavy PR cache lives on that host, so
+ * nothing can render until it returns.
+ */
+export interface PrDetailDeadTileBannerProps {
+  readonly hostLabel: string;
+  readonly testId: string;
+}
+
+export function PrDetailDeadTileBanner(
+  props: PrDetailDeadTileBannerProps,
+): ReactNode {
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
+      data-testid={props.testId}
+    >
+      <p className="max-w-md">
+        This pull request is on host &quot;{props.hostLabel}&quot;, which is
+        currently unreachable. It will load once that host is back.
+      </p>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Pull request is unavailable",
+          message: "The PR tile's bound host is unavailable.",
+          code: null,
+          source: "Pull request",
         })}
         presentation="text"
         className={undefined}

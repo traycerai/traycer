@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -92,6 +91,15 @@ function opencodeState(): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [ambientProfile()],
   };
 }
@@ -113,6 +121,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}

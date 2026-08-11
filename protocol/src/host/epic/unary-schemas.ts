@@ -75,12 +75,16 @@ export type TaskRepoMatchMode = z.infer<typeof taskRepoMatchModeSchema>;
 export const taskOwnershipScopeSchema = z.enum(["mine", "shared"]);
 export type TaskOwnershipScope = z.infer<typeof taskOwnershipScopeSchema>;
 
-export const listTasksSortSchema = z.enum([
+export const listTasksSortSchemaV11 = z.enum([
   "recent",
   "oldest",
   "title-asc",
   "title-desc",
   "relevance",
+]);
+export const listTasksSortSchema = z.enum([
+  ...listTasksSortSchemaV11.options,
+  "last-viewed",
 ]);
 export type ListTasksSort = z.infer<typeof listTasksSortSchema>;
 
@@ -496,13 +500,16 @@ export const listTaskLightSchema = taskLightSchema.extend({
 });
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
-export const listTasksRequestSchema = z.object({
+export const listTasksRequestSchemaV11 = z.object({
   limit: z.number(),
   cursor: z.string().optional(),
   filters: taskFiltersSchema.nullable(),
-  sort: listTasksSortSchema.optional(),
+  sort: listTasksSortSchemaV11.optional(),
   extensionPhaseVersion: z.string(),
   extensionEpicVersion: z.string(),
+});
+export const listTasksRequestSchema = listTasksRequestSchemaV11.extend({
+  sort: listTasksSortSchema.optional(),
 });
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
 
@@ -556,6 +563,22 @@ export const setEpicPinnedResponseSchema = z.object({
   pinned: z.boolean(),
 });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
+
+// ─── Personal task view recency (epic.recordViewed@1.0) ─────────────────────
+
+export const recordEpicViewedRequestSchema = z.object({
+  epicId: z.string(),
+});
+export type RecordEpicViewedRequest = z.infer<
+  typeof recordEpicViewedRequestSchema
+>;
+
+export const recordEpicViewedResponseSchema = z.object({
+  viewedAt: z.number(),
+});
+export type RecordEpicViewedResponse = z.infer<
+  typeof recordEpicViewedResponseSchema
+>;
 
 // ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
 // Optional (non-floor) capability: resolve a small set of task ids to list-row
@@ -1116,8 +1139,54 @@ export const createTuiAgentRequestSchema = z.object({
   // predate profiles keep today's exact behavior. See the multi-profile
   // decision log.
   profileId: z.string().nullable().default(null),
+  // The upstream harness session id this record was forked FROM, when the
+  // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
+  // above was itself a fork. `null` for a normal (non-fork) create, and for
+  // older clients that predate this field. The resolver persists this
+  // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
+  // provider failure between PTY spawn and destination-transcript
+  // establishment still has durable provenance to retry the fork from -
+  // the renderer's own prepared-launch stash is cleared on PTY creation,
+  // well before that establishment point.
+  // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
+  forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
+
+/**
+ * Frozen `epic.createTuiAgent@1.0` request, exactly as shipped through
+ * `host-v1.1.10`: everything above except `forkSourceHarnessSessionId`.
+ *
+ * That field was authored straight onto the live object while @1.0 was the
+ * only registered version, so it silently grew an already-released contract;
+ * `host-v1.1.10` then froze @1.0 without it, because the commit that added it
+ * was not in the release cherry-pick. It rides @1.1 now.
+ *
+ * Hand-pinned field-for-field rather than derived from the live schema via
+ * `.omit()` - a field added to the live shape must not silently leak back into
+ * this contract, which is the exact failure this freeze exists to prevent.
+ */
+export const createTuiAgentRequestSchemaV10 = z.object({
+  epicId: z.string(),
+  parentId: z.string().nullable(),
+  title: z.string(),
+  harnessId: tuiHarnessIdSchema,
+  harnessSessionId: z.string().nullable().catch(null),
+  terminalAgentArgs: z.string().nullable().default(null).catch(null),
+  terminalShellCommand: z.string().nullable().catch(null),
+  terminalShellArgs: z.array(z.string()).nullable().catch(null),
+  hostId: z.string(),
+  workspaceFolders: z.array(z.string()),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  tuiAgentId: z.string().nullable().optional(),
+  profileId: z.string().nullable().default(null),
+});
+export type CreateTuiAgentRequestV10 = z.infer<
+  typeof createTuiAgentRequestSchemaV10
+>;
 
 export const createTuiAgentResponseSchema = z.object({
   tuiAgentId: z.string(),

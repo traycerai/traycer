@@ -8,8 +8,9 @@ import type {
 import type { WorktreeHostEntry } from "@traycer/protocol/host/index";
 import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
+import { WorktreeDeleteBatchStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import {
@@ -49,11 +50,18 @@ const QUEUED_RUN: WorktreeDeleteRunState = {
   status: "queued",
 };
 
-// Each stream can run teardown scripts plus git removal; cap fanout so a large
-// multi-repo selection cannot saturate the host or websocket transport.
+// Fan-out cap for the FALLBACK path only (an older host with no batch
+// command method). On a current host the same cap lives on the host, where it
+// can actually bound the machine rather than one window's share of it.
 const MAX_PARALLEL_DELETE_STREAMS = 2;
 const CONNECTION_LOST_MESSAGE =
   "Lost connection to the host before the delete finished.";
+// A target the host settled while this client was disconnected. The host does
+// not replay per-target frames on re-attach, so its individual outcome is
+// genuinely unknown here - the refreshed list is the authority, and inventing
+// "deleted" or "failed" for it would be a guess presented as a result.
+const REATTACHED_MESSAGE =
+  "Reconnected after this delete finished. Check the refreshed list to see whether this worktree was removed.";
 
 export interface WorktreeDeleteRunRecord {
   readonly key: string;
@@ -321,11 +329,29 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
 }));
 
 /**
- * Module-level registry for live delete stream clients. Each host/worktree
- * pair owns its own stream, so backgrounding one delete does not release or
- * overwrite another in-flight delete.
+ * Module-level registry for live per-target delete stream clients (the
+ * older-host fallback only). Each host/worktree pair owns its own stream, so
+ * backgrounding one delete does not release or overwrite another in-flight
+ * delete.
  */
 const clientRefs = new Map<string, { close(): void }>();
+
+/**
+ * Live command streams, keyed by command id. One entry per user action on a
+ * current host, however many worktrees it covers.
+ */
+const commandRefs = new Map<string, { close(): void }>();
+
+/**
+ * Every run key (host + worktree path) currently owned by a command or by the
+ * fallback queue.
+ *
+ * Replaces the old "is there a `clientRefs` entry or a queue entry" check,
+ * which no longer answers the question: a target inside a batch command has
+ * neither of those, yet starting a second delete for it would be exactly the
+ * duplicate destructive action the check exists to prevent.
+ */
+const activeTargetKeys = new Set<string>();
 
 interface QueuedWorktreeDelete {
   readonly key: string;
@@ -338,6 +364,7 @@ interface QueuedWorktreeDelete {
 
 const queuedDeletes: QueuedWorktreeDelete[] = [];
 let activeDeleteStreamCount = 0;
+let activeCommandCount = 0;
 const pendingSettledCallbacks = new Set<() => void>();
 
 /**
@@ -406,47 +433,45 @@ export function useWorktreeDeleteRun(
     setBackgrounded(visibleRecord.key, true);
   }, [setBackgrounded, visibleRecord]);
 
+  // Dismisses the modal's record. On the fallback path that also drops the
+  // target's own socket (its historical abort-on-close behaviour, which
+  // settles the run and releases its key through the status handler). A target
+  // inside a command has no socket of its own, and closing the command's
+  // stream here would silence its SIBLINGS - so the command keeps running and
+  // releases the key when the target actually settles, which is both the
+  // detach-not-cancel contract and what stops a dismissed modal from letting
+  // the same worktree be deleted twice concurrently.
   const close = useCallback(() => {
     if (visibleRecord === null) return;
-    clientRefs.get(visibleRecord.key)?.close();
-    clientRefs.delete(visibleRecord.key);
+    closeDeleteClient(visibleRecord.key);
+    discardQueuedDelete(visibleRecord.key);
     clear(visibleRecord.key);
   }, [clear, visibleRecord]);
 
   const startDelete = useCallback(
     (
-      target: WorktreeHostEntry,
-      scripts: WorktreeEntryScripts | null,
+      targets: ReadonlyArray<WorktreeDeleteRequestTarget>,
       backgrounded: boolean,
       batchKey: string | null,
     ) => {
-      const key = worktreeDeleteRunKey(hostId, target.worktreePath);
-      if (
-        clientRefs.has(key) ||
-        queuedDeletes.some((queued) => queued.key === key)
-      ) {
-        return;
-      }
       // Freeze the settle callback at start so a host swap mid-delete can't
       // redirect the cache invalidation to the wrong host scope (the live
       // `onSettledRef` would otherwise rebind to the newly-selected host).
-      const onSettled = onSettledRef.current;
-      begin({ key, hostId, batchKey, target, run: QUEUED_RUN, backgrounded });
-      queuedDeletes.push({
-        key,
+      startWorktreeDeleteCommand({
         hostId,
-        target,
-        scripts,
+        batchKey,
+        backgrounded,
+        targets,
+        begin,
         openStreamTransport,
-        onSettled,
+        onSettled: onSettledRef.current,
       });
-      drainDeleteQueue();
     },
     [begin, hostId, openStreamTransport],
   );
   const start = useCallback(
     (target: WorktreeHostEntry, scripts: WorktreeEntryScripts | null) => {
-      startDelete(target, scripts, false, null);
+      startDelete([{ target, scripts }], false, null);
     },
     [startDelete],
   );
@@ -455,15 +480,14 @@ export function useWorktreeDeleteRun(
       targets: ReadonlyArray<WorktreeHostEntry>,
       scriptsByPath: ReadonlyMap<string, WorktreeEntryScripts>,
     ) => {
-      const batchKey = nextWorktreeDeleteBatchKey(hostId);
-      targets.forEach((target) => {
-        startDelete(
+      startDelete(
+        targets.map((target) => ({
           target,
-          scriptsByPath.get(target.worktreePath) ?? null,
-          true,
-          batchKey,
-        );
-      });
+          scripts: scriptsByPath.get(target.worktreePath) ?? null,
+        })),
+        true,
+        nextWorktreeDeleteBatchKey(hostId),
+      );
     },
     [hostId, startDelete],
   );
@@ -494,11 +518,262 @@ export function useWorktreeDeleteRun(
 export function __resetWorktreeDeleteRunForTests(): void {
   clientRefs.forEach((client) => client.close());
   clientRefs.clear();
+  commandRefs.forEach((client) => client.close());
+  commandRefs.clear();
+  activeTargetKeys.clear();
   queuedDeletes.length = 0;
   activeDeleteStreamCount = 0;
+  activeCommandCount = 0;
   pendingSettledCallbacks.clear();
   batchSequence = 0;
   useWorktreeDeleteRunStore.getState().clearAll();
+}
+
+interface WorktreeDeleteRequestTarget {
+  readonly target: WorktreeHostEntry;
+  readonly scripts: WorktreeEntryScripts | null;
+}
+
+interface StartWorktreeDeleteCommandInput {
+  readonly hostId: string;
+  readonly batchKey: string | null;
+  readonly backgrounded: boolean;
+  readonly targets: ReadonlyArray<WorktreeDeleteRequestTarget>;
+  readonly begin: (input: {
+    readonly key: string;
+    readonly hostId: string;
+    readonly batchKey: string | null;
+    readonly target: WorktreeHostEntry;
+    readonly run: WorktreeDeleteRunState;
+    readonly backgrounded: boolean;
+  }) => void;
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
+  readonly onSettled: () => void;
+}
+
+/**
+ * Opens ONE host-owned deletion command for a user action - a single delete or
+ * a bulk selection alike.
+ *
+ * This replaces the renderer-side queue of N sockets as the primary path. The
+ * queue was never really scheduling: it was the only place that knew a bulk
+ * delete was one user action, so nothing durable could ever describe it. Here
+ * the host holds that identity, which is what lets the work outlive this
+ * window and produce one completion notification instead of N or zero.
+ *
+ * The old queue survives underneath as the older-host fallback, entered only
+ * on `onUnsupported` - i.e. only when the host proved it has no such method,
+ * before it was asked to delete anything.
+ */
+function startWorktreeDeleteCommand(
+  input: StartWorktreeDeleteCommandInput,
+): void {
+  const accepted = input.targets.filter(
+    (item) =>
+      !activeTargetKeys.has(
+        worktreeDeleteRunKey(input.hostId, item.target.worktreePath),
+      ),
+  );
+  if (accepted.length === 0) return;
+
+  accepted.forEach((item) => {
+    const key = worktreeDeleteRunKey(input.hostId, item.target.worktreePath);
+    activeTargetKeys.add(key);
+    input.begin({
+      key,
+      hostId: input.hostId,
+      batchKey: input.batchKey,
+      target: item.target,
+      run: QUEUED_RUN,
+      backgrounded: input.backgrounded,
+    });
+  });
+
+  const commandId = crypto.randomUUID();
+  const keyFor = (worktreePath: string): string =>
+    worktreeDeleteRunKey(input.hostId, worktreePath);
+  const unsettled = new Set(
+    accepted.map((item) => keyFor(item.target.worktreePath)),
+  );
+  activeCommandCount += 1;
+
+  // A holder rather than a plain `let`: the settle happens inside callbacks the
+  // stream client owns, and the post-build guard below has to read the value as
+  // of THEN, not as of the last assignment the compiler can see.
+  const command = { settled: false };
+  /**
+   * Ends the command and drives every target that never reported a terminal
+   * frame into `unsettledReason`.
+   *
+   * That leftover set is NOT just an error path. The host does not replay
+   * per-target frames to an observer that attached late, so a run that lost
+   * its socket for a few seconds mid-batch legitimately reaches
+   * `command.complete` with targets it never saw settle. Leaving them
+   * non-terminal is what strands the progress strip, blocks the acknowledge
+   * control, and stops settled successes from ever being pruned - so the
+   * honest thing is to settle them as failures whose copy sends the user to
+   * the refreshed list, which `onSettled` invalidates moments later.
+   */
+  const settleCommand = (unsettledReason: string): void => {
+    if (command.settled) return;
+    command.settled = true;
+    activeCommandCount = Math.max(0, activeCommandCount - 1);
+    closeCommandClient(commandId);
+    unsettled.forEach((key) => {
+      useWorktreeDeleteRunStore.getState().failRun(key, unsettledReason);
+      releaseTargetKey(key);
+    });
+    unsettled.clear();
+    pendingSettledCallbacks.add(input.onSettled);
+    drainDeleteQueue();
+    flushSettledCallbacksIfIdle();
+  };
+  /**
+   * Ends the command WITHOUT settling anything: this host has no such method,
+   * so the fallback queue is about to run the work per target instead.
+   *
+   * Only STILL-UNSETTLED targets are handed over. On the common path that is
+   * all of them - the compatibility check rejects the very first openAck,
+   * before anything can settle. It matters on the path where the host is
+   * replaced mid-command by a build without the method: the observe session's
+   * compat check reports unsupported, and re-queueing a target that already
+   * reported a terminal frame would let a stale entry act on whatever record
+   * holds that path LATER. If the user has since started a fresh delete for it,
+   * that record is `queued`, and the stale entry would start a second,
+   * uncoordinated per-target stream for someone else's run. Filtering here
+   * keeps the invariant local instead of leaning on store state observed from
+   * the drain.
+   *
+   * Reservations stay held across the hand-off rather than being released and
+   * re-acquired, which would let a concurrent action slip a second delete for
+   * the same path in between. The settled-callback flush deliberately happens
+   * after the queue has the items, so an earlier run's pending invalidation
+   * cannot fire in the gap where the system looks idle but is not.
+   */
+  const handOffToFallback = (): void => {
+    if (command.settled) return;
+    command.settled = true;
+    activeCommandCount = Math.max(0, activeCommandCount - 1);
+    closeCommandClient(commandId);
+    const remaining = accepted.filter((item) =>
+      unsettled.has(keyFor(item.target.worktreePath)),
+    );
+    if (remaining.length === 0) {
+      // A replacement host can report unsupported after every target already
+      // settled. There is then no fallback item that can add this callback,
+      // but the completed command still changed the worktree list and needs
+      // its usual invalidation once the system is idle.
+      pendingSettledCallbacks.add(input.onSettled);
+    } else {
+      enqueueFallbackDeletes(input, remaining);
+    }
+    drainDeleteQueue();
+    flushSettledCallbacksIfIdle();
+  };
+
+  try {
+    const client = openOwnedDurableStreamClient(
+      input.openStreamTransport,
+      input.hostId,
+      (wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>) =>
+        new WorktreeDeleteBatchStreamClient({
+          wsStreamClient,
+          commandId,
+          source: "settings",
+          targets: accepted.map((item) => ({
+            worktreePath: item.target.worktreePath,
+            scripts: item.scripts,
+          })),
+          callbacks: {
+            onTargetStarted: (worktreePath, hasTeardown) =>
+              useWorktreeDeleteRunStore
+                .getState()
+                .updateRun(keyFor(worktreePath), (run) => ({
+                  ...run,
+                  status: "running",
+                  hasTeardown,
+                })),
+            onTargetPhase: (worktreePath, phase) =>
+              useWorktreeDeleteRunStore
+                .getState()
+                .updateRun(keyFor(worktreePath), (run) => ({
+                  ...run,
+                  activePhase: phase,
+                })),
+            onTargetOutput: (worktreePath, channel, chunk) =>
+              useWorktreeDeleteRunStore
+                .getState()
+                .updateRun(keyFor(worktreePath), (run) => ({
+                  ...run,
+                  log: [
+                    ...run.log,
+                    { id: run.log.length, channel, text: chunk },
+                  ],
+                })),
+            onTargetComplete: (worktreePath, deleted) => {
+              const key = keyFor(worktreePath);
+              useWorktreeDeleteRunStore.getState().completeRun(key, deleted);
+              unsettled.delete(key);
+              releaseTargetKey(key);
+            },
+            onTargetFailed: (worktreePath, reason) => {
+              const key = keyFor(worktreePath);
+              useWorktreeDeleteRunStore.getState().failRun(key, reason);
+              unsettled.delete(key);
+              releaseTargetKey(key);
+            },
+            // Terminal for the command. Anything still open here is a target
+            // whose own frames were missed while this client was away.
+            onCommandComplete: () => settleCommand(REATTACHED_MESSAGE),
+            onCommandFailed: (reason) => settleCommand(reason),
+            onUnsupported: () => handOffToFallback(),
+            onConnectionStatus: (status, reason) => {
+              // Only a terminal stream close BEFORE the command's terminal
+              // frame is an error. A recoverable drop surfaces as
+              // "reconnecting", and the batch client answers it by re-opening
+              // in observe mode - which can re-attach to a live command but
+              // can never start this one again.
+              if (status !== "closed" || reason === null) return;
+              settleCommand(CONNECTION_LOST_MESSAGE);
+            },
+          },
+        }),
+    );
+    commandRefs.set(commandId, client);
+    // A callback can settle the command DURING the build - in production the
+    // handshake is async, but nothing in the contract promises that, and a
+    // settle that ran before this registry entry existed would leave the
+    // transport open with nobody holding it.
+    if (command.settled) closeCommandClient(commandId);
+  } catch (error) {
+    settleCommand(startStreamErrorMessage(error));
+  }
+}
+
+/**
+ * Older-host fallback: hand the command's targets to the per-target queue that
+ * predates the batch method.
+ *
+ * Safe to run after `onUnsupported` precisely because that signal comes from
+ * the openAck compatibility check - the host never received a subscribe frame,
+ * so no deletion was attempted and re-issuing the work cannot double it.
+ */
+function enqueueFallbackDeletes(
+  input: StartWorktreeDeleteCommandInput,
+  accepted: ReadonlyArray<WorktreeDeleteRequestTarget>,
+): void {
+  accepted.forEach((item) => {
+    queuedDeletes.push({
+      key: worktreeDeleteRunKey(input.hostId, item.target.worktreePath),
+      hostId: input.hostId,
+      target: item.target,
+      scripts: item.scripts,
+      openStreamTransport: input.openStreamTransport,
+      onSettled: input.onSettled,
+    });
+  });
+  // Draining is the caller's, so the enqueue → drain → flush ordering stays
+  // visible in one place.
 }
 
 /**
@@ -600,7 +875,16 @@ function drainDeleteQueue(): void {
     const record = useWorktreeDeleteRunStore
       .getState()
       .runs.find((candidate) => candidate.key === next.key);
-    if (record === undefined || record.run.status !== "queued") continue;
+    if (record === undefined || record.run.status !== "queued") {
+      // Dropped before it ever ran (its modal was dismissed, or the record was
+      // pruned). Nothing started, so the reservation has to go with it -
+      // otherwise that host+worktree pair stays un-deletable for the rest of
+      // the session. Before commands existed the queue entry WAS the
+      // reservation and shifting it released it; now the two are separate and
+      // the release has to be explicit.
+      releaseTargetKey(next.key);
+      continue;
+    }
     startQueuedDelete(next);
   }
 }
@@ -616,6 +900,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
     if (settled) return;
     settled = true;
     activeDeleteStreamCount = Math.max(0, activeDeleteStreamCount - 1);
+    releaseTargetKey(item.key);
     pendingSettledCallbacks.add(item.onSettled);
     drainDeleteQueue();
     flushSettledCallbacksIfIdle();
@@ -625,7 +910,7 @@ function startQueuedDelete(item: QueuedWorktreeDelete): void {
     const client = openOwnedDurableStreamClient(
       item.openStreamTransport,
       item.hostId,
-      (wsStreamClient: WsStreamClient<HostStreamRpcRegistry>) =>
+      (wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>) =>
         new WorktreeDeleteStreamClient({
           wsStreamClient,
           worktreePath: item.target.worktreePath,
@@ -694,6 +979,29 @@ function closeDeleteClient(key: string): void {
   client?.close();
 }
 
+function closeCommandClient(commandId: string): void {
+  const client = commandRefs.get(commandId);
+  commandRefs.delete(commandId);
+  client?.close();
+}
+
+function releaseTargetKey(key: string): void {
+  activeTargetKeys.delete(key);
+}
+
+/**
+ * Drops a fallback-queue entry that has not started yet and frees its
+ * reservation. No-op for a target inside a command (never queued) and for one
+ * whose stream is already live - both settle through their own paths, and a
+ * live delete must keep its reservation until it actually ends.
+ */
+function discardQueuedDelete(key: string): void {
+  const index = queuedDeletes.findIndex((queued) => queued.key === key);
+  if (index === -1) return;
+  queuedDeletes.splice(index, 1);
+  releaseTargetKey(key);
+}
+
 function summarizeProgress(
   runs: readonly WorktreeDeleteRunRecord[],
 ): WorktreeDeleteProgressSummary {
@@ -750,7 +1058,13 @@ function progressGroups(
 }
 
 function flushSettledCallbacksIfIdle(): void {
-  if (activeDeleteStreamCount > 0 || queuedDeletes.length > 0) return;
+  if (
+    activeDeleteStreamCount > 0 ||
+    activeCommandCount > 0 ||
+    queuedDeletes.length > 0
+  ) {
+    return;
+  }
   const callbacks = [...pendingSettledCallbacks];
   pendingSettledCallbacks.clear();
   callbacks.forEach((callback) => callback());

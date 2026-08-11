@@ -72,10 +72,13 @@ function buildFakeBridge(
   }> = [];
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
+    relayBaseUrl: "ws://localhost:8787/attach",
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
+    listRegisteredHosts: async () => ({ kind: "network-error" as const }),
+    updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
@@ -97,6 +100,12 @@ function buildFakeBridge(
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
     })(),
+    listUserSessions: async () => ({ kind: "network-error" as const }),
+    revokeUserSession: async () => ({ kind: "network-error" as const }),
+    revokeAllSessions: async () => ({ kind: "network-error" as const }),
+    mintHostCredential: async () => ({ kind: "network-error" as const }),
+    requestStepUpChallenge: async () => ({ kind: "network-error" as const }),
+    verifyStepUpChallenge: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
@@ -109,7 +118,8 @@ function buildFakeBridge(
       start: async () => null,
     },
     notifications: {
-      show: async () => undefined,
+      show: async () => "presented" as const,
+      onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: (_handler: (payload: unknown) => void) => ({
         dispose: () => undefined,
       }),
@@ -137,7 +147,9 @@ function buildFakeBridge(
     }),
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
+      return { kind: "restarted" as const };
     },
+    getLastKnownLocalHostId: async () => null,
     trayState: {
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
       setIndicator: async (_state: TrayIndicatorState) => undefined,
@@ -290,10 +302,12 @@ function buildFakeBridge(
           version: null,
           pid: null,
           hostId: null,
+          layer0: null,
         },
         logs: [],
         links: [],
         supportEmail: "",
+        privateDeliveryAvailable: true,
       }),
       revealLog: async (target) => ({ target, path: "/tmp/test.log" }),
       tailLog: async (input) => ({
@@ -495,7 +509,7 @@ function buildFakeBridge(
       },
       getRemovalState: async () => ({ removedByUser: false }),
       clearRemoval: async () => undefined,
-      restartHost: async () => undefined,
+      restartHost: async () => ({ kind: "restarted" as const }),
       getHostLogs: async () => ({ path: null, tail: "" }),
       runDoctor: async () => ({ issues: [], ranAt: "" }),
       availableVersions: async () => {
@@ -707,6 +721,105 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     await expect(host.validateAuthTokenIdentity("jwt-1")).resolves.toEqual({
       kind: "rejected",
     });
+  });
+
+  it("delegates user sessions and step-up auth calls to the bridge", async () => {
+    const fake = buildFakeBridge(null);
+    const listUserSessions = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const revokeUserSession = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const revokeAllSessions = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const requestStepUpChallenge = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const verifyStepUpChallenge = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    fake.bridge.listUserSessions = listUserSessions;
+    fake.bridge.revokeUserSession = revokeUserSession;
+    fake.bridge.revokeAllSessions = revokeAllSessions;
+    fake.bridge.requestStepUpChallenge = requestStepUpChallenge;
+    fake.bridge.verifyStepUpChallenge = verifyStepUpChallenge;
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.listUserSessions("jwt", new AbortController().signal),
+    ).resolves.toEqual({
+      kind: "network-error",
+    });
+    await expect(
+      host.revokeUserSession("jwt", "family-1", true),
+    ).resolves.toEqual({ kind: "network-error" });
+    await expect(host.revokeAllSessions("jwt")).resolves.toEqual({
+      kind: "network-error",
+    });
+    await expect(host.requestStepUpChallenge("jwt")).resolves.toEqual({
+      kind: "network-error",
+    });
+    await expect(host.verifyStepUpChallenge("jwt", "123456")).resolves.toEqual({
+      kind: "network-error",
+    });
+
+    // Deliberately still one argument: an `AbortSignal` is not cloneable
+    // across the context bridge, so the signal is consumed on this side and
+    // never forwarded into main.
+    expect(listUserSessions).toHaveBeenCalledWith("jwt");
+    expect(revokeUserSession).toHaveBeenCalledWith("jwt", "family-1", true);
+    expect(revokeAllSessions).toHaveBeenCalledWith("jwt");
+    expect(requestStepUpChallenge).toHaveBeenCalledWith("jwt");
+    expect(verifyStepUpChallenge).toHaveBeenCalledWith("jwt", "123456");
+  });
+
+  it("settles a cancelled session list without waiting for the main-process reply", async () => {
+    // Main keeps running the GET (bounded by the fetcher's own timeout) because
+    // the signal cannot cross the bridge. What must not happen is the caller
+    // waiting it out: `AuthService.fetchUserSessions()` follows a list with a
+    // repair that spends a single-use refresh rotation, so cancellation has to
+    // reach it now rather than seconds later.
+    const fake = buildFakeBridge(null);
+    fake.bridge.listUserSessions = vi.fn(
+      () => new Promise<never>(() => undefined),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    const controller = new AbortController();
+    const pending = host.listUserSessions("jwt", controller.signal);
+    const reason = new Error("cancelled by the sessions query");
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+  });
+
+  it("rejects a session list requested with an already-aborted signal", async () => {
+    const fake = buildFakeBridge(null);
+    const listUserSessions = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    fake.bridge.listUserSessions = listUserSessions;
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    const controller = new AbortController();
+    const reason = new Error("cancelled before the request went out");
+    controller.abort(reason);
+
+    await expect(host.listUserSessions("jwt", controller.signal)).rejects.toBe(
+      reason,
+    );
+    expect(listUserSessions).not.toHaveBeenCalled();
   });
 
   it("exposes the desktop-only windows bridge without changing IRunnerHost", async () => {

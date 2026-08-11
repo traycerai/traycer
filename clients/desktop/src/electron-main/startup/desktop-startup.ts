@@ -47,6 +47,7 @@ import {
 } from "./host-launch-converge";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 import { respawnIfDown } from "./host-health-respawn";
+import { bootstrapHostWithInstallState } from "./host-install-state";
 import {
   checkForUpdatesAfterResume,
   checkForUpdatesNow,
@@ -521,6 +522,17 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
     desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
   });
+  // The mutation lane's NDJSON progress is the only evidence main has that a
+  // first install is still downloading/extracting rather than stuck. Feeding it
+  // to the lifecycle is what keeps `bootstrap()` from declaring "Traycer Host
+  // did not start" over an install that is minutes from finishing
+  // (traycer#862). Wired here, at the one place that owns both objects, rather
+  // than handing the lifecycle a controller it must not otherwise touch - the
+  // controller already holds the lifecycle, and the reverse edge would be a
+  // cycle.
+  hostController.onMutationProgress(() => {
+    host.notifyProvisioningActivity();
+  });
   const support = new DesktopSupportService({
     appName: appDisplayName,
     host,
@@ -692,7 +704,10 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     services.host.on("error", (err: HostStartupError) => {
       log.error("[desktop] host startup error", err);
     });
-    return services.host.bootstrap();
+    return bootstrapHostWithInstallState(
+      services.host,
+      services.hostController,
+    );
   });
 
   // All-platform watchdog for a host that dies without rewriting pid.json
@@ -707,7 +722,10 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // edge is missed - the monitor's reload-first convergence covers exactly
   // that, and only falls back to `HostController.recoverIfDown()` when the
   // disk still names an unreachable host. Started after bootstrap so the
-  // initial 60s readiness wait can't register as an outage.
+  // initial 60s readiness wait can't register as an outage. On a machine with
+  // no host installed that wait is skipped, so this starts promptly instead -
+  // harmless, because `tick` returns immediately while the snapshot is null
+  // and no recovery is pending, and so never reaches `recoverIfDown`.
   void hostReady.then(() => {
     // One authority for automatic restarts, holding both the liveness gate and
     // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
@@ -968,9 +986,9 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
-      // No .catch: the store's write chain never rejects (persist failures
-      // are retried once, then surrendered with an error log inside it).
-      services.desktopStateStore.flush(),
+      services.desktopStateStore.flush().catch((err) => {
+        log.warn("[desktop] per-window state flush failed", err);
+      }),
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),

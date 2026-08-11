@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 
@@ -256,7 +255,7 @@ function makeEditor(): Editor {
     element,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: { current: () => undefined },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,

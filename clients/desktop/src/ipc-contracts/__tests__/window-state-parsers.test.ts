@@ -1,5 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { parseLandingDraft, parseLandingDrafts } from "../window-state-parsers";
+import {
+  parseJsonValue,
+  parseLandingDraft,
+  parseLandingDrafts,
+} from "../window-state-parsers";
+
+describe("parseJsonValue", () => {
+  it("repairs hostile nesting without throwing or overflowing the stack", () => {
+    let nested: unknown = "leaf";
+    for (let index = 0; index < 20_000; index += 1) {
+      nested = [nested];
+    }
+
+    expect(() => parseJsonValue(nested)).not.toThrow();
+    expect(parseJsonValue(nested)).toBeUndefined();
+  });
+
+  it("fails the whole value when a nested object exceeds the depth limit", () => {
+    // The failure has to reach the top: a caller stores `null` on `undefined`,
+    // which is recoverable, but a truncated layout would be acknowledged and
+    // persisted as though it were the layout the renderer actually sent.
+    let nested: unknown = "leaf";
+    for (let index = 0; index < 20_000; index += 1) {
+      nested = { child: nested };
+    }
+
+    expect(parseJsonValue({ version: 2, deep: nested })).toBeUndefined();
+  });
+
+  it("drops only the unrepresentable keys of an otherwise valid object", () => {
+    // `JSON.stringify` omits these three, so dropping the key (rather than
+    // failing the record, which is reserved for depth exhaustion) keeps a
+    // round-trip equal to what the sender meant.
+    expect(
+      parseJsonValue({
+        keep: "yes",
+        gone: undefined,
+        alsoGone: () => "fn",
+        notFinite: Number.NaN,
+      }),
+    ).toEqual({ keep: "yes" });
+  });
+});
 
 describe("parseLandingDraft", () => {
   it("rejects a legacy prompt-only entry (no `content`)", () => {

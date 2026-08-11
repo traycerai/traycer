@@ -79,7 +79,7 @@ async function withAuthNetworkRetry<T>(
   return outcome;
 }
 
-function authRetryDelayMs(retry: number): number {
+export function authRetryDelayMs(retry: number): number {
   const candidate = AUTH_FETCH_RETRY_BASE_DELAY_MS * 2 ** (retry - 1);
   return Math.min(candidate, AUTH_FETCH_RETRY_MAX_DELAY_MS);
 }
@@ -279,6 +279,7 @@ export async function refreshOnceAbortable(args: {
   readonly authnBaseUrl: string;
   readonly token: string;
   readonly refreshToken: string;
+  readonly clientKind: "cli" | "desktop" | null;
   readonly signal: AbortSignal | null;
 }): Promise<AuthTokenRefreshResult> {
   const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
@@ -288,6 +289,7 @@ export async function refreshOnceAbortable(args: {
     args.authnBaseUrl,
     args.token,
     args.refreshToken,
+    args.clientKind,
     signal,
   );
 }
@@ -296,6 +298,7 @@ async function refreshAuthTokenOnceViaHttp(
   authnBaseUrl: string,
   token: string,
   refreshToken: string,
+  clientKind: "cli" | "desktop" | null,
   signal: AbortSignal,
 ): Promise<AuthTokenRefreshResult> {
   let response: Response;
@@ -307,7 +310,10 @@ async function refreshAuthTokenOnceViaHttp(
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({
+        refreshToken,
+        ...(clientKind === null ? {} : { clientKind }),
+      }),
       signal,
     });
   } catch {

@@ -23,6 +23,7 @@ import {
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   isArtifactMentionStep,
@@ -46,6 +47,7 @@ import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
@@ -53,8 +55,11 @@ const SLASH_MENU_COPY = {
 const LOAD_FAILED_LABEL = "Couldn't load commands";
 const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
-// Conservative bound for open-time placement decision; list is capped via
-// max-h CSS so the rendered menu never exceeds this.
+// Open-time preference only: how much room a side needs before it is worth
+// opening into. The rendered menu routinely exceeds this - a full roster of
+// files or terminals grows the list to its `max-h` viewport cap - and that is
+// fine, because `flip()` re-picks the side and `shift()` keeps it on screen
+// once the real height is known. Nothing here bounds the menu.
 const MENU_HEIGHT_ESTIMATE = 280;
 
 type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
@@ -113,11 +118,12 @@ export function ComposerMenu(props: ComposerMenuProps) {
     loadFailed,
     step,
   } = slice;
+  const paneFocused = usePaneFocused();
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
 
-  if (!open) return null;
+  if (!open || !paneFocused) return null;
   if (typeof document === "undefined") return null;
 
   return (
@@ -314,33 +320,51 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
             ) : null}
           </div>
           {refreshAvailable ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh artifacts"
-              title="Refresh artifacts"
-              className="-my-1 text-muted-foreground/70 hover:text-foreground"
-              disabled={artifactRefresh.refreshing}
-              onMouseDown={(event) => {
-                event.preventDefault();
-              }}
-              onClick={artifactRefresh.trigger}
+            <TooltipWrapper
+              label="Refresh artifacts"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <RefreshCwIcon
-                className={cn(
-                  "size-3.5",
-                  artifactRefresh.refreshing && "animate-spin",
-                )}
-              />
-            </Button>
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Refresh artifacts"
+                  className="-my-1 text-muted-foreground/70 hover:text-foreground"
+                  disabled={artifactRefresh.refreshing}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                  }}
+                  onClick={artifactRefresh.trigger}
+                >
+                  <RefreshCwIcon
+                    className={cn(
+                      "size-3.5",
+                      artifactRefresh.refreshing && "animate-spin",
+                    )}
+                  />
+                </Button>
+              </span>
+            </TooltipWrapper>
           ) : null}
         </div>
         <div
           ref={listRef}
           id={menuId}
           role="listbox"
-          className="max-h-[min(50vh,12rem)] overflow-y-auto py-1"
+          // The first menu (mention categories, slash commands) stays compact:
+          // tall enough for the full category roster without a scrollbar,
+          // while typed-query results scroll behind the cap. A provider
+          // submenu mirrors a bounded roster (terminals, git refs), so it
+          // grows to the viewport cap instead of scrolling.
+          className={cn(
+            "overflow-y-auto py-1",
+            kind === "mention" && step.kind === "provider"
+              ? "max-h-[70vh]"
+              : "max-h-[min(50vh,16rem)]",
+          )}
         >
           <ComposerMenuBody
             renderedItems={renderedItems}

@@ -4,6 +4,8 @@ import {
   prepareWorkspaceFoldersResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  workspaceBrowseFoldersRequestSchema,
+  workspaceBrowseFoldersResponseSchema,
   workspaceFileMentionSuggestionsResponseSchema,
   workspaceFolderMentionSuggestionsResponseSchema,
   workspaceGitBranchMentionSuggestionsResponseSchema,
@@ -15,8 +17,12 @@ import {
   workspaceListFileTreeRequestSchema,
   workspaceListFileTreeResponseSchema,
   workspacePathMentionSuggestionsRequestSchema,
+  workspacePrepareFoldersRequestSchemaV11,
+  workspacePrepareFoldersResponseSchemaV11,
   workspaceReadFileRequestSchema,
   workspaceReadFileResponseSchema,
+  workspaceWriteFileRequestSchema,
+  workspaceWriteFileResponseSchema,
   workspaceResolvePathsByRepoIdentifiersRequestSchema,
   workspaceResolvePathsByRepoIdentifiersResponseSchema,
   workspaceSearchPathsRequestSchema,
@@ -31,6 +37,17 @@ export const workspacePrepareFoldersV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: prepareWorkspaceFoldersRequestSchema,
   responseSchema: prepareWorkspaceFoldersResponseSchema,
+});
+
+// v1.1 folds the 4 standalone workspace-picker methods (T14) onto this
+// existing method name instead of shipping new ones (T18) - see the RPC
+// backward-compat decision log and `workspace/unary-schemas.ts`'s doc
+// comment on `workspacePrepareFoldersRequestSchemaV11` for the full design.
+export const workspacePrepareFoldersV11 = defineRpcContract({
+  method: "workspace.prepareFolders",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: workspacePrepareFoldersRequestSchemaV11,
+  responseSchema: workspacePrepareFoldersResponseSchemaV11,
 });
 
 export const workspaceMentionFilesV10 = defineRpcContract({
@@ -82,6 +99,15 @@ export const workspaceResolvePathsByRepoIdentifiersV10 = defineRpcContract({
   responseSchema: workspaceResolvePathsByRepoIdentifiersResponseSchema,
 });
 
+/**
+ * @deprecated Legacy "ship the whole tree" snapshot (flat list of up to 50k
+ * paths + workspace-wide git status), superseded by the live single-level
+ * stream `workspace.subscribeFileList` (file explorer) and the host-ranked
+ * `workspace.searchPaths` (path search). It CANNOT be removed - the method is
+ * on the released floor, so hosts must keep serving already-shipped clients -
+ * but its only remaining first-party caller is the file tree's fallback for
+ * hosts that predate `workspace.subscribeFileList`. Do not add new consumers.
+ */
 export const workspaceListFileTreeV10 = defineRpcContract({
   method: "workspace.listFileTree",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -96,11 +122,29 @@ export const workspaceListDirectoryV10 = defineRpcContract({
   responseSchema: workspaceListDirectoryResponseSchema,
 });
 
+export const workspaceBrowseFoldersV10 = defineRpcContract({
+  method: "workspace.browseFolders",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceBrowseFoldersRequestSchema,
+  responseSchema: workspaceBrowseFoldersResponseSchema,
+});
+
 export const workspaceReadFileV10 = defineRpcContract({
   method: "workspace.readFile",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceReadFileRequestSchema,
   responseSchema: workspaceReadFileResponseSchema,
+});
+
+/**
+ * Optional post-v1 file-edit capability. Older hosts omit it from their
+ * manifest and the GUI keeps file surfaces read-only.
+ */
+export const workspaceWriteFileV10 = defineRpcContract({
+  method: "workspace.writeFile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceWriteFileRequestSchema,
+  responseSchema: workspaceWriteFileResponseSchema,
 });
 
 export const workspaceSearchPathsV10 = defineRpcContract({

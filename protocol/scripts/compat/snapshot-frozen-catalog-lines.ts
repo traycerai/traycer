@@ -14,6 +14,7 @@ import {
   listAgentsResponseSchemaV30,
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
+  listAgentsResponseSchemaV60,
 } from "../../src/host/agent/shared";
 import {
   listGuiHarnessesResponseSchemaV10,
@@ -22,6 +23,7 @@ import {
   listGuiHarnessesResponseSchemaV30,
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
+  listGuiHarnessesResponseSchemaV60,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
   providersListResponseSchemaV10,
@@ -29,6 +31,7 @@ import {
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
@@ -48,11 +51,13 @@ const FIXTURES = {
   "agent.gui.listHarnesses@3.0": dump(listGuiHarnessesResponseSchemaV30),
   "agent.gui.listHarnesses@4.0": dump(listGuiHarnessesResponseSchemaV40),
   "agent.gui.listHarnesses@5.0": dump(listGuiHarnessesResponseSchemaV50),
+  "agent.gui.listHarnesses@6.0": dump(listGuiHarnessesResponseSchemaV60),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),
   "agent.list@4.0": dump(listAgentsResponseSchemaV40),
   "agent.list@5.0": dump(listAgentsResponseSchemaV50),
+  "agent.list@6.0": dump(listAgentsResponseSchemaV60),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
@@ -62,6 +67,7 @@ const FIXTURES = {
   "providers.list@3.0": dump(providersListResponseSchemaV30),
   "providers.list@4.0": dump(providersListResponseSchemaV40),
   "providers.list@5.0": dump(providersListResponseSchemaV50),
+  "providers.list@6.0": dump(providersListResponseSchemaV60),
 };
 
 const HEADER =

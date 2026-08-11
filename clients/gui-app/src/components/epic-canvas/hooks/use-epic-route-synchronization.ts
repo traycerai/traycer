@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
   useRouter,
@@ -32,6 +32,14 @@ import {
   resolveNestedFocusTarget,
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
+import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
+import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
+import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
+
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 type NavigateFn = UseNavigateResult<string>;
 
@@ -77,6 +85,7 @@ export function useEpicRouteSynchronization(
     (s) => s.applyNestedRouteFocus,
   );
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const [nestedRouteRetryToken, setNestedRouteRetryToken] = useState(0);
   const pendingCreateArtifactIds = useEpicCanvasStore(
     (s) => s.pendingCreateArtifactIds,
   );
@@ -132,6 +141,17 @@ export function useEpicRouteSynchronization(
     if (!hasRestoredCanvas) {
       return;
     }
+    const deferralMs = getNestedRouteApplicationDeferralMs(
+      epicId,
+      tabId,
+      nestedRouteTarget,
+    );
+    if (deferralMs !== null) {
+      const timeout = window.setTimeout(() => {
+        setNestedRouteRetryToken((token) => token + 1);
+      }, deferralMs);
+      return () => window.clearTimeout(timeout);
+    }
 
     if (nestedRouteTarget === null) {
       if (
@@ -176,6 +196,7 @@ export function useEpicRouteSynchronization(
     tabId,
     currentNestedTarget,
     applyNestedRouteFocus,
+    nestedRouteRetryToken,
   ]);
 
   // The nested-route target we last moved DOM focus to. This effect re-runs on
@@ -208,7 +229,10 @@ export function useEpicRouteSynchronization(
     const targetToFocus = resolvedNestedRouteTarget;
     const frame = window.requestAnimationFrame(() => {
       lastRestoredNestedTargetRef.current = targetToFocus;
-      focusNestedRouteTarget(targetToFocus);
+      focusNestedRouteTarget(
+        targetToFocus,
+        consumeNestedRoutePrimaryEditorFocus(epicId, tabId, targetToFocus),
+      );
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -489,13 +513,28 @@ function isNestedRouteTargetApplied(
   return areNestedFocusTargetsEqual(currentTarget, routeTarget);
 }
 
-function focusNestedRouteTarget(target: NestedFocusTarget): void {
+function focusNestedRouteTarget(
+  target: NestedFocusTarget,
+  focusPrimaryEditor: boolean,
+): void {
   const element =
     target.tileInstanceId === undefined
       ? findActivePaneElement(target.paneId)
       : findSelectedTileElement(target.tileInstanceId);
   if (element === null) {
     return;
+  }
+  if (!focusPrimaryEditor && shouldYieldPaneActivationRouteFocus(element)) {
+    return;
+  }
+  if (focusPrimaryEditor) {
+    const editor =
+      element.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+      element.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
+    if (editor !== null) {
+      editor.focus({ preventScroll: true });
+      return;
+    }
   }
   // The pane / tab container is an ancestor of the tile's editing surface, and
   // this effect re-runs on every canvas mutation (a title rename, for one). If
@@ -520,7 +559,22 @@ function findActivePaneElement(paneId: string): HTMLElement | null {
   );
 }
 
+/**
+ * A hosted chat's body no longer sits inside a `[data-tab-instance-id]`
+ * pane-tab layer - `TabGroupView` still keeps that selected wrapper mounted
+ * around `TileSurfaceSlot`'s bare geometry anchor (it carries layout, tab
+ * strip, and DnD target duties independent of hosting), so it is always
+ * found by the physical query and would shadow the hosted fallback if tried
+ * second (design-review slice-4 finding 4). The hosted record, when one
+ * exists for this exact `tileInstanceId`, is therefore checked FIRST: its
+ * presence unambiguously means the real body lives there, never in the
+ * physical wrapper. With the stable-tile-surface-host switch off (or for a
+ * non-hosted tile kind) no hosted record ever exists, so this falls straight
+ * through to the same physical lookup as before - byte-equivalent.
+ */
 function findSelectedTileElement(tileInstanceId: string): HTMLElement | null {
+  const hosted = findHostedTileElement(document, tileInstanceId);
+  if (hosted !== null) return hosted;
   const elements = document.querySelectorAll<HTMLElement>(
     "[data-tab-instance-id][data-selected='true']",
   );

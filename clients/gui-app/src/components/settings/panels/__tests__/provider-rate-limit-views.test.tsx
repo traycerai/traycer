@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanup,
@@ -14,6 +13,7 @@ import {
   ClaudeRateLimitView,
   CodexRateLimitView,
   GrokRateLimitView,
+  HuggingFaceRateLimitView,
   KiloCodeRateLimitView,
   OpenRouterRateLimitView,
   ProviderRateLimitBody,
@@ -31,6 +31,10 @@ type OpenRouterRateLimits = Extract<
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type HuggingFaceRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "huggingface" }
+>;
 
 const NOW = Date.now();
 
@@ -620,6 +624,97 @@ describe("OpenRouterRateLimitView", () => {
   });
 });
 
+describe("HuggingFaceRateLimitView", () => {
+  const huggingFace: HuggingFaceRateLimits = {
+    provider: "huggingface",
+    available: true,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  // A pay-as-you-go account: no included allowance, so no denominator exists.
+  const spendOnly: HuggingFaceRateLimits = {
+    ...huggingFace,
+    includedUsd: null,
+    remainingIncludedUsd: null,
+    limitUsd: null,
+    remainingLimitUsd: null,
+  };
+
+  it("renders a credits bar from the included allowance", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getAllByText("Included credits").length).toBeGreaterThan(0);
+    expect(screen.getByText("$0.50 / $2.00")).toBeTruthy();
+  });
+
+  it("leads with remaining included credits", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.getByText("$1.50")).toBeTruthy();
+  });
+
+  it("renders the spend-limit and request detail rows", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Spend limit")).toBeTruthy();
+    expect(screen.getByText("$10.00")).toBeTruthy();
+    expect(screen.getByText("Requests")).toBeTruthy();
+  });
+
+  it("falls back to spend-only wording with no bar when there is no included allowance", () => {
+    render(<HuggingFaceRateLimitView data={spendOnly} variant="settings" />);
+    // No denominator, so no bar and no invented "0 of unknown" row.
+    expect(screen.queryByText("$0.50 / $2.00")).toBeNull();
+    expect(screen.queryByText("Included credits left")).toBeNull();
+    expect(screen.getByText("Spent this period")).toBeTruthy();
+    expect(screen.getByText("$0.50")).toBeTruthy();
+  });
+
+  it("clamps the bar when spend has run past the included allowance", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, usedUsd: 5, remainingIncludedUsd: 0 }}
+        variant="settings"
+      />,
+    );
+    // Clamped to the allowance rather than overflowing the meter.
+    expect(screen.getByText("$2.00 / $2.00")).toBeTruthy();
+  });
+
+  it("renders the billing period the figures cover", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("drops the billing period rather than rendering Invalid Date", () => {
+    // The endpoint is schema-less, so an unparseable bound degrades to no row.
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, periodEnd: "not-a-date" }}
+        variant="settings"
+      />,
+    );
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  it("condenses the Overview to the bar and the headline figure", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={huggingFace}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.queryByText("Spend limit")).toBeNull();
+    expect(screen.queryByText("Requests")).toBeNull();
+  });
+});
+
 describe("KiloCodeRateLimitView", () => {
   const kilo: KiloCodeRateLimits = {
     provider: "kilocode",
@@ -777,6 +872,28 @@ describe("GrokRateLimitView", () => {
 });
 
 describe("ProviderRateLimitDetail dispatch", () => {
+  it("dispatches to the Hugging Face view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "huggingface",
+          available: true,
+          includedUsd: 2,
+          usedUsd: 0.5,
+          remainingIncludedUsd: 1.5,
+          limitUsd: null,
+          remainingLimitUsd: null,
+          numRequests: null,
+          periodStart: null,
+          periodEnd: null,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+  });
+
   it("dispatches to the OpenRouter view", () => {
     render(
       <ProviderRateLimitDetail

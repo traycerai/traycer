@@ -311,6 +311,9 @@ describe("reconcileCli - newest-wins", () => {
   });
 
   it("trusts a newer manifest CLI silently", async () => {
+    // The probe must CONFIRM the newer version - trusting rests on the
+    // binary being able to answer, not on the manifest's claim alone (see
+    // the probe-failure tests below for the other half of that contract).
     const { deps, install } = makeDeps({
       manifest: {
         version: "2.0.0",
@@ -321,6 +324,7 @@ describe("reconcileCli - newest-wins", () => {
       },
       bundledPath: "/bundled/traycer",
       bundledVersion: "1.4.2",
+      probeCliVersion: () => "2.0.0",
     });
     const result = await reconcileCli(deps);
     expect(install).not.toHaveBeenCalled();
@@ -328,6 +332,62 @@ describe("reconcileCli - newest-wins", () => {
     if (result.kind === "trusted-equal") {
       expect(result.installedVersion).toBe("2.0.0");
       expect(result.binaryPath).toBe("/new/traycer");
+    }
+  });
+
+  it("re-stages the bundled CLI over a desktop-owned slot binary that fails the version probe", async () => {
+    // v1.1.9-rc.3 field incident: the slot binary was overwritten with a
+    // non-executable file while the manifest kept claiming 2.0.0. The
+    // version compare then read "newer than bundled" on every launch and
+    // trusted a binary that could not even print `--version` - a
+    // permanently dead CLI with no self-heal short of reinstalling the
+    // app. A failed probe on the desktop-owned slot must route through
+    // the upgrade path, never the trust branch.
+    const { deps, install } = makeDeps({
+      manifest: {
+        version: "2.0.0",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/stable/traycer",
+        source: "desktop",
+        pendingUpgrade: null,
+      },
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).toHaveBeenCalledWith({
+      bundledCliPath: "/bundled/traycer",
+      version: "1.4.2",
+      source: "desktop",
+    });
+    expect(result.kind).toBe("upgraded");
+    if (result.kind === "upgraded") {
+      expect(result.previousVersion).toBe("2.0.0");
+      expect(result.newVersion).toBe("1.4.2");
+    }
+  });
+
+  it("routes a probe-failed slot to upgrade-blocked when no bundled binary is reachable", async () => {
+    // Broken slot AND no bundled source to heal from (a packaging bug):
+    // surfacing upgrade-blocked beats calling the dead binary trusted.
+    const { deps, install } = makeDeps({
+      manifest: {
+        version: "2.0.0",
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: "/stable/traycer",
+        source: "desktop",
+        pendingUpgrade: null,
+      },
+      bundledPath: null,
+      bundledVersion: "1.4.2",
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).not.toHaveBeenCalled();
+    expect(result.kind).toBe("upgrade-blocked");
+    if (result.kind === "upgrade-blocked") {
+      expect(result.reason).toBe("manifest-rewrite-failed");
     }
   });
 
@@ -361,7 +421,11 @@ describe("reconcileCli - newest-wins", () => {
     expect(result.kind).toBe("no-cli-anywhere");
   });
 
-  it("trusts a PATH CLI silently when no manifest exists", async () => {
+  // No-manifest PATH trust now rests on a `--version` probe, never on the
+  // file name alone. The former "trust silently" contract is exactly what
+  // let an imposter suppress first-launch staging (oss #872 below).
+  it("trusts a non-npm PATH CLI when the probe confirms it speaks --version", async () => {
+    const probe = vi.fn(() => "1.5.0");
     const { deps, install } = makeDeps({
       manifest: null,
       bundledPath: "/bundled/traycer",
@@ -371,15 +435,157 @@ describe("reconcileCli - newest-wins", () => {
         binaryPath: "/usr/local/bin/traycer",
         version: null,
       } as const,
+      probeCliVersion: probe,
     });
     const result = await reconcileCli(deps);
+    expect(probe).toHaveBeenCalledWith("/usr/local/bin/traycer");
     expect(install).not.toHaveBeenCalled();
     expect(result.kind).toBe("trusted-newer");
     if (result.kind === "trusted-newer") {
       expect(result.source).toBe("path");
       expect(result.binaryPath).toBe("/usr/local/bin/traycer");
-      expect(result.installedVersion).toBeNull();
+      expect(result.installedVersion).toBe("1.5.0");
     }
+  });
+
+  it("stages the bundled CLI when the PATH `traycer` fails the version probe (oss #872: name squatted by a desktop-app launcher)", async () => {
+    // Field case: an AppImage manager exposed the DESKTOP APP as `traycer`
+    // on PATH. Trusting it skipped bundled staging, so the slot binary +
+    // manifest never existed, service install threw
+    // SERVICE_CLI_PATH_UNRESOLVED, and every status query relaunched the
+    // desktop into its single-instance lock. A probe-failed PATH candidate
+    // must route to fresh-install staging, not the trust branch.
+    const { deps, install } = makeDeps({
+      manifest: null,
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/home/me/.local/bin/traycer",
+        version: null,
+      } as const,
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).toHaveBeenCalledWith({
+      bundledCliPath: "/bundled/traycer",
+      version: "1.4.2",
+      source: "desktop",
+    });
+    expect(result.kind).toBe("installed-bundled");
+    if (result.kind === "installed-bundled") {
+      expect(result.version).toBe("1.4.2");
+      expect(result.binaryPath).toBe("/stable/traycer");
+    }
+  });
+
+  it("returns trusted-equal when the probed PATH version matches bundled", async () => {
+    const { deps, install } = makeDeps({
+      manifest: null,
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/usr/local/bin/traycer",
+        version: null,
+      } as const,
+      probeCliVersion: () => "1.4.2",
+    });
+    const result = await reconcileCli(deps);
+    expect(install).not.toHaveBeenCalled();
+    expect(result.kind).toBe("trusted-equal");
+    if (result.kind === "trusted-equal") {
+      expect(result.installedVersion).toBe("1.4.2");
+    }
+  });
+
+  it("still trusts a probed non-npm PATH CLI that is OLDER than bundled (unknown owner - no hint, no overwrite)", async () => {
+    // Behavior-preserving on purpose: a healthy manifest-less CLI from a
+    // package manager that skipped `cli mark-source` keeps working. Only a
+    // FAILED probe changes behavior.
+    const { deps, install } = makeDeps({
+      manifest: null,
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/usr/local/bin/traycer",
+        version: null,
+      } as const,
+      probeCliVersion: () => "1.0.0",
+    });
+    const result = await reconcileCli(deps);
+    expect(install).not.toHaveBeenCalled();
+    expect(result.kind).toBe("trusted-newer");
+    if (result.kind === "trusted-newer") {
+      expect(result.installedVersion).toBe("1.0.0");
+    }
+  });
+
+  it("does not re-probe when discovery already carries a probed PATH version", async () => {
+    // Production `discoverCli` vets PATH candidates itself; reconcile must
+    // reuse that verdict instead of exec-ing the binary a second time.
+    const probe = vi.fn(() => "9.9.9");
+    const { deps, install } = makeDeps({
+      manifest: null,
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/usr/local/bin/traycer",
+        version: "1.5.0",
+      } as const,
+      probeCliVersion: probe,
+    });
+    const result = await reconcileCli(deps);
+    expect(probe).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+    expect(result.kind).toBe("trusted-newer");
+    if (result.kind === "trusted-newer") {
+      expect(result.installedVersion).toBe("1.5.0");
+    }
+  });
+
+  it("stages the bundled CLI when an npm-owned PATH CLI cannot report a version", async () => {
+    // Same defect class through the npm gate: `source: "npm"` with a null
+    // version means the npm-owned binary could not answer - it must not be
+    // trusted version-less.
+    const { deps, install } = makeDeps({
+      manifest: null,
+      bundledPath: "/bundled/traycer",
+      bundledVersion: "1.4.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/usr/local/lib/node_modules/@traycerai/cli/traycer",
+        version: null,
+        source: "npm",
+      } as const,
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).toHaveBeenCalledWith({
+      bundledCliPath: "/bundled/traycer",
+      version: "1.4.2",
+      source: "desktop",
+    });
+    expect(result.kind).toBe("installed-bundled");
+  });
+
+  it("returns no-cli-anywhere when the PATH probe fails and no bundled CLI is reachable", async () => {
+    const { deps, install } = makeDeps({
+      manifest: null,
+      bundledPath: null,
+      bundledVersion: "1.4.2",
+      discovery: {
+        kind: "path",
+        binaryPath: "/home/me/.local/bin/traycer",
+        version: null,
+      } as const,
+      probeCliVersion: () => null,
+    });
+    const result = await reconcileCli(deps);
+    expect(install).not.toHaveBeenCalled();
+    expect(result.kind).toBe("no-cli-anywhere");
   });
 
   it("surfaces npm upgrade instructions for an older npm-owned PATH CLI without a manifest", async () => {
@@ -557,6 +763,7 @@ describe("reconcileCli - newest-wins", () => {
       },
       bundledPath: "/bundled/traycer",
       bundledVersion: "1.4.2",
+      probeCliVersion: () => "1.4.2",
     });
     const result = await reconcileCli(deps);
     expect(install).not.toHaveBeenCalled();

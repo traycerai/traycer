@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
@@ -568,7 +567,8 @@ describe("resolveQuoteSelection - validity rules", () => {
     frozen.textContent = "Frozen prefix.";
     root.appendChild(frozen);
     const unstable = document.createElement("div");
-    unstable.setAttribute("data-md-unstable", "");
+    // Tailmark's StreamingMarkdown marker for the open tail.
+    unstable.setAttribute("data-md-streaming", "");
     const tail = document.createElement("p");
     tail.textContent = "Streaming tail.";
     unstable.appendChild(tail);

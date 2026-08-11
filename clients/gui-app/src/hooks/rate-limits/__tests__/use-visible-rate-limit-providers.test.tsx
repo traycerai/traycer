@@ -79,7 +79,16 @@ function providerState(args: {
     availabilityPending: args.availabilityPending,
     providerId: args.providerId,
     auth: auth(args.status),
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     profiles: [],
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
   };
 }
 

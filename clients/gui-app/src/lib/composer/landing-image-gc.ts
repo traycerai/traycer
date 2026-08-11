@@ -1,20 +1,22 @@
 /**
  * Garbage collection for the landing / new-epic composer's content-addressed
  * image bytes (`landing-image-store`). Reclaims IndexedDB bytes + session
- * entries that no draft references, runs the ready-gated startup orphan sweep,
- * and enforces a per-partition byte budget on paste.
+ * entries that no draft references and runs the ready-gated startup orphan
+ * sweep. Byte-budget ownership (the 64 MB cap, live-root/referenced-byte
+ * accounting, and in-flight reservations) lives in `landing-image-budget.ts`;
+ * this module only imports its live-root helper for the reconcile sweep below.
  *
  * This module runs OUTSIDE React render (store ops + GC), so it reads stores
  * imperatively via `getState()` at call time. It is consumer-driven: the draft
- * store, composer store, paste hook, and submit path call into it on the
+ * store, draft-runtime registry, paste hook, and submit path call into it on the
  * documented triggers (§6 of the tech plan).
  *
  * Two invariants drive the reconcile logic:
  *
  * - **[C2] Roots, never victims.** The set of referenced hashes is the union of
- *   every persisted draft's content AND the live editor mirror. The session
+ *   every persisted draft's content AND every keyed live runtime. The session
  *   cache additionally protects the paste→insert window: a just-pasted hash has
- *   bytes in IndexedDB before its node lands in `currentContent`, so it must not
+ *   bytes in IndexedDB before its node lands in a runtime mirror, so it must not
  *   be IDB-deleted while it is still session-cached.
  * - **[C1] Ready-gated sweep.** `reconcile()` is a no-op until the draft set is
  *   known. On browser the draft store hydrates synchronously from localStorage;
@@ -23,32 +25,14 @@
  *   delete every restored image's bytes moments before the drafts arrive.
  */
 
-import { toast } from "sonner";
-
-import type { JsonContent } from "@traycer/protocol/common/registry";
-
-import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import {
   deleteImage,
   imageHashKeys,
   releaseSession,
   sessionHashKeys,
 } from "@/lib/composer/landing-image-store";
-import {
-  useLandingDraftStore,
-  type LandingDraftTab,
-} from "@/stores/home/landing-draft-store";
-import { landingComposerLiveImageHashes } from "@/stores/composer/landing-composer-store";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
-
-/**
- * Per-partition byte budget for stored landing images. Flagged TUNABLE — shipped
- * at 64 MB (≈ 12× the 5 MB per-image cap). Per-runtime partitioning already
- * isolates this to the current window, so the budget is scoped to this window's
- * drafts; there is no cross-window accounting.
- */
-export const LANDING_IMAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 
 const RECONCILE_DEBOUNCE_MS = 250;
 
@@ -143,28 +127,6 @@ export function landingDraftsReady(): boolean {
   return draftsReady;
 }
 
-function imageHashesOf(content: JsonContent): Set<string> {
-  const hashes = new Set<string>();
-  for (const atom of collectImageAtoms(content)) {
-    if (atom.hash !== null) hashes.add(atom.hash);
-  }
-  return hashes;
-}
-
-/**
- * Every hash that must NOT be collected: union of all persisted drafts'
- * content and the live editor mirror. The session cache is handled separately
- * to protect the normal paste-to-insert window.
- */
-function computeLiveRoots(): Set<string> {
-  const roots = new Set<string>();
-  for (const draft of useLandingDraftStore.getState().drafts) {
-    for (const hash of imageHashesOf(draft.content)) roots.add(hash);
-  }
-  for (const hash of landingComposerLiveImageHashes()) roots.add(hash);
-  return roots;
-}
-
 /**
  * Reclaim image bytes/session entries no longer referenced. No-op until ready
  * [C1]. IDB orphans exclude both the live roots and the current session keys —
@@ -182,7 +144,7 @@ export async function reconcile(): Promise<void> {
   // session before that write — is reflected in `liveRoots`/`sessionKeys` and is
   // not mistaken for an orphan and deleted. [C2: the paste↔reconcile-await race]
   const stored = await imageHashKeys();
-  const liveRoots = computeLiveRoots();
+  const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();
   const protectedFromDelete = new Set(sessionKeys);
   const orphans = stored.filter(
@@ -224,102 +186,6 @@ export function scheduleLandingImageReconcile(): void {
     reconcileTimer = null;
     void reconcile();
   }, RECONCILE_DEBOUNCE_MS);
-}
-
-function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
-  // Bytes are content-addressed: a hash present in N drafts occupies the store
-  // ONCE, so dedupe by hash before summing — counting it per-draft would evict or
-  // block too eagerly. Base64-only atoms (no hash) aren't in the store; skip them.
-  // A node with no `size` attr — only a 0-byte file yields that — counts as 0; the
-  // per-image 5 MB paste cap bounds the untracked slack, so the soft budget stays
-  // meaningful.
-  const sizeByHash = new Map<string, number>();
-  for (const draft of drafts) {
-    for (const atom of collectImageAtoms(draft.content)) {
-      if (atom.hash === null) continue;
-      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
-    }
-  }
-  let total = 0;
-  for (const size of sizeByHash.values()) total += size;
-  return total;
-}
-
-/**
- * Drop a draft and reclaim the image bytes it solely referenced. The evicted
- * draft is an intentional discard, so its hashes ARE deleted from IndexedDB (and
- * their session entries released) even though they were session-cached — unless
- * another remaining draft / the live editor still references them.
- */
-function evictLandingDraftImages(draft: LandingDraftTab): void {
-  useLandingDraftStore.getState().closeDraft(draft.id);
-  const remainingRoots = computeLiveRoots();
-  for (const hash of imageHashesOf(draft.content)) {
-    if (remainingRoots.has(hash)) continue;
-    void deleteImage(hash);
-    releaseSession(hash);
-  }
-}
-
-/**
- * Reserve budget for a paste of `incomingBytes`. Returns whether the paste may
- * proceed. When the current referenced bytes + the incoming bytes would exceed
- * the budget, evict the oldest drafts by `lastTouchedAt` — EXCLUDING the active
- * draft — until back under budget, toasting each eviction. If only the active
- * draft remains and its own paste still exceeds the budget, the paste is blocked
- * with a toast (return false).
- */
-export function reserveLandingImageBudget(incomingBytes: number): boolean {
-  const { drafts, activeDraftId } = useLandingDraftStore.getState();
-  let referenced = referencedImageBytes(drafts);
-  if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) return true;
-
-  // With no active draft, this paste is not attributed to any existing draft, so
-  // `draft.id !== activeDraftId` would exclude NOTHING and the eviction below
-  // would destroy unrelated in-progress drafts to make room for it. Block the
-  // paste instead — we never evict user drafts for an unattributed paste.
-  if (activeDraftId === null) {
-    reportableErrorToast(
-      "Couldn't add the image.",
-      {
-        description: "It would exceed this window's image storage budget.",
-      },
-      {
-        title: "Could not add image",
-        message: "The image storage budget was exceeded.",
-        code: null,
-        source: "Chat composer",
-      },
-    );
-    return false;
-  }
-
-  const evictable = drafts
-    .filter((draft) => draft.id !== activeDraftId)
-    .sort((a, b) => a.lastTouchedAt - b.lastTouchedAt);
-
-  for (const draft of evictable) {
-    if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) break;
-    evictLandingDraftImages(draft);
-    toast.info("Cleared an older draft to free up image space.");
-    referenced = referencedImageBytes(useLandingDraftStore.getState().drafts);
-  }
-
-  if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) return true;
-
-  reportableErrorToast(
-    "Couldn't add the image.",
-    {
-      description: "It would exceed this window's image storage budget.",
-    },
-    {
-      title: "Could not add image",
-      message: "The image storage budget was exceeded.",
-      code: null,
-      source: "Chat composer",
-    },
-  );
-  return false;
 }
 
 // Browser becomes ready once the draft store has hydrated synchronously from

@@ -2,9 +2,11 @@ import type { Element, Root, Text } from "hast";
 import { visit } from "unist-util-visit";
 import { TRAYCER_AGENT_TAG } from "./const";
 
-const AGENT_ID_PATTERN =
-  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-const AGENT_ID_LENGTH = 36;
+const UUID_REFERENCE_TOKEN_PATTERN =
+  /(?<![0-9a-f-])[0-9a-f][0-9a-f-]{7,35}(?![0-9a-f-])/gi;
+const UUID_REFERENCE_SHAPE =
+  /^[0-9a-f]{8}(?:-[0-9a-f]{0,4})?(?:-[0-9a-f]{0,4})?(?:-[0-9a-f]{0,4})?(?:-[0-9a-f]{0,12})?$/i;
+const UUID_REFERENCE_MIN_LENGTH = 8;
 
 export function rehypeTraycerAgentReferences() {
   return (tree: Root) => {
@@ -29,13 +31,14 @@ export function rehypeTraycerAgentReferences() {
 }
 
 function splitAgentReferenceText(value: string): Array<Text | Element> | null {
-  if (value.length < AGENT_ID_LENGTH || !value.includes("-")) return null;
-  AGENT_ID_PATTERN.lastIndex = 0;
+  if (value.length < UUID_REFERENCE_MIN_LENGTH) return null;
+  UUID_REFERENCE_TOKEN_PATTERN.lastIndex = 0;
   const nodes: Array<Text | Element> = [];
   let cursor = 0;
 
-  for (const match of value.matchAll(AGENT_ID_PATTERN)) {
+  for (const match of value.matchAll(UUID_REFERENCE_TOKEN_PATTERN)) {
     const agentId = match[0];
+    if (!isUuidReferenceCandidate(agentId)) continue;
     const start = match.index;
     if (start > cursor) {
       nodes.push({ type: "text", value: value.slice(cursor, start) });
@@ -49,6 +52,10 @@ function splitAgentReferenceText(value: string): Array<Text | Element> | null {
     nodes.push({ type: "text", value: value.slice(cursor) });
   }
   return nodes;
+}
+
+export function isUuidReferenceCandidate(value: string): boolean {
+  return UUID_REFERENCE_SHAPE.test(value);
 }
 
 export function agentReferenceElement(

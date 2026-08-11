@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, renderHook, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -6,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import type {
-  CanonicalTerminalSessionInfo,
-  ListTerminalsResponseV21,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+  ListTerminalsResponseV22,
   TerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -70,13 +69,14 @@ const listKey = [
 ] as const;
 
 function sessionInfo(
-  overrides: Partial<CanonicalTerminalSessionInfo>,
-): CanonicalTerminalSessionInfo {
+  overrides: Partial<CanonicalTerminalSessionInfoWithCurrentCwd>,
+): CanonicalTerminalSessionInfoWithCurrentCwd {
   return {
     sessionId: SESSION_ID,
     scope: { kind: "epic", epicId: EPIC_ID },
     sessionKind: "terminal",
     cwd: "/work/repo",
+    currentCwd: "/work/repo",
     shellCommand: "/bin/zsh",
     shellArgs: [],
     cols: 80,
@@ -121,7 +121,7 @@ function setup() {
     sessionId: "term-other",
     title: "other",
   });
-  queryClient.setQueryData<ListTerminalsResponseV21>(listKey, {
+  queryClient.setQueryData<ListTerminalsResponseV22>(listKey, {
     sessions: [sessionInfo({}), otherSession],
     homeCwd: HOME_CWD,
   });
@@ -200,7 +200,7 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV21>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
     expect(data).toBeDefined();
     const patched = data?.sessions.find((s) => s.sessionId === SESSION_ID);
     expect(patched?.activeProcessName).toBe("bun");
@@ -239,14 +239,89 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV21>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
     const patched = data?.sessions.find((s) => s.sessionId === SESSION_ID);
     expect(patched?.title).toBe("renamed");
     expect(patched?.activeProcessName).toBe("vim");
+    expect(patched?.currentCwd).toBe("/work/repo");
     expect(data?.homeCwd).toBe(HOME_CWD);
     expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
       false,
     );
     expect(harness.factoryCalls()).toBe(1);
+  });
+
+  it("patches a live current-directory update into the cached row", async () => {
+    const harness = setup();
+    await waitFor(() => {
+      expect(harness.rendered.result.current).not.toBeNull();
+    });
+
+    act(() => {
+      harness.callbacks().onSessionUpdated({
+        kind: "sessionUpdated",
+        hasBinaryPayload: false,
+        sessionId: SESSION_ID,
+        session: sessionInfo({ currentCwd: "/work/next" }),
+      });
+    });
+
+    const data =
+      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
+    expect(
+      data?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("/work/next");
+
+    act(() => {
+      harness.callbacks().onSessionUpdated({
+        kind: "sessionUpdated",
+        hasBinaryPayload: false,
+        sessionId: SESSION_ID,
+        session: sessionInfo({ currentCwd: "" }),
+      });
+    });
+
+    expect(
+      harness.queryClient
+        .getQueryData<ListTerminalsResponseV22>(listKey)
+        ?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("");
+    expect(data?.homeCwd).toBe(HOME_CWD);
+    expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
+      false,
+    );
+  });
+
+  it("clears a cached cwd when the first stream frame explicitly reports empty", async () => {
+    const harness = setup();
+    await waitFor(() => {
+      expect(harness.rendered.result.current).not.toBeNull();
+    });
+
+    act(() => {
+      harness.callbacks().onSnapshot(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessionId: SESSION_ID,
+          session: sessionInfo({ currentCwd: "" }),
+          scrollback: "",
+          ackCreditSupported: true,
+        },
+        "",
+      );
+    });
+
+    expect(
+      harness.queryClient
+        .getQueryData<ListTerminalsResponseV22>(listKey)
+        ?.sessions.find((session) => session.sessionId === SESSION_ID)
+        ?.currentCwd,
+    ).toBe("");
+    expect(harness.queryClient.getQueryState(listKey)?.isInvalidated).toBe(
+      false,
+    );
   });
 });

@@ -30,15 +30,19 @@ import {
   listAgentsResponseSchemaV30,
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
+  listAgentsResponseSchemaV60,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
   agentSummarySchemaV40,
   agentSummarySchemaV50,
+  agentSummarySchemaV60,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
+  forkAgentRequestSchema,
+  forkAgentResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 
 // ─── Agent-to-agent unary surface ─────────────────────────────────────────
@@ -586,7 +590,11 @@ export const agentListV60 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  responseSchema: listAgentsResponseSchema,
+  // Frozen: the v1.1.9 tags shipped this line, so it must serve the v6.0
+  // harness id set rather than the live one. Before that release it pointed at
+  // the canonical schema - the same defect that let `omp` first try to ride
+  // v5.0, one line later.
+  responseSchema: listAgentsResponseSchemaV60,
 });
 
 export const agentListUpgradeV5ToV6 = defineUpgradePath<
@@ -698,6 +706,141 @@ export const agentListDowngradeV6ToV1 = defineDowngradePath<
   }),
 });
 
+export const agentListV70 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 7, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV6ToV7 = defineUpgradePath<
+  typeof agentListV60,
+  typeof agentListV70
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 7, minor: 0 },
+  // The request shape is identical. Parsing the response through the live v7
+  // schema default-fills `runConfig: null` on every released v6 row.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => listAgentsResponseSchema.parse(response),
+});
+
+export const agentListDowngradeV7ToV6 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV60
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hugging Face agents so an already-shipped v6.0 client's strict decode
+  // never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV60.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV60.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV5 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV50
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop omp/Hugging Face agents so an already-shipped v5.0 client's strict
+  // decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV50.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV50.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV4 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV40
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hermes/omp/Hugging Face agents so an already-shipped v4.0 client's
+  // strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV40.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV40.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV3 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV30
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Devin/Pi/Hermes/omp/Hugging Face agents so an already-shipped v3.0
+  // client's strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV30.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV30.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV2 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV20
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV20.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV20.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV7ToV1 = defineDowngradePath<
+  typeof agentListV70,
+  typeof agentListV10
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
 export const agentSendMessageV10 = defineRpcContract({
   method: "agent.sendMessage",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -717,4 +860,16 @@ export const agentStopV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: stopAgentRequestSchema,
   responseSchema: stopAgentResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method - an old host simply lacks it, so a caller gets
+ * per-call "host too old, upgrade" guidance instead of a fatal handshake
+ * mismatch (see `degrade: { kind: "unsupported" }` in `registry.ts`).
+ */
+export const agentForkV10 = defineRpcContract({
+  method: "agent.fork",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: forkAgentRequestSchema,
+  responseSchema: forkAgentResponseSchema,
 });

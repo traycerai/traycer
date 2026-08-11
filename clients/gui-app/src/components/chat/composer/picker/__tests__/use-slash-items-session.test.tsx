@@ -56,6 +56,7 @@ function openSession(
     range: { from: 1, to: 2 },
     query,
     commit: () => undefined,
+    dismiss: null,
     clientRect: null,
   });
 }

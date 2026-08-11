@@ -1,12 +1,11 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_AGENT_MODE,
-  DEFAULT_PERMISSION,
-} from "@/components/home/data/landing-options";
+import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 
 function resetSettingsStore(): void {
   window.localStorage.clear();
@@ -14,12 +13,13 @@ function resetSettingsStore(): void {
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     defaultPermission: DEFAULT_PERMISSION,
-    defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
     showGlobalResourceMonitor: true,
     showNavigatorResourceStats: false,
     pinContextUsageBreakdown: false,
+    chatTurnMinimapSide: "right",
     quoteReplyEnabled: true,
+    worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
   });
 }
@@ -33,6 +33,51 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().artifactIconColors).toEqual(
       DEFAULT_EPIC_NODE_ICON_COLORS,
     );
+  });
+
+  it("defaults the chat turn minimap to the right side", () => {
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
+  });
+
+  it("persists and rehydrates the chat turn minimap side", async () => {
+    useSettingsStore.getState().setChatTurnMinimapSide("left");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"chatTurnMinimapSide":"left"');
+
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
+  });
+
+  it("persists and rehydrates a hidden chat turn minimap", async () => {
+    useSettingsStore.getState().setChatTurnMinimapSide("hide");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"chatTurnMinimapSide":"hide"');
+
+    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("hide");
+  });
+
+  it("repairs an invalid persisted chat turn minimap side to right", async () => {
+    useSettingsStore.setState({ chatTurnMinimapSide: "left" });
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { chatTurnMinimapSide: "top" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
   });
 
   it("updates the global artifact icon color mode", () => {
@@ -282,37 +327,6 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().defaultPermission).toBe("full_access");
   });
 
-  it("defaults new runs to regular mode", () => {
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("regular");
-  });
-
-  it("persists epic mode when selected", () => {
-    useSettingsStore.getState().setDefaultAgentMode("epic");
-    const persistedSettings = window.localStorage.getItem(
-      "traycer-gui-app:settings",
-    );
-
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
-    expect(persistedSettings).not.toBeNull();
-    expect(persistedSettings ?? "").toContain('"defaultAgentMode":"epic"');
-  });
-
-  it("rehydrates epic mode from persisted settings", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: {
-          defaultAgentMode: "epic",
-        },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
-  });
-
   it("accepts valid persisted default permissions", async () => {
     window.localStorage.setItem(
       "traycer-gui-app:settings",
@@ -415,5 +429,146 @@ describe("useSettingsStore", () => {
       lineNumbers: false,
       indicatorStyle: "none",
     });
+  });
+
+  it("defaults the worktree branch prefix to traycer/", () => {
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+    expect(DEFAULT_WORKTREE_BRANCH_PREFIX).toBe("traycer/");
+  });
+
+  it("updates the worktree branch prefix via the setter", () => {
+    useSettingsStore.getState().setWorktreeBranchPrefix("feat-");
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
+  });
+
+  it("accepts an empty worktree branch prefix (no prefix)", () => {
+    useSettingsStore.getState().setWorktreeBranchPrefix("");
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("");
+  });
+
+  it("persists the worktree branch prefix", () => {
+    useSettingsStore.getState().setWorktreeBranchPrefix("anurag/");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain('"worktreeBranchPrefix":"anurag/"');
+  });
+
+  it("rehydrates a persisted worktree branch prefix", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: "feat-" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
+  });
+
+  it("rehydrates an invalid persisted worktree branch prefix to the default", async () => {
+    // Leading-dash and control-char values must not rehydrate verbatim.
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: "-wip/" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("rehydrates a control-character worktree branch prefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: "a\x01b" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("rehydrates a non-string worktree branch prefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: 42 },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("rehydrates a null worktree branch prefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: null },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("still shallow-merges unrelated persisted fields through the custom merge", async () => {
+    // Custom merge only special-cases worktreeBranchPrefix; other fields must
+    // still rehydrate via the normal shallow spread path.
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: {
+          worktreeBranchPrefix: "feat-",
+          quoteReplyEnabled: false,
+        },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("rehydrates old settings without worktreeBranchPrefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { artifactIconColorMode: "none" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
   });
 });

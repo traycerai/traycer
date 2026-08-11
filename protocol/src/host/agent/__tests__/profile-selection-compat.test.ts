@@ -570,17 +570,18 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // v3.0 is the advertised latest: the v1.1.8 tags froze v2.0 with the
-    // pre-omp id sets, so omp opened a new major on all three methods.
+    // v4.0 is the advertised latest: the v1.1.9 tags froze v3.0 with the
+    // pre-Hugging-Face id sets, so `huggingface` opened a new major on all
+    // three methods (as omp did on v3.0 before it).
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 3,
+      major: 4,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 3, minor: 0 });
+    ).toEqual({ major: 4, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 3,
+      major: 4,
       minor: 0,
     });
   });
@@ -607,7 +608,7 @@ describe("optional-method capability negotiation", () => {
     ).toEqual({ major: 3, minor: 0 });
   });
 
-  it("keeps every released profile-method major frozen and advertises the omp-inclusive v3.0 line", () => {
+  it("keeps every released profile-method major frozen and installs the Hugging-Face-inclusive v4.0 line", () => {
     expect(
       hostRpcRegistry["agent.listProviderProfiles"][1].versions[0].contract
         .schemaVersion,
@@ -633,6 +634,21 @@ describe("optional-method capability negotiation", () => {
       hostRpcRegistry["agent.getProviderProfileRateLimits"][3].versions[0]
         .contract.schemaVersion,
     ).toEqual({ major: 3, minor: 0 });
+    // The Hugging-Face-inclusive lines: the v3.0 lines above are frozen
+    // pre-huggingface (cli-v1.1.9 shipped them), v4.0 carries the id. Asserted
+    // so an accidental repin of a v4.0 contract fails here rather than only in
+    // the tag-based compat gate.
+    expect(
+      hostRpcRegistry["agent.listProviderProfiles"][4].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.getProviderProfileRateLimits"][4].versions[0]
+        .contract.schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.configure"][4].versions[0].contract.schemaVersion,
+    ).toEqual({ major: 4, minor: 0 });
   });
 });
 
@@ -1019,5 +1035,89 @@ describe("agent.configure v1 <-> v2 hermes-harness response translation", () => 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+});
+
+describe("Epic Mode removal — agentMode is RETAINED on the released wires", () => {
+  const LIVE_RESPONSE = {
+    settings: {
+      harnessId: "claude" as const,
+      model: "opus-4.7",
+      profileSelection: { kind: "profile" as const, profileId: "profile-1" },
+      reasoningEffort: "high",
+      fastMode: false,
+      permissionMode: "supervised" as const,
+      agentMode: "regular" as const,
+    },
+    warnings: [],
+  };
+
+  // `agent.configure` v3.0 is RELEASED: its baseline surface requires
+  // `settings.agentMode` on the response, so a payload built from this tree
+  // that omitted it would be rejected outright by an already-shipped peer.
+  // Epic Mode is gone from the PRODUCT, but the key stays on the wire until
+  // the released floor passes this version. The host states the one
+  // remaining mode rather than dropping the field.
+  it("keeps agentMode required on the live configure response", () => {
+    expect(
+      agentConfigureResponseSchema.safeParse({
+        ...LIVE_RESPONSE,
+        settings: Object.fromEntries(
+          Object.entries(LIVE_RESPONSE.settings).filter(
+            ([key]) => key !== "agentMode",
+          ),
+        ),
+      }).success,
+    ).toBe(false);
+
+    const parsed = agentConfigureResponseSchema.parse(LIVE_RESPONSE);
+    expect(parsed.settings.agentMode).toBe("regular");
+  });
+
+  // The field is present on every version in the chain, so no bridge has to
+  // synthesize it - each simply passes through what its input carried. A
+  // legacy "epic" value must survive rather than be normalized away: these
+  // bridges translate an existing wire payload, they do not mint new records.
+  it.each([
+    ["v3.0 -> v2.0", agentConfigureDowngradeV30ToV20],
+    ["v3.0 -> v1.0", agentConfigureDowngradeV30ToV10],
+    ["v2.0 -> v1.0", agentConfigureDowngradeV20ToV10],
+  ])(
+    "passes agentMode through unchanged on the frozen %s response",
+    (_label, bridge) => {
+      const result = bridge.downgradeResponse({
+        ...LIVE_RESPONSE,
+        settings: { ...LIVE_RESPONSE.settings, agentMode: "epic" as const },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.settings.agentMode).toBe("epic");
+    },
+  );
+
+  // v3.0 is itself released (v1.1.8), so a current client and a v1.1.8 host
+  // both negotiate 3.0 with NO bridge between them. The key must survive the
+  // upgrade or that host rejects the request outright.
+  it("keeps agentMode on the released v3.0 create request", () => {
+    const upgraded = agentCreateUpgradeV20ToV30.upgradeRequest(
+      createAgentRequestSchemaV20.parse({
+        senderAgentId: "agent-1",
+        epicId: "epic-1",
+        name: null,
+        surface: "gui",
+        harnessId: "claude",
+        model: null,
+        agentMode: "regular",
+        reasoningEffort: null,
+        fastMode: null,
+        workspace: null,
+        profileSelection: { kind: "ambient" },
+      }),
+    );
+
+    expect(createAgentRequestSchemaV30.safeParse(upgraded).success).toBe(true);
+    expect(upgraded.agentMode).toBe("regular");
+    expect(upgraded.permissionMode).toBeNull();
   });
 });

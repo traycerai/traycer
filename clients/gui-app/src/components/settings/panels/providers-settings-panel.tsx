@@ -4,34 +4,33 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
-import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostClient } from "@/lib/host";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -43,6 +42,9 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
+import { ProviderMcpTab } from "./provider-mcp-tab";
+import { ProviderPluginsTab } from "./provider-plugins-tab";
+import { ProviderSkillsTab } from "./provider-skills-tab";
 import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
@@ -50,16 +52,51 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import {
+  providerCanStartProfileOauth,
+  providerSignInUnavailableHint,
+} from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
+import { ProviderRailControls } from "./provider-rail-controls";
+import {
+  DEFAULT_PROVIDER_RAIL_VIEW,
+  filterProviderRail,
+  type ProviderRailView,
+} from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
+import {
+  providerTabInputs,
+  supportedTabsFor as resolveSupportedTabs,
+  type ProviderTabKey,
+} from "./provider-settings-tabs";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type ProviderId = ProviderCliState["providerId"];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
   HostRpcError
 >;
+
+// Wire ids (`providerSettingsTabSchema`) are NOT display strings: they ride
+// `supportedTabs`, which a released client decodes through a single
+// `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES)` on the whole
+// `nativeCapabilities` object. An id this side renames that an older client
+// cannot parse fails the enum and drops that ENTIRE object, silently taking
+// MCP/Plugins/Skills with it. So every rename lands here, on the label, and
+// never on the id - `general` shows as "CLI & Args" and `usage` as
+// "Profiles & Limits". "General" said nothing about what the tab holds; each
+// label now names its own content.
+const PROVIDER_TAB_LABELS: Record<ProviderTabKey, string> = {
+  general: "CLI & Args",
+  account: "Account",
+  usage: "Profiles & Limits",
+  env: "Env",
+  mcp: "MCP",
+  plugins: "Plugins",
+  skills: "Skills",
+};
 
 // The provider to select on mount: the deep-link focus target (mapped from its
 // GUI harness id) when one was requested and is present,
@@ -77,6 +114,59 @@ function initialActiveProviderId(
   return providers[0].providerId;
 }
 
+// Initial tab for the deep-linked (or first) provider: honor `focusTab` when
+// the target supports it, else the first supported tab in
+// {@link PROVIDER_TAB_ORDER} (account → usage → general → …).
+function initialActiveTab(
+  providers: readonly ProviderCliState[],
+  providerId: ProviderId,
+): ProviderTabKey {
+  const state =
+    providers.find((p) => p.providerId === providerId) ?? providers[0];
+  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  // `focusTab` is a plain `string` in the store, so a deep link CAN name the
+  // client-only `account` tab even though it is absent from the wire enum -
+  // the match below is against the resolved tab list, not the schema. When no
+  // focusTab is set (including the "Add API key" CTA that only sets
+  // `focusHarnessId`), `tabs[0]` is the first supported tab — account when the
+  // provider takes a key, usage when it has profiles/limits, otherwise the
+  // next supported tab in display order.
+  const focusTab = useProvidersFocusStore.getState().focusTab;
+  if (focusTab !== null) {
+    const match = tabs.find((tab) => tab === focusTab);
+    if (match !== undefined) return match;
+  }
+  return tabs[0] ?? "general";
+}
+
+// When switching providers, keep the current tab if the new provider supports
+// it; otherwise fall back to that provider's first tab.
+function resolveTabForProvider(
+  state: ProviderCliState,
+  preferred: ProviderTabKey,
+): ProviderTabKey {
+  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  if (tabs.includes(preferred)) return preferred;
+  return tabs[0] ?? "general";
+}
+
+// NOTE: the per-tab "has content" dot that used to render here is gone on
+// purpose, not by oversight. It claimed "this tab holds something" but could
+// not tell the truth about it: `general` lit up for every CLI-backed provider
+// (candidates are never empty) INCLUDING cursor/amp, whose tab rendered
+// nothing; `usage` lit up unconditionally for every rate-limit-capable
+// provider whether or not anything was configured; and mcp/plugins/skills -
+// the only three tabs that hold user-installed content - were hardcoded to
+// never light up, so the tabs with real content were the ones that looked
+// empty. It also drew in `bg-primary`, reading as "needs attention" for what
+// was at best "is configured", using the same 1.5-unit dot the provider rail
+// already spends on "provider disabled".
+//
+// If a per-tab signal comes back, split the two meanings and keep them split:
+// a muted COUNT on mcp/plugins/skills once their list query is cached, and a
+// warning-toned dot reserved for genuine attention (expired auth, config
+// parse failure). Never one glyph for both.
+
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   "claude-code": "Anthropic's Claude Code CLI.",
   codex: "OpenAI's Codex CLI.",
@@ -86,6 +176,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
+  huggingface:
+    "Hugging Face - OpenAI-compatible router authenticated with your Hugging Face token.",
   grok: "Grok agent - xAI's coding CLI via your SuperGrok / X subscription.",
   qwen: "Qwen Code CLI agent.",
   kiro: "Kiro agent - Kiro's coding CLI via login or KIRO_API_KEY.",
@@ -162,50 +254,79 @@ function ProviderCheckedTimestamp({
 }
 
 export function ProvidersSettingsPanel() {
-  const activeHostId = useReactiveActiveHostId();
-  const hostsQuery = useHostDirectoryList();
-  const hosts = useMemo(() => hostsQuery.data ?? [], [hostsQuery.data]);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    () => useProvidersFocusStore.getState().focusHostId,
-  );
-  const effectiveId = selectedId ?? activeHostId;
-  // Reach a non-active host through a transient client (the Worktrees
-  // pattern) so picking one never rebinds the app-wide active host. Null when
-  // the active host is selected - the inherited runtime context already
-  // targets it, so no override client is built.
-  const targetEntry = useMemo(() => {
-    if (effectiveId === null || effectiveId === activeHostId) return null;
-    return hosts.find((entry) => entry.hostId === effectiveId) ?? null;
-  }, [hosts, effectiveId, activeHostId]);
-  const selectedEntry = useMemo(() => {
-    if (effectiveId === null) return null;
-    return hosts.find((entry) => entry.hostId === effectiveId) ?? null;
-  }, [hosts, effectiveId]);
-  const isSelectedHostLocal = selectedEntry?.kind === "local";
-  const transientClient = useHostClientFor(targetEntry);
+  const scope = useHostScope();
+  const setHostId = scope.setHostId;
+  // A deep link that already knows which machine needs attention — the
+  // composer's provider re-auth banner knows exactly whose profile expired —
+  // hands its host to the SHARED scope rather than to a picker private to
+  // this panel.
+  //
+  // Cleared HERE, at the point of use. It used to be cleared only inside the
+  // provider rail, which is host-scoped and therefore never rendered when the
+  // deep-linked host was unreachable — so the intent survived, and every later
+  // visit to Providers yanked the scope back to a host the user had already
+  // moved on from.
+  //
+  // READ LIVE from the store — never captured at mount, which is the part
+  // each narrower fix got wrong in turn. Two constraints meet here:
+  //
+  //   - NOTHING BELOW MOUNTS until the switch has landed. The rail is a
+  //     descendant, its mount effect consumes and clears the provider/profile
+  //     half of the intent, and child passive effects run BEFORE the
+  //     parent's — so children mounted for host A would consume the intent
+  //     there (in the worst case starting a re-auth sign-in against A) one
+  //     commit before the scope could move to B. The hold below removes that
+  //     race rather than trying to outrun it.
+  //   - The panel OUTLIVES its mount. The top-level keep-alive host retains
+  //     this component while its tab is hidden, so a re-auth banner click
+  //     that arms a new intent finds no fresh mount to capture it — a
+  //     mount-time snapshot stayed stale, `pending` never rose, and the Sign
+  //     in action appeared to do nothing. Deriving pending from the live
+  //     subscription reacts to every newly armed intent, whenever it arms.
+  //
+  // Applying the intent clears `focusHostId`, this subscription re-renders,
+  // and the hold releases — no setState inside the effect.
+  const liveFocusHostId = useProvidersFocusStore((s) => s.focusHostId);
+  const deepLinkPending = liveFocusHostId !== null;
+  useEffect(() => {
+    if (liveFocusHostId === null) return;
+    setHostId(liveFocusHostId);
+    useProvidersFocusStore.getState().clearFocusHostId();
+  }, [liveFocusHostId, setHostId]);
+
   const realBinding = useHostBinding();
   // Scope the whole panel (list + refresh + every provider mutation) to the
   // selected host by re-providing the runtime client for this subtree; the
   // provider hooks all read `useHostClient()`, so none need a client prop.
+  // Only a genuinely resolved override re-provides — `connecting`,
+  // `unreachable` and `vanished` all leave `client` null and fall through to
+  // the gate below, which is what stops one host's providers rendering under
+  // another host's name.
   const scopedBinding = useMemo(() => {
-    if (transientClient === null || realBinding === null) return null;
-    return { ...realBinding, hostClient: transientClient };
-  }, [transientClient, realBinding]);
+    if (scope.status !== "ready" || scope.client === null) return null;
+    if (realBinding === null) return null;
+    return { ...realBinding, hostClient: scope.client };
+  }, [scope.status, scope.client, realBinding]);
 
-  const hostPicker =
-    hosts.length > 0 ? (
-      <ProvidersHostSelect
-        hosts={hosts}
-        value={effectiveId}
-        onChange={setSelectedId}
+  // The hold that makes the deep link atomic: one frame of placeholder while
+  // the effect above moves the scope. Children — including the rail that
+  // consumes the rest of the intent — first mount already pointed at the
+  // deep-linked host.
+  if (deepLinkPending) {
+    return (
+      <div
+        className="flex-1"
+        data-testid="providers-deep-link-pending"
+        aria-hidden
       />
-    ) : null;
+    );
+  }
 
   const inner = (
     <ProvidersSettingsPanelInner
-      hostPicker={hostPicker}
-      hostId={effectiveId}
-      isSelectedHostLocal={isSelectedHostLocal}
+      scope={scope}
+      hostId={scope.hostId}
+      isSelectedHostLocal={scope.host?.isLocalMachine ?? false}
     />
   );
   if (scopedBinding === null) return inner;
@@ -216,45 +337,64 @@ export function ProvidersSettingsPanel() {
   );
 }
 
-function ProvidersHostSelect(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
-}): ReactNode {
-  return (
-    <Select value={props.value ?? undefined} onValueChange={props.onChange}>
-      <SelectTrigger
-        size="sm"
-        aria-label="Host"
-        className="w-[min(40vw,12rem)]"
-      >
-        <SelectValue placeholder="Select a host" />
-      </SelectTrigger>
-      <SelectContent>
-        {props.hosts.map((host) => (
-          <SelectItem key={host.hostId} value={host.hostId}>
-            {hostOptionLabel(host)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function hostOptionLabel(host: HostDirectoryEntry): string {
-  const label = host.label.length > 0 ? host.label : host.hostId;
-  return host.status === "unavailable" ? `${label} (offline)` : label;
-}
-
 function ProvidersSettingsPanelInner({
-  hostPicker,
+  scope,
   hostId,
   isSelectedHostLocal,
 }: {
-  readonly hostPicker: ReactNode;
+  readonly scope: HostScope;
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
+  return (
+    <SettingsPanelShell
+      title="Providers"
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
+      fillHeight
+      bodyClassName="max-h-[min(85vh,52rem)]"
+      // No host readout here — the sidebar states the scoped host one row
+      // above and repeating it was the same fact printed twice.
+      //
+      // And no provider CONTROLS here either, which is the load-bearing half.
+      // `headerAction` renders as a SIBLING of the gate below, not a child, so
+      // anything mounted here escapes it: with a non-ready scope the runtime
+      // context is not re-provided, `useHostClient()` resolves to the ambient
+      // host, and "Refresh" re-probed and rewrote THAT host's provider list
+      // while the page named a different one. The gate only guards what it
+      // wraps, so the controls moved inside it.
+      headerAction={undefined}
+    >
+      <HostScopeGate
+        scope={scope}
+        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+      >
+        <ProvidersScopedContent
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
+        />
+      </HostScopeGate>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * Everything that talks to the scoped host, mounted only once the gate has
+ * proven there is a client behind the name.
+ *
+ * The list query and the Refresh control live HERE rather than in the panel
+ * header for one reason: the header is outside the gate. Mounted there, these
+ * hooks resolved against the ambient host whenever the scope was not ready —
+ * so "Refresh" re-probed provider auth and rewrote the cached provider list of
+ * a host the page was not showing. Being a child of the gate is what makes
+ * them unable to do that.
+ */
+function ProvidersScopedContent({
+  hostId,
+  isSelectedHostLocal,
+}: {
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
+}): ReactNode {
   const query = useProvidersList({ enabled: true, subscribed: true });
   const providers = query.data?.providers ?? [];
   const checkingProviders =
@@ -262,32 +402,26 @@ function ProvidersSettingsPanelInner({
   const checkedAt = latestProviderCheckedAt(providers);
   const refreshProviders = useRefreshProviders();
   return (
-    <SettingsPanelShell
-      title="Providers"
-      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
-      fillHeight
-      bodyClassName="max-h-[min(85vh,52rem)]"
-      headerAction={
-        <div className="flex items-center gap-2">
-          <ProviderLastChecked
-            checkedAt={checkedAt}
-            checking={checkingProviders}
-          />
-          <RefreshIconButton
-            onRefresh={refreshProviders}
-            label="Refresh providers"
-            refreshing={checkingProviders}
-          />
-          {hostPicker}
-        </div>
-      }
-    >
-      <ProvidersPanelBody
-        query={query}
-        hostId={hostId}
-        isSelectedHostLocal={isSelectedHostLocal}
-      />
-    </SettingsPanelShell>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-end gap-2 px-5 pb-2">
+        <ProviderLastChecked
+          checkedAt={checkedAt}
+          checking={checkingProviders}
+        />
+        <RefreshIconButton
+          onRefresh={refreshProviders}
+          label="Refresh providers"
+          refreshing={checkingProviders}
+        />
+      </div>
+      <div className="min-h-0 flex-1">
+        <ProvidersPanelBody
+          query={query}
+          hostId={hostId}
+          isSelectedHostLocal={isSelectedHostLocal}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -308,6 +442,58 @@ function ProvidersPanelBody({
     );
   }
   if (query.isError) {
+    // A PRE-SEND transport failure says nothing about the RPC or the host's
+    // version - the request was never put on the wire. On a remote host this
+    // is routinely just the session's first dial still in flight, and the
+    // ready boundary refetches this query the moment the session is up, so
+    // describe the connection instead of blaming the host.
+    //
+    // Deliberately the `RetryableTransportError` subclass and not its
+    // `HostTransportFailureError` base: an AMBIGUOUS post-send drop (the
+    // socket died after the request frame went out) keeps the base class
+    // precisely because nothing may assume it will resolve itself. Nothing
+    // refetches it either - `useHostQuery` pins `retry: false`, and a healthy
+    // independent stream connection need not emit any recovery event - so
+    // showing it as "connecting" would park the panel on a spinner that never
+    // resolves and offers no way to report the fault.
+    //
+    // REMOTE only, for exactly the same reason. A spinner is a promise that
+    // something will refetch, and only the remote path can keep it: the
+    // messenger holds a remote binding for the selected host whose ready
+    // boundary invalidates this query (`subscribeRemoteAvailability` ->
+    // `onRemoteAvailabilityRecovered`). A local host has no such binding, and
+    // by the time this error arrives the retry wrapper has already spent its
+    // whole budget - its final attempt rethrows unchanged, so "retryable" here
+    // describes what the class of failure WAS, not that anything is still
+    // retrying. The only thing that could refetch a local host is a durable
+    // stream tab that happens to be bound to it, which Settings cannot assume
+    // exists. So local falls through to the actionable card, which at worst
+    // shows a recoverable fault with a way out and is replaced the moment a
+    // recovery invalidation does land.
+    //
+    // A remote host that dialed and then went TERMINAL - an incompatible
+    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // owes no boundary either, and would strand this spinner just as badly.
+    // That case never PERSISTS here, enforced at two layers. New requests:
+    // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
+    // `HostTransportFailureError`, so the class keeps meaning "still dialing"
+    // at this branch. The query that already CACHED a retryable error from
+    // racing the dial (the retry budget is shorter than a full attach):
+    // `RuntimeHostMessenger` records the terminal verdict, fires one
+    // host-scope invalidation, and rejects the resulting refetch with the
+    // verdict instead of transparently redialing - without that, the refetch
+    // would race a FRESH dial, cache "retryable" again, and spin forever.
+    if (
+      query.error instanceof RetryableTransportError &&
+      !isSelectedHostLocal
+    ) {
+      return (
+        <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
+          <MutedAgentSpinner />
+          Connecting to the remote host…
+        </div>
+      );
+    }
     return (
       <div className="px-6 py-8 text-ui-sm text-destructive">
         Couldn't load provider state. The host may need to be updated.
@@ -355,6 +541,18 @@ function ProvidersRailLayout({
   );
   const [initialFocus, setInitialFocus] = useState(() => {
     const focus = useProvidersFocusStore.getState();
+    // The intent is consumed only by the rail of the host it NAMES. A profile
+    // deep link whose target is unreachable or plan-gated never mounts a rail
+    // there, so the harness / profile / sign-in halves stay armed; without
+    // this check the next reachable host the user picked consumed them and
+    // could start an automatic sign-in on that machine whenever the same
+    // profile id existed. `null` target = "no host in particular".
+    if (
+      focus.focusTargetHostId !== null &&
+      focus.focusTargetHostId !== hostId
+    ) {
+      return { harnessId: null, profileId: null, startSignIn: false };
+    }
     return {
       harnessId: focus.focusHarnessId,
       profileId: focus.focusProfileId,
@@ -362,18 +560,59 @@ function ProvidersRailLayout({
     };
   });
   // A deep-link entry point (e.g. the model picker's "Add API key" CTA) can ask
-  // the panel to open on a specific provider via the focus store. Read it once
-  // for the initial selection, then clear it so a later manual open starts on
-  // the first provider again.
+  // the panel to open on a specific provider (and optional tab) via the focus
+  // store. Read both once for the initial selection, then clear so a later
+  // manual open starts on the first provider / first tab again.
   const [activeId, setActiveId] = useState<ProviderId>(() =>
     initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
+  // Same provider id as `activeId` above, deliberately: the default tab is now
+  // provider-dependent (account → usage → …), so deriving it from the rail's
+  // first provider lands the deep link on the wrong tab. The "Add API key" CTA
+  // sets `focusHarnessId` with no `focusTab`; with a first provider defaulting
+  // to `usage`, a focused provider that also supports `usage` would keep
+  // "Profiles & Limits" instead of opening its own first tab, "Account" — the
+  // one field the CTA exists to reach. When the deep link is not consumed (no
+  // focus, or a different host) `initialFocus.harnessId` is already null, so
+  // this stays the rail's first provider.
+  const [activeTab, setActiveTab] = useState<ProviderTabKey>(() =>
+    initialActiveTab(
+      orderedProviders,
+      initialActiveProviderId(orderedProviders, initialFocus.harnessId),
+    ),
+  );
   useEffect(() => {
-    useProvidersFocusStore.getState().clearFocusHarnessId();
+    const store = useProvidersFocusStore.getState();
+    store.clearFocusHarnessId();
+    store.clearFocusTab();
   }, []);
   const active =
     orderedProviders.find((p) => p.providerId === activeId) ??
     orderedProviders[0];
+  const resolvedTab = resolveTabForProvider(active, activeTab);
+
+  // The rail's own view state. Resolved against `orderedProviders` for the ROWS
+  // only - `active` above is deliberately unaffected, so narrowing the rail
+  // never yanks the detail pane onto a different provider mid-keystroke. The
+  // cost is that a filter can hide the selected row; that reads as "the rail is
+  // showing a subset", where re-selecting on every keystroke would silently
+  // discard whatever you were in the middle of doing on the right.
+  const [railView, setRailView] = useState<ProviderRailView>(
+    DEFAULT_PROVIDER_RAIL_VIEW,
+  );
+  const visibleProviders = useMemo(
+    () => filterProviderRail(orderedProviders, railView),
+    [orderedProviders, railView],
+  );
+
+  const onSelectProvider = (providerId: ProviderId): void => {
+    setInitialFocus({ harnessId: null, profileId: null, startSignIn: false });
+    setActiveId(providerId);
+    const next =
+      orderedProviders.find((p) => p.providerId === providerId) ??
+      orderedProviders[0];
+    setActiveTab(resolveTabForProvider(next, activeTab));
+  };
 
   return (
     // Fill the panel body (the shell stretches it to the settings scroll
@@ -381,39 +620,57 @@ function ProvidersRailLayout({
     // providers never resizes the box and the detail pane - not the outer
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0">
+      {/* The search row is a pinned SIBLING of the scroll box rather than the
+          first child of a scrolling column - the same shape the tab rail uses
+          below, and for the same reason: scrolling the list must never carry
+          the control that filters it out of reach. */}
       <nav
         aria-label="Providers"
-        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
+        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60"
       >
-        <ProviderList
-          ariaLabel="Providers"
-          variant="settings"
-          className="gap-1"
-          rows={orderedProviders.map((state) => ({
-            providerId: state.providerId,
-            active: state.providerId === active.providerId,
-            dimmed: false,
-            enabled: state.enabled,
-            badge: null,
-            description: null,
-            trailing: null,
-            onSelect: (providerId) => {
-              setInitialFocus({
-                harnessId: null,
-                profileId: null,
-                startSignIn: false,
-              });
-              setActiveId(providerId);
-            },
-          }))}
+        <ProviderRailControls
+          view={railView}
+          onViewChange={setRailView}
+          resultCount={visibleProviders.length}
         />
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-2">
+          {visibleProviders.length === 0 ? (
+            <p className="px-2.5 py-2 text-ui-xs text-muted-foreground">
+              No providers match.
+            </p>
+          ) : (
+            <ProviderList
+              ariaLabel="Providers"
+              variant="settings"
+              className="gap-1"
+              rows={visibleProviders.map((state) => ({
+                providerId: state.providerId,
+                active: state.providerId === active.providerId,
+                dimmed: false,
+                enabled: state.enabled,
+                badge: null,
+                description: null,
+                trailing: null,
+                onSelect: onSelectProvider,
+              }))}
+            />
+          )}
+        </div>
       </nav>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+      {/* The detail COLUMN no longer scrolls - the active tab's body does (see
+          `ProviderDetail`), so the provider header and tab rail stay pinned.
+          Horizontal padding lives here rather than on each row so the rail's
+          `border-b` keeps exactly the width it had when this element owned the
+          scroll; the tab body cancels it with `-mx-5 px-5` to put its scrollbar
+          on the pane edge instead of 5 units inside it. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col px-5 pt-5">
         <ProviderDetail
           key={`${hostId}:${active.providerId}`}
           state={active}
           providers={orderedProviders}
+          activeTab={resolvedTab}
+          onActiveTabChange={setActiveTab}
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
           initialProfileId={initialFocus.profileId}
@@ -450,24 +707,34 @@ function ProviderEnableSwitch(props: {
   const { id, providerId, enabled, isPending, onSetEnabled } = props;
   const disablingLast = enabled && props.enabledProviderCount <= 1;
   return (
-    <Switch
-      id={id}
-      checked={enabled}
-      onCheckedChange={(next) => {
-        if (isPending || (!next && disablingLast)) return;
-        onSetEnabled(providerId, next);
-      }}
-      disabled={isPending || disablingLast}
-      title={
-        disablingLast ? "At least one provider must stay enabled." : undefined
-      }
-    />
+    <TooltipWrapper
+      label={disablingLast ? "At least one provider must stay enabled." : null}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* Guard span: the Switch is `disabled` in exactly the state this
+          explains, and a disabled control emits no pointer events. */}
+      <span className="inline-flex">
+        <Switch
+          id={id}
+          checked={enabled}
+          onCheckedChange={(next) => {
+            if (isPending || (!next && disablingLast)) return;
+            onSetEnabled(providerId, next);
+          }}
+          disabled={isPending || disablingLast}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 
 function ProviderDetail({
   state,
   providers,
+  activeTab,
+  onActiveTabChange,
   hostId,
   isSelectedHostLocal,
   initialProfileId,
@@ -475,6 +742,8 @@ function ProviderDetail({
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly activeTab: ProviderTabKey;
+  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly initialProfileId: string | null;
@@ -489,6 +758,13 @@ function ProviderDetail({
   // explicit prop since it's also reused by the picker's tab-scoped flow.
   const hostClient = useHostClient();
   const switchId = useId();
+  // The API-key draft outlives the `account` tab body that renders it. Radix
+  // unmounts an inactive `TabsContent`, so holding this inside the section
+  // would blank a pasted key on any tab switch. Held HERE for the same reason
+  // `selectedProfileId` is below: `ProvidersRailLayout` keys `<ProviderDetail>`
+  // by provider, so a provider switch still discards the draft - a key typed
+  // for one provider must never appear in another's field.
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [addProfileOpen, setAddProfileOpen] = useState(false);
   const [failedProfileAttempt, setFailedProfileAttempt] =
     useState<FailedProviderProfileAttempt | null>(null);
@@ -505,7 +781,6 @@ function ProviderDetail({
         ? initialProfileId
         : defaultSelectedProfileId(state.profiles),
   );
-
   const setEnabled = useProvidersSetEnabled();
   const canAddProfile = providerCanStartProfileOauth(
     state,
@@ -519,10 +794,29 @@ function ProviderDetail({
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
+  const tabs = resolveSupportedTabs(providerTabInputs(state));
+  // Bundled once here (rather than threaded as eight separate props) since
+  // only the "usage" ("Profiles & Limits") tab body needs the profile-
+  // management surface - the other tabs never see it.
+  const profileTab: ProviderProfileTabProps = {
+    hostId,
+    isSelectedHostLocal,
+    canAddProfile,
+    startInReauth: shouldStartInReauth,
+    failedAttempt: failedProfileAttempt,
+    onAddProfile: () => setAddProfileOpen(true),
+    onDismissFailedAttempt: () => setFailedProfileAttempt(null),
+    selectedProfileId,
+    onSelectedProfileIdChange: setSelectedProfileId,
+  };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-4">
+    // Three rows: provider header, tab rail, tab body - and only the last one
+    // scrolls. `min-h-0` repeats down every level because a flex item's default
+    // `min-height: auto` refuses to shrink below its content, which would push
+    // the overflow back up to the column and un-pin the two rows above.
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div className="flex shrink-0 items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <div className="font-medium text-foreground">
@@ -552,8 +846,8 @@ function ProviderDetail({
             isPending={setEnabled.isPending}
             enabledProviderCount={enabledProviderCount}
             onSetEnabled={(id, enabled) =>
-              // No profile management UI yet - this call never renames/removes
-              // a profile.
+              // Plain enable/disable - never a native mutation or profile
+              // rename/remove/recolor/drift-ack.
               setEnabled.mutate({
                 providerId: id,
                 enabled,
@@ -563,42 +857,76 @@ function ProviderDetail({
           />
         </div>
       </div>
-
-      <TraycerSubscriptionForProvider providerId={providerId} />
-      {state.profiles.length === 0 ? (
-        <ProviderRateLimitForProvider
-          providerId={providerId}
-          profileId={null}
-          usageUpdatedAt={null}
-          fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
-        />
-      ) : null}
-      <ProviderProfileScopedSection
-        state={state}
-        hostId={hostId}
-        isSelectedHostLocal={isSelectedHostLocal}
-        canAddProfile={canAddProfile}
-        startInReauth={shouldStartInReauth}
-        failedAttempt={failedProfileAttempt}
-        onAddProfile={() => setAddProfileOpen(true)}
-        onDismissFailedAttempt={() => setFailedProfileAttempt(null)}
-        selectedProfileId={selectedProfileId}
-        onSelectedProfileIdChange={setSelectedProfileId}
-      />
-
       <div
         className={cn(
-          "flex flex-col transition-opacity",
+          "flex min-h-0 flex-1 flex-col transition-opacity",
           state.enabled ? "" : "pointer-events-none opacity-50",
         )}
+        {...(!state.enabled ? { inert: true } : {})}
       >
-        <ProviderApiKeySection state={state} />
-        <ProviderCliCandidatesSection state={state} providers={providers} />
-        <TerminalAgentArgsSection key={state.terminalAgentArgs} state={state} />
-        <ProviderEnvOverridesSection
-          providerId={providerId}
-          overrides={state.envOverrides}
-        />
+        {/* Nothing renders between the provider header and the tab rail. The
+            API-key card used to sit here, above the bar, so a provider's only
+            real setting appeared outside the tabs that were supposed to hold
+            its settings; it is now the whole body of the `account` tab. That
+            matters more now that the rail is PINNED: anything parked here would
+            occupy fixed height at the top of the pane forever, not just until
+            you scrolled past it. */}
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const next = tabs.find((tab) => tab === value);
+            if (next !== undefined) onActiveTabChange(next);
+          }}
+          // `gap-0`, with the rail-to-body spacing moved INSIDE the scroll box
+          // as `pt-4`. With a gap here the scroll box would start 4 units below
+          // the rail's rule, so content vanished in mid-air above itself; owned
+          // by the body, the clip edge and the rule are the same line.
+          className="flex min-h-0 flex-1 flex-col gap-0"
+        >
+          {/* Line (underline) tabs, not the filled default. Seven unrelated
+              panes is NAVIGATION, and a filled track reads as a segmented
+              control - which is for re-presenting one dataset, and tops out
+              around four options. The old bar also cancelled the primitive's
+              `w-fit` with `w-full` while keeping content-width triggers, so
+              the filled slab spanned the pane and every unused pixel piled up
+              on the right as dead space. Full width is kept here for the
+              BORDER (a rail spanning the pane), while the track itself is
+              transparent, so there is nothing left to look empty. */}
+          <TabsList
+            variant="line"
+            className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+          >
+            {tabs.map((tab) => (
+              <TabsTrigger key={tab} value={tab} className="flex-none px-3">
+                {PROVIDER_TAB_LABELS[tab]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {/* The scroll owner. Radix mounts only the ACTIVE content, so there
+              is exactly one scroll box at a time and switching tabs starts it
+              at the top - which is what you want when the panes are unrelated.
+              Pinning the rail this way (a sibling row outside the scroll box)
+              rather than with `position: sticky` is what avoids the background
+              problem: nothing ever passes UNDER the rail, so it needs no opaque
+              fill over the pane's translucent `bg-card/40`. */}
+          {tabs.map((tab) => (
+            <TabsContent
+              key={tab}
+              value={tab}
+              className="-mx-5 mt-0 min-h-0 overflow-y-auto px-5 pt-4 pb-5"
+            >
+              <ProviderTabBody
+                tab={tab}
+                state={state}
+                providers={providers}
+                profileTab={profileTab}
+                apiKeyDraft={apiKeyDraft}
+                onApiKeyDraftChange={setApiKeyDraft}
+              />
+            </TabsContent>
+          ))}
+        </Tabs>
       </div>
       {addProfileOpen ? (
         <AddProviderProfileDialog
@@ -615,10 +943,148 @@ function ProviderDetail({
   );
 }
 
-function providerCanStartProfileOauth(
-  state: ProviderCliState,
-  isSelectedHostLocal: boolean,
-): boolean {
-  const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  return isSelectedHostLocal && oauthArgs !== null && oauthArgs.length > 0;
+// Profile-management surface handed to the "usage" ("Profiles & Limits") tab
+// body - the only tab that renders `ProviderProfileScopedSection` (add/rename/
+// remove/recolor, switch active profile). Profiles and limits stay on ONE tab
+// because the section already owns the SELECTED PROFILE's limits; splitting
+// those two meant a provider's limits were reported in two places at once. The
+// API key is a different question (how the provider authenticates at all) and
+// moved to its own `account` tab. Bundled into one object rather than eight
+// individual props on `ProviderTabBody`, since the other tabs
+// (general/account/env/mcp/plugins/skills) are provider-level and never touch
+// it.
+interface ProviderProfileTabProps {
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
+  readonly canAddProfile: boolean;
+  readonly startInReauth: boolean;
+  readonly failedAttempt: FailedProviderProfileAttempt | null;
+  readonly onAddProfile: () => void;
+  readonly onDismissFailedAttempt: () => void;
+  readonly selectedProfileId: string | null;
+  readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+}
+
+function ProviderTabBody({
+  tab,
+  state,
+  providers,
+  profileTab,
+  apiKeyDraft,
+  onApiKeyDraftChange,
+}: {
+  readonly tab: ProviderTabKey;
+  readonly state: ProviderCliState;
+  readonly providers: readonly ProviderCliState[];
+  readonly profileTab: ProviderProfileTabProps;
+  readonly apiKeyDraft: string;
+  readonly onApiKeyDraftChange: (draft: string) => void;
+}): ReactNode {
+  switch (tab) {
+    case "general":
+      return (
+        <div className="flex flex-col gap-3">
+          <ProviderCliCandidatesSection state={state} providers={providers} />
+          <TerminalAgentArgsSection
+            key={state.terminalAgentArgs}
+            state={state}
+          />
+        </div>
+      );
+    case "env":
+      return (
+        <ProviderEnvOverridesSection
+          providerId={state.providerId}
+          overrides={state.envOverrides}
+          envOverrideScope={state.nativeCapabilities.envOverrideScope}
+        />
+      );
+    // The key IS the account for these providers, so it owns a tab rather than
+    // floating above the tab bar as its own pre-tab region. `supportedTabsFor`
+    // shows this tab exactly when `apiKey.supported`, so the section's own
+    // `if (!supported) return null` guard is unreachable from here - kept
+    // there because the section is not otherwise gated at its call site.
+    //
+    // The draft is threaded in because this body is UNMOUNTED whenever another
+    // tab is active (Radix `TabsContent`), which the section used to survive by
+    // sitting outside the tab bar entirely.
+    case "account":
+      return (
+        <ProviderApiKeySection
+          state={state}
+          draft={apiKeyDraft}
+          onDraftChange={onApiKeyDraftChange}
+        />
+      );
+    case "usage":
+      return (
+        <div className="flex flex-col gap-3">
+          <ProviderProfileScopedSection
+            state={state}
+            {...profileTab}
+            signInUnavailableHint={providerSignInUnavailableHint(
+              state,
+              profileTab.isSelectedHostLocal,
+            )}
+          />
+          <TraycerSubscriptionForProvider providerId={state.providerId} />
+          {/* The unscoped card is the ZERO-profile shape, which is what
+              `ProviderProfileScopedSection` documents it as. With profiles on
+              this same tab its per-profile limits are already rendered above,
+              scoped to the selected profile - mounting this too would show two
+              near-identical limits blocks and leave the ambient one looking
+              authoritative when the selected profile is what actually runs. */}
+          {state.profiles.length === 0 ? (
+            <ProviderRateLimitForProvider
+              providerId={state.providerId}
+              profileId={null}
+              usageUpdatedAt={null}
+              fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
+            />
+          ) : null}
+        </div>
+      );
+    case "mcp": {
+      const mcp = state.nativeCapabilities.mcp;
+      if (mcp === null) {
+        return (
+          <ProviderTabPlaceholder
+            title="MCP servers"
+            description="This provider does not support MCP servers."
+          />
+        );
+      }
+      return (
+        <ProviderMcpTab
+          providerId={state.providerId}
+          capabilities={mcp}
+          providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+          // An old host omits the key entirely; `?? true` matches the schema's
+          // own `.catch(true)` - assume resolved, show no notice - so a host
+          // that cannot report this never accuses a provider of a missing
+          // binary it knows nothing about.
+          cliBinaryResolved={state.cliBinaryResolved ?? true}
+        />
+      );
+    }
+    case "plugins":
+      return <ProviderPluginsTab state={state} />;
+    case "skills":
+      return <ProviderSkillsTab state={state} />;
+  }
+}
+
+function ProviderTabPlaceholder({
+  title,
+  description,
+}: {
+  readonly title: string;
+  readonly description: string;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
+      <div className="text-ui-sm font-medium text-foreground">{title}</div>
+      <p className="text-ui-xs text-muted-foreground">{description}</p>
+    </div>
+  );
 }

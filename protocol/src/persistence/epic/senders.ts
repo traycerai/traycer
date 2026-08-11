@@ -411,6 +411,24 @@ export const ompChatSessionAnchorSchema = z.object({
 });
 export type OmpChatSessionAnchor = z.infer<typeof ompChatSessionAnchorSchema>;
 
+// Hugging Face runs on the bundled OpenCode engine (a synthetic
+// OpenAI-compatible provider pointed at `router.huggingface.co`), so its anchor
+// is opencode-shaped: the OpenCode session id plus the OpenCode user-message id
+// that turn started at, which is the truncation/fork point on resume.
+export const huggingFaceChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("huggingface"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  opencodeUserMessageId: z.string(),
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type HuggingFaceChatSessionAnchor = z.infer<
+  typeof huggingFaceChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -430,5 +448,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   piChatSessionAnchorSchema,
   hermesChatSessionAnchorSchema,
   ompChatSessionAnchorSchema,
+  huggingFaceChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

@@ -13,6 +13,7 @@ import {
   type NotificationDisplayTarget,
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
@@ -22,6 +23,7 @@ const NOTIFICATION: MergedNotificationRow = {
   feedId: "host:n-1",
   source: "host",
   sourceId: "n-1",
+  originHostId: null,
   createdAt: 10,
   readAt: null,
   title: "Checkout notifications",
@@ -41,12 +43,16 @@ describe("notification toast interactions", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(1_000);
+    // The in-app toast only renders in a focused window; jsdom reports
+    // unfocused by default.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
   });
 
   afterEach(() => {
     toast.dismiss();
     cleanup();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("activates when the rendered toast surface is clicked", async () => {
@@ -57,7 +63,9 @@ describe("notification toast interactions", () => {
       displayNotificationRows(
         [NOTIFICATION],
         {
-          showNotification: vi.fn(() => Promise.resolve()),
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
           playChime: vi.fn(),
           onToastClick,
         },
@@ -85,7 +93,9 @@ describe("notification toast interactions", () => {
       displayNotificationRows(
         [NOTIFICATION],
         {
-          showNotification: vi.fn(() => Promise.resolve()),
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
           playChime: vi.fn(),
           onToastClick,
         },

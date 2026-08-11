@@ -67,6 +67,9 @@ export function providerRateLimitWindows(
       return rateLimits.period !== null ? [rateLimits.period] : [];
     case "openrouter":
     case "kilocode":
+    case "huggingface":
+      // Credit providers: the payload is money, not a percentage of a rolling
+      // window, so there is nothing the shared window primitive can describe.
       return [];
   }
 }

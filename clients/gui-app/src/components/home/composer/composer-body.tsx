@@ -51,6 +51,7 @@ export interface ComposerBodyProps {
    * banner through a separate portal and never uses this slot).
    */
   readonly topBanner: ReactNode | null;
+  readonly stashControl: ReactNode;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
   readonly dictationControl: ComposerDictationControl | null;
@@ -71,10 +72,11 @@ export interface ComposerBodyProps {
   readonly onEditorReady: (() => void) | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
-  readonly onSnapshot: (
+  readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
   ) => void;
+  readonly onSelectionChange: (selection: { from: number; to: number }) => void;
 }
 
 export function ComposerBody({
@@ -92,6 +94,7 @@ export function ComposerBody({
   workspaceDisabledHint,
   header,
   topBanner,
+  stashControl,
   attachmentsStrip,
   workspaceControls,
   dictationControl,
@@ -102,13 +105,13 @@ export function ComposerBody({
   onEditorReady,
   onSubmit,
   onStartTerminal,
-  onSnapshot,
+  onDocumentChange,
+  onSelectionChange,
 }: ComposerBodyProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
-  const showLandingAgentModeTooltip = true;
 
   return (
     <div className="flex flex-col gap-3">
@@ -121,6 +124,7 @@ export function ComposerBody({
         onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
         onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
         dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
+        utilityRail={composerMode === "chat" ? stashControl : null}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>
@@ -134,11 +138,12 @@ export function ComposerBody({
                 hasPastedImageBytes={hasPastedImageBytes}
                 ingestPastedComposerImages={ingestPastedComposerImages}
                 isActive={chatEditorIsActive}
-                disabled={false}
+                disabled={isSubmitting}
                 placeholder={COMPOSER_PLACEHOLDER}
                 editorClassName={editorClassName}
                 stabilizeImageAttachmentCaret
-                onSnapshot={onSnapshot}
+                onDocumentChange={onDocumentChange}
+                onSelectionChange={onSelectionChange}
                 onSubmit={onSubmit}
                 onPaste={chatPasteActive ? paste.onPaste : NOOP}
                 onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
@@ -168,7 +173,6 @@ export function ComposerBody({
                 store={toolbarStore}
                 onAttachImages={paste.attachImageFiles}
                 showNextTurnPermissionNote={false}
-                showAgentModeTooltip={showLandingAgentModeTooltip}
                 canSubmit={canSubmit}
                 attachmentPending={attachmentPending}
                 onSubmit={onSubmit}
@@ -178,7 +182,7 @@ export function ComposerBody({
                 composerDisabledHint={workspaceDisabledHint}
                 dictation={dictationControl}
                 dictationPreparing={dictationPreparing}
-                settingsLocked={false}
+                settingsLocked={isSubmitting}
                 // The landing composer has no tab yet - the app-wide default
                 // host applies.
                 createProfileHostId={null}

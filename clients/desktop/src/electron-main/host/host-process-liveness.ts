@@ -21,13 +21,20 @@ import type { HostProcessLiveness } from "./host-recovery-governor";
  * ### Evidence
  *
  * `pid.json` is written on bind and removed on graceful shutdown, and carries
- * `startedAt`. `getPublishedProcessIdentityVerdict` combines a cross-platform
- * liveness probe (`kill(pid, 0)` on POSIX, `tasklist` on Windows) with a
- * start-time comparison against that timestamp - so a recycled pid now owned
- * by an unrelated process is positively identified rather than mistaken for a
- * living host. That helper is shared with the CLI's `cli-lock` hardening by
- * explicit design, which is why this reuses it instead of calling
- * `process.kill(pid, 0)` directly.
+ * `processStartIdentity` - the kernel's own record of when the publishing
+ * process was created. `getPublishedProcessIdentityVerdict` combines a
+ * cross-platform liveness probe (`kill(pid, 0)` on POSIX, `tasklist` on
+ * Windows) with an exact comparison against that stamp, so a recycled pid now
+ * owned by an unrelated process is positively identified rather than mistaken
+ * for a living host. That helper is shared with the CLI's `cli-lock`
+ * hardening by explicit design, which is why this reuses it instead of
+ * calling `process.kill(pid, 0)` directly.
+ *
+ * It used to compare a wall-clock-derived start time against `startedAt`
+ * instead. A `CLOCK_REALTIME` step between publication and this read made
+ * that comparison answer `"mismatch"` for a perfectly healthy process, which
+ * this function turned into `"dead"` - dropping the shield on exactly the
+ * hosts it exists to protect (traycerai/traycer#740).
  */
 export async function readPublishedHostProcessLiveness(
   pidMetadataFile: string,
@@ -49,7 +56,7 @@ export async function readPublishedHostProcessLiveness(
 
   const verdict = await getPublishedProcessIdentityVerdict(
     state.snapshot.pid,
-    state.startedAt,
+    state.startIdentity,
   );
   // `mismatch` is a positively identified recycled pid - the process running
   // under that number started AFTER pid.json was published, so it cannot be

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -96,6 +95,10 @@ vi.mock("@/lib/host/runtime", () => ({
     getActiveHostId: () => HOST_ID,
     getActiveHost: () => null,
   }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
 
 // `EpicSessionProvider` opens its own durable transport via this factory, but

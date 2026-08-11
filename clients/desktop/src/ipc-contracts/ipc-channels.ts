@@ -21,6 +21,7 @@ export const RunnerHostInvoke = {
   deviceFlowStart: "runnerHost:auth:deviceFlowStart",
   deviceFlowPollNow: "runnerHost:auth:deviceFlowPollNow",
   deviceFlowCancel: "runnerHost:auth:deviceFlowCancel",
+  refreshAuthToken: "runnerHost:auth:refreshToken",
   // Credentials-file token store (tech plan §3). `get`/`signIn`/`rotate`/`delete`
   // route the renderer's `ITokenStore` through the main-process `FileTokenStore`,
   // which owns the single machine-local credentials file + its lock/WAL. `rotate`
@@ -30,6 +31,28 @@ export const RunnerHostInvoke = {
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
+  // main for the same CORS reason as the token validators — authn-v3's CORS
+  // allow-list is the web dashboard origin, not the app renderer.
+  listRegisteredHosts: "runnerHost:hosts:list",
+  // Devices & Sessions account-security surface. These authn-v3 calls run in
+  // main for the same renderer-origin CORS reason as token validation.
+  listUserSessions: "runnerHost:auth:sessions:list",
+  revokeUserSession: "runnerHost:auth:sessions:revoke",
+  revokeAllSessions: "runnerHost:auth:sessions:revokeAll",
+  // Delegated host-credential mint. Same main-process placement as the revoke
+  // calls, with the added reason that the retained step-up bearer must never
+  // reach the renderer.
+  mintHostCredential: "runnerHost:auth:hosts:mintCredential",
+  // Cross-window arbitration for the mint above. Each BrowserWindow is its own
+  // module realm, so the renderer's "one prompt per host" memo does not span
+  // them; main holds the single registry every window claims against.
+  requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
+  verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
+  // Remote Host Support (§13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
+  // now" / auto-policy toggle / "Apply now — ends N sessions". Same CORS
+  // reason as `listRegisteredHosts`.
+  updateHostVersionPolicy: "runnerHost:hosts:updateVersionPolicy",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -46,6 +69,13 @@ export const RunnerHostInvoke = {
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
   requestHostRespawn: "runnerHost:host:requestRespawn",
+  // The `hostId` in `pid.json`, read as a pure structural parse with no
+  // reachability requirement. `localHostChange` only ever emits a snapshot
+  // for a host that is actually dialable, so while the host is down the
+  // renderer has no way to recognise this machine's own registry entry.
+  // This is that durable identity, and the renderer needs it precisely when
+  // no snapshot exists.
+  lastKnownLocalHostId: "runnerHost:host:lastKnownLocalHostId",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).
@@ -64,6 +94,7 @@ export const RunnerHostInvoke = {
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
+  perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",
@@ -72,6 +103,18 @@ export const RunnerHostInvoke = {
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",
   supportTailLog: "runnerHost:support:log:tail",
+  supportFreezeEvidence: "runnerHost:support:evidence:freeze",
+  supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
+  supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
+  supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
+  // Per-install report ledger (T3.5). Read-only surface for the dialog's
+  // "Nth time on this install" strip; sightings write via freezeEvidence,
+  // filed reports write on delivered submit - neither is renderer-writable.
+  supportGetFingerprintOccurrence:
+    "runnerHost:support:ledger:fingerprintOccurrence:get",
+  // Ticket 09 / T6: the sole main-process producer of public (GitHub-bound)
+  // text, always behind the deep scrubber.
+  supportBuildPublicDraft: "runnerHost:support:publicDraft:build",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
   serviceStart: "runnerHost:service:start",
@@ -153,6 +196,8 @@ export const RunnerHostInvoke = {
   gpuAccelerationSet: "runnerHost:gpu:set",
   logLevelsGet: "runnerHost:logLevels:get",
   logLevelsSet: "runnerHost:logLevels:set",
+  featureSettingsGet: "runnerHost:featureSettings:get",
+  agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
   // pickers (Settings → Appearance → UI/Code/Terminal font).
   fontsList: "runnerHost:fonts:list",
@@ -227,6 +272,8 @@ export const RunnerHostEvent = {
   // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
   notificationClick: "runnerHost:event:notificationClick",
+  notificationForegroundDisplay:
+    "runnerHost:event:notificationForegroundDisplay",
   trayEpicSelected: "runnerHost:event:trayEpicSelected",
   hostPickerChange: "runnerHost:event:hostPickerChange",
   quitRequested: "runnerHost:event:quitRequested",

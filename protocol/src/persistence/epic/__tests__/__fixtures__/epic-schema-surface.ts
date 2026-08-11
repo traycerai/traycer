@@ -86,6 +86,7 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
+                        "huggingface",
                       ],
                     },
                     model: {
@@ -173,6 +174,7 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
+                        "huggingface",
                       ],
                     },
                     sessionId: {
@@ -320,6 +322,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
+                                  "huggingface",
                                 ],
                               },
                               agentId: {
@@ -2376,6 +2379,113 @@ export const epicSchemaSurfaceBaseline = {
                                   "createdAt",
                                 ],
                               },
+                              {
+                                type: "object",
+                                properties: {
+                                  harnessId: {
+                                    type: "string",
+                                    const: "huggingface",
+                                  },
+                                  hostId: {
+                                    type: "string",
+                                  },
+                                  sessionId: {
+                                    type: "string",
+                                  },
+                                  sessionWorkspaceSnapshot: {
+                                    type: "object",
+                                    properties: {
+                                      workspaceKind: {
+                                        type: "string",
+                                        const: "session-snapshot",
+                                      },
+                                      primaryWorkspace: {
+                                        type: "string",
+                                      },
+                                      secondaryWorkspaces: {
+                                        default: [],
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                    },
+                                    required: [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                    ],
+                                  },
+                                  opencodeUserMessageId: {
+                                    type: "string",
+                                  },
+                                  createdAt: {
+                                    type: "number",
+                                  },
+                                  coveredUntilMessageId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  profileId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  labelSnapshot: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accountUuid: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accentColor: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                },
+                                required: [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "opencodeUserMessageId",
+                                  "createdAt",
+                                ],
+                              },
                             ],
                           },
                           {
@@ -2432,6 +2542,7 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
+                              "huggingface",
                             ],
                           },
                           agentId: {
@@ -2557,6 +2668,7 @@ export const epicSchemaSurfaceBaseline = {
                                             "pi",
                                             "hermes",
                                             "omp",
+                                            "huggingface",
                                           ],
                                         },
                                         noticeKind: {
@@ -3262,6 +3374,21 @@ export const epicSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                backgroundTask: {
+                                  default: false,
+                                  anyOf: [
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
+                                stopped: {
+                                  default: false,
+                                  type: "boolean",
+                                },
                               },
                               required: [
                                 "blockId",
@@ -3784,6 +3911,7 @@ export const epicSchemaSurfaceBaseline = {
                                     "pi",
                                     "hermes",
                                     "omp",
+                                    "huggingface",
                                   ],
                                 },
                                 source: {
@@ -3810,6 +3938,7 @@ export const epicSchemaSurfaceBaseline = {
                                         "pi",
                                         "hermes",
                                         "omp",
+                                        "huggingface",
                                       ],
                                     },
                                     sessionId: {
@@ -4274,6 +4403,31 @@ export const epicSchemaSurfaceBaseline = {
                                           },
                                         ],
                                       },
+                                      live: {
+                                        default: false,
+                                        type: "boolean",
+                                      },
+                                      managedCommand: {
+                                        default: null,
+                                        anyOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              commandId: {
+                                                type: "string",
+                                              },
+                                              monitoring: {
+                                                default: false,
+                                                type: "boolean",
+                                              },
+                                            },
+                                            required: ["commandId"],
+                                          },
+                                          {
+                                            type: "null",
+                                          },
+                                        ],
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -4430,6 +4584,7 @@ export const epicSchemaSurfaceBaseline = {
                                                 "pi",
                                                 "hermes",
                                                 "omp",
+                                                "huggingface",
                                               ],
                                             },
                                             agentId: {
@@ -5041,6 +5196,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
+                                  "huggingface",
                                 ],
                               },
                               agentId: {
@@ -5213,6 +5369,28 @@ export const epicSchemaSurfaceBaseline = {
               anyOf: [
                 {
                   type: "number",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            pinnedUserProviderHandle: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            lastDeliveredRolesDigest: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
                 },
                 {
                   type: "null",
@@ -5800,6 +5978,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -5945,6 +6156,39 @@ export const epicSchemaSurfaceBaseline = {
                   anyOf: [
                     {
                       type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
                     },
                     {
                       type: "null",
@@ -6109,6 +6353,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -6260,6 +6537,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -6287,6 +6597,54 @@ export const epicSchemaSurfaceBaseline = {
                 "agentMode",
               ],
             },
+          ],
+        },
+      },
+      roleClaims: {
+        default: {},
+        type: "object",
+        propertyNames: {
+          type: "string",
+          format: "uuid",
+          pattern:
+            "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            claimId: {
+              type: "string",
+              format: "uuid",
+              pattern:
+                "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            },
+            agentId: {
+              type: "string",
+              minLength: 1,
+            },
+            userId: {
+              type: "string",
+              minLength: 1,
+            },
+            role: {
+              type: "string",
+            },
+            scope: {
+              type: "string",
+            },
+            claimedAt: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          required: [
+            "claimId",
+            "agentId",
+            "userId",
+            "role",
+            "scope",
+            "claimedAt",
           ],
         },
       },
@@ -6432,6 +6790,7 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
+                        "huggingface",
                       ],
                     },
                     model: {
@@ -6522,6 +6881,7 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
+                        "huggingface",
                       ],
                     },
                     sessionId: {
@@ -6679,6 +7039,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
+                                  "huggingface",
                                 ],
                               },
                               agentId: {
@@ -8888,6 +9249,121 @@ export const epicSchemaSurfaceBaseline = {
                                 ],
                                 additionalProperties: false,
                               },
+                              {
+                                type: "object",
+                                properties: {
+                                  harnessId: {
+                                    type: "string",
+                                    const: "huggingface",
+                                  },
+                                  hostId: {
+                                    type: "string",
+                                  },
+                                  sessionId: {
+                                    type: "string",
+                                  },
+                                  sessionWorkspaceSnapshot: {
+                                    type: "object",
+                                    properties: {
+                                      workspaceKind: {
+                                        type: "string",
+                                        const: "session-snapshot",
+                                      },
+                                      primaryWorkspace: {
+                                        type: "string",
+                                      },
+                                      secondaryWorkspaces: {
+                                        default: [],
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                    },
+                                    required: [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                      "secondaryWorkspaces",
+                                    ],
+                                    additionalProperties: false,
+                                  },
+                                  opencodeUserMessageId: {
+                                    type: "string",
+                                  },
+                                  createdAt: {
+                                    type: "number",
+                                  },
+                                  coveredUntilMessageId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  profileId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  labelSnapshot: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accountUuid: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accentColor: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                },
+                                required: [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "opencodeUserMessageId",
+                                  "createdAt",
+                                  "coveredUntilMessageId",
+                                  "profileId",
+                                  "labelSnapshot",
+                                  "accountUuid",
+                                  "accentColor",
+                                ],
+                                additionalProperties: false,
+                              },
                             ],
                           },
                           {
@@ -8945,6 +9421,7 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
+                              "huggingface",
                             ],
                           },
                           agentId: {
@@ -9075,6 +9552,7 @@ export const epicSchemaSurfaceBaseline = {
                                             "pi",
                                             "hermes",
                                             "omp",
+                                            "huggingface",
                                           ],
                                         },
                                         noticeKind: {
@@ -9811,6 +10289,21 @@ export const epicSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                backgroundTask: {
+                                  default: false,
+                                  anyOf: [
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
+                                stopped: {
+                                  default: false,
+                                  type: "boolean",
+                                },
                               },
                               required: [
                                 "blockId",
@@ -9820,6 +10313,8 @@ export const epicSchemaSurfaceBaseline = {
                                 "command",
                                 "cwd",
                                 "exitCode",
+                                "backgroundTask",
+                                "stopped",
                               ],
                               additionalProperties: false,
                             },
@@ -10351,6 +10846,7 @@ export const epicSchemaSurfaceBaseline = {
                                     "pi",
                                     "hermes",
                                     "omp",
+                                    "huggingface",
                                   ],
                                 },
                                 source: {
@@ -10377,6 +10873,7 @@ export const epicSchemaSurfaceBaseline = {
                                         "pi",
                                         "hermes",
                                         "omp",
+                                        "huggingface",
                                       ],
                                     },
                                     sessionId: {
@@ -10869,6 +11366,35 @@ export const epicSchemaSurfaceBaseline = {
                                           },
                                         ],
                                       },
+                                      live: {
+                                        default: false,
+                                        type: "boolean",
+                                      },
+                                      managedCommand: {
+                                        default: null,
+                                        anyOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              commandId: {
+                                                type: "string",
+                                              },
+                                              monitoring: {
+                                                default: false,
+                                                type: "boolean",
+                                              },
+                                            },
+                                            required: [
+                                              "commandId",
+                                              "monitoring",
+                                            ],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "null",
+                                          },
+                                        ],
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -10878,6 +11404,8 @@ export const epicSchemaSurfaceBaseline = {
                                       "blockId",
                                       "outputFile",
                                       "mcp",
+                                      "live",
+                                      "managedCommand",
                                     ],
                                     additionalProperties: false,
                                   },
@@ -10980,6 +11508,7 @@ export const epicSchemaSurfaceBaseline = {
                                                 "pi",
                                                 "hermes",
                                                 "omp",
+                                                "huggingface",
                                               ],
                                             },
                                             agentId: {
@@ -11613,6 +12142,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
+                                  "huggingface",
                                 ],
                               },
                               agentId: {
@@ -11797,6 +12327,28 @@ export const epicSchemaSurfaceBaseline = {
                 },
               ],
             },
+            pinnedUserProviderHandle: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
+            lastDeliveredRolesDigest: {
+              default: null,
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
           },
           required: [
             "parentId",
@@ -11813,6 +12365,8 @@ export const epicSchemaSurfaceBaseline = {
             "messages",
             "events",
             "archivedAt",
+            "pinnedUserProviderHandle",
+            "lastDeliveredRolesDigest",
           ],
           additionalProperties: false,
         },
@@ -12392,6 +12946,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12415,6 +13002,9 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12550,6 +13140,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -12581,6 +13204,9 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12716,6 +13342,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12739,6 +13398,9 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12874,6 +13536,39 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                pendingForkSourceHarnessSessionId: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                pinnedUserProviderHandle: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                lastDeliveredRolesDigest: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -12905,11 +13600,63 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellArgs",
                 "profileId",
                 "archivedAt",
+                "pendingForkSourceHarnessSessionId",
+                "pinnedUserProviderHandle",
+                "lastDeliveredRolesDigest",
                 "harnessSessionId",
               ],
               additionalProperties: false,
             },
           ],
+        },
+      },
+      roleClaims: {
+        default: {},
+        type: "object",
+        propertyNames: {
+          type: "string",
+          format: "uuid",
+          pattern:
+            "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            claimId: {
+              type: "string",
+              format: "uuid",
+              pattern:
+                "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            },
+            agentId: {
+              type: "string",
+              minLength: 1,
+            },
+            userId: {
+              type: "string",
+              minLength: 1,
+            },
+            role: {
+              type: "string",
+            },
+            scope: {
+              type: "string",
+            },
+            claimedAt: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          required: [
+            "claimId",
+            "agentId",
+            "userId",
+            "role",
+            "scope",
+            "claimedAt",
+          ],
+          additionalProperties: false,
         },
       },
     },
@@ -12923,6 +13670,7 @@ export const epicSchemaSurfaceBaseline = {
       "artifacts",
       "deletedArtifacts",
       "tuiAgents",
+      "roleClaims",
     ],
     additionalProperties: false,
     $defs: {

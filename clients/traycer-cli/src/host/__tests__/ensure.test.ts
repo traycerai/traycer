@@ -145,12 +145,22 @@ function makeController(
     stop: vi.fn(async () => {
       current = "stopped";
     }),
+    stopForRestart: vi.fn(async () => {
+      current = "stopped";
+      return { forcedRecycle: false };
+    }),
+    relaunchAfterRestart: vi.fn(async () => {
+      current = "running";
+    }),
     restart: vi.fn(async () => {
       current = "running";
     }),
     // `host ensure` never reaches the externally-managed repair path (its
     // stub states are all CLI-managed), so a plain no-op is faithful here.
     retireCompetingRegistration: vi.fn(async () => ({
+      kind: "not-applicable" as const,
+    })),
+    takeoverDesktopRegistration: vi.fn(async () => ({
       kind: "not-applicable" as const,
     })),
   };
@@ -188,11 +198,16 @@ beforeEach(() => {
       postSwapAction: "install",
       postSwapError: null,
     },
-    lifecycle: { beforeSwap: vi.fn(), afterSwap: vi.fn() },
+    lifecycle: {
+      beforeSwap: vi.fn(),
+      afterSwap: vi.fn(),
+      swapLockRecovery: null,
+    },
   }));
   createBytesOnlyInstallLifecycleMock.mockImplementation(() => ({
     beforeSwap: vi.fn(),
     afterSwap: vi.fn(),
+    swapLockRecovery: null,
   }));
   stageHostInstallSourceMock.mockResolvedValue({
     stagingDir: "/tmp/staged",

@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -36,7 +35,6 @@ interface FindTestState {
     hostLabel: string;
   };
   readFile: ReadFileState;
-  syntaxHighlight: boolean;
 }
 
 class MockCssHighlight {
@@ -59,7 +57,6 @@ const state = vi.hoisted((): FindTestState => ({
     isError: false,
     error: null,
   },
-  syntaxHighlight: false,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -74,37 +71,25 @@ vi.mock("@/hooks/workspace/use-read-file-query", () => ({
   useWorkspaceReadFile: () => state.readFile,
 }));
 
-vi.mock("@/markdown/shiki-highlighter", () => ({
-  useShikiHighlighter: () => ({
-    highlighter: null,
-    theme: "dark",
-    themesVersion: 0,
-  }),
-  highlightCode: () => null,
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
 }));
 
-vi.mock("@/markdown/use-throttled-code-highlight", () => ({
-  useThrottledCodeHighlight: (input: { readonly code: string }) => {
-    if (!state.syntaxHighlight) return null;
-    const lines = input.code.split("\n");
-    let offset = 0;
-    return (
-      <>
-        {lines.map((line) => {
-          const key = `${offset}:${line}`;
-          offset += line.length;
-          const hasLineBreak = offset < input.code.length;
-          if (hasLineBreak) offset += 1;
-          return (
-            <span key={key}>
-              {line}
-              {hasLineBreak ? "\n" : null}
-            </span>
-          );
-        })}
-      </>
-    );
-  },
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => false,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
+  useWorkspaceWriteFile: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark" }),
 }));
 
 import { WorkspaceFileTile } from "../workspace-file-tile";
@@ -153,7 +138,6 @@ beforeEach(() => {
   state.activeHostId = "host-A";
   state.reachability = { status: "reachable", hostLabel: "Host A" };
   state.readFile = loadingReadFile();
-  state.syntaxHighlight = false;
   installMockCssHighlights();
 });
 
@@ -298,8 +282,7 @@ describe("<WorkspaceFileTile /> tile find", () => {
     });
   });
 
-  it("keeps CRLF source highlights aligned on the syntax-highlighted path", async () => {
-    state.syntaxHighlight = true;
+  it("keeps CRLF source highlights aligned in the Diffs renderer", async () => {
     state.readFile = loadedReadFile("foo\r\nbar\r\nbaz", false);
     renderTile(CODE_NODE);
     await waitForSearchable(CODE_NODE);
@@ -551,7 +534,13 @@ function tileSnapshot(node: WorkspaceFileRef): TileFindStateSnapshot {
 }
 
 function activeSourceLine(container: HTMLElement): Element | null {
-  return container.querySelector('[data-workspace-file-find-active="true"]');
+  return (
+    container
+      .querySelector("diffs-container")
+      ?.shadowRoot?.querySelector(
+        '[data-column-number][data-workspace-file-find-active="true"]',
+      ) ?? null
+  );
 }
 
 function activeHighlightRange(): Range {
@@ -563,11 +552,11 @@ function activeHighlightRange(): Range {
 }
 
 function activeHighlightStartOffset(): number {
-  return activeHighlightRange().startOffset;
+  return lineRelativeRangeOffset(activeHighlightRange(), "start");
 }
 
 function activeHighlightEndOffset(): number {
-  return activeHighlightRange().endOffset;
+  return lineRelativeRangeOffset(activeHighlightRange(), "end");
 }
 
 function activeHighlightText(): string {
@@ -577,7 +566,32 @@ function activeHighlightText(): string {
 function inactiveHighlightStartOffsets(): readonly number[] {
   const highlight = firstSourceInactiveHighlight();
   if (highlight === undefined) return [];
-  return highlight.ranges.map((range) => range.startOffset);
+  return highlight.ranges.map((range) =>
+    lineRelativeRangeOffset(range, "start"),
+  );
+}
+
+function lineRelativeRangeOffset(
+  range: Range,
+  endpoint: "start" | "end",
+): number {
+  const node = endpoint === "start" ? range.startContainer : range.endContainer;
+  const nodeOffset = endpoint === "start" ? range.startOffset : range.endOffset;
+  const line = node.parentElement?.closest<HTMLElement>("[data-line]");
+  if (line === undefined || line === null) return nodeOffset;
+  const walker = line.ownerDocument.createTreeWalker(
+    line,
+    NodeFilter.SHOW_TEXT,
+    null,
+  );
+  let offset = 0;
+  let current = walker.nextNode();
+  while (current !== null) {
+    if (current === node) return offset + nodeOffset;
+    offset += current.textContent?.length ?? 0;
+    current = walker.nextNode();
+  }
+  return nodeOffset;
 }
 
 function sourceActiveHighlightTexts(): readonly string[] {

@@ -163,6 +163,22 @@ export function finalizeStreamingActionBlocks(
             block.planStatus === "drafting" ? "ready" : block.planStatus,
         };
       }
+      // A compaction still in flight at turn end never reported a boundary, so
+      // it folded nothing. The content fallthrough below would mark it
+      // "completed" and the bar would claim a result it never produced - the
+      // silent version of a failed compaction, with no error line to contradict
+      // it. Compaction is not an action block, so `interrupted`/`superseded` are
+      // not in its schema; `errored` is the honest terminal state. No harness
+      // leaves a compaction running across a turn end (each yields its own
+      // terminal event first), so this only ever fires on a genuine cut-short.
+      if (block.type === "compaction") {
+        return {
+          ...block,
+          status: "errored" as const,
+          error: block.error ?? "Compaction did not finish",
+          timestamp,
+        };
+      }
       // text/reasoning are content, not actions: a partial thought/sentence is
       // not a failure. Always "completed", with `timestamp` advanced to turn-end
       // so a derived duration ("Thought for Xs") spans first delta → turn end.
@@ -175,14 +191,15 @@ export function finalizeStreamingActionBlocks(
   return hasUpdates ? finalizedBlocks : blocks;
 }
 
-// Option B (backgrounded work): restore any subagent/background-tool block that
-// `finalizeStreamingActionBlocks` just finalized but was "streaming" before, to
-// its pre-finalize (streaming) state. Detached work still streaming at a CLEAN
-// turn end outlives the turn that spawned it, so its card must keep reading
-// "running" until its OWN completion finalizes it (the host's detached
-// execution). Other turn-scoped action blocks (ordinary tool_call/command/
-// file_change) stay finalized. Only applied on `turn.completed` - a
-// stopped/interrupted turn DOES finalize still-running detached work.
+// Option B (backgrounded work): restore any subagent block, or any background-
+// marked tool_call/command block, that `finalizeStreamingActionBlocks` just
+// finalized but was "streaming" before, to its pre-finalize (streaming) state.
+// Detached work still streaming at a CLEAN turn end outlives the turn that
+// spawned it, so its card must keep reading "running" until its OWN completion
+// finalizes it (the host's detached execution). Turn-scoped action blocks
+// (unmarked tool_call/command, file_change) stay finalized. Only applied on
+// `turn.completed` - a stopped/interrupted turn DOES finalize still-running
+// detached work.
 export function reopenStreamingSubagentBlocks(
   before: ContentBlock[],
   finalized: ContentBlock[],
@@ -207,7 +224,8 @@ function streamingDetachedBlockIds(
         (block) =>
           block.status === "streaming" &&
           (block.type === "subagent" ||
-            (block.type === "tool_call" && block.backgroundTask)),
+            (block.type === "tool_call" && block.backgroundTask) ||
+            (block.type === "command" && block.backgroundTask)),
       )
       .map((block) => block.blockId),
   );
@@ -1452,6 +1470,24 @@ export function accumulateEvent(
     }
 
     case "command.started": {
+      // A harness that discovers backgrounding only after the card is open
+      // (Codex promotes at the parent turn's end) re-emits this event to stamp
+      // the marker, so an existing block is updated in place - appending would
+      // duplicate the card. The open block's `timestamp` is its elapsed anchor
+      // and its `status` may already be terminal, so neither is touched here.
+      const existing = findBlockOfType(blocks, event.blockId, "command");
+      if (existing) {
+        return replaceBlock(blocks, event.blockId, {
+          ...existing,
+          command: event.command,
+          cwd: event.cwd === undefined ? existing.cwd : event.cwd,
+          parentBlockId: resolveParentBlockId(event, existing),
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
+        });
+      }
       return [
         ...blocks,
         {
@@ -1463,11 +1499,14 @@ export function accumulateEvent(
           cwd: nullableString(event.cwd),
           exitCode: null,
           parentBlockId: resolveParentBlockId(event, undefined),
+          backgroundTask: event.backgroundTask ?? null,
+          stopped: false,
         },
       ];
     }
 
     case "command.completed": {
+      const stopped = event.terminationReason === "stopped";
       const existing = findBlockOfType(blocks, event.blockId, "command");
       if (existing) {
         const updated = {
@@ -1476,6 +1515,11 @@ export function accumulateEvent(
           exitCode: event.exitCode ?? existing.exitCode,
           timestamp: event.timestamp,
           parentBlockId: resolveParentBlockId(event, existing),
+          backgroundTask: mergeBackgroundTaskMarker(
+            existing.backgroundTask,
+            event.backgroundTask,
+          ),
+          stopped: existing.stopped || stopped,
         };
         return replaceBlock(blocks, event.blockId, updated);
       }
@@ -1490,6 +1534,8 @@ export function accumulateEvent(
           cwd: null,
           exitCode: nullableNumber(event.exitCode),
           parentBlockId: resolveParentBlockId(event, undefined),
+          backgroundTask: event.backgroundTask ?? null,
+          stopped,
         },
       ];
     }

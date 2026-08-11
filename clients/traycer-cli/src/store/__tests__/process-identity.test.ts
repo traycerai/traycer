@@ -6,6 +6,7 @@ import {
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
   isProcessAlive,
+  readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,
   type ProcessIdentityToken,
@@ -35,33 +36,39 @@ describe("parseElapsedSeconds (ps -o etime= format)", () => {
 });
 
 describe("computeProcessIdentityVerdict (pure decision logic)", () => {
-  it("returns dead when liveness is dead, regardless of start times", () => {
-    expect(computeProcessIdentityVerdict("dead", 1000, 1000)).toBe("dead");
+  // Tokens are compared only against each other, never against
+  // `process.platform`, so a fixed tag keeps these rows identical on every
+  // runner.
+  const A = "linux:boot-a 1000";
+  const B = "linux:boot-a 9999";
+
+  it("returns dead when liveness is dead, regardless of identities", () => {
+    expect(computeProcessIdentityVerdict("dead", A, A)).toBe("dead");
     expect(computeProcessIdentityVerdict("dead", null, null)).toBe("dead");
   });
 
   // Deliberately does NOT short-circuit on indeterminate liveness: the
-  // liveness probe (kill/tasklist) and the start-time probe (ps/
-  // Get-Process) are independent OS queries, so a start-time read can
+  // liveness probe (kill/tasklist) and the identity probe (/proc, ps,
+  // Get-Process) are independent OS queries, so an identity read can
   // still succeed and carry positive evidence even when liveness itself
   // couldn't be established (item B, Fixup round-2 ticket).
-  it("still derives a verdict from the start-time comparison when liveness itself is indeterminate", () => {
-    // A successful, matching start-time read is positive evidence of
+  it("still derives a verdict from the identity comparison when liveness itself is indeterminate", () => {
+    // A successful, matching identity read is positive evidence of
     // "still there", even without independent liveness confirmation.
-    expect(computeProcessIdentityVerdict("indeterminate", 1000, 1000)).toBe(
+    expect(computeProcessIdentityVerdict("indeterminate", A, A)).toBe(
       "alive-same",
     );
     // A successful, mismatching read is positive evidence the recorded
     // holder is gone (dead/recycled) - breakable.
-    expect(computeProcessIdentityVerdict("indeterminate", 1000, 100_000)).toBe(
+    expect(computeProcessIdentityVerdict("indeterminate", A, B)).toBe(
       "alive-different",
     );
-    // No recorded identity to compare against, or a failed start-time
+    // No recorded identity to compare against, or a failed identity
     // read (`null`), stays indeterminate - nothing positive either way.
-    expect(computeProcessIdentityVerdict("indeterminate", null, 1000)).toBe(
+    expect(computeProcessIdentityVerdict("indeterminate", null, A)).toBe(
       "indeterminate",
     );
-    expect(computeProcessIdentityVerdict("indeterminate", 1000, null)).toBe(
+    expect(computeProcessIdentityVerdict("indeterminate", A, null)).toBe(
       "indeterminate",
     );
     expect(computeProcessIdentityVerdict("indeterminate", null, null)).toBe(
@@ -69,11 +76,11 @@ describe("computeProcessIdentityVerdict (pure decision logic)", () => {
     );
   });
 
-  it("returns indeterminate when alive but either start time is unknown", () => {
-    expect(computeProcessIdentityVerdict("alive", null, 1000)).toBe(
+  it("returns indeterminate when alive but either identity is unknown", () => {
+    expect(computeProcessIdentityVerdict("alive", null, A)).toBe(
       "indeterminate",
     );
-    expect(computeProcessIdentityVerdict("alive", 1000, null)).toBe(
+    expect(computeProcessIdentityVerdict("alive", A, null)).toBe(
       "indeterminate",
     );
     expect(computeProcessIdentityVerdict("alive", null, null)).toBe(
@@ -81,25 +88,46 @@ describe("computeProcessIdentityVerdict (pure decision logic)", () => {
     );
   });
 
-  it("returns alive-same when alive and start times match within tolerance", () => {
-    expect(computeProcessIdentityVerdict("alive", 10_000, 10_000)).toBe(
-      "alive-same",
+  it("returns alive-same only for byte-identical identities", () => {
+    expect(computeProcessIdentityVerdict("alive", A, A)).toBe("alive-same");
+  });
+
+  it("returns alive-different when alive but the identities positively differ (recycled pid)", () => {
+    expect(computeProcessIdentityVerdict("alive", A, B)).toBe(
+      "alive-different",
     );
-    expect(computeProcessIdentityVerdict("alive", 10_000, 13_000)).toBe(
-      "alive-same",
-    );
-    expect(computeProcessIdentityVerdict("alive", 13_000, 10_000)).toBe(
-      "alive-same",
+    expect(computeProcessIdentityVerdict("alive", B, A)).toBe(
+      "alive-different",
     );
   });
 
-  it("returns alive-different when alive but start times diverge beyond tolerance (recycled pid)", () => {
-    expect(computeProcessIdentityVerdict("alive", 10_000, 100_000)).toBe(
-      "alive-different",
-    );
-    expect(computeProcessIdentityVerdict("alive", 100_000, 10_000)).toBe(
-      "alive-different",
-    );
+  /*
+   * The comparison used to be a 5s tolerance over two epoch-millisecond
+   * start times, each derived as `Date.now() - <elapsed since start>`. Any
+   * `CLOCK_REALTIME` step wider than the tolerance between recording a token
+   * and verifying it moved one operand and not the other, so a LIVE holder
+   * read as "alive-different" - which every caller here treats as licence to
+   * break its lock or sweep its temp dir. Identities are recorded once by the
+   * kernel and only read back, so there is no clock in the comparison and no
+   * tolerance to tune: two nearby-but-distinct stamps are different, full
+   * stop.
+   */
+  it("has no tolerance window a clock step could fall inside", () => {
+    expect(
+      computeProcessIdentityVerdict(
+        "alive",
+        "linux:boot-a 1",
+        "linux:boot-a 2",
+      ),
+    ).toBe("alive-different");
+  });
+
+  // A record that travelled between machines, or a broken reader. Knowing
+  // less is the answer; "different" would be positive evidence we do not have.
+  it("stays indeterminate across platform tags rather than claiming difference", () => {
+    expect(
+      computeProcessIdentityVerdict("alive", A, "darwin:Sun Jul 27 2026"),
+    ).toBe("indeterminate");
   });
 });
 
@@ -116,33 +144,38 @@ describe("isProcessAlive", () => {
 });
 
 describe("verifyProcessIdentity", () => {
-  it("returns alive-same when the recorded identity matches our own start time", () => {
-    const ownStartedAtMs = readProcessStartTimeMs(process.pid);
-    // Best-effort: if this machine's `ps` probe can't read our own start
-    // time, there's nothing to construct a matching token from.
-    if (ownStartedAtMs === null) return;
+  it("returns alive-same when the recorded identity matches our own creation stamp", () => {
+    const ownIdentity = readProcessStartIdentity(process.pid);
+    // Best-effort: if this machine's probe can't read our own stamp, there's
+    // nothing to construct a matching token from.
+    if (ownIdentity === null) return;
     const token: ProcessIdentityToken = {
       pid: process.pid,
-      startedAtMs: ownStartedAtMs,
+      startedAtMs: readProcessStartTimeMs(process.pid),
+      startIdentity: ownIdentity,
     };
     expect(verifyProcessIdentity(token)).toBe("alive-same");
   });
 
   it("returns dead when a recorded identity under our own pid mismatches (pid recycled onto us)", () => {
+    const ownIdentity = readProcessStartIdentity(process.pid);
+    if (ownIdentity === null) return;
     const token: ProcessIdentityToken = {
       pid: process.pid,
-      // Deliberately far from our actual start time - simulates a dead
-      // predecessor's token surviving under a pid the OS has since
+      startedAtMs: readProcessStartTimeMs(process.pid),
+      // A well-formed stamp from this platform that is positively not ours -
+      // a dead predecessor's token surviving under a pid the OS has since
       // recycled onto this process.
-      startedAtMs: Date.now() - 10 * 60 * 1000,
+      startIdentity: `${ownIdentity} 0`,
     };
     expect(verifyProcessIdentity(token)).toBe("dead");
   });
 
-  it("returns indeterminate when the recorded identity has no start time to compare", () => {
+  it("returns indeterminate when the recorded identity has no creation stamp to compare", () => {
     const token: ProcessIdentityToken = {
       pid: process.pid,
-      startedAtMs: null,
+      startedAtMs: readProcessStartTimeMs(process.pid),
+      startIdentity: null,
     };
     expect(verifyProcessIdentity(token)).toBe("indeterminate");
   });
@@ -154,6 +187,7 @@ describe("verifyProcessIdentity", () => {
     const token: ProcessIdentityToken = {
       pid: 999999,
       startedAtMs: Date.now(),
+      startIdentity: "linux:boot-a 1",
     };
     // Best-effort: if 999999 happens to be alive on this machine, skip
     // rather than assert a false failure.
@@ -209,7 +243,11 @@ describe.skipIf(process.platform === "win32")(
       expect(first).not.toBeNull();
       expect(Math.abs(Date.now() - (first as number))).toBeLessThan(15_000);
 
-      const token: ProcessIdentityToken = { pid, startedAtMs: first };
+      const token: ProcessIdentityToken = {
+        pid,
+        startedAtMs: first,
+        startIdentity: readProcessStartIdentity(pid),
+      };
       // A second, independent observation of the same still-running
       // process - the "two-process" scenario the cli-lock hardening
       // tests build on.
@@ -219,12 +257,15 @@ describe.skipIf(process.platform === "win32")(
     it("reports dead once the process has exited", async () => {
       const pid = await spawnSleeper(30);
       const startedAtMs = readProcessStartTimeMs(pid);
+      const startIdentity = readProcessStartIdentity(pid);
       const exited = new Promise<void>((resolve) => {
         child?.once("exit", () => resolve());
       });
       child?.kill();
       await exited;
-      expect(verifyProcessIdentity({ pid, startedAtMs })).toBe("dead");
+      expect(verifyProcessIdentity({ pid, startedAtMs, startIdentity })).toBe(
+        "dead",
+      );
     });
   },
 );

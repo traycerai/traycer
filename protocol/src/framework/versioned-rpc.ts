@@ -5,8 +5,10 @@
 // contract a consumer depends on). Do not conflate the two. See README.md.
 import { z } from "zod";
 import {
+  toUnknownKeyTree,
   describeAdditivityViolation,
   findAdditivityViolation,
+  rootAdditivityViolation,
   findBreakingChange,
   toJsonSchemaFingerprint,
   type JsonSchemaFingerprint,
@@ -170,9 +172,13 @@ export function defineFloorAwareVersionedRpcRegistry(
  *    - direct downgrades originate at the latest installed version of the source
  *      major and target the latest installed version of an older major
  * 2. Zod-schema-level:
- *    - minors within a major line only add request/response fields; no minor
- *      may drop a field that an earlier minor in the same line had (changing
- *      a field's own schema within a line is allowed)
+ *    - minors within a major line are additive under projection-feasibility
+ *      semantics at ANY depth: fields, enum values, and union variants may be
+ *      added (including inside nested objects and union arms), and a field
+ *      may widen into a union that retains an additively-compatible variant
+ *      of its old form; no minor may remove or incompatibly replace anything
+ *      an earlier minor in the same line had, nested or not (see
+ *      `findAdditivityViolation`)
  *    - major bumps carry at least one breaking change on the latest minor of
  *      each side (a removed field or a changed field schema); purely additive
  *      bumps should ship as a minor
@@ -213,6 +219,19 @@ export function validateVersionedRpcRegistry<
       for (const minor of minorKeys) {
         const entry = line.versions[minor];
         const contract = entry.contract;
+
+        // The compatibility loop below starts at the SECOND installed minor,
+        // so an annotation on the first one is never reached - it could sit
+        // in the registry forever as an unverifiable governance claim about
+        // growth that has no predecessor to grow over.
+        if (
+          entry.responseGrowthProjectionGated === true &&
+          minor === minorKeys[0]
+        ) {
+          throw new Error(
+            `Version ${major}.${minor} for method '${method}' cannot declare \`responseGrowthProjectionGated\`: it is the first installed minor of its line, so it has no predecessor to grow over`,
+          );
+        }
 
         if (contract.method !== method) {
           throw new Error(
@@ -415,9 +434,27 @@ function assertSchemaCompatibility(
         const previous = schemas[method][major][previousMinor];
         const current = schemas[method][major][currentMinor];
 
+        // Requests stay lenient on value growth: only a caller that opts
+        // into a new capability on its own call hits the projection
+        // refusal, which is the designed DOWNGRADE_UNSUPPORTED arm.
+        const previousRequestInput = toUnknownKeyTree(
+          line.versions[previousMinor].contract.requestSchema,
+        );
+        const previousResponseInput = toUnknownKeyTree(
+          line.versions[previousMinor].contract.responseSchema,
+        );
+        const currentRequestInput = toUnknownKeyTree(
+          line.versions[currentMinor].contract.requestSchema,
+        );
+        const currentResponseInput = toUnknownKeyTree(
+          line.versions[currentMinor].contract.responseSchema,
+        );
         const requestViolation = findAdditivityViolation(
           previous.request,
           current.request,
+          "lenient",
+          previousRequestInput,
+          currentRequestInput,
         );
         if (requestViolation !== null) {
           throw new Error(
@@ -425,13 +462,52 @@ function assertSchemaCompatibility(
           );
         }
 
-        const responseViolation = findAdditivityViolation(
+        // Responses are strict on value growth unless the minor declares
+        // its growth emission-gated: response values are typically decided
+        // by shared state, so a new value would poison every old peer's
+        // projection with no opt-out.
+        const responseGrowthGated =
+          line.versions[currentMinor].responseGrowthProjectionGated === true;
+        const strictResponseViolation = findAdditivityViolation(
           previous.response,
           current.response,
+          "no-value-growth",
+          previousResponseInput,
+          currentResponseInput,
         );
-        if (responseViolation !== null) {
+        // The annotation is a reviewed claim about the EMITTER, so it must
+        // never outlive the growth it was granted for: a minor that carries
+        // it without growth (or whose growth is later removed) would keep
+        // the response lane silently lenient for every future edit to that
+        // same minor. Require it to be load-bearing.
+        if (responseGrowthGated && strictResponseViolation === null) {
           throw new Error(
-            `Minor ${major}.${currentMinor} for method '${method}' response ${describeAdditivityViolation(responseViolation)} from ${major}.${previousMinor}`,
+            `Minor ${major}.${currentMinor} for method '${method}' declares \`responseGrowthProjectionGated\` but its response has no value growth over ${major}.${previousMinor}; remove the annotation`,
+          );
+        }
+        const responseViolation = responseGrowthGated
+          ? findAdditivityViolation(
+              previous.response,
+              current.response,
+              "lenient",
+              previousResponseInput,
+              currentResponseInput,
+            )
+          : strictResponseViolation;
+        if (responseViolation !== null) {
+          // Growth violations may arrive wrapped in `array-items`, so
+          // classify the unwrapped root rather than the rendered prose.
+          const violationDescription =
+            describeAdditivityViolation(responseViolation);
+          const rootViolation = rootAdditivityViolation(responseViolation);
+          const isValueGrowth =
+            rootViolation.kind === "enum-value-added" ||
+            rootViolation.kind === "union-variant-added";
+          const annotationHint = isValueGrowth
+            ? " (if this growth is genuinely emission-gated on the negotiated version, declare `responseGrowthProjectionGated: true` on the minor's registry entry)"
+            : "";
+          throw new Error(
+            `Minor ${major}.${currentMinor} for method '${method}' response ${violationDescription} from ${major}.${previousMinor}${annotationHint}`,
           );
         }
       }
@@ -447,13 +523,21 @@ function assertSchemaCompatibility(
       const currentLatest =
         schemas[method][currentMajor][currentLine.latestMinor];
 
+      const previousLatestContract =
+        previousLine.versions[previousLine.latestMinor].contract;
+      const currentLatestContract =
+        currentLine.versions[currentLine.latestMinor].contract;
       const requestBreak = findBreakingChange(
         previousLatest.request,
         currentLatest.request,
+        toUnknownKeyTree(previousLatestContract.requestSchema),
+        toUnknownKeyTree(currentLatestContract.requestSchema),
       );
       const responseBreak = findBreakingChange(
         previousLatest.response,
         currentLatest.response,
+        toUnknownKeyTree(previousLatestContract.responseSchema),
+        toUnknownKeyTree(currentLatestContract.responseSchema),
       );
 
       if (requestBreak === null && responseBreak === null) {

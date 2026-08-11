@@ -83,6 +83,7 @@ function open(
     range: { from: 1, to: 1 + query.length + 1 },
     query,
     commit,
+    dismiss: null,
     clientRect: null,
   });
 }
@@ -99,6 +100,7 @@ function openSlash(
     range: { from: 1, to: 2 },
     query: "",
     commit,
+    dismiss: null,
     clientRect: null,
   });
 }
@@ -119,6 +121,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().openPicker({
@@ -129,6 +132,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
 
@@ -160,6 +164,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 4, to: 5 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
 
@@ -250,6 +255,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 5 },
       query: "src",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -427,6 +433,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -558,6 +565,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -579,8 +587,8 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     expect(store.getState().knownSlashCommands).toBeNull();
     const commands = new Map([
-      ["plan", "plan"],
-      ["commit", "commit"],
+      ["plan", slashCommand("plan")],
+      ["commit", slashCommand("commit")],
     ]);
     store.getState().setKnownSlashCommands(commands);
     expect(store.getState().knownSlashCommands).toBe(commands);
@@ -602,5 +610,101 @@ describe("composer picker store", () => {
       clientRect: null,
     });
     expect(store.getState()).toBe(before);
+  });
+});
+
+// A same-query refresh can reorder rows as slower mention sources land (the
+// flat root search re-ranks every arrival). Once the user has moved the
+// highlight off the top row, it must follow the item they chose, not the index
+// it sat at; at index 0 the highlight keeps tracking the best match.
+describe("composer picker store selection stickiness", () => {
+  function publish(store: ComposerPickerStore, ids: ReadonlyArray<string>) {
+    store.getState().setItems({
+      sessionId: 1,
+      kind: "mention",
+      query: "src",
+      slashScope: null,
+      step: ROOT_MENTION_STEP,
+      items: ids.map(mentionItem),
+      loading: false,
+      loadFailed: false,
+      retryLoad: null,
+    });
+  }
+
+  it("follows a navigated-to item by id when a refresh reorders the list", () => {
+    const store = createComposerPickerStore();
+    open(store, "src", NOOP_COMMIT);
+    publish(store, ["a", "b", "c"]);
+    store.getState().moveActive(1);
+    expect(store.getState().activeIndex).toBe(1);
+
+    publish(store, ["late-hit", "a", "b", "c"]);
+
+    expect(store.getState().activeIndex).toBe(2);
+    expect(store.getState().items[store.getState().activeIndex].id).toBe("b");
+  });
+
+  it("keeps the highlight on the top row when the user has not navigated", () => {
+    const store = createComposerPickerStore();
+    open(store, "src", NOOP_COMMIT);
+    publish(store, ["a", "b", "c"]);
+
+    publish(store, ["late-hit", "a", "b", "c"]);
+
+    expect(store.getState().activeIndex).toBe(0);
+    expect(store.getState().items[0].id).toBe("late-hit");
+  });
+
+  it("falls back to the old index when the navigated item vanished", () => {
+    const store = createComposerPickerStore();
+    open(store, "src", NOOP_COMMIT);
+    publish(store, ["a", "b", "c"]);
+    store.getState().moveActive(1);
+
+    publish(store, ["a", "c"]);
+
+    expect(store.getState().activeIndex).toBe(1);
+  });
+
+  // Navigation deliberately highlights disabled slash rows (their disabled
+  // reason stays visible; commit refuses). A same-query catalog refresh must
+  // keep the highlight on that row - skipping it to an enabled neighbor would
+  // let a following Enter commit a command the user never selected.
+  it("carries a highlighted DISABLED slash row by id across a same-query refresh", () => {
+    const store = createComposerPickerStore();
+    openSlash(store, NOOP_COMMIT);
+    const publishSlash = (items: ReadonlyArray<ComposerPickerItem>) => {
+      store.getState().setItems({
+        sessionId: 1,
+        kind: "slash",
+        query: "",
+        slashScope: "skills",
+        step: ROOT_MENTION_STEP,
+        items,
+        loading: false,
+        loadFailed: false,
+        retryLoad: null,
+      });
+    };
+    publishSlash([
+      slashItem("deploy", null),
+      slashItem("compact", LEADING_ONLY),
+      slashItem("review", null),
+    ]);
+    store.getState().moveActive(1);
+    expect(store.getState().activeIndex).toBe(1);
+
+    publishSlash([
+      slashItem("new-skill", null),
+      slashItem("deploy", null),
+      slashItem("compact", LEADING_ONLY),
+      slashItem("review", null),
+    ]);
+
+    expect(store.getState().activeIndex).toBe(2);
+    expect(store.getState().items[2].id).toBe("compact");
+    // The carried row stays inert: commit still refuses it.
+    expect(store.getState().commitActiveItem()).toBe(false);
   });
 });

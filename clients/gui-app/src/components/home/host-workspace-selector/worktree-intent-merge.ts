@@ -3,6 +3,7 @@ import type {
   WorktreeIntent,
   WorktreeFolderIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import { createWorktreeRetryIdentity } from "@/lib/worktree/worktree-retry-identity";
 
 /**
  * Updates the setup/teardown `scripts` override on the staged `worktree` entry
@@ -27,6 +28,48 @@ export function setWorktreeIntentEntryScripts(
     entries: intent.entries.map((entry) =>
       entry.workspacePath === workspacePath && entry.kind === "worktree"
         ? { ...entry, scripts }
+        : entry,
+    ),
+  };
+}
+
+/**
+ * Updates the `name` of a staged `worktree` entry's `type: "new"` branch
+ * selection for `workspacePath`, preserving everything else (source,
+ * `carryUncommittedChanges`, scripts). A no-op (same reference returned) when
+ * the folder has no staged `worktree` entry, or its branch selection isn't
+ * `"new"` - there is no generated name to replace for an `"existing"` checkout.
+ * Used by the Environment dialog's repository-defaults section to offer
+ * regenerating THIS picker's proposed branch name after a repo prefix save,
+ * without touching any other staged intent.
+ */
+export function setWorktreeIntentEntryBranchName(
+  intent: WorktreeIntent | null,
+  workspacePath: string,
+  name: string,
+): WorktreeIntent | null {
+  if (intent === null) return null;
+  const hasTarget = intent.entries.some(
+    (entry) =>
+      entry.workspacePath === workspacePath &&
+      entry.kind === "worktree" &&
+      entry.branch.type === "new",
+  );
+  if (!hasTarget) return intent;
+  return {
+    entries: intent.entries.map((entry) =>
+      entry.workspacePath === workspacePath &&
+      entry.kind === "worktree" &&
+      entry.branch.type === "new"
+        ? {
+            ...entry,
+            branch: {
+              ...entry.branch,
+              name,
+              collision: "random",
+              retryIdentity: createWorktreeRetryIdentity(),
+            },
+          }
         : entry,
     ),
   };

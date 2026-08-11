@@ -322,6 +322,104 @@ export const resourcesSubscribeV13 = defineStreamRpcContract({
   clientFrameSchema: resourcesSubscribeClientFrameSchema,
 });
 
+/**
+ * `@1.4` grows the owner vocabulary by `managed-command` - the host's
+ * supervised long-running commands (shells). Their trees were
+ * always tracked; before `@1.4` the host folded them into `other` because the
+ * wire had no kind for them, and it still does that for any peer negotiated
+ * below `@1.4`. The `@1.0`-`@1.3` enum stays frozen: a kind is not an additive
+ * field, so an old peer must never receive one it cannot name.
+ */
+export const resourceOwnerKindSchemaV14 = z.enum([
+  "chat",
+  "terminal",
+  "terminal-agent",
+  "managed-command",
+]);
+export type ResourceOwnerKindWireV14 = z.infer<
+  typeof resourceOwnerKindSchemaV14
+>;
+
+export const resourceOwnerRefSchemaV14 = z.object({
+  ...resourceOwnerRefSchema.shape,
+  kind: resourceOwnerKindSchemaV14,
+});
+export type ResourceOwnerRefWireV14 = z.infer<typeof resourceOwnerRefSchemaV14>;
+
+/**
+ * What a `managed-command` owner row needs beyond the generic owner fields: the
+ * human description the command was created with, and whether it is monitoring -
+ * the same state its row in the Shells list renders, so one process tree is not
+ * labelled two different ways. `commandId` repeats `owner.ownerId` - the same
+ * value by construction - so a client joining this row to the managed-command
+ * list stream does it through a named field rather than a convention.
+ *
+ * `createdByAgentId` names the shell's creator - the agent whose tool call made
+ * it, which is what lets a client nest the row under that agent instead of
+ * listing it beside one. The owner list stays flat on the wire: the creator is
+ * an id, and whether it currently has an owner row of its own is a question
+ * only the client's own view can answer. It defaults rather than requires: a
+ * host from before the field exists must degrade to today's flat list, not
+ * fail the whole frame's parse and blank the panel.
+ */
+export const managedCommandOwnerSchema = z.object({
+  commandId: z.string(),
+  monitoring: z.boolean(),
+  description: z.string(),
+  createdByAgentId: z.string().default(""),
+});
+export type ManagedCommandOwnerWire = z.infer<typeof managedCommandOwnerSchema>;
+
+/**
+ * `@1.4` owner snapshot: the `@1.3` shape plus the widened owner kind and
+ * `managedCommand`, which is non-null exactly when the kind is
+ * `managed-command`. Not yet frozen: the v2 surface is staging-only with
+ * matched fleets, so this shape is still edited in place (see the shell
+ * unification ADR) - additions must default so an older host still parses.
+ */
+export const ownerResourceSnapshotSchemaV14 = z.object({
+  ...ownerResourceSnapshotSchemaV13.shape,
+  owner: resourceOwnerRefSchemaV14,
+  managedCommand: managedCommandOwnerSchema.nullable(),
+});
+export type OwnerResourceSnapshotWireV14 = z.infer<
+  typeof ownerResourceSnapshotSchemaV14
+>;
+
+const resourcesProjectionFieldsV14 = {
+  ...resourcesProjectionFieldsV13,
+  owners: z.array(ownerResourceSnapshotSchemaV14),
+} as const;
+
+export const resourcesSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...resourcesProjectionFieldsV14,
+    }),
+    z.object({
+      kind: z.literal("update"),
+      ...resourcesProjectionFieldsV14,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type ResourcesSubscribeServerFrameV14 = z.infer<
+  typeof resourcesSubscribeServerFrameSchemaV14
+>;
+
+export const resourcesSubscribeV14 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchemaV14,
+  clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
 // ── `resources.kill@1.0` — unary ────────────────────────────────────────────
 // Terminates the entire process subtree beneath each requested pid (graceful
 // SIGTERM, then SIGKILL escalation for survivors). Brand-new method, NOT on the

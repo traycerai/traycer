@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatQueuedManagedCommandItem,
+  ChatQueuedPromptItem,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
+  reconcileTurnSettled,
   sweepStalePendingActions,
+  turnSettledFromStatus,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
+  type ReconcileTurnSettledInput,
 } from "@/stores/chats/chat-queue-reconciler";
 import type {
   AcceptedChatAction,
@@ -91,8 +97,9 @@ function createPendingUserMessage(
 function createQueueItem(
   messageId: string,
   content: JsonContent,
-): ChatQueueState["items"][number] {
+): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId: `queue-${messageId}`,
     messageId,
     message: {
@@ -107,6 +114,23 @@ function createQueueItem(
     targetTurnId: null,
     steerRequest: null,
     fallbackReason: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+}
+
+function createManagedCommandQueueItem(
+  queueItemId: string,
+): ChatQueuedManagedCommandItem {
+  return {
+    kind: "managed-command",
+    queueItemId,
+    commandId: `${queueItemId}-command`,
+    description: "bun test --watch",
+    monitoring: true,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
     createdAt: 1000,
     updatedAt: 1000,
   };
@@ -513,6 +537,69 @@ describe("chat-queue-reconciler", () => {
     });
   });
 
+  describe("managed-command queue items", () => {
+    it("never settles a pending send against a managed-command item", () => {
+      const managedItem = createManagedCommandQueueItem("queue-managed");
+      const input: ReconcileQueueInput = {
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        queue: { status: "running", items: [managedItem] },
+        nowMs: 5000,
+      };
+
+      const result = reconcileQueueChange(input);
+
+      // The host has not echoed the send back yet, so the action stays pending
+      // even though a chip is sitting in the queue.
+      expect(result.pendingActions).toEqual(input.pendingActions);
+      expect(result.acceptedActions).toEqual({});
+      expect(result.pendingUserMessages).toEqual(input.pendingUserMessages);
+      // The reconciler only reads the queue - the chip is untouched.
+      expect(input.queue.items).toEqual([managedItem]);
+    });
+
+    it("settles a pending send from its prompt echo while a managed-command sibling survives", () => {
+      const managedItem = createManagedCommandQueueItem("queue-managed");
+      const promptEcho = createQueueItem("msg-1", CONTENT);
+      const input: ReconcileQueueInput = {
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        queue: { status: "running", items: [managedItem, promptEcho] },
+        nowMs: 5000,
+      };
+
+      const result = reconcileQueueChange(input);
+
+      expect(result.pendingActions).toEqual({});
+      expect(result.acceptedActions).toHaveProperty("action-1");
+      expect(input.queue.items).toEqual([managedItem, promptEcho]);
+    });
+
+    it("restores an unconfirmed send rather than accepting a managed-command item as its echo", () => {
+      const managedItem = createManagedCommandQueueItem("queue-managed");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "running", items: [managedItem] },
+        failedSendRestoration: null,
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.acceptedActions).toEqual({});
+      expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
+      expect(input.queue.items).toEqual([managedItem]);
+    });
+  });
+
   describe("pruning during reconciliation", () => {
     it("prunes accepted actions older than 5 minutes on queue change", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
@@ -663,6 +750,147 @@ describe("chat-queue-reconciler", () => {
       const result = sweepStalePendingActions(pendingActions, 0);
       expect(result.pendingActions).toBe(pendingActions);
       expect(result.sweptActionIds.size).toBe(0);
+    });
+  });
+
+  describe("turnSettledFromStatus", () => {
+    it("prefers the host-sent turnInProgress when present", () => {
+      expect(turnSettledFromStatus(false, "running")).toBe(true);
+      expect(turnSettledFromStatus(true, "running")).toBe(false);
+      expect(turnSettledFromStatus(true, "stopping")).toBe(false);
+    });
+
+    it("falls back to runStatus idle for an older host that omits the field", () => {
+      expect(turnSettledFromStatus(undefined, "idle")).toBe(true);
+      expect(turnSettledFromStatus(undefined, "running")).toBe(false);
+      expect(turnSettledFromStatus(undefined, "stopping")).toBe(false);
+    });
+  });
+
+  describe("reconcileTurnSettled", () => {
+    function settledInput(
+      overrides: Partial<ReconcileTurnSettledInput>,
+    ): ReconcileTurnSettledInput {
+      return {
+        pendingActions: {},
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        ...overrides,
+      };
+    }
+
+    it("drops a stranded entry (accepted ack, no messageAccepted) and restores its content to the composer", () => {
+      const result = reconcileTurnSettled(true, settledInput({}));
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toEqual({
+        clientActionId: "action-1",
+        content: CONTENT,
+        reason: "The message was not recorded before the turn stopped.",
+      });
+    });
+
+    it("keeps an entry whose ack is still in flight", () => {
+      const input = settledInput({
+        pendingActions: {
+          "action-1": createPendingAction("action-1", "msg-1", "send"),
+        },
+      });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toBe(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("drops an entry whose message reached the transcript as stale bookkeeping, without restoration", () => {
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const input = settledInput({ messages: [confirmedMessage] });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("keeps an entry parked in the queue", () => {
+      const input = settledInput({
+        queue: { status: "paused", items: [createQueueItem("msg-1", CONTENT)] },
+      });
+
+      const result = reconcileTurnSettled(true, input);
+
+      expect(result.pendingUserMessages).toBe(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("restores from the first dead entry, skipping confirmed stale bookkeeping", () => {
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const deadEntry: PendingUserMessage = {
+        clientActionId: "action-2",
+        messageId: "msg-2",
+        content: CONTENT_2,
+        sender: SENDER,
+        settings: SETTINGS,
+        timestamp: 1000,
+      };
+      const result = reconcileTurnSettled(
+        true,
+        settledInput({
+          pendingUserMessages: [
+            createPendingUserMessage("action-1", "msg-1"),
+            deadEntry,
+          ],
+          messages: [confirmedMessage],
+        }),
+      );
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toEqual({
+        clientActionId: "action-2",
+        content: CONTENT_2,
+        reason: "The message was not recorded before the turn stopped.",
+      });
+    });
+
+    it("is a no-op when the report is not settled", () => {
+      const input = settledInput({});
+
+      const result = reconcileTurnSettled(false, input);
+
+      expect(result.pendingUserMessages).toBe(input.pendingUserMessages);
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
+    it("never overwrites an occupied failedSendRestoration slot", () => {
+      const occupied = {
+        clientActionId: "action-0",
+        content: CONTENT_2,
+        reason: "Message was not accepted.",
+      };
+      const result = reconcileTurnSettled(
+        true,
+        settledInput({ failedSendRestoration: occupied }),
+      );
+
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.failedSendRestoration).toBe(occupied);
     });
   });
 });

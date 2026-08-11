@@ -2,7 +2,7 @@ import {
   useHostMethodSupport,
   useHostSupportsMethod,
 } from "@/hooks/host/use-host-supports-method";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 
 /**
  * The archive RPC's method name, shared by the capability gate and the mutation
@@ -16,22 +16,20 @@ export const SET_CHAT_ARCHIVED_METHOD = "epic.setChatArchived";
  * `epic.setChatArchived` is registered OFF the released floor with
  * `degrade: { kind: "unsupported" }`, so a host predating it negotiates the
  * method away rather than failing the handshake - and every archive affordance
- * (row hover button, row-menu entry, "Show archived") has to disappear on such
+ * (row hover button, row-menu entry, archive visibility filter) disappears on such
  * a host instead of offering an action that cannot work.
  *
- * Scoped to the DEFAULT host, because that is the host the archive mutation
- * actually targets: `useEpicArchiveChat` uses `useHostClient()`, matching
- * `useEpicRenameChat` / `useEpicDeleteChat`. Gate and target therefore always
- * name the same host. (A row bound to a different host is already outside what
- * the sidebar's other row mutations handle; archive does not diverge from them
- * here.)
+ * Scoped to the surrounding Epic session's owning host, matching
+ * `useEpicArchiveChat`. The sidebar is a sibling of the canvas and therefore
+ * sits outside every tile-level `TabHostProvider`; its writes belong to the
+ * same host that owns the Epic stream, not to any individual chat tile.
  *
  * Fails closed while the host's manifest is still unknown - see
  * {@link useHostSupportsMethod}.
  */
 export function useChatArchiveSupported(): boolean {
-  const activeHostId = useReactiveActiveHostId();
-  return useHostSupportsMethod(activeHostId, SET_CHAT_ARCHIVED_METHOD);
+  const epicHostId = useEpicSessionHostId();
+  return useHostSupportsMethod(epicHostId, SET_CHAT_ARCHIVED_METHOD);
 }
 
 /**
@@ -41,7 +39,7 @@ export function useChatArchiveSupported(): boolean {
  * Hiding and revealing are gated differently, and deliberately so. Every
  * archive *affordance* is hidden unless support is positively known
  * (`useChatArchiveSupported`, fail-closed). But hiding rows on a host that is
- * KNOWN to lack the method would strand them: the "Show archived" toggle, the
+ * KNOWN to lack the method would strand them: the archive visibility filter, the
  * Unarchive entry and the empty-state hint are all capability-gated, so a row
  * archived on a newer host and then seen from an older one would be invisible
  * with nothing left to bring it back. Archived records must never become
@@ -52,6 +50,6 @@ export function useChatArchiveSupported(): boolean {
  * moment later, which is worse than the toggle appearing late.
  */
 export function useChatArchiveSupportState(): boolean | null {
-  const activeHostId = useReactiveActiveHostId();
-  return useHostMethodSupport(activeHostId, SET_CHAT_ARCHIVED_METHOD);
+  const epicHostId = useEpicSessionHostId();
+  return useHostMethodSupport(epicHostId, SET_CHAT_ARCHIVED_METHOD);
 }

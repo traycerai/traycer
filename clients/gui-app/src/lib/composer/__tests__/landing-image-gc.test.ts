@@ -84,7 +84,7 @@ type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
   readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
-  readonly composer: typeof import("@/stores/composer/landing-composer-store");
+  readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
   readonly idb: typeof import("idb-keyval");
 };
 
@@ -120,13 +120,10 @@ async function loadModules(opts: {
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
   const draft = await import("@/stores/home/landing-draft-store");
-  const composer = await import("@/stores/composer/landing-composer-store");
+  const runtime = await import("@/stores/home/draft-runtime-registry");
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  composer.useLandingComposerStore.setState({
-    currentContent: EMPTY_DOC,
-    createdDraftId: null,
-  });
-  return { gc, store, draft, composer, idb };
+  runtime.draftRuntimeRegistry.resetForTesting();
+  return { gc, store, draft, runtime, idb };
 }
 
 function makeDraft(
@@ -269,17 +266,24 @@ describe("landing-image-gc", () => {
     m.gc.markLandingDraftsReady();
     await flush();
 
-    // Pasted image: bytes in IDB + session, node synchronously in the live editor.
+    // Pasted image: bytes in IDB + session, node synchronously in this draft's
+    // keyed live runtime.
     const pasted = await m.store.putImage(bytesOf([10, 11, 12]));
-    m.composer.useLandingComposerStore.setState({
-      currentContent: docWithImages(imageNode(pasted, 3)),
-      createdDraftId: null,
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, { id: "live", content: EMPTY_DOC, lastTouchedAt: 1 }),
+      ],
+      activeDraftId: "live",
     });
+    const runtime = m.runtime.draftRuntimeRegistry.getOrHydrate("live");
+    if (runtime === null) throw new Error("expected live draft runtime");
+    runtime.setSnapshot(docWithImages(imageNode(pasted, 3)), null);
 
     // An unrelated, image-free draft is closed → triggers a reconcile.
     m.draft.useLandingDraftStore.setState({
       drafts: [
-        makeDraft(m, { id: "other", content: EMPTY_DOC, lastTouchedAt: 1 }),
+        makeDraft(m, { id: "live", content: EMPTY_DOC, lastTouchedAt: 1 }),
+        makeDraft(m, { id: "other", content: EMPTY_DOC, lastTouchedAt: 2 }),
       ],
       activeDraftId: "other",
     });
@@ -398,199 +402,8 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain(hash);
   });
 
-  it("budget eviction never targets the active draft, even when it is the oldest", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const big = 40 * 1024 * 1024;
-    const activeHash = await m.store.putImage(bytesOf([1, 1, 1]));
-    const inactiveHash = await m.store.putImage(bytesOf([2, 2, 2]));
-
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        // Active is the OLDEST by lastTouchedAt — it must still be spared.
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(activeHash, big)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "inactive",
-          content: docWithImages(imageNode(inactiveHash, big)),
-          lastTouchedAt: 2,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // 80 MB referenced + a tiny paste exceeds the 64 MB budget.
-    const allowed = m.gc.reserveLandingImageBudget(1024);
-    await flush();
-
-    expect(allowed).toBe(true);
-    const draftIds = m.draft.useLandingDraftStore
-      .getState()
-      .drafts.map((d) => d.id);
-    expect(draftIds).toEqual(["active"]);
-    const keys = await m.store.imageHashKeys();
-    expect(keys).toContain(activeHash);
-    expect(keys).not.toContain(inactiveHash);
-  });
-
-  it("budget eviction picks the oldest inactive draft and reclaims its bytes", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const size = 30 * 1024 * 1024;
-    const oldHash = await m.store.putImage(bytesOf([3, 3, 3]));
-    const midHash = await m.store.putImage(bytesOf([4, 4, 4]));
-    const activeHash = await m.store.putImage(bytesOf([5, 5, 5]));
-
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "old",
-          content: docWithImages(imageNode(oldHash, size)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "mid",
-          content: docWithImages(imageNode(midHash, size)),
-          lastTouchedAt: 2,
-        }),
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(activeHash, size)),
-          lastTouchedAt: 3,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // 90 MB referenced; evicting the single oldest inactive draft (30 MB) drops
-    // it to 60 MB ≤ 64 MB, so only "old" is evicted.
-    const allowed = m.gc.reserveLandingImageBudget(1024);
-    await flush();
-
-    expect(allowed).toBe(true);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
-    const draftIds = m.draft.useLandingDraftStore
-      .getState()
-      .drafts.map((d) => d.id);
-    expect(draftIds).toEqual(["mid", "active"]);
-    const keys = await m.store.imageHashKeys();
-    expect(keys).not.toContain(oldHash);
-    expect(keys).toContain(midHash);
-    expect(keys).toContain(activeHash);
-  });
-
-  it("budget counts a hash shared across drafts once (content-addressed dedupe)", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const size = 40 * 1024 * 1024;
-    const shared = await m.store.putImage(bytesOf([9, 9, 9]));
-    // Two drafts reference the SAME hash — one stored copy, so it must count once.
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "a",
-          content: docWithImages(imageNode(shared, size)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(shared, size)),
-          lastTouchedAt: 2,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // Deduped referenced bytes = 40 MB; +10 MB = 50 MB ≤ 64 MB → allowed, no
-    // eviction. (Double-counting would read 80 MB and evict draft "a".)
-    const allowed = m.gc.reserveLandingImageBudget(10 * 1024 * 1024);
-    await flush();
-
-    expect(allowed).toBe(true);
-    expect(toastInfo).not.toHaveBeenCalled();
-    expect(
-      m.draft.useLandingDraftStore.getState().drafts.map((d) => d.id),
-    ).toEqual(["a", "active"]);
-  });
-
-  it("blocks the paste when only the active draft remains and it still exceeds budget", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const activeHash = await m.store.putImage(bytesOf([6, 6, 6]));
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "active",
-          content: docWithImages(imageNode(activeHash, 60 * 1024 * 1024)),
-          lastTouchedAt: 1,
-        }),
-      ],
-      activeDraftId: "active",
-    });
-
-    // Active alone is 60 MB; a 10 MB paste exceeds 64 MB and there is nothing
-    // inactive to evict → block.
-    const allowed = m.gc.reserveLandingImageBudget(10 * 1024 * 1024);
-    await flush();
-
-    expect(allowed).toBe(false);
-    expect(toastError).toHaveBeenCalledTimes(1);
-    expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
-  });
-
-  it("blocks the paste rather than evicting other drafts when there is no active draft", async () => {
-    const m = await loadModules({ desktop: true });
-    m.gc.markLandingDraftsReady();
-    await flush();
-
-    const big = 40 * 1024 * 1024;
-    const hashA = await m.store.putImage(bytesOf([7, 7, 7]));
-    const hashB = await m.store.putImage(bytesOf([8, 8, 8]));
-
-    // Two inactive drafts (80 MB) with NO active draft — e.g. the active draft
-    // was just closed while these remain. A paste here is unattributed, so it
-    // must be blocked, never evict (destroy) the surviving drafts.
-    m.draft.useLandingDraftStore.setState({
-      drafts: [
-        makeDraft(m, {
-          id: "a",
-          content: docWithImages(imageNode(hashA, big)),
-          lastTouchedAt: 1,
-        }),
-        makeDraft(m, {
-          id: "b",
-          content: docWithImages(imageNode(hashB, big)),
-          lastTouchedAt: 2,
-        }),
-      ],
-      activeDraftId: null,
-    });
-
-    const allowed = m.gc.reserveLandingImageBudget(1024);
-    await flush();
-
-    expect(allowed).toBe(false);
-    expect(toastError).toHaveBeenCalledTimes(1);
-    expect(toastInfo).not.toHaveBeenCalled();
-    // Both drafts and their bytes survive — nothing was evicted.
-    expect(
-      m.draft.useLandingDraftStore.getState().drafts.map((d) => d.id),
-    ).toEqual(["a", "b"]);
-    const keys = await m.store.imageHashKeys();
-    expect(keys).toContain(hashA);
-    expect(keys).toContain(hashB);
-  });
+  // Budget admission tests live in landing-image-budget.test.ts (canonical
+  // service). GC no longer owns reserveLandingImageBudget.
 
   it("browser readies the sweep automatically after synchronous hydration", async () => {
     const m = await loadModules({ desktop: false });
@@ -609,16 +422,14 @@ describe("landing-image-gc", () => {
     await flush();
     expect(m.gc.landingDraftsReady()).toBe(true);
 
-    // Empty live roots (no drafts, empty composer mirror) so a successful put
-    // with no editor node is unreferenced and eligible for reclaim — the same
-    // shape as Promise.all multi-file attach after onRejected (no nodes inserted).
+    // Empty live roots (no drafts, no live runtime mirror - loadModules already
+    // reset draftRuntimeRegistry and this test never attaches one) so a
+    // successful put with no editor node is unreferenced and eligible for
+    // reclaim — the same shape as Promise.all multi-file attach after
+    // onRejected (no nodes inserted).
     m.draft.useLandingDraftStore.setState({
       drafts: [],
       activeDraftId: null,
-    });
-    m.composer.useLandingComposerStore.setState({
-      currentContent: EMPTY_DOC,
-      createdDraftId: null,
     });
 
     const successBytes = bytesOf([11, 11, 11]);

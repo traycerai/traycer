@@ -14,10 +14,21 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   parseNotificationRoomEntry,
 } from "@traycer/protocol/notifications/notification-room";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
+
+/** The surface `openNotificationsStream` needs from a stream client; the
+ * only two members production and test doubles both provide. */
+type NotificationsStreamClientHandle = Pick<
+  NotificationsStreamClient,
+  "applyUpdate" | "close"
+>;
 
 export type NotificationsStreamClientFactory = (
   callbacks: NotificationsStreamCallbacks,
-) => Pick<NotificationsStreamClient, "applyUpdate" | "close">;
+) => NotificationsStreamClientHandle;
 
 interface NotificationsState {
   readonly doc: Y.Doc;
@@ -27,7 +38,6 @@ interface NotificationsState {
   readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
   readonly revision: number;
-
   markAsRead: (notificationId: string) => void;
   markAllAsRead: () => void;
   clearAll: () => void;
@@ -36,6 +46,14 @@ interface NotificationsState {
 
 const LOCAL_ORIGIN = "local";
 const STREAM_ORIGIN = "stream";
+
+/** An empty Y update encodes to exactly 2 bytes; anything longer carries
+ * real operations. Same check the epic store's reconcile path uses. */
+const EMPTY_Y_UPDATE_BYTES = 2;
+
+function isNonTrivialYUpdate(updateBytes: Uint8Array): boolean {
+  return updateBytes.length > EMPTY_Y_UPDATE_BYTES;
+}
 
 function getNotificationsArray(target: Y.Doc): NotificationRoomEntriesArray {
   return target.getArray<NotificationRoomEntryMap>(NOTIFICATIONS_ARRAY_KEY);
@@ -204,6 +222,7 @@ function createNotificationsStore(
       },
 
       reset: () => {
+        // `onProjection` binds to the Y.Doc that `replace()` swaps out.
         if (unwireProjection !== null) {
           unwireProjection();
           unwireProjection = null;
@@ -239,47 +258,103 @@ export const useNotificationsStore = createNotificationsStore(replica);
  * Local mutations tag their transactions with origin `"local"`; the forwarder
  * filters on that so only user-driven writes travel upstream, never snapshot
  * or remote-update applications which are tagged `"stream"`.
+ *
+ * The Y.Doc is deliberately not reset here: a reconnect's snapshot merges into
+ * the existing local replica.
  */
 export function openNotificationsStream(
   factory: NotificationsStreamClientFactory,
   onAuthError: (() => void) | null,
 ): () => void {
   const targetDoc = replica.getDoc();
-  const client = factory({
-    onSnapshot: (meta, snapshotBytes) => {
-      // `Y.applyUpdate` fires the doc's "update" listener synchronously, so
-      // the entries/unreadCount projection runs without us having to call it
-      // here. Only `snapshotMeta` needs an explicit setState.
-      Y.applyUpdate(targetDoc, snapshotBytes, STREAM_ORIGIN);
-      useNotificationsStore.setState({ snapshotMeta: meta });
-    },
-    onUpdate: (updateBytes) => {
-      Y.applyUpdate(targetDoc, updateBytes, STREAM_ORIGIN);
-    },
-    onConnectionStatus: (status, reason) => {
-      useNotificationsStore.setState({ connectionStatus: status });
-      if (
-        status === "closed" &&
-        reason !== null &&
-        reason.kind === "fatalError" &&
-        reason.details.code === "UNAUTHORIZED" &&
-        onAuthError !== null
-      ) {
-        onAuthError();
-      }
-    },
-  });
+  let disposed = false;
+  let currentClient: NotificationsStreamClientHandle | null = null;
+  let generation = 0;
+
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
+    currentClient?.close();
+    currentClient = null;
+    openClient();
+  }, isReopenableNotificationsStreamClose);
+
+  function openClient(): void {
+    if (disposed) return;
+    generation += 1;
+    const clientGeneration = generation;
+    // A superseded client (replaced by a reopen) must not touch the replica
+    // or the status projection its successor now owns.
+    const isCurrent = (): boolean =>
+      !disposed && clientGeneration === generation;
+    // Bound per generation so the reconcile send below targets THIS client
+    // rather than re-reading the module-scoped `currentClient`, whose value
+    // depends on assignment ordering around `factory`.
+    let client: NotificationsStreamClientHandle | null = null;
+    client = factory({
+      onSnapshot: (meta, snapshotBytes) => {
+        if (!isCurrent()) return;
+        // `Y.applyUpdate` fires the doc's "update" listener synchronously, so
+        // the entries/unreadCount projection runs without us having to call it
+        // here. Only `snapshotMeta` needs an explicit setState.
+        Y.applyUpdate(targetDoc, snapshotBytes, STREAM_ORIGIN);
+        useNotificationsStore.setState({ snapshotMeta: meta });
+        // Reconcile: local transactions made while no usable session existed
+        // (terminal gap, mid-reconnect, pre-snapshot) were dropped by the
+        // fire-and-forget send and would otherwise stay local-only forever.
+        // The snapshot bytes encode exactly what the host had at snapshot
+        // time, so the delta against their state vector is everything the
+        // host is missing. The notifications room is the user's own — no
+        // viewer-role gate applies (unlike the epic reconcile path).
+        const reconcileUpdate = Y.encodeStateAsUpdate(
+          targetDoc,
+          Y.encodeStateVectorFromUpdate(snapshotBytes),
+        );
+        if (isNonTrivialYUpdate(reconcileUpdate)) {
+          client?.applyUpdate(reconcileUpdate);
+        }
+        // A snapshot — not the raw transport `open` — is the proof the
+        // stream is actually usable: the host resolver's async init can
+        // still fail after `open`, and resetting there would pin the reopen
+        // backoff at its floor through an init-failure loop.
+        reopenScheduler.resetBackoff();
+      },
+      onUpdate: (updateBytes) => {
+        if (!isCurrent()) return;
+        Y.applyUpdate(targetDoc, updateBytes, STREAM_ORIGIN);
+      },
+      onAwareness: () => {},
+      onConnectionStatus: (status, reason) => {
+        if (!isCurrent()) return;
+        useNotificationsStore.setState({ connectionStatus: status });
+        if (status !== "closed") return;
+        reopenScheduler.scheduleAfterClose(reason);
+        if (
+          reason !== null &&
+          reason.kind === "fatalError" &&
+          reason.details.code === "UNAUTHORIZED" &&
+          onAuthError !== null
+        ) {
+          onAuthError();
+        }
+      },
+    });
+    currentClient = client;
+  }
+
+  openClient();
 
   const forwardLocal = (update: Uint8Array, origin: unknown): void => {
     if (origin === LOCAL_ORIGIN) {
-      client.applyUpdate(update);
+      currentClient?.applyUpdate(update);
     }
   };
   targetDoc.on("update", forwardLocal);
 
   return () => {
+    disposed = true;
+    reopenScheduler.dispose();
     targetDoc.off("update", forwardLocal);
-    client.close();
+    currentClient?.close();
+    currentClient = null;
   };
 }
 
@@ -313,7 +388,9 @@ export function useNotificationEntryById(id: string): NotificationEntry | null {
 
 export function useNotificationUnreadCount(): number {
   return useNotificationsStore((state) => state.unreadCount);
-} /**
+}
+
+/**
  * Test helper - delegates to the public `reset()` action so tests get the
  * same teardown semantics as a sign-out transition in production.
  */

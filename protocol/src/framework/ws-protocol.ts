@@ -59,6 +59,14 @@ export type IncompatibilityUpgradeGuidance = {
 };
 
 /**
+ * Fatal code emitted when the unary host sent `openAck` but did not observe the
+ * client's `request` before its bounded post-open deadline. This is a transport
+ * timeout, not an authentication rejection: the request was never dispatched,
+ * so a client may safely retry even a non-idempotent method on a fresh socket.
+ */
+export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
+
+/**
  * Full detail payload carried by a fatal error frame prior to WebSocket
  * close. The subsequent close event is only the fatal signal - all rich
  * detail MUST travel inside this frame.
@@ -70,8 +78,9 @@ export type FatalErrorDetails = {
   readonly upgradeGuidance: IncompatibilityUpgradeGuidance | null;
   /**
    * When `true`, the rejection is transient and host-side (e.g. the host's
-   * JWKS fetch timed out while verifying the bearer) - NOT a statement about
-   * the credential's authenticity. A client that understands this field should
+   * JWKS fetch timed out while verifying the bearer, or a post-open frame
+   * deadline elapsed while a process was suspended) - NOT a statement about the
+   * credential's authenticity. A client that understands this field should
    * reconnect with plain backoff instead of running credential recovery or
    * going terminal. Additive and optional: an older host omits it entirely and
    * a newer client then reads "not retryable".
@@ -213,8 +222,9 @@ export const fatalErrorDetailsSchema = z.object({
   upgradeGuidance: incompatibilityUpgradeGuidanceSchema.nullable(),
   // Additive/optional: an older host omits it, so a newer client parsing an
   // older host's frame reads `undefined` (not retryable). Set `true` only for
-  // transient host-side rejections (e.g. a JWKS fetch timeout) that the client
-  // recovers from with plain reconnect backoff, not credential revalidation.
+  // transient host-side rejections (e.g. a JWKS fetch or post-open frame
+  // timeout) that the client recovers from with plain reconnect backoff, not
+  // credential revalidation.
   retryable: z.boolean().optional(),
 });
 

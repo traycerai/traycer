@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -164,6 +164,22 @@ function EnvOverrideRow(props: {
     mode: modeForValue(entry.value),
     error: null,
   }));
+  const draftRef = useRef(draft);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+  const entryRef = useRef(entry);
+  useEffect(() => {
+    entryRef.current = entry;
+  }, [entry]);
+  const otherKeysRef = useRef(otherKeys);
+  useEffect(() => {
+    otherKeysRef.current = otherKeys;
+  }, [otherKeys]);
+  const onCommitRef = useRef(onCommit);
+  useEffect(() => {
+    onCommitRef.current = onCommit;
+  }, [onCommit]);
 
   const commit = (): void => {
     const nextKey = draft.key.trim();
@@ -178,6 +194,20 @@ function EnvOverrideRow(props: {
       onCommit(entry.key, nextKey, nextValue);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      const current = draftRef.current;
+      const currentEntry = entryRef.current;
+      const nextKey = current.key.trim();
+      const nextValue = current.mode === "unset" ? null : current.value;
+      const error = draftError(nextKey, otherKeysRef.current);
+      if (error !== null) return;
+      if (nextKey !== currentEntry.key || nextValue !== currentEntry.value) {
+        onCommitRef.current(currentEntry.key, nextKey, nextValue);
+      }
+    };
+  }, []);
 
   return (
     <li className="flex flex-col gap-1 px-3 py-2">

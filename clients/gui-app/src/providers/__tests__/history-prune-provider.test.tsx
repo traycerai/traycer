@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { createRouter, type RouterHistory } from "@tanstack/react-router";
@@ -98,6 +97,74 @@ afterEach(() => {
 });
 
 describe("HistoryPruneProvider", () => {
+  it("sanitizes a boot-restored dead back entry before it becomes navigable", () => {
+    seedCanvasTabs([{ tabId: "t1", epicId: "e1" }]);
+    const history = seedPersistentHistory(
+      ["/epics/missing/dead-tab", "/epics/e1/t1"],
+      1,
+    );
+    const controller = controllerFor(history);
+    const router = makeRouter(history);
+    const loadSpy = vi.spyOn(router, "load");
+
+    render(<HistoryPruneProvider router={router} />);
+
+    expect(controller.getEntries()).toEqual(["/epics/e1/t1"]);
+    expect(controller.canGoBack()).toBe(false);
+    expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes a dead boot-restored back entry before it can reach routing", () => {
+    seedCanvasTabs([{ tabId: "t1", epicId: "e1" }]);
+    const history = seedPersistentHistory(
+      ["/epics/eGONE/tGONE", "/epics/e1/t1"],
+      1,
+    );
+    const controller = controllerFor(history);
+    const router = makeRouter(history);
+
+    render(<HistoryPruneProvider router={router} />);
+
+    expect(controller.getEntries()).toEqual(["/epics/e1/t1"]);
+    expect(controller.canGoBack()).toBe(false);
+  });
+
+  it("retries initial sanitation after hydration wins a router-loading race", () => {
+    seedCanvasTabs([{ tabId: "t1", epicId: "e1" }]);
+    const history = seedPersistentHistory(
+      ["/epics/eGONE/tGONE", "/epics/e1/t1"],
+      1,
+    );
+    const controller = controllerFor(history);
+    const router = makeRouter(history);
+    const idleState = router.state;
+    let loading = true;
+    Object.defineProperty(router, "state", {
+      configurable: true,
+      get: () =>
+        loading
+          ? {
+              ...idleState,
+              status: "pending",
+              isLoading: true,
+              isTransitioning: true,
+            }
+          : idleState,
+    });
+
+    render(<HistoryPruneProvider router={router} />);
+    flushFrames();
+    expect(controller.getEntries()).toEqual([
+      "/epics/eGONE/tGONE",
+      "/epics/e1/t1",
+    ]);
+
+    loading = false;
+    flushFrames();
+    expect(controller.getEntries()).toEqual(["/epics/e1/t1"]);
+    expect(controller.canGoBack()).toBe(false);
+  });
+
   it("prunes a forward dead entry on a store mutation without calling router.load (Blocker 1); valid routes survive", () => {
     seedCanvasTabs([
       { tabId: "t1", epicId: "e1" },
@@ -150,8 +217,8 @@ describe("HistoryPruneProvider", () => {
 
   it("prunes a deleted active draft's forward entry without a load (delete active draft)", () => {
     const draftStore = useLandingDraftStore.getState();
-    const currentDraftId = draftStore.createDraft(null, undefined);
-    const forwardDraftId = draftStore.createDraft(null, undefined);
+    const currentDraftId = draftStore.createDraft(null);
+    const forwardDraftId = draftStore.createDraft(null);
 
     const history = seedPersistentHistory(
       [`/draft/${currentDraftId}`, `/draft/${forwardDraftId}`],

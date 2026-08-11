@@ -10,10 +10,25 @@ title = "Traycer gitleaks config"
 useDefault = true
 
 [[allowlists]]
-description = "Virtuoso message-list testing license key — a public dummy key (its payload decodes to 'TEST;ex9999999999999'), used only to satisfy @virtuoso.dev/message-list in gui-app unit tests."
+description = "Stable scrollStateKey identifiers in the original and split chat-messages unit suites. These exact strings are cache-key test IDs, not credentials; require both the precise source path and value."
+condition = "AND"
 regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages(?:-(?:anchor-engine|core|library-contract|navigation|persistence))?\.test\.tsx?$''',
+]
 regexes = [
-  '''eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==''',
+  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|s4b-reachability-key|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup|t18-pin-c-exhaust|t19-hydration-nav-key|t22-pin3-no-double-correction|t22-below-anchor-no-repair|t22-unmount-mid-repair|t22-shrink-above-anchor)$''',
+]
+
+[[allowlists]]
+description = "Historical message-list license unit-test fixture. Its payload identifies it as a public test key, not a production credential; require both the exact source path and value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
+regexes = [
+  '''^eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==$''',
 ]
 
 [[allowlists]]
@@ -28,6 +43,17 @@ regexes = [
 ]
 
 [[allowlists]]
+description = "Chat transcript scroll-state cache keys in the original and split gui-app chat tests - kebab-case UI state bucket names (e.g. a per-test anchor key) that the generic-api-key rule matches only because the field is literally named `scrollStateKey`. These are UI state keys, never credentials. Path-scoped to the monolith and its five split files; `fetch-depth: 0` means the PR scan sees them on in-flight branches before they merge, so this cannot wait for the introducing branch to land."
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages(?:-(?:anchor-engine|core|library-contract|navigation|persistence))?\.test\.tsx?$''',
+]
+regexes = [
+  '''scrollStateKey: "[A-Za-z0-9_-]+"''',
+]
+
+[[allowlists]]
 description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
 condition = "AND"
 regexTarget = "secret"
@@ -36,4 +62,15 @@ paths = [
 ]
 regexes = [
   '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+]
+
+[[allowlists]]
+description = "JWT-shaped scrubber fixture. This exact dummy value verifies redaction of JWTs in user text and logs; require both its precise test path and full value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/app/__tests__/support-scrubber\.test\.ts$''',
+]
+regexes = [
+  '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9[.]eyJzdWIiOiIxMjM0NTY3ODkwIn0[.]dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U$''',
 ]

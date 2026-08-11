@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 

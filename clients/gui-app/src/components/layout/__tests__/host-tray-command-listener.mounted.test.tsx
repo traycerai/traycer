@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -20,8 +19,18 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-const navigateMock = vi.hoisted(() => vi.fn());
+interface CapturedNavigate {
+  readonly to: string;
+  readonly replace: boolean;
+  readonly state: unknown;
+}
+
+const navigateMock = vi.hoisted(() =>
+  vi.fn<(options: CapturedNavigate) => void>(),
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
@@ -128,7 +137,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
         deregisteredService: true,
       }),
     ),
-    restartHost: vi.fn(() => Promise.resolve()),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(() =>
       Promise.resolve({
         removedHost: true,
@@ -187,69 +196,13 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
 }
 
 function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
-  return {
-    signInUrl: "https://auth.example.invalid/sign-in",
-    authnBaseUrl: "https://auth.example.invalid",
-    hasLocalHost: true,
-    validateAuthTokenIdentity: () =>
-      Promise.resolve({ kind: "rejected" as const }),
-    openExternalLink: () => Promise.resolve(),
-    getRegisteredUrlSchemes: () => Promise.resolve([]),
-    requestMicrophoneAccess: () => Promise.resolve("granted" as const),
-    openMicrophoneSettings: () => Promise.resolve(),
-    beginAuthAttempt: () => undefined,
-    onAuthCallback: () => ({ dispose: () => undefined }),
-    deviceFlow: { start: () => Promise.resolve(null) },
-    secureStorage: {
-      get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
-      delete: () => Promise.resolve(),
-    },
-    notifications: {
-      show: () => Promise.resolve(),
-      onClick: () => ({ dispose: () => undefined }),
-    },
-    tray: {
-      setEpics: () => Promise.resolve(),
-      setIndicator: () => Promise.resolve(),
-      onEpicSelected: () => ({ dispose: () => undefined }),
-    },
-    hostPicker: {
-      get isOpen(): boolean {
-        return false;
-      },
-      requestOpen: () => undefined,
-      requestClose: () => undefined,
-      onChange: () => ({ dispose: () => undefined }),
-    },
-    workspaceFolders: {
-      pickFolders: () => Promise.resolve([]),
-    },
-    fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
-      copyDroppedFilePaths: (paths) => Promise.resolve(paths),
-      readNativeClipboardFilePaths: () => Promise.resolve([]),
-    },
-    tokenStore: {
-      get: () => Promise.resolve(null),
-      signIn: () => Promise.resolve(),
-      rotate: () =>
-        Promise.resolve({ outcome: "deleted" as const, pair: null }),
-      delete: () => Promise.resolve(),
-      subscribe: () => ({ dispose: () => undefined }),
-      migrateLegacyCredentials: () =>
-        Promise.resolve("identity-unknown" as const),
-    },
-    onLocalHostChange: () => ({ dispose: () => undefined }),
-    onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
-    service: null,
-    traycerCli: null,
-    migration: null,
-    hostManagement: management,
+  // Shared `IRunnerHost` stub base so this test never has to re-declare the
+  // whole surface (it grows with every runner-host addition); only the two
+  // facets under test are overridden.
+  return createFakeRunnerHost({
     hostTray: tray,
-    zoom: null,
-  };
+    hostManagement: management,
+  });
 }
 
 function renderListener(host: IRunnerHost): QueryClient {
@@ -268,11 +221,13 @@ function renderListener(host: IRunnerHost): QueryClient {
 
 describe("<HostTrayCommandListener /> - mounted in __root", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     navigateMock.mockClear();
     toastErrorMock.mockClear();
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
   });
 
   it("subscribes to hostTray.onCommand and navigates on openSettingsHost", () => {
@@ -284,7 +239,12 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
       tray.emit({ kind: "openSettingsHost" });
     });
 
-    expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/host" });
+    const call = navigateMock.mock.calls.at(-1);
+    if (call === undefined) throw new Error("expected navigation");
+    const [navigation] = call;
+    expect(navigation.to).toBe("/settings/host");
+    expect(navigation.replace).toBe(false);
+    expect(navigation.state).toEqual(expect.any(Function));
   });
 
   it("opens a confirmation dialog for restartHost and only invokes restartHost after confirm", async () => {

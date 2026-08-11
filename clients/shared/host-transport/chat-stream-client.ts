@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for a `chat.subscribe@1.1` session. The GUI chat store binds
@@ -116,6 +116,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "worktreeStateChanged" }
     >,
   ) => void;
+  readonly onManagedCommandsChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "managedCommandsChanged" }
+    >,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -123,7 +129,7 @@ export interface ChatStreamCallbacks {
 }
 
 export interface ChatStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly chatId: string;
   readonly callbacks: ChatStreamCallbacks;
@@ -159,6 +165,27 @@ export class ChatStreamClient {
   sendAction(frame: ChatSubscribeClientFrame): void {
     if (this.closed) return;
     this.session.sendClientFrame(frame, null);
+  }
+
+  /**
+   * Whether the negotiated `chat.subscribe` protocol version understands the
+   * `after_safe_point` explicit-steer delivery policy (minor >= 5, added with
+   * same-turn steering). A new renderer paired with a released <=1.4 host must
+   * degrade `Mod-Enter` to a plain queued send: that host predates steering and
+   * would inject the message under whatever ordering/settings it does
+   * understand. Read lazily from the handshake, mirroring
+   * `TerminalStreamClient`'s per-frame version read.
+   */
+  sameTurnSteeringProtocolSupported(): boolean {
+    // THIS session's negotiated version, not the client-wide one. Every open
+    // chat tab is its own `chat.subscribe` session, and the client-wide
+    // accessor reports whichever of them reconciliation reached first - so a
+    // tab talking to a <=1.4 host could be told steering is supported because a
+    // sibling tab negotiated 1.5. That gates a SEND, not a parse: the message
+    // would be injected into a host that predates the ordering policy, which is
+    // the exact failure this guard exists to prevent.
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor >= 5;
   }
 
   close(): void {
@@ -253,6 +280,10 @@ export class ChatStreamClient {
       }
       case "worktreeStateChanged": {
         this.callbacks.onWorktreeStateChanged(frame);
+        return;
+      }
+      case "managedCommandsChanged": {
+        this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
       case "pong": {

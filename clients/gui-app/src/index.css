@@ -40,6 +40,57 @@
   }
 }
 
+@keyframes prompt-stash-count-flash {
+  0%,
+  72% {
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-primary) 18%, transparent);
+  }
+  100% {
+    background-color: var(--color-muted);
+    color: inherit;
+    box-shadow: none;
+  }
+}
+
+.prompt-stash-count-flash {
+  animation: prompt-stash-count-flash 700ms ease-out both;
+}
+
+/* A label-only tooltip must never win hit-testing from what it covers.
+   `TooltipContent`'s own `pointer-events-none` is NOT enough: Radix Popper
+   renders the content inside a positioning wrapper of exactly the same size,
+   and that wrapper keeps `pointer-events: auto` (Popper only sets `none` on it
+   for `hideWhenDetached`). So the wrapper still swallowed every click that
+   landed on the tooltip's rect - measured in a real browser against the
+   workspace folder picker, where rows are 28px apart and a `side="top"`
+   tooltip lands squarely on the row above: the covered row's controls never
+   received the click, and the cursor read as a text caret over the tooltip's
+   text (traycerai/traycer#466, #446).
+
+   Scoped by the direct child so only tooltip wrappers opt out - popovers,
+   dropdowns and hover cards hold real controls and must stay hit-testable. */
+[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+  pointer-events: none;
+}
+
+/* Attachment previews stay on one compact, independently scrollable row. */
+[data-composer-attachment-strip] {
+  scrollbar-width: none;
+}
+
+[data-composer-attachment-strip]::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-stash-count-flash {
+    animation-duration: 1ms;
+  }
+}
+
 .working-text-shimmer {
   background-image: linear-gradient(
     90deg,
@@ -261,6 +312,27 @@
  * so keeping these rules unlayered guarantees the reset + pill win regardless
  * of plugin source order.
  */
+
+/*
+ * Tailmark nests each top-level block under:
+ *   .prose > [data-tailmark] > [display:contents host] > block
+ * Tailwind Typography only zeroes outer margins with `.prose > :first-child`
+ * / `:last-child`. With that wrapper the first/last *block roots* keep full
+ * paragraph margins, so chat surfaces grow awkward empty space at the start
+ * and end of every markdown body (and double gaps between segments such as
+ * thinking → answer). Re-apply the same zeroing through the Tailmark hosts.
+ * Unlayered so it outranks the plugin's components-layer prose rules.
+ *
+ * Cross-tree gaps (body markdown → next-steps prose, often after a trailing
+ * `---`) cannot use collapsed margins between separate `.md-prose` roots -
+ * `TextSegment` owns that spacing on the next-steps wrapper.
+ */
+.md-prose > [data-tailmark] > :first-child > :first-child {
+  margin-top: 0;
+}
+.md-prose > [data-tailmark] > :last-child > :last-child {
+  margin-bottom: 0;
+}
 
 /* Strip the backtick quotes Tailwind Typography adds via ::before / ::after. */
 .md-prose :where(code)::before,
@@ -1059,34 +1131,15 @@
   }
 }
 
-@utility compact-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent)
-    transparent;
-
-  &::-webkit-scrollbar {
-    width: 2px !important;
-    height: 2px !important;
-  }
-
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    min-height: 1.25rem;
-    border: 0;
-    border-radius: 9999px;
-    background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
-  }
-}
-
 @layer base {
-  * {
+  /* Explicit opt-outs keep a scroll owner outside the compact app theme when
+     a platform-native gutter and thumb are part of that surface's contract. */
+  [data-native-scrollbar] {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  *:not([data-native-scrollbar]) {
     scrollbar-width: thin;
     scrollbar-color: color-mix(
         in oklch,
@@ -1095,34 +1148,24 @@
       )
       transparent;
   }
-  *::-webkit-scrollbar {
+  *:not([data-native-scrollbar])::-webkit-scrollbar {
     width: 4px !important;
     height: 4px !important;
   }
-  *::-webkit-scrollbar-track {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-track {
     background: transparent;
   }
-  *::-webkit-scrollbar-thumb {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--muted-foreground) 35%, transparent);
     border-radius: var(--radius-sm);
     border: 0;
     min-height: 24px;
   }
-  *::-webkit-scrollbar-thumb:hover {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-thumb:hover {
     background: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
   }
-  *::-webkit-scrollbar-corner {
+  *:not([data-native-scrollbar])::-webkit-scrollbar-corner {
     background: transparent;
-  }
-
-  .chat-scrollbar-native-thin {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-scrollbar-native-thin::-webkit-scrollbar {
-    width: 2px !important;
-    height: 2px !important;
   }
 
   /* `@pierre/trees` scroll surface. The global `*::-webkit-scrollbar`
@@ -1140,6 +1183,15 @@
   [data-file-tree-virtualized-scroll]::-webkit-scrollbar-thumb {
     border: 0 !important;
     background-clip: padding-box !important;
+  }
+
+  /* xterm draws its own slider div rather than a native scrollbar, so the
+     `::-webkit-scrollbar-thumb` rule above never reaches it. Width and colors
+     are matched where xterm accepts them (options + ITheme); the radius has
+     nowhere to go but here. xterm inline-styles only position/size/background,
+     so this is uncontested. */
+  .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+    border-radius: var(--radius-sm);
   }
 }
 
@@ -1295,4 +1347,15 @@
 ::highlight(traycer-find-match-active) {
   background-color: color-mix(in srgb, var(--primary) 75%, transparent);
   color: var(--primary-foreground);
+}
+
+/*
+ * Communication-graph edge focus (`comm-graph-edge-interaction.ts`).
+ * React Flow strips the edge group's outline and paints its own focus stroke
+ * only for a `selectable` edge - which that canvas is not - so a focused edge
+ * would otherwise look identical to an unfocused one.
+ */
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--ring);
+  stroke-width: 2;
 }

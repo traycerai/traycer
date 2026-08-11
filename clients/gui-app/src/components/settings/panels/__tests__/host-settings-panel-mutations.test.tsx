@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,
@@ -6,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -27,25 +27,77 @@ import type {
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+    info: vi.fn(),
     message: vi.fn(),
   },
 }));
+const hostScopeMocks: {
+  client: HostClient<HostRpcRegistry> | null;
+  hostId: string;
+  extra: Partial<HostScope>;
+} = vi.hoisted(() => ({
+  client: null,
+  hostId: "host-a",
+  extra: {},
+}));
+
+// Panels depend on the host SCOPE, not on the six hooks it composes, so this
+// mocks at that boundary rather than re-mocking the scope's internals.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        client: hostScopeMocks.client,
+        hostId: hostScopeMocks.hostId,
+        ...hostScopeMocks.extra,
+      }),
+  };
+});
 
 afterEach(() => {
   cleanup();
+  hostScopeMocks.client = null;
+  hostScopeMocks.hostId = "host-a";
+  hostScopeMocks.extra = {};
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.info).mockClear();
   vi.mocked(toast.message).mockClear();
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
+  // The page is now titled for whichever machine the sidebar has scoped, and
+  // the local service console renders only when that machine is this device.
+  // The old "This machine" heading existed to separate the local card from a
+  // "My Hosts" list that ALSO contained the local machine; the duplication it
+  // was disambiguating is gone, so the heading went with it.
+  it("titles the page for the scoped machine and keeps the local service console", async () => {
+    const { management } = makeManagement({});
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    expect(await screen.findByTestId("settings-host-identity")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "This machine" })).toBeNull();
+    // The machine is the subject of the page, so it must not also appear in
+    // the "other machines" strip below it.
+    expect(screen.queryByTestId("other-machines-row-host-a")).toBeNull();
+  });
+
   it("opens a confirmation dialog before restarting the host", async () => {
-    const restartHost = vi.fn(() => Promise.resolve());
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     const { management } = makeManagement({ restartHost });
 
     renderPanel(makeHost(management, makeLocalHostSnapshot()));
@@ -65,6 +117,100 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
   });
 
+  it("keeps the install console reachable on a fresh install with no hosts anywhere", async () => {
+    // First run: no local host id yet, so the union has no row at all and the
+    // scope resolves to NOTHING. The old branch rendered only the "No hosts
+    // yet" notice — while the CLI bridge sat right here reporting
+    // not-installed. Install must not hide behind a host list that can only
+    // become non-empty by installing.
+    hostScopeMocks.extra = {
+      host: null,
+      hosts: [],
+      hostId: null,
+      vanishedHostId: null,
+      isLoading: false,
+      listsFailed: false,
+      status: "unreachable",
+    };
+    const { management } = makeManagement({
+      installedRecord: vi.fn(() => Promise.resolve(null)),
+    });
+    renderPanel(makeHost(management, null));
+
+    const install = await waitForButton("Install host");
+    expect(install.getAttribute("data-variant")).toBe("default");
+    expect(screen.queryByTestId("host-scope-empty")).toBeNull();
+  });
+
+  it("disarms an open restart confirmation when the scoped host changes", async () => {
+    // The dialogs live outside the local-console conditional, so without the
+    // scope-keyed remount a host switch left this confirmation mounted and
+    // armed at the LOCAL bridge while the page described another machine —
+    // confirming it restarted a host that was no longer the dialog's visible
+    // subject.
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
+    const { management } = makeManagement({ restartHost });
+    const host = makeHost(management, makeLocalHostSnapshot());
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    // Fresh elements per render: reusing one element tree lets React bail out
+    // on referentially identical children, and the panel would never re-read
+    // the changed scope.
+    const makeUi = () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={host}>
+          <HostSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+    const view = render(makeUi());
+
+    fireEvent.click(await waitForButton("Restart"));
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).toBeTruthy();
+
+    hostScopeMocks.hostId = "host-b";
+    view.rerender(makeUi());
+
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(restartHost).not.toHaveBeenCalled();
+  });
+
+  // Field RCA 2026-07-28: a busy host denying the restart surfaced as a
+  // reportable "Couldn't restart host" error toast, inviting "Report
+  // issue" for a self-recovering condition. A declined result must render
+  // as plain information - never as a success and never as an error.
+  it("renders a declined restart as an informational toast, not success or a reportable error", async () => {
+    const restartHost = vi.fn(() =>
+      Promise.resolve({
+        kind: "declined" as const,
+        message: "The host has work in progress, so it was not restarted.",
+      }),
+    );
+    const { management } = makeManagement({ restartHost });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    fireEvent.click(await waitForButton("Restart"));
+    fireEvent.click(
+      within(
+        await screen.findByTestId("confirm-destructive-dialog"),
+      ).getByTestId("confirm-action"),
+    );
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+        description: "The host has work in progress, so it was not restarted.",
+      });
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("saves a custom host name from the Host settings page", async () => {
     const setHostName = vi.fn((input: { readonly customName: string | null }) =>
       Promise.resolve({
@@ -77,6 +223,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
 
     renderPanel(makeHost(management, makeLocalHostSnapshot()));
 
+    await openHostNameEdit();
     const input = await screen.findByRole("textbox", {
       name: "Display Name",
     });
@@ -94,6 +241,308 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       });
     });
     expect(toast.success).toHaveBeenCalledWith("Host name updated");
+    // Successful save closes the inline edit form and restores focus.
+    await waitFor(() => {
+      expect(screen.queryByTestId("settings-host-name-edit")).toBeNull();
+    });
+    const editToggle = screen.getByTestId("settings-host-edit-name-toggle");
+    expect(editToggle).toBeTruthy();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(editToggle);
+    });
+  });
+
+  it("opens the name editor, discards a draft on Cancel, and reopens with the persisted name", async () => {
+    const setHostName = vi.fn();
+    const { management } = makeManagement({
+      setHostName,
+      getHostName: vi.fn(() =>
+        Promise.resolve({
+          systemName: "hardiks-macbook",
+          customName: "Studio Mac",
+          effectiveName: "Studio Mac",
+        }),
+      ),
+    });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    await openHostNameEdit();
+    const input = await screen.findByRole("textbox", {
+      name: "Display Name",
+    });
+    await waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe("Studio Mac");
+    });
+    fireEvent.change(input, { target: { value: "Throwaway Draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("settings-host-name-edit")).toBeNull();
+    });
+    expect(setHostName).not.toHaveBeenCalled();
+    const editToggle = screen.getByTestId("settings-host-edit-name-toggle");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(editToggle);
+    });
+
+    await openHostNameEdit();
+    const reopened = await screen.findByRole("textbox", {
+      name: "Display Name",
+    });
+    expect((reopened as HTMLInputElement).value).toBe("Studio Mac");
+  });
+
+  it("closes the name editor after a successful Reset", async () => {
+    const setHostName = vi.fn((input: { readonly customName: string | null }) =>
+      Promise.resolve({
+        systemName: "hardiks-macbook",
+        customName: input.customName,
+        effectiveName: input.customName ?? "hardiks-macbook",
+      }),
+    );
+    const { management } = makeManagement({
+      setHostName,
+      getHostName: vi.fn(() =>
+        Promise.resolve({
+          systemName: "hardiks-macbook",
+          customName: "Studio Mac",
+          effectiveName: "Studio Mac",
+        }),
+      ),
+    });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    await openHostNameEdit();
+    fireEvent.click(await waitForButton("Reset"));
+
+    await waitFor(() => {
+      expect(setHostName).toHaveBeenCalledWith({ customName: null });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("settings-host-name-edit")).toBeNull();
+    });
+    expect(toast.success).toHaveBeenCalledWith("Host name updated");
+    const editToggle = screen.getByTestId("settings-host-edit-name-toggle");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(editToggle);
+    });
+  });
+
+  it("keeps status and meta visible when getHostName fails", async () => {
+    const { management } = makeManagement({
+      getHostName: vi.fn(() => Promise.reject(new Error("name failed"))),
+      installedRecord: vi.fn(() =>
+        Promise.resolve(makeInstalledRecord("1.4.2")),
+      ),
+    });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("settings-host-status").textContent).toBe(
+        "● Running",
+      );
+    });
+    // Status/meta must not wait on the name query - assert them first.
+    const identity = screen.getByTestId("settings-host-identity");
+    expect(identity.textContent).toContain("v1.4.2");
+    expect(identity.textContent).toContain("ws://127.0.0.1:42123");
+    expect(identity.textContent).toContain("pid 12345");
+    // Name degrades independently once getHostName settles to isError.
+    expect(
+      (await screen.findByTestId("settings-host-name-unavailable")).textContent,
+    ).toBe("Host name unavailable");
+    // No resolved settings -> Edit name stays disabled (can't open editor).
+    expect(
+      screen
+        .getByTestId("settings-host-edit-name-toggle")
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("disables Cancel while Save is in flight and keeps the editor open on rejection", async () => {
+    let rejectSet: (error: Error) => void = () => undefined;
+    const setHostName = vi.fn(
+      (_input: { readonly customName: string | null }) =>
+        new Promise<never>((_resolve, reject) => {
+          rejectSet = reject;
+        }),
+    );
+    const { management } = makeManagement({ setHostName });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    await openHostNameEdit();
+    const input = await screen.findByRole("textbox", {
+      name: "Display Name",
+    });
+    await waitFor(() => {
+      if (input.hasAttribute("disabled")) {
+        throw new Error("Host name input still disabled");
+      }
+    });
+    fireEvent.change(input, { target: { value: "Retry Me" } });
+
+    // Click Save without waitForButton - Save becomes disabled while pending.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(setHostName).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByTestId("settings-host-name-edit")).toBeTruthy();
+
+    act(() => {
+      rejectSet(new Error("save failed"));
+    });
+
+    // Editor stays open with the draft so the user can retry.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(screen.getByTestId("settings-host-name-edit")).toBeTruthy();
+    const draftInput = screen.getByRole<HTMLInputElement>("textbox", {
+      name: "Display Name",
+    });
+    expect(draftInput).toBeInstanceOf(HTMLInputElement);
+    expect(draftInput.value).toBe("Retry Me");
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
+      ).toBe(false);
+    });
+  });
+
+  it("shows state-contextual summary actions for not-installed, stopped, and running", async () => {
+    // not-installed: primary Install host, no Restart, update region hidden.
+    {
+      const { management } = makeManagement({
+        installedRecord: vi.fn(() => Promise.resolve(null)),
+      });
+      renderPanel(makeHost(management, null));
+
+      const install = await waitForButton("Install host");
+      expect(install.getAttribute("data-variant")).toBe("default");
+      expect(screen.getByRole("button", { name: "Run doctor" })).toBeTruthy();
+      expect(screen.getByTestId("settings-host-edit-name-toggle")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /^Restart$/ })).toBeNull();
+      await waitFor(() => {
+        expect(screen.getByTestId("settings-host-status").textContent).toBe(
+          "Not installed",
+        );
+      });
+      // Update region is hidden entirely for not-installed (no Up to date / Check now / Retry bar).
+      expect(screen.queryByText("Up to date")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(screen.queryByTestId("settings-host-update-action")).toBeNull();
+      cleanup();
+    }
+
+    // stopped: Restart is primary; update region is present.
+    {
+      const { management } = makeManagement({
+        installedRecord: vi.fn(() =>
+          Promise.resolve(makeInstalledRecord("1.4.2")),
+        ),
+        registryCheck: vi.fn(() =>
+          Promise.resolve<HostRegistryUpdateState>({
+            checkedAt: "2026-05-15T00:00:00Z",
+            latestVersion: "1.4.2",
+            installedVersion: "1.4.2",
+            updateAvailable: false,
+            reachable: true,
+            errorMessage: null,
+          }),
+        ),
+      });
+      renderPanel(makeHost(management, null));
+
+      const restart = await waitForButton("Restart");
+      expect(restart.getAttribute("data-variant")).toBe("default");
+      expect(screen.getByRole("button", { name: "Run doctor" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Install host" })).toBeNull();
+      await waitFor(() => {
+        expect(screen.getByTestId("settings-host-status").textContent).toBe(
+          "○ Stopped",
+        );
+      });
+      expect(await screen.findByText("Up to date")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check now" })).toBeTruthy();
+      cleanup();
+    }
+
+    // running: Restart is secondary; identity meta includes version / url / pid.
+    {
+      const { management } = makeManagement({
+        installedRecord: vi.fn(() =>
+          Promise.resolve(makeInstalledRecord("1.4.2")),
+        ),
+        registryCheck: vi.fn(() =>
+          Promise.resolve<HostRegistryUpdateState>({
+            checkedAt: "2026-05-15T00:00:00Z",
+            latestVersion: "1.4.2",
+            installedVersion: "1.4.2",
+            updateAvailable: false,
+            reachable: true,
+            errorMessage: null,
+          }),
+        ),
+      });
+      renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+      const restart = await waitForButton("Restart");
+      expect(restart.getAttribute("data-variant")).toBe("secondary");
+      expect(screen.getByRole("button", { name: "Run doctor" })).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.getByTestId("settings-host-status").textContent).toBe(
+          "● Running",
+        );
+      });
+      const identity = await screen.findByTestId("settings-host-identity");
+      expect(identity.textContent).toContain("v1.4.2");
+      expect(identity.textContent).toContain("ws://127.0.0.1:42123");
+      expect(identity.textContent).toContain("pid 12345");
+      expect(screen.getByText("Up to date")).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it("keeps Installation disclosures collapsed by default and opens Advanced the same way", async () => {
+    const { management } = makeManagement({
+      installedRecord: vi.fn(() =>
+        Promise.resolve(makeInstalledRecord("1.4.2")),
+      ),
+    });
+
+    renderPanel(makeHost(management, null));
+
+    expect(
+      await screen.findByRole("heading", { name: "Installation" }),
+    ).toBeTruthy();
+
+    const detailsTrigger = await waitFor(() =>
+      screen.getByRole("button", { name: /Installation details/i }),
+    );
+    const advancedTrigger = await waitFor(() =>
+      screen.getByRole("button", { name: "Advanced" }),
+    );
+    expect(detailsTrigger.getAttribute("data-state")).toBe("closed");
+    expect(advancedTrigger.getAttribute("data-state")).toBe("closed");
+
+    await openAdvancedDisclosure();
+    expect(
+      screen
+        .getByRole("button", { name: "Advanced" })
+        .getAttribute("data-state"),
+    ).toBe("open");
+    await waitForButton("Re-register");
   });
 
   it("runs applyStaged and shows a success toast once a stage is updateReady", async () => {
@@ -344,7 +793,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     ).toBeTruthy();
     const installButton = screen.getByRole("button", { name: "Install" });
     expect(installButton.hasAttribute("disabled")).toBe(true);
-    expect(installButton.getAttribute("title")).toBe(
+    expect(tooltipTextNear(installButton)).toBe(
       "Unavailable on this platform.",
     );
   });
@@ -357,6 +806,19 @@ async function openAdvancedDisclosure(): Promise<void> {
   if (trigger.getAttribute("data-state") !== "open") {
     fireEvent.click(trigger);
   }
+}
+
+async function openHostNameEdit(): Promise<void> {
+  // "Edit name" is disabled until the host-name query resolves successfully.
+  const toggle = await waitFor(() => {
+    const button = screen.getByTestId("settings-host-edit-name-toggle");
+    if (button.hasAttribute("disabled")) {
+      throw new Error("Edit name button still disabled");
+    }
+    return button;
+  });
+  fireEvent.click(toggle);
+  await screen.findByTestId("settings-host-name-edit");
 }
 
 async function waitForButton(name: string): Promise<HTMLElement> {
@@ -431,7 +893,9 @@ function makeManagement(
       overrides.installVersion ?? vi.fn(notImplemented("installVersion")),
     uninstallHost:
       overrides.uninstallHost ?? vi.fn(notImplemented("uninstallHost")),
-    restartHost: overrides.restartHost ?? vi.fn(() => Promise.resolve()),
+    restartHost:
+      overrides.restartHost ??
+      vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),
