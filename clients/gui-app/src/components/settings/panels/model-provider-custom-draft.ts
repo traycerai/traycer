@@ -65,15 +65,13 @@ export type CustomProviderDraft = {
   /**
    * Whether the key field has been EDITED in this session.
    *
-   * Load-bearing on an edit. The field can hold at most one `{env:VAR}`
-   * reference, but a config block may name several fallbacks - and rendering
-   * only the first meant saving an untouched form silently dropped the rest.
-   * While this is false the original array below is sent back verbatim; the
-   * field is a proposal to REPLACE it, not a lossy mirror of it.
+   * Load-bearing on an edit, because the field is a proposal to REPLACE the
+   * credential rather than a mirror of it: it can hold at most one `{env:VAR}`
+   * reference, while a config block may name several fallbacks. Untouched
+   * therefore sends `env: null` - the wire's word for "leave the declaration
+   * alone" - which is what keeps fallbacks this field could never have shown.
    */
   readonly apiKeyEdited: boolean;
-  /** The env fallbacks this row arrived with. Empty when declaring. */
-  readonly originalEnv: readonly string[];
   readonly models: readonly CustomProviderModelRow[];
   readonly headers: readonly CustomProviderHeaderRow[];
 };
@@ -112,8 +110,17 @@ export type CustomProviderValues = {
   }[];
   /** The plaintext secret, or null when the field was empty or an env ref. */
   readonly key: string | null;
-  /** Env var names the endpoint's key should be read from. */
-  readonly env: readonly string[];
+  /**
+   * Env var names the endpoint's key should be read from - in the wire's three
+   * states, not two.
+   *
+   * `null` leaves the stored declaration alone, `[]` CLEARS it, and a non-empty
+   * array replaces it. The distinction exists because deleting the block's
+   * `env` key needs an explicit signal, which forces `[]` to mean clear - and
+   * if absent meant the same thing, every edit that touched only the display
+   * name would silently delete how the provider reads its key.
+   */
+  readonly env: readonly string[] | null;
 };
 
 /**
@@ -148,7 +155,6 @@ export function emptyCustomProviderDraft(): CustomProviderDraft {
     baseUrl: "",
     apiKey: "",
     apiKeyEdited: false,
-    originalEnv: [],
     models: [emptyCustomProviderModelRow()],
     headers: [emptyCustomProviderHeaderRow()],
   };
@@ -168,11 +174,11 @@ export function customProviderDraftFrom(
     //
     // A SINGLE env reference is shown, because it is not a secret and the field
     // can represent it exactly. SEVERAL cannot be shown in one field at all, so
-    // the field stays empty and `originalEnv` carries them - showing `env[0]`
-    // alone is what dropped `env[1]` on save.
-    apiKey: values.env.length === 1 ? `{env:${values.env[0]}}` : "",
+    // the field stays empty - and an untouched save sends `env: null`, which
+    // leaves every one of them where it is. Showing `env[0]` alone is what
+    // dropped `env[1]` back when untouched had to be spelled as a resend.
+    apiKey: values.env?.length === 1 ? `{env:${values.env[0]}}` : "",
     apiKeyEdited: false,
-    originalEnv: values.env,
     // The rows that came off the config are LOCKED; the blank row substituted
     // for an empty list is not one of them - nothing is stored under it, so
     // there is nothing the merge could orphan.
@@ -415,11 +421,14 @@ export function customProviderValues(
   if (hasCustomProviderDraftError(validateCustomProviderDraft(draft, scope))) {
     return null;
   }
-  // Untouched means UNCHANGED: send back exactly the fallbacks this row
-  // arrived with, however many there were, and leave any stored secret alone.
+  // Untouched means UNTOUCHED, in the wire's own word for it: `null` leaves the
+  // stored secret and every env fallback exactly as they are, including the
+  // ones this single field could never have displayed. An EDITED field is a
+  // replacement, so it sends what it holds - and an emptied one sends `[]`,
+  // which clears the declaration rather than quietly keeping it.
   const credential = draft.apiKeyEdited
     ? customProviderKeyOf(draft.apiKey)
-    : { key: null, env: draft.originalEnv };
+    : { key: null, env: null };
   return {
     modelProviderId: draft.providerId.trim(),
     name: draft.name.trim(),
@@ -497,7 +506,6 @@ export function canReenableCustomProvider(
         baseUrl: values.baseUrl,
         apiKey: "",
         apiKeyEdited: false,
-        originalEnv: values.env,
         // Judged UNLOCKED, deliberately: this asks whether the write side would
         // accept these values, and locking would skip the very key checks that
         // question is about. The dialog locks rows to protect a stored key from

@@ -1054,8 +1054,29 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       The host refuses removal-shaped updates with `invalid_input` as a backstop
       for a stale client, and that detail renders **on the form**, which is the
       only surface that can say which key went missing.
-      `env` is the one genuine exception — it clears at block level, so an emptied
-      key field really does mean "drop the fallbacks".
+      `env` is the one genuine exception, and it has **three** states rather than
+      two: `null` leaves the declaration alone, `[]` CLEARS it, non-empty
+      replaces it. The gap between the first two is the whole point — deleting
+      the block's `env` key server-side needs an explicit signal, which forces
+      `[]` to mean clear, so if ABSENT meant the same thing then every edit that
+      touched only the display name would silently delete how the provider reads
+      its key. An untouched form therefore sends `null`, which is also what
+      retired the old `originalEnv` resend: that field existed only because
+      "untouched" had no spelling of its own, and one field could never show
+      several fallbacks anyway. An emptied field sends `[]`, and the edit-mode
+      hint names both halves rather than promising an empty field is always
+      harmless. **Re-enable sends `null` too** — it is not an env instruction,
+      and echoing the read side's array back would be a replace-with-identical
+      whose empty case arrives as CLEAR.
+    - **`config_unreadable` is gone from both model-provider vocabularies** (it
+      survives in `ProviderNativeErrorCode`, which is the MCP/plugins/skills
+      config-write path and a different enum). A config the provider cannot
+      parse is a server that never boots, so the condition was never separately
+      observable here: it arrives as `server_unavailable` carrying the redacted
+      parse error — file, line, column — and the detail-preferred rule renders
+      that instead of the generic sentence. The fallback stays TRUE for a bare
+      code rather than becoming a wrong-bug answer: a config the parser rejects
+      is a server that failed to start.
     - **The global "All providers" status lives on the panel HEADING row**, and
       renders only when `isHostScopeUsable(scope.status)`.
       `latestProviderCheckedAt` is a max over every provider and Refresh

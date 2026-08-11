@@ -280,13 +280,14 @@ describe("custom model provider dialog", () => {
       true,
     );
     // The stored secret is never read back, so the field cannot show it - and
-    // the helper has to say that empty KEEPS whatever is there rather than
-    // clearing it. That covers env fallbacks too, which one field cannot show
-    // when there is more than one.
+    // the helper has to distinguish UNTOUCHED from EMPTIED, because those are
+    // now different instructions: one keeps the declaration, the other deletes
+    // it. "Leave empty and nothing happens" was true only while clearing was
+    // unspellable.
     expect(screen.getByLabelText("API key").getAttribute("value")).toBe("");
     expect(
       screen.getByText(
-        "Optional. Leave empty to keep the saved key or env fallbacks.",
+        "Optional. Untouched keeps the saved key and env fallbacks; clearing a restored {env:VAR} removes it.",
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -296,9 +297,10 @@ describe("custom model provider dialog", () => {
       baseUrl: "https://api.myprovider.com/v1",
       models: [{ id: "a", name: "A" }],
       headers: [{ key: "X-Org", value: "acme" }],
-      // Null, so the host leaves the stored credential alone.
+      // Both null, and for the same reason: an untouched form is not an
+      // instruction. `[]` here would delete the env declaration.
       key: null,
-      env: [],
+      env: null,
     });
   });
 
@@ -339,7 +341,7 @@ describe("custom model provider dialog", () => {
       models: [{ id: "a", name: "A renamed" }],
       headers: [{ key: "X-Org", value: "wonka" }],
       key: null,
-      env: [],
+      env: null,
     });
   });
 
@@ -450,7 +452,7 @@ describe("custom model provider dialog", () => {
       models: [{ id: "wafer-1", name: "Wafer One" }],
       headers: [],
       key: null,
-      env: [],
+      env: null,
     });
   });
 

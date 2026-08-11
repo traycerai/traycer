@@ -255,9 +255,12 @@ export function ProviderCustomModelProviderDialog(props: {
                 editing
                   ? // The stored secret is never read back, so an edit cannot
                     // show it - and neither can one field show several env
-                    // fallbacks. Leaving it alone keeps whatever is there;
-                    // typing replaces it.
-                    "Optional. Leave empty to keep the saved key or env fallbacks."
+                    // fallbacks. Untouched keeps whatever is there; typing
+                    // replaces it. CLEARING is the third state and it is real
+                    // now, so the copy has to name it rather than promise that
+                    // an empty field is always harmless: a restored
+                    // `{env:VAR}` the user deletes is a deletion.
+                    "Optional. Untouched keeps the saved key and env fallbacks; clearing a restored {env:VAR} removes it."
                   : "Optional. Leave empty if you manage auth via headers."
               }
               error={null}

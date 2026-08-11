@@ -726,7 +726,9 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         models: [{ id: "gpt-4o-mini", name: "GPT-4o mini" }],
         headers: [],
         key: null,
-        env: [],
+        // Untouched key field, so no env instruction at all - a declaration
+        // that never mentioned env has nothing to clear.
+        env: null,
       },
     });
   });
@@ -817,7 +819,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         ],
         headers: [],
         key: null,
-        env: [],
+        env: null,
       },
     });
   });
@@ -908,7 +910,11 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         models: [{ id: "a", name: "a" }],
         headers: [],
         key: null,
-        env: [],
+        // Re-enable carries no env instruction. Echoing the read side's array
+        // back would be a replace-with-identical, and this row's empty one
+        // would arrive as the wire's CLEAR signal - deleting a declaration
+        // because a button that means "turn it on" said nothing about env.
+        env: null,
       },
     });
   });

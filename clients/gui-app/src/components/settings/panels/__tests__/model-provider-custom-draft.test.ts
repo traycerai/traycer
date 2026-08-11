@@ -294,8 +294,10 @@ describe("editing an existing declaration", () => {
 
   it("keeps EVERY env fallback across an untouched Edit", () => {
     // One field cannot show two references, and rendering `env[0]` alone meant
-    // saving an untouched form silently dropped `env[1]`. Untouched means
-    // unchanged: the original array goes back exactly as it came.
+    // saving an untouched form silently dropped `env[1]`. Untouched now says so
+    // in the wire's own word - `null`, leave the declaration alone - rather than
+    // resending an array this form only half understands. `[]` would CLEAR it,
+    // which is the bug this distinction exists to make unspellable by accident.
     const two = { ...values, env: ["KEY_A", "KEY_B"] };
     const draft = customProviderDraftFrom(two);
     expect(draft.apiKey).toBe("");
@@ -305,7 +307,27 @@ describe("editing an existing declaration", () => {
         disabledIds: [],
         existing: true,
       }),
-    ).toMatchObject({ key: null, env: ["KEY_A", "KEY_B"] });
+    ).toMatchObject({ key: null, env: null });
+  });
+
+  it("CLEARS the fallbacks when a restored reference is deleted", () => {
+    // The other half of the same distinction: an edited-to-empty field is an
+    // instruction, not an absence. A single reference is the only case the
+    // field can show, so it is the only case a user can delete by hand - and
+    // when they do, `[]` says exactly that.
+    const one = { ...values, env: ["OPENAI_KEY"] };
+    const cleared = {
+      ...customProviderDraftFrom(one),
+      apiKey: "",
+      apiKeyEdited: true,
+    };
+    expect(
+      customProviderValues(cleared, {
+        takenIds: [],
+        disabledIds: [],
+        existing: true,
+      }),
+    ).toMatchObject({ key: null, env: [] });
   });
 
   it("replaces the fallbacks once the field is edited", () => {

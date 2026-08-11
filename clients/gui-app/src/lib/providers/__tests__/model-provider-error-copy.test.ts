@@ -81,35 +81,44 @@ describe("modelProviderAuthErrorDisposition", () => {
   });
 });
 
-describe("config_unreadable", () => {
-  it("points at the FILE on both arms, because that is where the fix is", () => {
-    // The one code that is neither our fault nor the host's: the user's own
-    // `opencode.json` did not parse.
-    expect(modelProviderListErrorMessage("config_unreadable", null)).toContain(
-      "config file",
+describe("a config the provider cannot parse", () => {
+  // There is no code of its own for this any more, and that is the point: a
+  // config the provider rejects is a server that never boots, so the condition
+  // is not observable here as anything else. It arrives as
+  // `server_unavailable` carrying the redacted parse error, and the detail rule
+  // is what turns a generic sentence into an actionable one.
+
+  it("shows the host's parse error rather than our generic sentence", () => {
+    // File, line and column - the three things that say where to go, none of
+    // which a fallback sentence can know.
+    const detail =
+      "~/.config/opencode/opencode.json: unexpected token '}' at line 12, column 3";
+    expect(modelProviderAuthErrorMessage("server_unavailable", detail)).toBe(
+      detail,
     );
-    expect(modelProviderAuthErrorMessage("config_unreadable", null)).toContain(
-      "config file",
+    expect(modelProviderListErrorMessage("server_unavailable", detail)).toBe(
+      detail,
+    );
+  });
+
+  it("still reads sensibly on a bare code, because the fallback is TRUE", () => {
+    // A config the parser rejects IS a server that failed to start, so the
+    // generic sentence is not a wrong-bug answer - just a less useful one.
+    expect(modelProviderListErrorMessage("server_unavailable", null)).toContain(
+      "couldn't be started",
+    );
+    expect(modelProviderAuthErrorMessage("server_unavailable", null)).toContain(
+      "couldn't be started",
     );
   });
 
   it("is REPORTED, not restarted or re-prompted", () => {
     // No attempt was lost, so `restart` would invent one; and nothing the user
     // types in the dialog fixes a file the parser choked on, so `reprompt`
-    // would ask for input that cannot help.
-    expect(modelProviderAuthErrorDisposition("config_unreadable")).toBe(
+    // would ask for input that cannot help. The next move is in an editor.
+    expect(modelProviderAuthErrorDisposition("server_unavailable")).toBe(
       "report",
     );
-  });
-
-  it("prefers the host's detail, which names where the file broke", () => {
-    // Redacted host-side, and far more useful than our generic sentence.
-    expect(
-      modelProviderAuthErrorMessage(
-        "config_unreadable",
-        "opencode.json: unexpected token at line 12",
-      ),
-    ).toContain("line 12");
   });
 });
 
@@ -130,7 +139,7 @@ describe("detail normalization on the LIST helper", () => {
   it("prefers the host's detail, trimmed", () => {
     expect(
       modelProviderListErrorMessage(
-        "config_unreadable",
+        "server_unavailable",
         "  opencode.json: unexpected token at line 12  ",
       ),
     ).toBe("opencode.json: unexpected token at line 12");

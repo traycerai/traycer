@@ -386,7 +386,10 @@ function useCustomProviderForm(
             // carries a key back, so an edit that types nothing must not be
             // read as clearing the credential.
             key: values.key,
-            env: [...values.env],
+            // Same word, and the empty array is NOT the same as it: `[]` is the
+            // wire's clear signal, so an untouched form must send null rather
+            // than an empty list it happens to be holding.
+            env: values.env === null ? null : [...values.env],
           },
         },
         {
@@ -422,7 +425,12 @@ function useCustomProviderForm(
   );
   const reenable = useCallback(
     (values: CustomProviderValues) => {
-      send(values, false);
+      // Re-enable is not an env instruction, so it sends none. These values came
+      // off the READ side, where `env` is what the row declares - echoing that
+      // array back is a replace-with-identical that quietly depends on the read
+      // being complete, and an empty one would arrive as the CLEAR signal. Null
+      // says the only true thing here: turn this back on, touch nothing else.
+      send({ ...values, env: null }, false);
     },
     [send],
   );
