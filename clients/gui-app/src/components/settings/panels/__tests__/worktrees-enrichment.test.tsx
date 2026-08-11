@@ -782,6 +782,16 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         await vi.advanceTimersByTimeAsync(60_000);
       });
       expect(requests).toHaveLength(10);
+
+      // A strict filter can keep this path observer-less until TanStack
+      // garbage-collects its failed/cold query. Eviction must also retire the
+      // spent sweep ledger entry, otherwise no observer or later Refresh can
+      // ever recreate the query.
+      fixture.queryClient.removeQueries({ queryKey: perPathKey("/wt/a") });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(11);
     });
 
     it("re-probes swept entries after a method-scope invalidation (refresh), still in bounded chunks", async () => {

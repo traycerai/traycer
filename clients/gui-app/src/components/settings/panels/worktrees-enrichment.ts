@@ -227,6 +227,11 @@ function selectSweepChunk(args: {
       perPathEnrichmentQueryKey(hostId, path),
     );
     if (state?.fetchStatus === "fetching") continue;
+    // An inactive filtered query can be garbage-collected after its retry
+    // budget is exhausted. Its old ledger entry must not outlive the cache
+    // entry: with no viewport observer and nothing left for Refresh to
+    // invalidate, that would otherwise make the path permanently ineligible.
+    if (state === undefined) ledger.delete(path);
     const needsProbe =
       state?.data === undefined ||
       state.isInvalidated ||

@@ -3960,6 +3960,46 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     ).toBe("merged");
   });
 
+  it("combines retained activity with authoritative refreshed base facts", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 20,
+    });
+    const oldIdle = entry({
+      worktreePath: "/wt/now-in-use",
+      branch: "feat-now-in-use",
+      inUse: false,
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const refreshedInUseBase = entry({
+      ...oldIdle,
+      branch: "feat-now-in-use",
+      inUse: true,
+      branchStatus: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [landed, refreshedInUseBase],
+        enrichedByPath: new Map([
+          [landed.worktreePath, landed],
+          [oldIdle.worktreePath, oldIdle],
+        ]),
+        erroredPaths: new Set([oldIdle.worktreePath]),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
+
+    screen.getByText("feat-landed");
+    expect(screen.queryByText("feat-now-in-use")).toBeNull();
+  });
+
   it("excludes a still-pending row's unknown tier from the filter options", () => {
     const mergedRow = entry({
       worktreePath: "/wt/merged",
@@ -4603,6 +4643,23 @@ describe("WorktreesList PR-number search", () => {
     expect(visibleBranches()).toEqual([]);
     screen.getByText("No matches yet - still checking 1 worktree.");
     expect(screen.queryByText("No worktrees match your search.")).toBeNull();
+  });
+
+  it("settles an alphabetic no-match without waiting for unrelated pending rows", () => {
+    renderPrList({
+      enrichedByPath: enrichedExcept(["/wt/super-pr"]),
+      erroredPaths: undefined,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Review" }));
+    search("definitely-not-a-repo-branch-path-or-task");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match your search.");
+    expect(screen.queryByText(/No matches yet - still checking/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Checking 1 worktree…",
+    );
   });
 
   it("settles to 'no matches' once every probe has landed", () => {

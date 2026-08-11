@@ -874,7 +874,10 @@ export function WorktreesList(props: {
     for (const base of worktrees) {
       const enriched = enrichedByPath.get(base.worktreePath);
       if (enriched !== undefined && enriched.resolvedAt !== null) {
-        known.set(base.worktreePath, enriched);
+        known.set(
+          base.worktreePath,
+          mergeStaleActivityOntoBase(base, enriched),
+        );
       }
     }
     return known;
@@ -998,6 +1001,24 @@ export function WorktreesList(props: {
       (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
     ).length;
   }, [mergedWorktrees, enrichmentStateFor]);
+  const searchStillCheckingCount = useMemo(() => {
+    const needle = deferredSearchText.trim().toLowerCase();
+    if (needle.length === 0) return stillCheckingCount;
+    const couldMatchUnknownPr = needle === "#" || /^#?\d+$/.test(needle);
+    return mergedWorktrees.filter((entry) => {
+      if (enrichmentStateFor(entry.worktreePath) !== "pending") return false;
+      return (
+        couldMatchUnknownPr ||
+        (searchHaystackByPath.get(entry.worktreePath) ?? "").includes(needle)
+      );
+    }).length;
+  }, [
+    deferredSearchText,
+    stillCheckingCount,
+    mergedWorktrees,
+    enrichmentStateFor,
+    searchHaystackByPath,
+  ]);
   const unavailableStatusCount = useMemo(
     () =>
       mergedWorktrees.filter((entry) => {
@@ -1586,10 +1607,10 @@ export function WorktreesList(props: {
                */
               <WorktreesStateMessage
                 tone="muted"
-                spinner={stillCheckingCount > 0}
+                spinner={searchStillCheckingCount > 0}
               >
-                {stillCheckingCount > 0
-                  ? worktreeSearchCheckingNoticeText(stillCheckingCount)
+                {searchStillCheckingCount > 0
+                  ? worktreeSearchCheckingNoticeText(searchStillCheckingCount)
                   : "No worktrees match your search."}
               </WorktreesStateMessage>
             ) : (
@@ -1920,6 +1941,24 @@ function worktreeCheckingNoticeText(checkingCount: number): string {
 function worktreeSearchCheckingNoticeText(checkingCount: number): string {
   const plural = checkingCount === 1 ? "worktree" : "worktrees";
   return `No matches yet - still checking ${checkingCount} ${plural}.`;
+}
+
+function mergeStaleActivityOntoBase(
+  base: WorktreeHostEntryV14,
+  enriched: WorktreeHostEntryV14,
+): WorktreeHostEntryV14 {
+  return {
+    ...base,
+    lastActivityAt: enriched.lastActivityAt,
+    branchStatus: enriched.branchStatus,
+    prState: enriched.prState,
+    prNumber: enriched.prNumber,
+    prUrl: enriched.prUrl,
+    mergedHeadShaMatches: enriched.mergedHeadShaMatches,
+    submodules: enriched.submodules,
+    atBaseCommit: enriched.atBaseCommit,
+    resolvedAt: enriched.resolvedAt,
+  };
 }
 
 function worktreeFilterResolutionStatusText(
