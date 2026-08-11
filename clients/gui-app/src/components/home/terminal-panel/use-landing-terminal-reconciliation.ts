@@ -54,6 +54,7 @@ function abortableRequest<Value>(
 }
 
 interface LandingTerminalReconciliationArgs {
+  readonly landingPageId: string;
   readonly activeHostId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -71,6 +72,8 @@ interface LandingTerminalReconciliationArgs {
     variables: LandingTerminalKillVariables,
   ) => Promise<unknown>;
   readonly onReconciled: (context: LandingTerminalHostContext) => void;
+  /** Runs when the fresh terminal list cannot be fetched for this generation. */
+  readonly onError: () => void;
   /**
    * Runs after a reconciliation generation has fully applied (store updated,
    * host context published). Receives the same generation's host context so
@@ -117,12 +120,14 @@ export function useLandingTerminalReconciliation(
   const {
     activeHostId,
     availability,
+    landingPageId,
     panelOpen,
     primaryWorkspacePath,
     generation,
     client,
     killTerminal,
     onReconciled,
+    onError,
     onSettled,
   } = args;
   const queryClient = useQueryClient();
@@ -189,9 +194,13 @@ export function useLandingTerminalReconciliation(
       );
       if (
         isAborted(controller.signal) ||
-        client.getActiveHostId() !== activeHostId ||
-        freshResponse === null
+        client.getActiveHostId() !== activeHostId
       ) {
+        releaseLatch();
+        return;
+      }
+      if (freshResponse === null) {
+        onError();
         releaseLatch();
         return;
       }
@@ -249,6 +258,7 @@ export function useLandingTerminalReconciliation(
         mintInstanceId: () => `landing-terminal-${uuidv4()}`,
       });
       current.applyReconciliation(
+        landingPageId,
         reconciliation.tabs,
         reconciliation.activeInstanceId,
         reconciliation.collapseWhenEmpty,
@@ -274,7 +284,9 @@ export function useLandingTerminalReconciliation(
     connectionEpoch,
     generation,
     killTerminal,
+    landingPageId,
     onReconciled,
+    onError,
     onSettled,
     panelOpen,
     primaryWorkspacePath,

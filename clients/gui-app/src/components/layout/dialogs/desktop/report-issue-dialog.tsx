@@ -121,6 +121,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Shell",
+  "/settings/usage": "Settings - Usage",
   "/settings/worktrees": "Settings - Worktrees",
 };
 

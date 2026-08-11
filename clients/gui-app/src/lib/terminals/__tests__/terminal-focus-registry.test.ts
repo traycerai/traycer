@@ -1,43 +1,72 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   focusTerminalInstance,
   registerTerminalFocus,
   resetTerminalFocusRegistryForTests,
+  terminalFocusOwnsInstance,
 } from "../terminal-focus-registry";
 
 describe("terminal-focus-registry", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
     resetTerminalFocusRegistryForTests();
-    vi.useRealTimers();
   });
 
-  it("fulfils a request for a mounted instance only after a macrotask, not synchronously", () => {
-    const focus = vi.fn();
-    registerTerminalFocus("a", focus);
+  it("fulfils a request for a mounted instance synchronously", () => {
+    const target = document.createElement("textarea");
+    document.body.append(target);
+    const focus = vi.fn(() => target.focus());
+    registerTerminalFocus(
+      "a",
+      focus,
+      (activeElement) => activeElement === target,
+      () => true,
+    );
     focusTerminalInstance("a");
-    expect(focus).not.toHaveBeenCalled();
-    vi.runAllTimers();
     expect(focus).toHaveBeenCalledTimes(1);
+    target.remove();
   });
 
-  it("cancels a still-scheduled fulfilment when a newer, not-yet-mounted instance is requested", () => {
+  it("fulfils only the latest parked instance", () => {
     const focusA = vi.fn();
-    registerTerminalFocus("a", focusA);
     focusTerminalInstance("a");
-
-    // "b" has not mounted yet - this park must not let "a"'s already-scheduled
-    // timer fire later and steal focus back from the newer request.
     focusTerminalInstance("b");
-    vi.runAllTimers();
+    registerTerminalFocus(
+      "a",
+      focusA,
+      () => false,
+      () => true,
+    );
     expect(focusA).not.toHaveBeenCalled();
 
     const focusB = vi.fn();
-    registerTerminalFocus("b", focusB);
-    vi.runAllTimers();
+    registerTerminalFocus(
+      "b",
+      focusB,
+      () => false,
+      () => true,
+    );
     expect(focusB).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes actual DOM focus ownership without a pending intent", () => {
+    const target = document.createElement("textarea");
+    document.body.append(target);
+    registerTerminalFocus(
+      "a",
+      () => target.focus(),
+      (activeElement) => activeElement === target,
+      () => true,
+    );
+    target.focus();
+
+    expect(terminalFocusOwnsInstance("a")).toBe(true);
+    target.remove();
+  });
+
+  it("recognizes a parked semantic focus intent", () => {
+    focusTerminalInstance("a");
+
+    expect(terminalFocusOwnsInstance("a")).toBe(true);
+    expect(terminalFocusOwnsInstance("b")).toBe(false);
   });
 });

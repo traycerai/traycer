@@ -2,12 +2,11 @@
  * Picks a memorable two-word `<adjective>-<noun>` slug for a default
  * branch name when the Epic / chat title doesn't yield anything
  * meaningful. Lives client-side so the Create-new-worktree input shows
- * the same name the user would land with after a host-side collision
- * pass - `swift-otter` over `k7m9`.
+ * the friendly first candidate - `swift-otter` over `k7m9`.
  *
  * Wordlists are embedded (no network / dependency); roughly
- * `ADJECTIVES.length * NOUNS.length` ≈ 1.6k combinations before the
- * client-side collision suffix kicks in (`-2`, `-3`, …).
+ * `ADJECTIVES.length * NOUNS.length` ≈ 1.6k combinations before Git may
+ * require a retry-identity-derived random suffix.
  */
 
 const ADJECTIVES: ReadonlyArray<string> = [

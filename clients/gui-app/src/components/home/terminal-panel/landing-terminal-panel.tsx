@@ -1,6 +1,8 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -30,6 +32,11 @@ import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
+  hasPrimaryFocusIntent,
+  reconcilePrimaryFocus,
+  requestPrimaryFocus,
+} from "@/lib/focus/primary-focus-coordinator";
+import {
   clearPendingTerminalFocus,
   focusTerminalInstance,
 } from "@/lib/terminals/terminal-focus-registry";
@@ -39,10 +46,12 @@ import {
   DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
   MAX_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
   MIN_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+  landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
 import { LandingTerminalTabStrip } from "./landing-terminal-tab-strip";
+import { LandingTerminalDirectoryPicker } from "./landing-terminal-directory-picker";
 import { LandingTerminalTile } from "./landing-terminal-tile";
 import { useLandingTerminalKill } from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
@@ -67,6 +76,38 @@ interface LandingTerminalDragState {
   latestFraction: number;
 }
 
+type LandingTerminalDirectoryRequestMode = "reuse-or-create" | "always-create";
+
+interface LandingTerminalDirectoryRequest {
+  readonly key: number;
+  readonly workspacePaths: ReadonlyArray<string>;
+  readonly primaryWorkspacePath: string;
+  readonly error: string | null;
+  readonly closePanelOnCancel: boolean;
+  readonly mode: LandingTerminalDirectoryRequestMode;
+  readonly capturedTarget: LandingTerminalTarget;
+  readonly selectedTarget: LandingTerminalTarget | null;
+}
+
+function directoryRequestFor(
+  target: LandingTerminalTarget,
+  mode: LandingTerminalDirectoryRequestMode,
+  closePanelOnCancel: boolean,
+): LandingTerminalDirectoryRequest | null {
+  if (target.workspacePaths.length <= 1) return null;
+  return {
+    key: target.generation,
+    mode,
+    closePanelOnCancel,
+    capturedTarget: target,
+    selectedTarget: null,
+    workspacePaths: target.workspacePaths,
+    primaryWorkspacePath:
+      target.primaryWorkspacePath ?? target.workspacePaths[0],
+    error: null,
+  };
+}
+
 // Matched against the resolved launch cwd (primary folder, else the settled
 // context's home), not merely `target.primaryWorkspacePath` - so a
 // gesture-opened panel with no primary folder still re-targets an existing
@@ -83,33 +124,114 @@ function terminalForTarget(
   return active !== undefined && matches(active) ? active : tabs.find(matches);
 }
 
+function settleDirectoryRequest(args: {
+  readonly request: LandingTerminalDirectoryRequest | null;
+  readonly generation: number;
+  readonly context: LandingTerminalHostContext;
+  readonly addTerminalTab: (hostId: string, cwd: string) => string;
+  readonly replaceDirectoryRequest: (
+    request: LandingTerminalDirectoryRequest | null,
+  ) => void;
+  readonly clearPending: () => void;
+  readonly ownsFocus: () => boolean;
+}): boolean {
+  const request = args.request;
+  if (request === null) return false;
+  const selectedTarget = request.selectedTarget;
+  if (
+    selectedTarget === null ||
+    selectedTarget.generation !== args.generation
+  ) {
+    return true;
+  }
+  const client = selectedTarget.client;
+  const hostId = selectedTarget.hostId;
+  const launchCwd = selectedTarget.launchWorkspacePath;
+  if (
+    client === null ||
+    hostId === null ||
+    client.getActiveHostId() !== hostId ||
+    args.context.hostId !== hostId ||
+    launchCwd === null
+  ) {
+    args.replaceDirectoryRequest({
+      ...request,
+      selectedTarget: null,
+      error: "The terminal directory could not be opened.",
+    });
+    return true;
+  }
+
+  const shouldFocusTerminal = args.ownsFocus();
+  const state = useLandingTerminalStore.getState();
+  let instanceId: string;
+  if (request.mode === "always-create") {
+    instanceId = args.addTerminalTab(hostId, launchCwd);
+  } else {
+    const existing = terminalForTarget(
+      state.tabs,
+      state.activeInstanceId,
+      hostId,
+      launchCwd,
+    );
+    if (existing === undefined) {
+      instanceId = args.addTerminalTab(hostId, launchCwd);
+    } else {
+      instanceId = existing.instanceId;
+      if (existing.instanceId !== state.activeInstanceId) {
+        state.activateTab(existing.instanceId);
+      }
+    }
+  }
+  args.replaceDirectoryRequest(null);
+  args.clearPending();
+  if (shouldFocusTerminal) focusTerminalInstance(instanceId);
+  return true;
+}
+
 /**
  * Landing-only independent-terminal surface. It is a CONSUMER of
- * `LandingTerminalGestureProvider`: every host / client / folder / availability
- * value comes from `useLandingTerminalGesture().target`, never a live hook - so
- * no live value is in scope for a create / reconcile / `+` path to
- * accidentally read past a pinned opening gesture.
+ * `LandingTerminalGestureProvider`: routing identity comes from its captured
+ * target, while chooser presentation reads the provider's workspace source for
+ * that same captured draft. No consumer reads live host or draft focus.
  */
 export function LandingTerminalPanel(): ReactNode {
   const {
+    focusedLandingPageId,
     target,
     pending,
     pendingGeneration,
     openEpisodeDraftId,
+    workspace,
     capture,
+    selectWorkspacePath,
     clearPending,
   } = useLandingTerminalGesture();
+  // Layout belongs to the focused start page. This is deliberately independent
+  // of `target`: a pending gesture may retain an earlier page's host/folder
+  // routing while focus has already moved to another page.
+  const landingPageId = focusedLandingPageId ?? "unbound-landing-page";
+  const targetLandingPageId = target.draftId ?? "unbound-landing-page";
   const tabs = useLandingTerminalStore((state) => state.tabs);
   const activeInstanceId = useLandingTerminalStore(
     (state) => state.activeInstanceId,
   );
-  const panelOpen = useLandingTerminalStore((state) => state.panelOpen);
-  const panelWidthFraction = useLandingTerminalStore(
-    (state) => state.panelWidthFraction,
+  const layout = useLandingTerminalStore((state) =>
+    landingTerminalLayoutFor(state, landingPageId),
   );
-  const setPanelOpen = useLandingTerminalStore((state) => state.setPanelOpen);
-  const setPanelWidthFraction = useLandingTerminalStore(
+  const panelOpen = layout.panelOpen;
+  const targetPanelOpen = useLandingTerminalStore(
+    (state) => landingTerminalLayoutFor(state, targetLandingPageId).panelOpen,
+  );
+  const panelWidthFraction = layout.panelWidthFraction;
+  const setPanelOpenForPage = useLandingTerminalStore(
+    (state) => state.setPanelOpen,
+  );
+  const setPanelWidthFractionForPage = useLandingTerminalStore(
     (state) => state.setPanelWidthFraction,
+  );
+  const setPanelMaximizedForPage = useLandingTerminalStore(
+    (state) => state.setPanelMaximized,
   );
   const addTab = useLandingTerminalStore((state) => state.addTab);
   const activateTab = useLandingTerminalStore((state) => state.activateTab);
@@ -119,11 +241,49 @@ export function LandingTerminalPanel(): ReactNode {
   const kill = useLandingTerminalKill();
   const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
-  const [maximized, setMaximized] = useState(false);
   // Last settled generation's host context. Manual create uses it only when
   // `hostId` still equals the active host; auto-spawn never reads this alone.
   const [reconciledContext, setReconciledContext] =
     useState<LandingTerminalHostContext | null>(null);
+  const [directoryRequest, setDirectoryRequest] =
+    useState<LandingTerminalDirectoryRequest | null>(null);
+  const directoryRequestRef = useRef<LandingTerminalDirectoryRequest | null>(
+    null,
+  );
+
+  const writeDirectoryRequest = useCallback(
+    (request: LandingTerminalDirectoryRequest | null): void => {
+      directoryRequestRef.current = request;
+      setDirectoryRequest(request);
+    },
+    [],
+  );
+
+  const replaceDirectoryRequest = useCallback(
+    (request: LandingTerminalDirectoryRequest | null): void => {
+      writeDirectoryRequest(request);
+      if (request !== null && request.selectedTarget === null) {
+        requestPrimaryFocus({
+          kind: "landing-terminal-directory",
+          requestId: request.key,
+        });
+      }
+    },
+    [writeDirectoryRequest],
+  );
+
+  const setPanelOpen = useCallback(
+    (open: boolean) => setPanelOpenForPage(landingPageId, open),
+    [landingPageId, setPanelOpenForPage],
+  );
+  const setPanelWidthFraction = useCallback(
+    (fraction: number) => setPanelWidthFractionForPage(landingPageId, fraction),
+    [landingPageId, setPanelWidthFractionForPage],
+  );
+  const setMaximized = useCallback(
+    (maximized: boolean) => setPanelMaximizedForPage(landingPageId, maximized),
+    [landingPageId, setPanelMaximizedForPage],
+  );
 
   const addTerminalTab = useCallback(
     (hostId: string, cwd: string): string => {
@@ -166,7 +326,7 @@ export function LandingTerminalPanel(): ReactNode {
         return null;
       }
       const launchCwd = resolveLandingTerminalLaunchCwd(
-        routing.primaryWorkspacePath,
+        routing.launchWorkspacePath,
         reconciledContext,
         currentHostId,
       );
@@ -176,56 +336,154 @@ export function LandingTerminalPanel(): ReactNode {
     [addTerminalTab, reconciledContext],
   );
 
-  // The `+` button: create against the EFFECTIVE target (a pinned gesture, else
-  // live focus). It never re-captures, so a `+` pressed while an opening gesture
-  // is still pending honors that gesture's captured host/folder, not focus that
-  // moved to a split partner in the meantime. A user-gesture create keeps the
-  // keyboard with the panel: the focus request parks in the registry until the
-  // new tile's xterm engine mounts.
-  const createTerminalTabFocused = useCallback(() => {
-    const instanceId = createTerminalTab(target);
-    if (instanceId !== null) focusTerminalInstance(instanceId);
-  }, [createTerminalTab, target]);
-
   // The tab-family chord ("new terminal"): if the panel is closed, capture the
   // open gesture and create from THAT captured snapshot up-front (the non-empty
   // set suppresses the open reconciliation's auto-spawn). If already open, it is
   // just a `+` - create against the effective target, never re-capturing.
   const revealAndCreateTerminal = useCallback(() => {
+    if (directoryRequestRef.current !== null) {
+      if (panelOpen) return;
+      replaceDirectoryRequest(null);
+    }
     if (panelOpen) {
+      const request =
+        target.workspacePaths.length > 1
+          ? directoryRequestFor(
+              pending ? target : capture(),
+              "always-create",
+              false,
+            )
+          : null;
+      if (request !== null) {
+        replaceDirectoryRequest(request);
+        return;
+      }
       const instanceId = createTerminalTab(target);
       if (instanceId !== null) focusTerminalInstance(instanceId);
       return;
     }
-    const captured = capture();
+    const captured = pending ? target : capture();
     setPanelOpen(true);
+    const request = directoryRequestFor(captured, "always-create", true);
+    if (request !== null) {
+      replaceDirectoryRequest(request);
+      return;
+    }
     const instanceId = createTerminalTab(captured);
     if (instanceId !== null) focusTerminalInstance(instanceId);
-  }, [capture, createTerminalTab, panelOpen, setPanelOpen, target]);
+  }, [
+    capture,
+    createTerminalTab,
+    panelOpen,
+    pending,
+    replaceDirectoryRequest,
+    setPanelOpen,
+    target,
+  ]);
+
+  const cancelDirectoryRequest = useCallback(() => {
+    const request = directoryRequestRef.current;
+    if (request === null) return;
+    replaceDirectoryRequest(null);
+    clearPending();
+    if (request.closePanelOnCancel) {
+      setPanelOpen(false);
+      clearPendingTerminalFocus(null);
+      focusActiveComposer();
+      return;
+    }
+    requestPrimaryFocus({ kind: "landing-terminal-new-tab" });
+  }, [clearPending, replaceDirectoryRequest, setPanelOpen]);
+
+  const selectDirectory = useCallback(
+    (workspacePath: string) => {
+      const request = directoryRequestRef.current;
+      if (request === null || request.selectedTarget !== null) return;
+      const client = request.capturedTarget.client;
+      if (
+        client === null ||
+        client.getActiveHostId() !== request.capturedTarget.hostId
+      ) {
+        replaceDirectoryRequest({
+          ...request,
+          error: "The selected host is no longer available.",
+        });
+        return;
+      }
+      const selectedTarget = selectWorkspacePath(workspacePath);
+      if (selectedTarget === null) {
+        replaceDirectoryRequest({
+          ...request,
+          error: "That directory is no longer attached.",
+        });
+        return;
+      }
+      replaceDirectoryRequest({
+        ...request,
+        selectedTarget,
+        error: null,
+      });
+      requestPrimaryFocus({
+        kind: "landing-terminal-directory",
+        requestId: request.key,
+      });
+    },
+    [replaceDirectoryRequest, selectWorkspacePath],
+  );
+
+  const handleReconciliationError = useCallback(() => {
+    const request = directoryRequestRef.current;
+    if (request === null || request.selectedTarget === null) return;
+    const ownsFocus = hasPrimaryFocusIntent(
+      (target) =>
+        target.kind === "landing-terminal-directory" &&
+        target.requestId === request.key,
+    );
+    writeDirectoryRequest({
+      ...request,
+      selectedTarget: null,
+      error: "The terminal directory could not be opened.",
+    });
+    if (ownsFocus) {
+      requestPrimaryFocus({
+        kind: "landing-terminal-directory",
+        requestId: request.key,
+      });
+    }
+  }, [writeDirectoryRequest]);
 
   const activateTerminalTab = useCallback(
     (instanceId: string) => {
+      replaceDirectoryRequest(null);
       clearPending();
       activateTab(instanceId);
       focusTerminalInstance(instanceId);
     },
-    [activateTab, clearPending],
+    [activateTab, clearPending, replaceDirectoryRequest],
   );
 
   // Focus follows the open/collapse *transition*, never the mount: a landing
   // page that mounts with the panel already open (new tab, tab switch back)
   // must leave focus with the composer. Opening also arms the launch-cwd
   // intent that reconciliation consumes once the host's session list settles.
-  const prevPanelOpenRef = useRef(panelOpen);
+  const previousPanelLayoutRef = useRef({ landingPageId, panelOpen });
   useEffect(() => {
-    const wasOpen = prevPanelOpenRef.current;
-    prevPanelOpenRef.current = panelOpen;
+    const previous = previousPanelLayoutRef.current;
+    previousPanelLayoutRef.current = { landingPageId, panelOpen };
+    if (previous.landingPageId !== landingPageId) {
+      clearPendingTerminalFocus(null);
+      return;
+    }
+    const wasOpen = previous.panelOpen;
     if (wasOpen === panelOpen) return;
     if (panelOpen) {
       if (!pending) capture();
       const openActiveInstanceId =
         useLandingTerminalStore.getState().activeInstanceId;
-      if (openActiveInstanceId !== null) {
+      if (
+        openActiveInstanceId !== null &&
+        directoryRequestRef.current === null
+      ) {
         focusTerminalInstance(openActiveInstanceId);
       }
       return;
@@ -233,12 +491,12 @@ export function LandingTerminalPanel(): ReactNode {
     // Every collapse path converges on this store transition: the chord, the
     // header button, closing the last tab, close-all, and a shell exiting.
     // All of them should hand the keyboard back to the composer.
-    clearPendingTerminalFocus();
+    clearPendingTerminalFocus(null);
     focusActiveComposer();
-  }, [capture, panelOpen, pending]);
+  }, [capture, landingPageId, panelOpen, pending]);
   useEffect(
     () => () => {
-      clearPendingTerminalFocus();
+      clearPendingTerminalFocus(null);
     },
     [],
   );
@@ -253,6 +511,31 @@ export function LandingTerminalPanel(): ReactNode {
   const handleReconciliationSettled = useCallback(
     (generation: number, context: LandingTerminalHostContext) => {
       const state = useLandingTerminalStore.getState();
+      if (!landingTerminalLayoutFor(state, targetLandingPageId).panelOpen) {
+        replaceDirectoryRequest(null);
+        if (pending) clearPending();
+        return;
+      }
+      const request = directoryRequestRef.current;
+      if (
+        settleDirectoryRequest({
+          request,
+          generation,
+          context,
+          addTerminalTab,
+          replaceDirectoryRequest,
+          clearPending,
+          ownsFocus: () =>
+            request !== null &&
+            hasPrimaryFocusIntent(
+              (target) =>
+                target.kind === "landing-terminal-directory" &&
+                target.requestId === request.key,
+            ),
+        })
+      ) {
+        return;
+      }
       // A settlement for a superseded generation must neither act nor clear the
       // newer pending gesture that replaced it.
       if (pending && pendingGeneration !== generation) return;
@@ -263,10 +546,6 @@ export function LandingTerminalPanel(): ReactNode {
       const clearIfPending = (): void => {
         if (pending) clearPending();
       };
-      if (!state.panelOpen) {
-        clearIfPending();
-        return;
-      }
       // Host may have switched after this generation began; never spawn with
       // a home path whose hostId no longer matches the routing target.
       if (target.hostId === null || context.hostId !== target.hostId) {
@@ -274,7 +553,7 @@ export function LandingTerminalPanel(): ReactNode {
         return;
       }
       const launchCwd = resolveLandingTerminalLaunchCwd(
-        target.primaryWorkspacePath,
+        target.launchWorkspacePath,
         context,
         target.hostId,
       );
@@ -322,65 +601,107 @@ export function LandingTerminalPanel(): ReactNode {
       openEpisodeDraftId,
       pending,
       pendingGeneration,
+      replaceDirectoryRequest,
       target,
+      targetLandingPageId,
     ],
   );
 
   useLandingTerminalReconciliation({
+    landingPageId: targetLandingPageId,
     activeHostId: target.hostId,
     availability: target.availability,
-    panelOpen,
-    primaryWorkspacePath: target.primaryWorkspacePath,
+    panelOpen: targetPanelOpen,
+    primaryWorkspacePath: target.launchWorkspacePath,
     generation: target.generation,
     client: target.client,
     killTerminal: killTerminalAsync,
     onReconciled: setReconciledContext,
+    onError: handleReconciliationError,
     onSettled: handleReconciliationSettled,
   });
 
   const closeTerminalTab = useCallback(
     (tab: LandingTerminalTabRef) => {
+      replaceDirectoryRequest(null);
       clearPending();
       // `closeTab` is the atomic tombstone-first durable write. Dispatch the
       // host mutation only after that state transition has completed.
-      const closed = closeTab(tab.instanceId);
+      const closed = closeTab(landingPageId, tab.instanceId);
       if (closed === null) return;
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The last-tab case collapses the panel, and
       // the open-transition effect hands focus back to the composer instead.
       const state = useLandingTerminalStore.getState();
-      if (state.panelOpen && state.activeInstanceId !== null) {
+      if (
+        landingTerminalLayoutFor(state, landingPageId).panelOpen &&
+        state.activeInstanceId !== null
+      ) {
         focusTerminalInstance(state.activeInstanceId);
+      } else {
+        clearPendingTerminalFocus(tab.instanceId);
+        focusActiveComposer();
       }
     },
-    [clearPending, closeTab, killTerminal],
+    [
+      clearPending,
+      closeTab,
+      killTerminal,
+      landingPageId,
+      replaceDirectoryRequest,
+    ],
   );
 
   const closeAllTerminalTabs = useCallback(() => {
     // Same tombstone-first ordering as a single close, batched: every ref is
     // durably tombstoned in one write before the first kill is dispatched.
+    replaceDirectoryRequest(null);
     clearPending();
-    closeAllTabs().forEach((closed) => {
+    closeAllTabs(landingPageId).forEach((closed) => {
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
     });
-  }, [clearPending, closeAllTabs, killTerminal]);
+    clearPendingTerminalFocus(null);
+    focusActiveComposer();
+  }, [
+    clearPending,
+    closeAllTabs,
+    killTerminal,
+    landingPageId,
+    replaceDirectoryRequest,
+  ]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
       setMaximized(false);
+      replaceDirectoryRequest(null);
       clearPending();
       setPanelOpen(false);
+      clearPendingTerminalFocus(null);
+      focusActiveComposer();
       return;
     }
-    capture();
+    const captured = capture();
+    const request = directoryRequestFor(captured, "reuse-or-create", true);
+    replaceDirectoryRequest(request);
     setPanelOpen(true);
-  }, [capture, clearPending, panelOpen, setPanelOpen]);
+    if (request === null) {
+      const instanceId = useLandingTerminalStore.getState().activeInstanceId;
+      if (instanceId !== null) focusTerminalInstance(instanceId);
+    }
+  }, [
+    capture,
+    clearPending,
+    panelOpen,
+    replaceDirectoryRequest,
+    setMaximized,
+    setPanelOpen,
+  ]);
 
   const openPanel = useCallback(() => {
-    capture();
-    setPanelOpen(true);
-  }, [capture, setPanelOpen]);
+    if (panelOpen) return;
+    togglePanel();
+  }, [panelOpen, togglePanel]);
 
   // The `+` gate reads the effective target only: capability from the captured
   // host, fail-closed on an unpinned client, and the reconciled launch context.
@@ -392,6 +713,22 @@ export function LandingTerminalPanel(): ReactNode {
     clientReady: target.client !== null,
     reconciledContext,
   });
+
+  const visibleDirectoryRequest = useMemo(() => {
+    if (!panelOpen || directoryRequest === null) return null;
+    return {
+      ...directoryRequest,
+      workspacePaths: workspace.folders,
+      primaryWorkspacePath:
+        workspace.primaryWorkspacePath ??
+        (workspace.folders.length === 0 ? "" : workspace.folders[0]),
+    };
+  }, [
+    directoryRequest,
+    panelOpen,
+    workspace.folders,
+    workspace.primaryWorkspacePath,
+  ]);
 
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
@@ -407,6 +744,7 @@ export function LandingTerminalPanel(): ReactNode {
 
   return (
     <LandingTerminalPanelContents
+      landingPageId={landingPageId}
       tabs={tabs}
       activeInstanceId={activeInstanceId}
       availability={target.availability}
@@ -417,13 +755,16 @@ export function LandingTerminalPanel(): ReactNode {
       createEnabled={createEnabled}
       createDisabledReason={createDisabledReason}
       reconciledContext={reconciledContext}
-      maximized={maximized}
+      maximized={layout.maximized}
+      directoryPicker={visibleDirectoryRequest}
       onTogglePanel={togglePanel}
       onOpenPanel={openPanel}
-      onToggleMaximized={() => setMaximized((value) => !value)}
+      onToggleMaximized={() => setMaximized(!layout.maximized)}
       onSetPanelWidthFraction={setPanelWidthFraction}
-      onCreateTerminal={createTerminalTabFocused}
+      onCreateTerminal={revealAndCreateTerminal}
       onRevealAndCreate={revealAndCreateTerminal}
+      onSelectDirectory={selectDirectory}
+      onCancelDirectoryPicker={cancelDirectoryRequest}
       onActivateTab={activateTerminalTab}
       onCloseTab={closeTerminalTab}
       onCloseAllTabs={closeAllTerminalTabs}
@@ -433,6 +774,7 @@ export function LandingTerminalPanel(): ReactNode {
 }
 
 interface LandingTerminalPanelContentsProps {
+  readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
@@ -444,12 +786,15 @@ interface LandingTerminalPanelContentsProps {
   readonly createDisabledReason: string | null;
   readonly reconciledContext: LandingTerminalHostContext | null;
   readonly maximized: boolean;
+  readonly directoryPicker: LandingTerminalDirectoryRequest | null;
   readonly onTogglePanel: () => void;
   readonly onOpenPanel: () => void;
   readonly onToggleMaximized: () => void;
   readonly onSetPanelWidthFraction: (fraction: number) => void;
   readonly onCreateTerminal: () => void;
   readonly onRevealAndCreate: () => void;
+  readonly onSelectDirectory: (workspacePath: string) => void;
+  readonly onCancelDirectoryPicker: () => void;
   readonly onActivateTab: (instanceId: string) => void;
   readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
   readonly onCloseAllTabs: () => void;
@@ -471,6 +816,7 @@ function LandingTerminalPanelContents(
   });
 
   useLandingTerminalShortcuts({
+    landingPageId: props.landingPageId,
     panelOpen: props.panelOpen,
     maximized: props.maximized,
     onTogglePanel: props.onTogglePanel,
@@ -514,6 +860,10 @@ function LandingTerminalPanelContents(
     };
   }, [handlePanelTransitionCancel]);
 
+  useLayoutEffect(() => {
+    if (props.panelOpen) reconcilePrimaryFocus();
+  }, [props.activeInstanceId, props.directoryPicker, props.panelOpen]);
+
   return (
     <>
       {/* Reveal-only affordance. Once open, the panel header owns collapse -
@@ -545,13 +895,15 @@ function LandingTerminalPanelContents(
         data-testid="landing-terminal-panel"
         data-open={props.panelOpen ? "true" : "false"}
         className={cn(
-          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-l border-canvas-border/70 bg-canvas transition-[width,visibility]",
+          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-l border-canvas-border/70 bg-canvas",
           // The width transition exists for open/collapse only. During a
           // resize drag the global freeze class suspends it - otherwise every
           // per-frame `style.width` write eases over the default duration and
           // the panel rubber-bands behind the pointer.
           "[.traycer-panel-resizing_&]:transition-none",
-          !props.panelOpen && "invisible pointer-events-none",
+          props.panelOpen
+            ? "transition-[width]"
+            : "invisible pointer-events-none transition-[width,visibility]",
           props.maximized && "absolute inset-0 z-20 w-full",
         )}
         style={panelStyle}
@@ -564,7 +916,9 @@ function LandingTerminalPanelContents(
         />
         <LandingTerminalTabStrip
           tabs={props.tabs}
-          activeInstanceId={props.activeInstanceId}
+          activeInstanceId={
+            props.directoryPicker === null ? props.activeInstanceId : null
+          }
           createDisabledReason={props.createDisabledReason}
           onAdd={props.onCreateTerminal}
           onActivate={props.onActivateTab}
@@ -573,6 +927,7 @@ function LandingTerminalPanelContents(
           onRename={props.onRenameTab}
         />
         <LandingTerminalPanelBody
+          landingPageId={props.landingPageId}
           tabs={props.tabs}
           activeInstanceId={props.activeInstanceId}
           availability={props.availability}
@@ -581,6 +936,9 @@ function LandingTerminalPanelContents(
           createEnabled={props.createEnabled}
           primaryWorkspacePath={props.primaryWorkspacePath}
           reconciledContext={props.reconciledContext}
+          directoryPicker={props.directoryPicker}
+          onSelectDirectory={props.onSelectDirectory}
+          onCancelDirectoryPicker={props.onCancelDirectoryPicker}
         />
       </aside>
     </>
@@ -684,6 +1042,7 @@ function systemTabOverlayActive(): boolean {
  * registrations shadow nothing.
  */
 function useLandingTerminalShortcuts(args: {
+  readonly landingPageId: string;
   readonly panelOpen: boolean;
   readonly maximized: boolean;
   readonly onTogglePanel: () => void;
@@ -695,6 +1054,7 @@ function useLandingTerminalShortcuts(args: {
   readonly onCloseAllTabs: () => void;
 }): void {
   const {
+    landingPageId,
     panelOpen,
     maximized,
     onTogglePanel,
@@ -744,30 +1104,40 @@ function useLandingTerminalShortcuts(args: {
       registerDynamicActionHandler("tab.close", () => {
         if (systemTabOverlayActive()) return;
         const state = useLandingTerminalStore.getState();
-        if (!state.panelOpen) return;
+        if (!landingTerminalLayoutFor(state, landingPageId).panelOpen) return;
         const active = state.tabs.find(
           (tab) => tab.instanceId === state.activeInstanceId,
         );
         if (active === undefined) return;
         onCloseTab(active);
       }),
-    [onCloseTab],
+    [landingPageId, onCloseTab],
   );
   useEffect(
     () =>
       registerDynamicActionHandler("tab.close-all", () => {
         if (systemTabOverlayActive()) return;
         const state = useLandingTerminalStore.getState();
-        if (!state.panelOpen || state.tabs.length === 0) return;
+        if (
+          !landingTerminalLayoutFor(state, landingPageId).panelOpen ||
+          state.tabs.length === 0
+        ) {
+          return;
+        }
         onCloseAllTabs();
       }),
-    [onCloseAllTabs],
+    [landingPageId, onCloseAllTabs],
   );
   const activateAdjacentTab = useCallback(
     (delta: 1 | -1) => {
       if (systemTabOverlayActive()) return;
       const state = useLandingTerminalStore.getState();
-      if (!state.panelOpen || state.tabs.length < 2) return;
+      if (
+        !landingTerminalLayoutFor(state, landingPageId).panelOpen ||
+        state.tabs.length < 2
+      ) {
+        return;
+      }
       const index = state.tabs.findIndex(
         (tab) => tab.instanceId === state.activeInstanceId,
       );
@@ -775,7 +1145,7 @@ function useLandingTerminalShortcuts(args: {
       const next = state.tabs[(Math.max(index, 0) + delta + count) % count];
       onActivateTab(next.instanceId);
     },
-    [onActivateTab],
+    [landingPageId, onActivateTab],
   );
   useEffect(
     () =>
@@ -797,7 +1167,7 @@ function useLandingTerminalShortcuts(args: {
             isActive: () => {
               const state = useLandingTerminalStore.getState();
               return (
-                state.panelOpen &&
+                landingTerminalLayoutFor(state, landingPageId).panelOpen &&
                 state.tabs.length > 0 &&
                 !systemTabOverlayActive()
               );
@@ -816,7 +1186,7 @@ function useLandingTerminalShortcuts(args: {
           },
         ],
       }),
-    [onActivateTab],
+    [landingPageId, onActivateTab],
   );
 }
 
@@ -887,6 +1257,7 @@ function LandingTerminalPanelHeader(props: {
 }
 
 function LandingTerminalPanelBody(props: {
+  readonly landingPageId: string;
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly availability: LandingTerminalAvailability;
@@ -895,8 +1266,11 @@ function LandingTerminalPanelBody(props: {
   readonly createEnabled: boolean;
   readonly primaryWorkspacePath: string | null;
   readonly reconciledContext: LandingTerminalHostContext | null;
+  readonly directoryPicker: LandingTerminalDirectoryRequest | null;
+  readonly onSelectDirectory: (workspacePath: string) => void;
+  readonly onCancelDirectoryPicker: () => void;
 }): ReactNode {
-  if (props.availability === "unknown") {
+  if (props.availability === "unknown" && props.directoryPicker === null) {
     return (
       <div
         role="status"
@@ -909,33 +1283,55 @@ function LandingTerminalPanelBody(props: {
 
   return (
     <div className="relative min-h-0 flex-1">
-      {props.tabs.length === 0 ? (
-        <LandingTerminalEmptyState
-          primaryWorkspacePath={props.primaryWorkspacePath}
-          activeHostId={props.activeHostId}
-          reconciledContext={props.reconciledContext}
-        />
-      ) : (
-        props.tabs.map((tab) => (
-          <div
-            key={tab.instanceId}
-            className={cn(
-              "absolute inset-0 min-h-0",
-              tab.instanceId !== props.activeInstanceId &&
-                "invisible pointer-events-none",
-            )}
-          >
-            <LandingTerminalTile
-              tab={tab}
-              active={tab.instanceId === props.activeInstanceId}
-              createEnabled={Boolean(
-                props.availability === "supported" &&
-                props.panelOpen &&
-                (props.createEnabled || tab.hostId !== props.activeHostId),
+      <div
+        aria-hidden={props.directoryPicker !== null}
+        className={cn(
+          "contents",
+          props.directoryPicker !== null && "invisible pointer-events-none",
+        )}
+      >
+        {props.tabs.length === 0 ? (
+          <LandingTerminalEmptyState
+            primaryWorkspacePath={props.primaryWorkspacePath}
+            activeHostId={props.activeHostId}
+            reconciledContext={props.reconciledContext}
+          />
+        ) : (
+          props.tabs.map((tab) => (
+            <div
+              key={tab.instanceId}
+              className={cn(
+                "absolute inset-0 min-h-0",
+                tab.instanceId !== props.activeInstanceId &&
+                  "invisible pointer-events-none",
               )}
-            />
-          </div>
-        ))
+            >
+              <LandingTerminalTile
+                landingPageId={props.landingPageId}
+                tab={tab}
+                active={tab.instanceId === props.activeInstanceId}
+                createEnabled={Boolean(
+                  props.availability === "supported" &&
+                  props.panelOpen &&
+                  (props.createEnabled || tab.hostId !== props.activeHostId),
+                )}
+              />
+            </div>
+          ))
+        )}
+      </div>
+      {props.directoryPicker === null ? null : (
+        <div className="absolute inset-0 z-10">
+          <LandingTerminalDirectoryPicker
+            requestKey={props.directoryPicker.key}
+            workspacePaths={props.directoryPicker.workspacePaths}
+            primaryWorkspacePath={props.directoryPicker.primaryWorkspacePath}
+            error={props.directoryPicker.error}
+            isPending={props.directoryPicker.selectedTarget !== null}
+            onSelect={props.onSelectDirectory}
+            onCancel={props.onCancelDirectoryPicker}
+          />
+        </div>
       )}
     </div>
   );

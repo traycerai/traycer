@@ -4,6 +4,7 @@ import type {
   CanonicalTerminalSessionInfoWithCurrentCwd,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
+  landingTerminalLayoutFor,
   parsePersistedLandingTerminalState,
   terminalSessionKey,
   useLandingTerminalStore,
@@ -23,6 +24,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 
 const HOST_A = "host-a";
 const HOST_B = "host-b";
+const LANDING_PAGE_ID = "landing-page";
 
 function tab(input: {
   readonly instanceId: string;
@@ -108,13 +110,90 @@ describe("landing terminal lifecycle", () => {
     useLandingTerminalStore
       .getState()
       .addTab(tab({ instanceId: "a", sessionId: "session-a", hostId: HOST_A }));
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
 
     expect(resolveLandingTerminalAvailability(null, undefined, null)).toBe(
       "no-active-host",
     );
     expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+    expect(
+      landingTerminalLayoutFor(
+        useLandingTerminalStore.getState(),
+        LANDING_PAGE_ID,
+      ).panelOpen,
+    ).toBe(true);
+  });
+
+  it("restores collapse, width, and fullscreen independently by landing page", () => {
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      layoutsByLandingPageId: {
+        "draft-a": {
+          panelOpen: false,
+          panelWidthFraction: 0.3,
+          maximized: false,
+        },
+        "draft-b": {
+          panelOpen: true,
+          panelWidthFraction: 0.48,
+          maximized: true,
+        },
+      },
+      pendingKills: [],
+    });
+
+    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+      panelOpen: false,
+      panelWidthFraction: 0.3,
+      maximized: false,
+    });
+    expect(landingTerminalLayoutFor(restored, "draft-b")).toEqual({
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      maximized: true,
+    });
+  });
+
+  it("collapses every open layout when the shared terminal set becomes empty", () => {
+    const store = useLandingTerminalStore.getState();
+    store.setPanelOpen("draft-a", true);
+    store.setPanelOpen("draft-b", true);
+    store.addTab(
+      tab({ instanceId: "only", sessionId: "s-only", hostId: HOST_A }),
+    );
+
+    store.closeTab("draft-b", "only");
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(false);
+    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(false);
+  });
+
+  it("preserves a v1 layout without coupling later page changes", () => {
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      pendingKills: [],
+    });
+    useLandingTerminalStore.setState(restored);
+
+    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      maximized: false,
+    });
+
+    useLandingTerminalStore.getState().setPanelOpen("draft-a", false);
+
+    expect(
+      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-a"),
+    ).toMatchObject({ panelOpen: false, panelWidthFraction: 0.48 });
+    expect(
+      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-b"),
+    ).toMatchObject({ panelOpen: true, panelWidthFraction: 0.48 });
   });
 
   it("adopts a running host session before any auto-spawn decision", () => {
@@ -150,14 +229,21 @@ describe("landing terminal lifecycle", () => {
         hostId: HOST_A,
       }),
     );
-    const closed = useLandingTerminalStore.getState().closeTab("closed");
+    const closed = useLandingTerminalStore
+      .getState()
+      .closeTab(LANDING_PAGE_ID, "closed");
     expect(closed?.sessionId).toBe("session-close");
 
     const restored = parsePersistedLandingTerminalState({
       tabs: [],
       activeInstanceId: null,
-      panelOpen: false,
-      panelWidthFraction: 0.36,
+      layoutsByLandingPageId: {
+        [LANDING_PAGE_ID]: {
+          panelOpen: false,
+          panelWidthFraction: 0.36,
+          maximized: false,
+        },
+      },
       pendingKills: [{ hostId: HOST_A, sessionId: "session-close" }],
     });
     const result = reconcileLandingTerminalTabs({
@@ -409,7 +495,9 @@ describe("closeAllTabs", () => {
     store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
     store.addTab(tab({ instanceId: "b", sessionId: "s-b", hostId: HOST_B }));
 
-    const closed = useLandingTerminalStore.getState().closeAllTabs();
+    const closed = useLandingTerminalStore
+      .getState()
+      .closeAllTabs(LANDING_PAGE_ID);
 
     // Tombstone-first durability: the refs are gone AND every session is
     // tombstoned by the time the caller gets them back to kill, so a reload
@@ -418,7 +506,9 @@ describe("closeAllTabs", () => {
     const state = useLandingTerminalStore.getState();
     expect(state.tabs).toEqual([]);
     expect(state.activeInstanceId).toBeNull();
-    expect(state.panelOpen).toBe(false);
+    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
+      false,
+    );
     expect(state.pendingKills).toEqual([
       { hostId: HOST_A, sessionId: "s-a" },
       { hostId: HOST_B, sessionId: "s-b" },
@@ -426,10 +516,17 @@ describe("closeAllTabs", () => {
   });
 
   it("is a no-op with no tabs open", () => {
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
 
-    expect(useLandingTerminalStore.getState().closeAllTabs()).toEqual([]);
+    expect(
+      useLandingTerminalStore.getState().closeAllTabs(LANDING_PAGE_ID),
+    ).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+    expect(
+      landingTerminalLayoutFor(
+        useLandingTerminalStore.getState(),
+        LANDING_PAGE_ID,
+      ).panelOpen,
+    ).toBe(true);
   });
 });

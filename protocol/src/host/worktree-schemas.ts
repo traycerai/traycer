@@ -149,23 +149,58 @@ export type WorkspaceScripts = z.infer<typeof workspaceScriptsSchema>;
  * Both variants carry `name` as `min(1)`: a git branch name is never empty, so
  * an empty name is structurally impossible to express on either side.
  */
-export const worktreeBranchSelectionSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("new"),
-    name: z.string().min(1),
-    // A fork source is a branch name, never empty - `min(1)` rejects a malformed
-    // empty-source request at the schema boundary (consistent with `name`).
-    source: z.string().min(1),
-    carryUncommittedChanges: z.boolean(),
-  }),
-  z.object({
-    type: z.literal("existing"),
-    name: z.string().min(1),
-  }),
-]);
-export type WorktreeBranchSelection = z.infer<
-  typeof worktreeBranchSelectionSchema
+export const worktreeBranchCollisionSchema = z.enum(["fail", "random"]);
+export type WorktreeBranchCollision = z.infer<
+  typeof worktreeBranchCollisionSchema
 >;
+
+const worktreeNewBranchBaseShape = {
+  type: z.literal("new"),
+  name: z.string().min(1),
+  // A fork source is a branch name, never empty - `min(1)` rejects a malformed
+  // empty-source request at the schema boundary (consistent with `name`).
+  source: z.string().min(1),
+  carryUncommittedChanges: z.boolean(),
+} as const;
+
+export type WorktreeBranchSelection =
+  | {
+      readonly type: "new";
+      readonly name: string;
+      readonly source: string;
+      readonly carryUncommittedChanges: boolean;
+      readonly collision?: "fail";
+    }
+  | {
+      readonly type: "new";
+      readonly name: string;
+      readonly source: string;
+      readonly carryUncommittedChanges: boolean;
+      readonly collision: "random";
+      readonly retryIdentity: string;
+    }
+  | { readonly type: "existing"; readonly name: string };
+
+export const worktreeBranchSelectionSchema: z.ZodType<WorktreeBranchSelection> =
+  z.union([
+    z.object({
+      ...worktreeNewBranchBaseShape,
+      collision: z.literal("random"),
+      // Idempotency key for one generated-name create operation. The host hashes
+      // it into retry candidates and the managed directory, so a replay can
+      // recognize only its own completed checkout without adopting existing refs.
+      retryIdentity: z.string().min(1).max(128),
+    }),
+    // Keep the released variant structurally unchanged. Persisted pre-policy
+    // intents omit collision and execute as `fail`; an explicit `fail` is also
+    // safe input because Zod objects strip unknown keys by default. The random
+    // arm must come first so its identity fields survive parsing.
+    z.object(worktreeNewBranchBaseShape),
+    z.object({
+      type: z.literal("existing"),
+      name: z.string().min(1),
+    }),
+  ]);
 
 /**
  * Setup/teardown override carried on a `kind:"worktree"` folder intent. The
@@ -496,13 +531,77 @@ const worktreeOwnerRequestFields = {
   ownerKind: worktreeBindingOwnerKindSchema,
 } as const;
 
+const worktreeBranchSelectionRequestSchemaV10 = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("new"),
+    name: z.string().min(1),
+    source: z.string().min(1),
+    carryUncommittedChanges: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("existing"),
+    name: z.string().min(1),
+  }),
+]);
+
+const worktreeBranchSelectionRequestSchemaV11 = z.union([
+  z.object({
+    ...worktreeNewBranchBaseShape,
+    collision: z.literal("fail"),
+  }),
+  z.object({
+    ...worktreeNewBranchBaseShape,
+    collision: z.literal("random"),
+    retryIdentity: z.string().min(1).max(128),
+  }),
+  z.object({
+    type: z.literal("existing"),
+    name: z.string().min(1),
+  }),
+]);
+
+const worktreeFolderIntentRequestSchemaV10 = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),
+  z.object({
+    kind: z.literal("import"),
+    ...worktreeFolderIntentBaseShape,
+    worktreePath: z.string(),
+  }),
+  z.object({
+    kind: z.literal("worktree"),
+    ...worktreeFolderIntentBaseShape,
+    branch: worktreeBranchSelectionRequestSchemaV10,
+    scripts: worktreeEntryScriptsSchema.nullable(),
+  }),
+]);
+
+const worktreeFolderIntentRequestSchemaV11 = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("local"), ...worktreeFolderIntentBaseShape }),
+  z.object({
+    kind: z.literal("import"),
+    ...worktreeFolderIntentBaseShape,
+    worktreePath: z.string(),
+  }),
+  z.object({
+    kind: z.literal("worktree"),
+    ...worktreeFolderIntentBaseShape,
+    branch: worktreeBranchSelectionRequestSchemaV11,
+    scripts: worktreeEntryScriptsSchema.nullable(),
+  }),
+]);
+
 // `worktree.create` takes the canonical folder-intent union directly: the
 // orchestrator resolves each entry's `kind` (and, for `worktree`, its
 // `branch.type`) into a binding. The `perEntry` channel reports per-folder
 // success/failure unchanged.
+export const worktreeCreateRequestSchemaV10 = z.object({
+  ...worktreeOwnerRequestFields,
+  entries: z.array(worktreeFolderIntentRequestSchemaV10),
+});
+
 export const worktreeCreateRequestSchema = z.object({
   ...worktreeOwnerRequestFields,
-  entries: z.array(worktreeFolderIntentSchema),
+  entries: z.array(worktreeFolderIntentRequestSchemaV11),
 });
 export type WorktreeCreateRequest = z.infer<typeof worktreeCreateRequestSchema>;
 
@@ -546,12 +645,21 @@ export type WorktreeCreateResponse = z.infer<
  * (`worktreeFolderIntentSchema`), which keeps both because that flow is driven
  * by epic/cloud metadata that is authoritative and may differ from local git.
  */
+export const worktreeCreatePathsEntrySchemaV10 = z.object({
+  workspacePath: z.string(),
+  branch: worktreeBranchSelectionRequestSchemaV10,
+});
+
 export const worktreeCreatePathsEntrySchema = z.object({
+  workspacePath: z.string(),
+  branch: worktreeBranchSelectionRequestSchemaV11,
+});
+const worktreeCreatePathsEntrySharedSchema = z.object({
   workspacePath: z.string(),
   branch: worktreeBranchSelectionSchema,
 });
 export type WorktreeCreatePathsEntry = z.infer<
-  typeof worktreeCreatePathsEntrySchema
+  typeof worktreeCreatePathsEntrySharedSchema
 >;
 
 export const worktreeCreatedPathEntrySchema = z.object({
@@ -564,6 +672,10 @@ export const worktreeCreatedPathEntrySchema = z.object({
 export type WorktreeCreatedPathEntry = z.infer<
   typeof worktreeCreatedPathEntrySchema
 >;
+
+export const worktreeCreatePathsRequestSchemaV10 = z.object({
+  entries: z.array(worktreeCreatePathsEntrySchemaV10),
+});
 
 export const worktreeCreatePathsRequestSchema = z.object({
   entries: z.array(worktreeCreatePathsEntrySchema),

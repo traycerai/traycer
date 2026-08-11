@@ -68,6 +68,8 @@ import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-grap
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
+import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
+import { useChatUsageDialogStore } from "@/stores/chats/chat-usage-dialog-store";
 import {
   TabStripContextMenu,
   type TabStripContextMenuProps,
@@ -409,9 +411,35 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onCopyFilePath" | "onEditTitle"
+    "canRename" | "onCopyFilePath" | "onEditTitle" | "onOpenUsage"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
+}
+
+// Ticket 12's chat cost line: the tab's own overflow (this context menu),
+// never the header. `null` for every non-chat tab kind and for a chat whose
+// host hasn't negotiated `host.usage.summary` - "unsupported chats show
+// nothing" applied to the menu item itself rather than opening a dialog that
+// would then show a capability notice. Extracted out of `TabItem` to keep
+// that component's branching under the complexity budget.
+function useChatUsageMenuHandler(
+  tab: EpicCanvasTileRef,
+  chatTitle: string,
+): (() => void) | null {
+  const usageChatHostId =
+    tab.type === "chat" && "hostId" in tab ? tab.hostId : null;
+  const usageSupported = useUsageSummarySupported(usageChatHostId);
+  const openChatUsageDialog = useChatUsageDialogStore((s) => s.open);
+  return useMemo(() => {
+    if (usageChatHostId === null || !usageSupported) return null;
+    return () => {
+      openChatUsageDialog({
+        hostId: usageChatHostId,
+        chatId: tab.id,
+        chatTitle,
+      });
+    };
+  }, [chatTitle, openChatUsageDialog, tab.id, usageChatHostId, usageSupported]);
 }
 
 function TabItem(props: TabItemProps) {
@@ -551,6 +579,8 @@ function TabItem(props: TabItemProps) {
     if (absoluteFilePath !== null) copy(absoluteFilePath);
   }, [absoluteFilePath, copy]);
 
+  const onOpenUsage = useChatUsageMenuHandler(tab, displayTitle);
+
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
@@ -663,6 +693,7 @@ function TabItem(props: TabItemProps) {
         canRename={canRename}
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
+        onOpenUsage={onOpenUsage}
       />
     </ContextMenu>
   );

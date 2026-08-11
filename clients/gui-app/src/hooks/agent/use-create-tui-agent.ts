@@ -23,6 +23,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { displayTitle } from "@/lib/display-title";
+import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
@@ -531,6 +532,7 @@ async function dispatchWorktreeIntent(
   // folders when it finds no row (the always-non-empty invariant), so there is
   // nothing to dispatch here.
   if (intent.entries.length === 0) return;
+  const entries = worktreeCreateEntries(intent.entries);
   // Send the full union in ONE `worktree.create` call and let the host's
   // `resolveIntent` route each entry by `kind` (local / import / worktree)
   // into a single sibling-preserving binding write. One call keeps entry
@@ -541,7 +543,7 @@ async function dispatchWorktreeIntent(
     epicId,
     ownerId: tuiAgentId,
     ownerKind: "terminal-agent",
-    entries: [...intent.entries],
+    entries,
   });
   // The RPC resolves per-entry: an entry the host failed - or reported
   // nothing about - has no `ok` row. Launching anyway would run the agent

@@ -28,6 +28,7 @@ import { Route as SettingsNotificationsRouteImport } from "./routes/settings.not
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
+import { Route as SettingsUsageRouteImport } from "./routes/settings.usage";
 import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
 
@@ -126,6 +127,11 @@ const SettingsShellRoute = SettingsShellRouteImport.update({
   path: "/shell",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsUsageRoute = SettingsUsageRouteImport.update({
+  id: "/usage",
+  path: "/usage",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsWorktreesRoute = SettingsWorktreesRouteImport.update({
   id: "/worktrees",
   path: "/worktrees",
@@ -155,6 +161,7 @@ export interface FileRoutesByFullPath {
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
   "/settings/": typeof SettingsIndexRoute;
@@ -176,6 +183,7 @@ export interface FileRoutesByTo {
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics": typeof EpicsIndexRoute;
   "/settings": typeof SettingsIndexRoute;
@@ -200,6 +208,7 @@ export interface FileRoutesById {
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
   "/settings/": typeof SettingsIndexRoute;
@@ -225,6 +234,7 @@ export interface FileRouteTypes {
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
     | "/settings/"
@@ -246,6 +256,7 @@ export interface FileRouteTypes {
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/usage"
     | "/settings/worktrees"
     | "/epics"
     | "/settings"
@@ -269,6 +280,7 @@ export interface FileRouteTypes {
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
     | "/settings/"
@@ -419,6 +431,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsShellRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/usage": {
+      id: "/settings/usage";
+      path: "/usage";
+      fullPath: "/settings/usage";
+      preLoaderRoute: typeof SettingsUsageRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/worktrees": {
       id: "/settings/worktrees";
       path: "/worktrees";
@@ -460,6 +479,7 @@ interface SettingsRouteChildren {
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
+  SettingsUsageRoute: typeof SettingsUsageRoute;
   SettingsWorktreesRoute: typeof SettingsWorktreesRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
 }
@@ -476,6 +496,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
+  SettingsUsageRoute: SettingsUsageRoute,
   SettingsWorktreesRoute: SettingsWorktreesRoute,
   SettingsIndexRoute: SettingsIndexRoute,
 };
