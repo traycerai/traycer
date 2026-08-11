@@ -1,0 +1,78 @@
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
+import { buildUsageActivityCalendar } from "@/lib/usage-analytics/usage-activity";
+import type { UsageBucket } from "@/lib/usage-analytics/usage-chart-data";
+
+afterEach(cleanup);
+
+function bucket(day: string, knownCostUsd: number): UsageBucket {
+  return {
+    day,
+    harnessId: "claude",
+    model: "claude-sonnet-5",
+    factCount: 1,
+    tokens: {
+      uncachedInputTokens: 10,
+      cacheReadInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+    },
+    knownCostUsd,
+    knownCacheSavingsUsd: 0,
+    knownReasoningTokens: 0,
+    costProvenance: "providerReported",
+  };
+}
+
+// 2026-08-02 (Sunday) .. 2026-08-08 (Saturday): one full week.
+const DAYS = [
+  "2026-08-02",
+  "2026-08-03",
+  "2026-08-04",
+  "2026-08-05",
+  "2026-08-06",
+  "2026-08-07",
+  "2026-08-08",
+];
+
+describe("<UsageActivityHeatmap />", () => {
+  const calendar = buildUsageActivityCalendar(
+    DAYS,
+    [bucket("2026-08-03", 5)],
+    "cost",
+  );
+
+  it("renders one focusable tile per day with its intensity level", () => {
+    render(
+      <TooltipProvider>
+        <UsageActivityHeatmap calendar={calendar} metric="cost" />
+      </TooltipProvider>,
+    );
+    const tiles = screen.getAllByTestId("usage-activity-day");
+    expect(tiles).toHaveLength(7);
+    const active = tiles.find(
+      (tile) => tile.getAttribute("data-day") === "2026-08-03",
+    );
+    expect(active?.getAttribute("data-level")).toBe("4");
+    // Identity is not color-alone: every tile names its day and exact value.
+    expect(active?.getAttribute("aria-label")).toBe("2026-08-03: $5.00");
+    const empty = tiles.find(
+      (tile) => tile.getAttribute("data-day") === "2026-08-02",
+    );
+    expect(empty?.getAttribute("data-level")).toBe("0");
+    expect(empty?.getAttribute("aria-label")).toBe("2026-08-02: No usage");
+  });
+
+  it("shows the stat row computed from the same calendar", () => {
+    render(
+      <TooltipProvider>
+        <UsageActivityHeatmap calendar={calendar} metric="cost" />
+      </TooltipProvider>,
+    );
+    const stats = screen.getByTestId("usage-activity-stats");
+    expect(within(stats).getByText("Aug 3, 2026")).toBeTruthy();
+    expect(within(stats).getByText("Aug 2026")).toBeTruthy();
+  });
+});

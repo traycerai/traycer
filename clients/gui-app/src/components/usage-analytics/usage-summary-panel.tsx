@@ -41,6 +41,11 @@ import { UsageCostFigure } from "@/components/usage-analytics/usage-cost-figure"
 import { UsageErrorCard } from "@/components/usage-analytics/usage-error-card";
 import { UsageHostFilter } from "@/components/usage-analytics/usage-host-filter";
 import { UsageHostSplit } from "@/components/usage-analytics/usage-host-split";
+import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
+import {
+  buildUsageActivityCalendar,
+  USAGE_ACTIVITY_WINDOW_DAYS,
+} from "@/lib/usage-analytics/usage-activity";
 import {
   buildUsageHostFilterOptions,
   buildUsageHostSplitRows,
@@ -95,12 +100,31 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId }),
     [windowDays, hostId],
   );
+  // The activity heatmap's own fixed-year read (ticket 15) - independent of
+  // the 7/30/90 picker (an activity calendar over one month is all padding)
+  // but scoped by the same host filter, so narrowing to a machine narrows
+  // the calendar too.
+  const activityRequest = useMemo(
+    () =>
+      buildUsageSummaryRequest({
+        windowDays: USAGE_ACTIVITY_WINDOW_DAYS,
+        epicId: null,
+        hostId,
+      }),
+    [hostId],
+  );
   // Enabled unconditionally: this panel only mounts once its caller has
   // already confirmed `host.usage.summary` is supported (see
   // `UsageSettingsPanelBody`'s early return). No polling here - unlike the
   // ambient epic cost badge, this is an actively-viewed screen with its own
   // refetch triggers (window/metric change, manual Retry).
   const query = useUsageSummaryForClient(props.client, request, true, false);
+  const activityQuery = useUsageSummaryForClient(
+    props.client,
+    activityRequest,
+    true,
+    false,
+  );
   const days = useMemo(() => daysForResponse(query.data), [query.data]);
   const dateRangeLabel = formatDateRangeLabel(days);
 
@@ -182,6 +206,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       </div>
       <UsageSummaryPanelBody
         query={query}
+        activityData={activityQuery.data}
         metric={metric}
         days={days}
         breakdownGroupBy={breakdownGroupBy}
@@ -250,6 +275,13 @@ function daysForResponse(
 
 function UsageSummaryPanelBody(props: {
   readonly query: UsageSummaryQueryResult;
+  /**
+   * The fixed-year activity read, already unwrapped: this section is
+   * SECONDARY, so it renders only once data exists and simply stays absent
+   * while loading or errored - the page's loading/error surfaces belong to
+   * the primary window query alone.
+   */
+  readonly activityData: UsageSummaryResponse | undefined;
   readonly metric: UsageMetric;
   readonly days: readonly string[];
   readonly breakdownGroupBy: UsageBreakdownGroupBy;
@@ -260,6 +292,7 @@ function UsageSummaryPanelBody(props: {
 }): ReactNode {
   const {
     query,
+    activityData,
     metric,
     days,
     breakdownGroupBy,
@@ -350,6 +383,23 @@ function UsageSummaryPanelBody(props: {
         )}
       </div>
       <UsageDailyChart columns={columns} scale={scale} metric={metric} />
+      {activityData === undefined ? null : (
+        <div className="flex flex-col gap-2">
+          <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
+          <UsageActivityHeatmap
+            calendar={buildUsageActivityCalendar(
+              lastNCalendarDays(
+                USAGE_ACTIVITY_WINDOW_DAYS,
+                activityData.summary.window.timezone,
+                activityData.summary.window.endAtExclusive - 1,
+              ),
+              activityData.summary.buckets,
+              metric,
+            )}
+            metric={metric}
+          />
+        </div>
+      )}
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-ui-sm font-medium text-foreground">Breakdown</h3>
