@@ -1485,7 +1485,7 @@ function CreateTeamWizard(props: {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="titanos-squad"
+                placeholder="my-squad"
                 className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
                 data-testid="wizard-team-name"
               />
