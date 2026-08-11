@@ -1356,7 +1356,11 @@ function RowStatusLine({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent === null ? undefined : percent}
-          className="h-1 w-full max-w-48 shrink-0 overflow-hidden rounded-full bg-muted"
+          // Viewport-bounded, not a fixed 12rem. `max-w-48` is a fixed layout
+          // width, which this repo's UI rule excludes for layout surfaces - the
+          // track has to shrink with a narrow settings dialog rather than hold
+          // a rem figure chosen against one window size.
+          className="h-1 w-full max-w-[min(100%,30vw)] shrink-0 overflow-hidden rounded-full bg-muted"
         >
           <span
             className={cn(

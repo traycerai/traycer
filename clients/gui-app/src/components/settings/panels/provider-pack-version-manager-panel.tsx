@@ -118,6 +118,12 @@ export function ProviderPackVersionManagerPanel(
 
   const [rowNotice, setRowNotice] = useState<RowNotice | null>(null);
   const [bannerNotice, setBannerNotice] = useState<BannerNotice | null>(null);
+  // Pin-scoped, and NOT the update banner. `bannerNotice` renders only inside
+  // `UpdateAvailableBanner`, which only mounts when `updateAvailable !== null`
+  // - so routing a clear-pin refusal there still dropped it whenever no update
+  // was pending, which is most of the time. The pinned banner below renders on
+  // exactly the condition that makes a clear-pin refusal possible.
+  const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
 
   const sharedLine = formatSharedWithProvidersLine(
@@ -136,6 +142,7 @@ export function ProviderPackVersionManagerPanel(
   const clearNotice = useCallback(() => {
     setRowNotice(null);
     setBannerNotice(null);
+    setPinNotice(null);
   }, []);
 
   const onToggleAutoDownload = useCallback(
@@ -218,13 +225,12 @@ export function ProviderPackVersionManagerPanel(
         onSettled: () => setPendingVersion(null),
         onSuccess: (response) => {
           if (!response.result.ok) {
-            // BANNER, not a row notice. Row notices render inside `VersionRow`
-            // and are keyed by version, so a refusal keyed to the pinned
-            // version disappears whenever that version has no row - which is
-            // exactly the state a user clears a pin from (a pin on a build the
-            // channel no longer lists). The old `?? packId` fallback could
-            // never match a row at all.
-            setBannerNotice({
+            // The PIN banner. Not a row notice: those render inside
+            // `VersionRow` keyed by version, and the pinned version has no row
+            // exactly when a user is most likely to be clearing the pin (a pin
+            // on a build the channel no longer lists). Not the update banner
+            // either: that one only mounts when an update is pending.
+            setPinNotice({
               kind: "error",
               message: packVersionUseRefusalMessage(response.result.code),
             });
@@ -324,6 +330,7 @@ export function ProviderPackVersionManagerPanel(
         totalSizeLabel={totalSizeLabel}
         autoDownload={managedVersions.autoDownload}
         pinnedVersion={managedVersions.pinnedVersion}
+        pinNotice={pinNotice}
         clearPinPending={
           pendingVersion === CLEAR_PIN_PENDING_KEY && useVersion.isPending
         }
@@ -396,6 +403,7 @@ function VersionManagerHeader(props: {
   readonly totalSizeLabel: string | null;
   readonly autoDownload: boolean;
   readonly pinnedVersion: string | null;
+  readonly pinNotice: BannerNotice | null;
   readonly clearPinPending: boolean;
   readonly policyPending: boolean;
   readonly actionsDisabled: boolean;
@@ -455,6 +463,14 @@ function VersionManagerHeader(props: {
             {props.clearPinPending ? <MutedAgentSpinner /> : null}
           </Button>
         </div>
+      ) : null}
+      {props.pinNotice !== null ? (
+        <p
+          data-testid="provider-pack-pin-notice"
+          className="text-ui-xs text-destructive"
+        >
+          {props.pinNotice.message}
+        </p>
       ) : null}
     </header>
   );

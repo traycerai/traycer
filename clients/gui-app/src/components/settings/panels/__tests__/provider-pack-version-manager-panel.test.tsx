@@ -503,6 +503,55 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
   });
 
+  // The regression this exists for: a clear-pin refusal used to be reported
+  // through a notice keyed by the PINNED VERSION and rendered inside
+  // `VersionRow`, so it vanished whenever that version had no row - and then
+  // through the update banner, which only mounts when an update is pending.
+  // Both dropped the message in the case that matters most, and the user saw a
+  // click that did nothing. `updateAvailable` is deliberately null here.
+  it("shows a clear-pin refusal even with no update pending and no row for the pinned version", async () => {
+    const user = userEvent.setup();
+    mocks.useMutate.mockImplementation((_variables, options) => {
+      options.onSuccess?.({
+        result: {
+          ok: false,
+          code: "below-security-floor",
+          detail: "operator detail that must not be the user sentence",
+        },
+      });
+      options.onSettled?.();
+    });
+
+    renderPanel({
+      hostId: "host-1",
+      // 9.9.9 is pinned and is NOT in `available`, so no row can carry the
+      // notice - the exact state a user clears a pin from.
+      available: [
+        version({
+          version: "1.2.0",
+          current: true,
+          installState: { status: "installed" },
+        }),
+      ],
+      managedOverrides: {
+        pinnedVersion: "9.9.9",
+        updateAvailable: null,
+        autoDownload: false,
+      },
+    });
+
+    await user.click(screen.getByTestId("provider-pack-clear-pin"));
+
+    const notice = screen.getByTestId("provider-pack-pin-notice");
+    // Mapped copy, not the raw host `detail` - operator strings are never the
+    // primary sentence.
+    expect(notice.textContent).toMatch(/security minimum/iu);
+    expect(notice.textContent).not.toMatch(/operator detail/iu);
+    expect(
+      screen.queryByTestId("provider-pack-update-available-banner"),
+    ).toBeNull();
+  });
+
   it("composes uncertified + unverified without claiming still usable", () => {
     renderPanel({
       hostId: "host-1",
