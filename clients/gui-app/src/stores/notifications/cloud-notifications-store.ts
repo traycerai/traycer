@@ -199,6 +199,16 @@ function loadedBlockingAttentionCount(
   return count;
 }
 
+function loadedUnreadFailureCount(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
+): number {
+  let count = 0;
+  for (const row of Object.values(rows)) {
+    if (row !== undefined && isUnreadFailure(row)) count += 1;
+  }
+  return count;
+}
+
 export const useCloudNotificationsStore = create<CloudNotificationsState>()(
   (set) => ({
     rows: {},
@@ -263,6 +273,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       }),
     markAllReadLocally: (readAt) =>
       set((state) => {
+        const unreadFailureCount = loadedUnreadFailureCount(state.rows);
         const rows = { ...state.rows };
         for (const [key, row] of Object.entries(rows)) {
           if (row === undefined || row.entry.readAt !== null) continue;
@@ -276,12 +287,15 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
               : {
                   ...state.summary,
                   unreadCount: 0,
-                  // Mark-all-read removes every failure contribution,
-                  // including raw-feed rows this client cannot render. An
-                  // unresolved prompt remains blocking even after it is read;
-                  // loaded rows provide the residual until the next
-                  // authoritative summary reconciles this approximation.
-                  attentionCount: loadedBlockingAttentionCount(rows),
+                  // Summary counts include visible cloud rows this relay could
+                  // not render. Their attention may be an unresolved prompt,
+                  // which mark-all must never hide, so only subtract failures
+                  // this client can prove it marked read. The next snapshot
+                  // removes any residual summary-only failure contribution.
+                  attentionCount: Math.max(
+                    loadedBlockingAttentionCount(rows),
+                    state.summary.attentionCount - unreadFailureCount,
+                  ),
                 },
         };
       }),

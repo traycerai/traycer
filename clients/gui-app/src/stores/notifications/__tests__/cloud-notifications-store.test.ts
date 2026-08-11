@@ -421,6 +421,24 @@ describe("cloud notifications store", () => {
     ]);
   });
 
+  it("preserves summary-only attention after optimistic mark-all-read", () => {
+    const failure = cloudFailureRow("entry-failure", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure],
+      // The relay summary also covers one unrenderable unresolved prompt.
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 2 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markAllReadLocally(30);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+  });
+
   it("decrements optimistic attention only for failures during entity-read fan-out", () => {
     const failure = cloudFailureRow("entry-failure", 10);
     const informational = cloudRow("entry-info", 20, "host-a");
