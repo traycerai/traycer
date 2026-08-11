@@ -21,6 +21,7 @@ import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
   clearPendingTerminalFocus,
   focusTerminalInstance,
+  terminalFocusOwnsInstance,
 } from "@/lib/terminals/terminal-focus-registry";
 import {
   landingTerminalLayoutFor,
@@ -67,10 +68,11 @@ function LandingTerminalTileBootstrap(
   );
   const handleExitedTab = useCallback(
     (instanceId: string): void => {
+      const ownsFocus = terminalFocusOwnsInstance(instanceId);
       const wasActive =
         useLandingTerminalStore.getState().activeInstanceId === instanceId;
       removeExitedTab(props.landingPageId, instanceId);
-      if (!wasActive) return;
+      if (!wasActive || !ownsFocus) return;
       const state = useLandingTerminalStore.getState();
       if (
         landingTerminalLayoutFor(state, props.landingPageId).panelOpen &&

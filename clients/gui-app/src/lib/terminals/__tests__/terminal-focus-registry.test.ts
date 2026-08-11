@@ -3,6 +3,7 @@ import {
   focusTerminalInstance,
   registerTerminalFocus,
   resetTerminalFocusRegistryForTests,
+  terminalFocusOwnsInstance,
 } from "../terminal-focus-registry";
 
 describe("terminal-focus-registry", () => {
@@ -45,5 +46,27 @@ describe("terminal-focus-registry", () => {
       () => true,
     );
     expect(focusB).toHaveBeenCalledTimes(1);
+  });
+
+  it("recognizes actual DOM focus ownership without a pending intent", () => {
+    const target = document.createElement("textarea");
+    document.body.append(target);
+    registerTerminalFocus(
+      "a",
+      () => target.focus(),
+      (activeElement) => activeElement === target,
+      () => true,
+    );
+    target.focus();
+
+    expect(terminalFocusOwnsInstance("a")).toBe(true);
+    target.remove();
+  });
+
+  it("recognizes a parked semantic focus intent", () => {
+    focusTerminalInstance("a");
+
+    expect(terminalFocusOwnsInstance("a")).toBe(true);
+    expect(terminalFocusOwnsInstance("b")).toBe(false);
   });
 });
