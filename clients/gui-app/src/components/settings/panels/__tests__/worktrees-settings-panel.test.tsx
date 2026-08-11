@@ -4159,6 +4159,52 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   });
 
+  it("discards retained activity after the worktree branch identity changes", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 20,
+    });
+    const oldActivity = entry({
+      worktreePath: "/wt/reused",
+      branch: "old-branch",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      prState: "merged",
+      prNumber: 123,
+      resolvedAt: 10,
+    });
+    const reusedPath = entry({
+      ...oldActivity,
+      branch: "new-branch",
+      branchStatus: null,
+      prState: null,
+      prNumber: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [landed, reusedPath],
+        enrichedByPath: new Map([
+          [landed.worktreePath, landed],
+          [oldActivity.worktreePath, oldActivity],
+        ]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filter: All" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Landed" }));
+
+    screen.getByRole("button", { name: "Delete worktree feat-landed" });
+    expect(screen.queryByText("new-branch")).toBeNull();
+    expect(screen.queryByText("#123")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Checking 1 worktree…",
+    );
+  });
+
   it("upgrades an errored row in place once a later refetch succeeds", () => {
     const merged = entry({
       worktreePath: "/wt/errored",

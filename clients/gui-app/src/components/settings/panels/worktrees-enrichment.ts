@@ -107,6 +107,11 @@ interface SweepRetryState {
   readonly sawInvalidated: boolean;
 }
 
+interface SweepExhaustionState {
+  readonly hostId: string | null;
+  readonly paths: ReadonlySet<string>;
+}
+
 // `prState === null` = "not yet probed" (distinct from `"none"` = probed, no
 // PR): the host served a stale/cold row and scheduled a background `gh` probe
 // whose result never re-emits; only a refetch picks the warmed fact up. A
@@ -191,6 +196,25 @@ function pruneSweepLedger(
   for (const path of ledger.keys()) {
     if (!listedPaths.has(path)) ledger.delete(path);
   }
+}
+
+function exhaustedSweepPaths(
+  ledger: ReadonlyMap<string, SweepRetryState>,
+): ReadonlySet<string> {
+  const exhausted = new Set<string>();
+  for (const [path, retry] of ledger) {
+    if (retry.attempts >= WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS) {
+      exhausted.add(path);
+    }
+  }
+  return exhausted;
+}
+
+function equalPathSets(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  return left.size === right.size && [...left].every((path) => right.has(path));
 }
 
 /**
@@ -439,6 +463,7 @@ export function useWorktreeActivityEnrichment(
   // until a live probe replaces the seed.
   readonly seededPaths: ReadonlySet<string>;
   readonly reportVisiblePaths: (paths: readonly string[]) => void;
+  readonly rearmMissingSweepPaths: () => void;
   readonly enriching: boolean;
 } {
   const queryClient = useQueryClient();
@@ -683,6 +708,10 @@ export function useWorktreeActivityEnrichment(
   const [seedTick, bumpSeedTick] = useReducer((tick: number) => tick + 1, 0);
   const seedsOutstandingRef = useRef(false);
   const sweepLedgerRef = useRef<Map<string, SweepRetryState>>(new Map());
+  const [sweepExhaustion, setSweepExhaustion] = useState<SweepExhaustionState>({
+    hostId: null,
+    paths: EMPTY_ERRORED,
+  });
   // Two wake signals the identity-stable fold deliberately does NOT carry:
   //  - `invalidate` actions change no data, so the fold ignores them - but a
   //    refresh marks observer-less swept entries invalidated WITHOUT
@@ -701,17 +730,6 @@ export function useWorktreeActivityEnrichment(
       if (event.type !== "updated") return;
       if (!queryKeyHasPrefix(event.query.queryKey, scope)) return;
       if (event.action.type === "invalidate") {
-        // A filtered path's inactive query may have been GC'd after exhausting
-        // its retry budget, so there is no per-path query left for Refresh to
-        // invalidate. The method-scope invalidation is the explicit user-driven
-        // retry signal: re-arm only those missing queries here, never on GC
-        // alone (which would create periodic ten-probe bursts forever).
-        for (const path of sweepLedgerRef.current.keys()) {
-          const state = queryClient.getQueryState(
-            perPathEnrichmentQueryKey(hostId, path),
-          );
-          if (state === undefined) sweepLedgerRef.current.delete(path);
-        }
         bumpSweepTick();
       } else if (
         event.action.type === "success" &&
@@ -721,6 +739,26 @@ export function useWorktreeActivityEnrichment(
       }
     });
   }, [queryClient, hostId]);
+  // Refresh invalidation cannot emit a cache event for an observer-less path
+  // whose query was already garbage-collected. The listing refresh calls this
+  // explicit signal after it succeeds, granting missing exhausted paths one
+  // fresh sweep budget without treating ordinary GC as a retry signal.
+  const rearmMissingSweepPaths = useCallback(() => {
+    if (hostId === null) return;
+    for (const path of sweepLedgerRef.current.keys()) {
+      const state = queryClient.getQueryState(
+        perPathEnrichmentQueryKey(hostId, path),
+      );
+      if (state === undefined) sweepLedgerRef.current.delete(path);
+    }
+    setSweepExhaustion((prior) => {
+      const paths = exhaustedSweepPaths(sweepLedgerRef.current);
+      return prior.hostId === hostId && equalPathSets(prior.paths, paths)
+        ? prior
+        : { hostId, paths };
+    });
+    bumpSweepTick();
+  }, [hostId, queryClient]);
   const sweepInFlightRef = useRef(false);
   const sweepWakeTimerRef = useRef<number | null>(null);
   const sweepStatsRef = useRef({ fetchedCount: 0, drainLogged: true });
@@ -768,6 +806,12 @@ export function useWorktreeActivityEnrichment(
       viewportPaths: new Set(requestedPaths),
       ledger,
       now,
+    });
+    setSweepExhaustion((prior) => {
+      const paths = exhaustedSweepPaths(ledger);
+      return prior.hostId === sweepHostId && equalPathSets(prior.paths, paths)
+        ? prior
+        : { hostId: sweepHostId, paths };
     });
     if (candidates.length === 0) {
       if (nextWakeAt !== null) {
@@ -835,6 +879,13 @@ export function useWorktreeActivityEnrichment(
             sawInvalidated: stateNow?.isInvalidated === true,
           });
         });
+        setSweepExhaustion((prior) => {
+          const paths = exhaustedSweepPaths(ledger);
+          return prior.hostId === sweepHostId &&
+            equalPathSets(prior.paths, paths)
+            ? prior
+            : { hostId: sweepHostId, paths };
+        });
       }
       // Bump UNCONDITIONALLY: while this chunk was in flight the effect
       // skipped every re-run, so this is what schedules the next pass - for
@@ -867,19 +918,36 @@ export function useWorktreeActivityEnrichment(
     void sweepTick;
     if (hostId === null) return EMPTY_ERRORED;
     const errored = new Set<string>();
+    const viewportPaths = new Set(requestedPaths);
     for (const path of worktreePaths) {
       const state =
         queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
           perPathEnrichmentQueryKey(hostId, path),
         );
       if (state?.status === "error" && state.fetchStatus !== "fetching") {
-        errored.add(path);
+        // Viewport queries have already consumed TanStack's observer retry
+        // policy. Observer-less sweep failures remain pending while their own
+        // retry ledger still has budget, and settle only after exhaustion.
+        if (
+          viewportPaths.has(path) ||
+          (sweepExhaustion.hostId === hostId && sweepExhaustion.paths.has(path))
+        ) {
+          errored.add(path);
+        }
       }
     }
     // The stable constant in the (overwhelmingly common) empty case, so this
     // prop can't defeat downstream memoization on every `results` identity.
     return errored.size === 0 ? EMPTY_ERRORED : errored;
-  }, [hostId, queryClient, results, sweepTick, worktreePaths]);
+  }, [
+    hostId,
+    queryClient,
+    requestedPaths,
+    results,
+    sweepExhaustion,
+    sweepTick,
+    worktreePaths,
+  ]);
 
   const enriching = results.some((result) => result.isFetching);
   // Settle telemetry describes this viewport's `results` window, so its error
@@ -930,6 +998,7 @@ export function useWorktreeActivityEnrichment(
     erroredPaths,
     seededPaths,
     reportVisiblePaths,
+    rearmMissingSweepPaths,
     enriching,
   };
 }

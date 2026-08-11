@@ -559,7 +559,10 @@ function WorktreesBody(props: {
   // still-unresolved ids through epic.getTaskContexts on this host.
   const taskTitlesByEpicId = useWorktreeTaskTitles(client, listing.worktrees);
   const canRefresh = reachable && client !== null;
-  const onRefresh = useCallback(() => listing.refresh(), [listing]);
+  const onRefresh = useCallback(async () => {
+    await listing.refresh();
+    enrichment.rearmMissingSweepPaths();
+  }, [listing, enrichment]);
   const toolbarProps = {
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
@@ -878,7 +881,11 @@ export function WorktreesList(props: {
     const known = new Map<string, WorktreeHostEntryV14>();
     for (const base of worktrees) {
       const enriched = enrichedByPath.get(base.worktreePath);
-      if (enriched !== undefined && enriched.resolvedAt !== null) {
+      if (
+        enriched !== undefined &&
+        enriched.resolvedAt !== null &&
+        hasMatchingActivityIdentity(base, enriched)
+      ) {
         known.set(
           base.worktreePath,
           mergeStaleActivityOntoBase(base, enriched),
@@ -1977,6 +1984,24 @@ function mergeStaleActivityOntoBase(
   };
   byEnriched.set(enriched, merged);
   return merged;
+}
+
+function hasMatchingActivityIdentity(
+  base: WorktreeHostEntryV14,
+  enriched: WorktreeHostEntryV14,
+): boolean {
+  // An unresolved base is only a schema sentinel, so it carries no identity
+  // capable of disproving the last-known entry. Once the base resolves, stale
+  // activity is valid only for the same branch and repository.
+  if (base.resolvedAt === null) return true;
+  if (base.branch !== enriched.branch) return false;
+  if (base.repoIdentifier !== null || enriched.repoIdentifier !== null) {
+    return (
+      base.repoIdentifier?.owner === enriched.repoIdentifier?.owner &&
+      base.repoIdentifier?.repo === enriched.repoIdentifier?.repo
+    );
+  }
+  return base.repoLabel === enriched.repoLabel;
 }
 
 function worktreeFilterResolutionStatusText(

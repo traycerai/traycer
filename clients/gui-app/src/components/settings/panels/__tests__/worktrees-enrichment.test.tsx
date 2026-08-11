@@ -732,7 +732,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         null,
         createAppQueryClient(),
       );
-      renderHook(
+      const { result } = renderHook(
         () =>
           useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
             "/wt/a",
@@ -793,17 +793,10 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       });
       expect(requests).toHaveLength(10);
 
-      // A deliberate method-scope refresh is the recovery signal even though
-      // the missing per-path query itself no longer exists to be invalidated.
-      await act(async () => {
-        fixture.queryClient.setQueryData(baseKey(), {
-          worktrees: [],
-          nextCursor: null,
-        });
-        await fixture.queryClient.invalidateQueries({
-          queryKey: METHOD_SCOPE,
-          refetchType: "none",
-        });
+      // The successful listing refresh explicitly re-arms the sweep even when
+      // every per-path query is gone and therefore emits no invalidation event.
+      act(() => {
+        result.current.rearmMissingSweepPaths();
       });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
@@ -909,6 +902,13 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
           refetchType: "active",
         });
       });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      // One swept failure is not terminal: the row remains pending while the
+      // sweep ledger still owns retries, instead of flashing unavailable.
+      expect(requests.length).toBeGreaterThan(1);
+      expect(result.current.erroredPaths).toEqual(new Set());
       for (let window = 0; window < 16; window += 1) {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(20_000);
