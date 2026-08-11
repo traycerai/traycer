@@ -19,6 +19,7 @@ import { getSvgIntrinsicSize } from "./mermaid-service";
 
 export interface PanZoomSvgViewerProps {
   readonly svg: string;
+  readonly source: "sanitized" | "trusted";
   readonly ariaLabel: string;
   readonly className: string | undefined;
 }
@@ -74,8 +75,13 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
   const { svg, ariaLabel, className } = props;
   const intrinsic = useMemo(() => getSvgIntrinsicSize(svg), [svg]);
   const renderedSvg = useMemo(
-    () => trustedMarkupToReactNodes(svg, "svg"),
-    [svg],
+    () =>
+      props.source === "trusted" ? (
+        trustedMarkupToReactNodes(svg, "svg")
+      ) : (
+        <SanitizedSvgMarkup svg={svg} />
+      ),
+    [props.source, svg],
   );
 
   const transformRef = useRef<ReactZoomPanPinchRef | null>(null);
@@ -242,7 +248,7 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
                 height: `${intrinsic.height}px`,
                 lineHeight: 0,
               }}
-              className="tc-mermaid-pan-zoom__content [&>svg]:!w-full [&>svg]:!h-full [&>svg]:!max-w-none"
+              className="tc-mermaid-pan-zoom__content [&>svg]:!size-full [&>svg]:!max-w-none [&>div>svg]:!size-full [&>div>svg]:!max-w-none"
             >
               {renderedSvg}
             </div>
@@ -347,4 +353,19 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
       </div>
     </section>
   );
+}
+
+function SanitizedSvgMarkup(props: { readonly svg: string }) {
+  const setHost = useCallback(
+    (host: HTMLDivElement | null): void => {
+      if (host === null) return;
+      const parsed = new DOMParser().parseFromString(
+        props.svg,
+        "image/svg+xml",
+      );
+      host.replaceChildren(document.importNode(parsed.documentElement, true));
+    },
+    [props.svg],
+  );
+  return <div ref={setHost} className="size-full [&>svg]:size-full" />;
 }

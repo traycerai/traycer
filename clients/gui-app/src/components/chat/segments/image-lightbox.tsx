@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { Copy, Download } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -24,6 +24,12 @@ interface ImageLightboxProps {
 }
 
 type ImageAction = "copy" | "download";
+
+const UntrustedSvgLightbox = lazy(() =>
+  import("./untrusted-svg-lightbox").then((module) => ({
+    default: module.UntrustedSvgLightbox,
+  })),
+);
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const [pendingAction, setPendingAction] = useState<ImageAction | null>(null);
@@ -86,12 +92,24 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
         <div className="relative flex max-h-[90vh] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg bg-muted/30">
-          <img
-            src={props.src}
-            alt={alt}
-            className="block max-h-[min(88vh,52rem)] max-w-full object-contain"
-            draggable={false}
-          />
+          {props.mediaType === "image/svg+xml" ? (
+            <div className="h-[min(88vh,52rem)] w-full">
+              <Suspense
+                fallback={
+                  <div className="size-full animate-pulse bg-muted/60 motion-reduce:animate-none" />
+                }
+              >
+                <UntrustedSvgLightbox src={props.src} alt={alt} />
+              </Suspense>
+            </div>
+          ) : (
+            <img
+              src={props.src}
+              alt={alt}
+              className="block max-h-[min(88vh,52rem)] max-w-full object-contain"
+              draggable={false}
+            />
+          )}
           <div className="absolute bottom-3 right-3">{actions}</div>
         </div>
       </DialogContent>

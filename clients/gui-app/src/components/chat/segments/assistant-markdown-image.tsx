@@ -153,10 +153,11 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   }
   if (source.kind === "data-svg") {
     return (
-      <ImageFailureChip
+      <LoadableImage
+        key={source.src}
+        src={source.src}
         alt={props.alt}
-        source={source.src}
-        reason="SVG preview will be available with the secure SVG viewer"
+        mediaType="image/svg+xml"
       />
     );
   }
