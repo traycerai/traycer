@@ -30,6 +30,8 @@ export interface LandingTerminalTarget {
 }
 
 export interface LandingTerminalGestureValue {
+  /** The focused start page that owns the currently visible panel layout. */
+  readonly focusedLandingPageId: string | null;
   /** The effective routing target (captured snapshot while pending, else live). */
   readonly target: LandingTerminalTarget;
   /** Whether an opening gesture is currently pinning the target. */

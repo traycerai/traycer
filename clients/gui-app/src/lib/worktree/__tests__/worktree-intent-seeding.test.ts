@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DiskWorktreeEntry,
   WorktreeBranch,
@@ -100,6 +100,16 @@ function rememberedImport(worktreePath: string): WorktreeFolderIntent {
   };
 }
 
+beforeEach(() => {
+  vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(
+    "00000000-0000-4000-8000-000000000000",
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("defaultFolderIntent", () => {
   it("forks a new branch off the working tree for a git repo", () => {
     expect(
@@ -122,6 +132,8 @@ describe("defaultFolderIntent", () => {
         name: "traycer/swift-otter",
         source: "main",
         carryUncommittedChanges: false,
+        collision: "random",
+        retryIdentity: "00000000-0000-4000-8000-000000000000",
       },
     });
   });
@@ -244,6 +256,8 @@ describe("resolveRememberedFolderIntent", () => {
         name: "traycer/fresh-name",
         source: "main",
         carryUncommittedChanges: false,
+        collision: "random",
+        retryIdentity: "00000000-0000-4000-8000-000000000000",
       },
     });
   });

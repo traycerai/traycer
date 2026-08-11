@@ -384,6 +384,8 @@ describe("newWorktreeIntent", () => {
           defaultNewBranchName: "traycer/swift-otter",
         },
         branchName: "feat/new",
+        collision: "random",
+        retryIdentity: "retry-identity",
       }),
     ).toEqual({
       kind: "worktree",
@@ -396,6 +398,8 @@ describe("newWorktreeIntent", () => {
         name: "feat/new",
         source: "development",
         carryUncommittedChanges: false,
+        collision: "random",
+        retryIdentity: "retry-identity",
       },
     });
   });
@@ -415,6 +419,8 @@ describe("newWorktreeIntent", () => {
           defaultNewBranchName: "traycer/swift-otter",
         },
         branchName: "feat/new",
+        collision: "random",
+        retryIdentity: "retry-identity",
       }),
     ).toMatchObject({
       kind: "worktree",
@@ -442,6 +448,8 @@ describe("newWorktreeIntent", () => {
           defaultNewBranchName: "traycer/swift-otter",
         },
         branchName: "",
+        collision: "random",
+        retryIdentity: "retry-identity",
       }),
     ).toBeNull();
   });
@@ -461,6 +469,8 @@ describe("newWorktreeIntent", () => {
           defaultNewBranchName: "traycer/swift-otter",
         },
         branchName: "traycer/swift-otter",
+        collision: "random",
+        retryIdentity: "retry-identity",
       }),
     ).toMatchObject({
       kind: "worktree",

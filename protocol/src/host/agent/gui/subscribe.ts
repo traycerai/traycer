@@ -374,18 +374,17 @@ export const chatQueuedManagedCommandItemSchema = z.object({
   // Durable dispatch key: the render is keyed by this, not by a closure, so an
   // item rehydrated after a host restart dispatches identically.
   commandId: z.string(),
-  // The command's human label (the Monitor's description / the shell command
-  // line), shown on the queue chip.
+  // The command's human label (the shell's description), shown on the queue
+  // chip.
   description: z.string(),
-  // Which kind of managed command this delivery came from, so the chip reads
-  // "Monitor · deploy watcher" rather than a generic badge. Named
-  // `commandKind` because `kind` above is the union's discriminant.
+  // Whether the shell this delivery came from is monitoring, so the chip can
+  // carry the same watcher glyph its row does.
   //
   // Nullable and defaulted rather than required even though this line is
   // unshipped: the queue is DURABLE, so an item written by an earlier build of
   // this same line must still rehydrate. Absent means "not recorded", which the
-  // chip renders generically - it never stands in for a guessed kind.
-  commandKind: z.enum(["monitor", "shell"]).nullable().default(null),
+  // chip renders generically - it never stands in for a guessed flag.
+  monitoring: z.boolean().nullable().default(null),
   // Whether this digest opens its own turn or lands inside the turn already
   // running. Defaulted `next_turn` so a row written by an earlier build of this
   // line - and every delivery that has no eligible turn to join - rehydrates as
@@ -624,9 +623,9 @@ export const chatSnapshotSchema = z.object({
   // Background section and never sends stop actions; a present (possibly empty)
   // array means the controls are supported. This is the capability sentinel.
   backgroundItems: z.array(backgroundItemSchema).optional(),
-  // The Monitors and shells this chat created (`createdByAgentId === chatId`),
-  // whatever their state - a Monitor keeps running long after the turn that
-  // started it, so this is NOT a subset of `backgroundItems`. Chat-scoped
+  // The shells this chat created (`createdByAgentId === chatId`), whatever
+  // their state - a shell keeps running long after the turn that started it,
+  // so this is NOT a subset of `backgroundItems`. Chat-scoped
   // because every surface that reads it is: the chat tile's menu and the
   // chat's Background panel.
   //
@@ -696,7 +695,7 @@ const chatSubscribeTurnStateChangedServerFrameSchema = z.object({
  * dropped frame can never leave a stale row behind.
  *
  * It is its own frame rather than another field on `turnStateChanged` because
- * its trigger is not a turn: a Monitor exits, is restarted, or is deleted long
+ * its trigger is not a turn: a shell exits, is restarted, or is deleted long
  * after the turn that created it ended, and the host's turn broadcast carries
  * run-status side effects (activity/presence tiering) that a command's
  * lifecycle must not fire.
@@ -1791,14 +1790,13 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 
 // ─── Live `chat.subscribe@1.6` contract (the managed-command surface) ───────
 //
-// `1.6` is where the whole "Monitors & Shells" surface joins the chat stream:
-// the chat's own commands (`snapshot.managedCommands` +
-// `managedCommandsChanged`) and the queue items their deliveries ride as. There
-// is no epic-wide list stream to pair with it - see the re-entry note in
-// `host/managed-command/subscribe.ts`.
+// `1.6` is where the whole Shells surface joins the chat stream: the chat's own
+// commands (`snapshot.managedCommands` + `managedCommandsChanged`) and the queue
+// items their deliveries ride as. There is no epic-wide list stream to pair with
+// it - see the re-entry note in `host/managed-command/subscribe.ts`.
 //
 // The live serverFrame's queue is the `prompt | managed-command` union: a
-// pending managed-command delivery (Monitor log digest, backgrounded shell
+// pending managed-command delivery (a monitoring shell's log digest, a shell's
 // completion) is a first-class, content-free queue item the user can see,
 // reorder, and cancel - and, on a harness that confirms it consumed a mid-turn
 // steer, one that can be injected into the running turn rather than waiting for

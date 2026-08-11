@@ -333,6 +333,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.notifications.cloudFeed.markAllRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.notifications.cloudFeed.resolve": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -374,8 +379,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Monitor/shell lifecycle from the "Monitors & Shells" list and the output
-  // window header. `fifo` is what buys these three the guarantees the
+  // Shell lifecycle from the Shells list and the output window header.
+  // `fifo` is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
   // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
   // refuses to cancel one. A delete destroys the command's entire output
@@ -524,6 +529,8 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Forking an agent persists a new collaboration record, like agent.create.
+  "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
   "phase.migrateToEpic": {
     mode: "fifo",
@@ -1093,6 +1100,16 @@ export const HOST_METHOD_POLL_TABLE = {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
+  },
+  // A bounded read over settled facts (Usage page + epic cost badge). The
+  // Settings panel controls its own refetch (window/metric change, manual
+  // retry) and opts out of polling; the ambient epic cost badge opts in
+  // (matching `host.getRateLimitUsage`'s cadence below) so it self-heals
+  // within a bounded time from a silently-reverted fetch instead of staying
+  // stuck pending forever with no other trigger (ticket-7 fixup-01).
+  "host.usage.summary": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
 } satisfies HostMethodPolicyTable;
 

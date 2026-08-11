@@ -34,6 +34,30 @@ const IDENTITY = {
   name: "Ada",
 } as const;
 
+/**
+ * Waits that cross a REAL `fs.watch` need a regression-scale bound, not the
+ * implicit 1000 ms `vi.waitFor` default. OS event delivery is unbounded, and
+ * the store's own 50 ms debounce only starts once the watcher callback runs,
+ * so the default is a wall-clock bet on a loaded machine - and it loses. CI
+ * observed `external write fires subscribe...` failing at 1017 ms, and 12
+ * parallel local copies of this file reproduce it.
+ *
+ * A watcher that genuinely never delivers still fails here in seconds, while
+ * ordinary scheduler latency no longer does. Only real-delivery waits use
+ * this; mock-driven waits elsewhere keep the default deliberately.
+ */
+const WATCHER_DELIVERY_TIMEOUT_MS = 10_000;
+
+/**
+ * Per-test timeouts below are `N * WATCHER_DELIVERY_TIMEOUT_MS +
+ * TEST_TIMEOUT_BUFFER_MS`, not a bare sum: the enclosing Vitest timer starts
+ * before the `signIn`/`rotate`/write calls that precede each `vi.waitFor`,
+ * so a sum-only budget leaves zero room for those calls, their assertions,
+ * or (for the debounce test) the extra 120 ms post-wait sleep. Sized well
+ * above that fixed overhead rather than tuned to the minimum that passes.
+ */
+const TEST_TIMEOUT_BUFFER_MS = 5_000;
+
 vi.mock("electron", () => ({
   app: {
     getPath: (): string => join(tmpdir(), "traycer-file-token-store-userdata"),
@@ -365,17 +389,76 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect((await b.get())?.token).toBe(live?.token);
   });
 
-  it("subscribe is a live registration that never fires (§4 stub)", async () => {
-    const store = makeStore();
-    let fired = 0;
-    const dispose = store.subscribe(() => {
-      fired += 1;
-    });
-    await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
-    await store.rotate({ userId: IDENTITY.id, token: "tok-1" });
-    dispose();
-    expect(fired).toBe(0);
-  });
+  /**
+   * Replaces a test that asserted `subscribe` "never fires". It does fire:
+   * the watcher is installed in the constructor and deliberately notifies on
+   * SELF-writes as well as external ones (see the contract note on
+   * `FileTokenStore` and on `subscribe` itself), so the old assertion only
+   * held while the 50 ms debounce had not yet elapsed - i.e. it was a race
+   * that a fast machine won. CI lost it: `expected 1 to be +0`. The suite
+   * already knew better one screen down, where a sibling test drains "the
+   * self-write emit from signIn" before asserting on a delete.
+   *
+   * What is actually worth pinning is the unsubscribe contract, and it is
+   * pinned without any sleep: a SECOND live listener acts as a positive
+   * acknowledgement that a post-unsubscribe write travelled the whole real
+   * path (fs.watch delivery -> debounce -> read -> fan-out). Once the probe
+   * has observed that event, the unsubscribed listener demonstrably had its
+   * chance and did not fire. Sleeping past 50 ms instead would not work:
+   * `fs.watch` delivery itself has no upper bound, and the debounce only
+   * starts once the watcher callback runs.
+   */
+  it(
+    "unsubscribing stops delivery while the watcher keeps notifying others",
+    async () => {
+      const store = makeStore();
+
+      let firstCount = 0;
+      const unsubscribeFirst = store.subscribe(() => {
+        firstCount += 1;
+      });
+
+      // Establish that the registration is genuinely live, rather than
+      // inferring it from the absence of a call.
+      await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
+      await vi.waitFor(
+        () => {
+          expect(firstCount).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
+
+      unsubscribeFirst();
+      const countAtUnsubscribe = firstCount;
+
+      // The second mutation is a delete, not another rotate: its
+      // `present: false` payload cannot be satisfied by a notification the
+      // first (still in-flight) signIn write already queued, which the probe
+      // subscribing after unsubscribeFirst could otherwise observe and
+      // mistake for acknowledgement of this mutation.
+      const probeChanges: TokenStoreChange[] = [];
+      const unsubscribeProbe = store.subscribe((change) => {
+        probeChanges.push(change);
+      });
+
+      await store.delete();
+      await vi.waitFor(
+        () => {
+          expect(probeChanges.some((c) => c.present === false)).toBe(true);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
+
+      // The probe proves an event completed the full path after the first
+      // listener unsubscribed, so an unchanged count is a real guarantee.
+      expect(firstCount).toBe(countAtUnsubscribe);
+      unsubscribeProbe();
+    },
+    // Two sequential WATCHER_DELIVERY_TIMEOUT_MS waits: give the test itself
+    // headroom above their sum, or Vitest's 5s default per-test timeout aborts
+    // the test before either wait's own (longer) deadline can take effect.
+    2 * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+  );
 
   it("signIn on a second instance supersedes a prior sign-out tombstone", async () => {
     const a = makeStore();
@@ -440,91 +523,115 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       user: { ...IDENTITY },
     };
 
-    it("external write fires subscribe with present:true, userId, higher revision", async () => {
-      const store = makeStore();
-      const changes: TokenStoreChange[] = [];
-      const dispose = store.subscribe((change) => {
-        changes.push(change);
-      });
+    it(
+      "external write fires subscribe with present:true, userId, higher revision",
+      async () => {
+        const store = makeStore();
+        const changes: TokenStoreChange[] = [];
+        const dispose = store.subscribe((change) => {
+          changes.push(change);
+        });
 
-      await writeCredentialsFile(credentialsPath(), EXTERNAL, 0);
+        await writeCredentialsFile(credentialsPath(), EXTERNAL, 0);
 
-      await vi.waitFor(() => {
-        expect(changes.length).toBeGreaterThanOrEqual(1);
-      });
-      const last = changes[changes.length - 1];
-      expect(last).toEqual({
-        present: true,
-        userId: IDENTITY.id,
-        revision: expect.any(Number),
-      });
-      expect(last.revision).toBeGreaterThanOrEqual(1);
-      dispose();
-    });
+        await vi.waitFor(
+          () => {
+            expect(changes.length).toBeGreaterThanOrEqual(1);
+          },
+          { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+        );
+        const last = changes[changes.length - 1];
+        expect(last).toEqual({
+          present: true,
+          userId: IDENTITY.id,
+          revision: expect.any(Number),
+        });
+        expect(last.revision).toBeGreaterThanOrEqual(1);
+        dispose();
+      },
+      WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+    );
 
-    it("external delete fires present:false", async () => {
-      const store = makeStore();
-      await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
-      // Drain the self-write emit from signIn before asserting on the delete.
-      await vi.waitFor(async () => {
-        expect(await store.get()).not.toBeNull();
-      });
+    it(
+      "external delete fires present:false",
+      async () => {
+        const store = makeStore();
+        await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
+        // Drain the self-write emit from signIn before asserting on the delete.
+        await vi.waitFor(
+          async () => {
+            expect(await store.get()).not.toBeNull();
+          },
+          { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+        );
 
-      const changes: TokenStoreChange[] = [];
-      const dispose = store.subscribe((change) => {
-        changes.push(change);
-      });
+        const changes: TokenStoreChange[] = [];
+        const dispose = store.subscribe((change) => {
+          changes.push(change);
+        });
 
-      await deleteCredentialsFile(credentialsPath());
+        await deleteCredentialsFile(credentialsPath());
 
-      await vi.waitFor(() => {
-        expect(changes.some((c) => c.present === false)).toBe(true);
-      });
-      const lastDelete = changes.filter((c) => c.present === false).at(-1);
-      expect(lastDelete).toEqual({
-        present: false,
-        userId: null,
-        revision: expect.any(Number),
-      });
-      dispose();
-    });
+        await vi.waitFor(
+          () => {
+            expect(changes.some((c) => c.present === false)).toBe(true);
+          },
+          { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+        );
+        const lastDelete = changes.filter((c) => c.present === false).at(-1);
+        expect(lastDelete).toEqual({
+          present: false,
+          userId: null,
+          revision: expect.any(Number),
+        });
+        dispose();
+      },
+      2 * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+    );
 
-    it("debounce coalesces a burst of external writes into one emit", async () => {
-      const store = makeStore();
-      const changes: TokenStoreChange[] = [];
-      const dispose = store.subscribe((change) => {
-        changes.push(change);
-      });
+    it(
+      "debounce coalesces a burst of external writes into one emit",
+      async () => {
+        const store = makeStore();
+        const changes: TokenStoreChange[] = [];
+        const dispose = store.subscribe((change) => {
+          changes.push(change);
+        });
 
-      // Burst of rapid renames through the protocol write primitive.
-      await Promise.all([
-        writeCredentialsFile(
-          credentialsPath(),
-          { ...EXTERNAL, token: "burst-1" },
-          0,
-        ),
-        writeCredentialsFile(
-          credentialsPath(),
-          { ...EXTERNAL, token: "burst-2" },
-          0,
-        ),
-        writeCredentialsFile(
-          credentialsPath(),
-          { ...EXTERNAL, token: "burst-3" },
-          0,
-        ),
-      ]);
+        // Burst of rapid renames through the protocol write primitive.
+        await Promise.all([
+          writeCredentialsFile(
+            credentialsPath(),
+            { ...EXTERNAL, token: "burst-1" },
+            0,
+          ),
+          writeCredentialsFile(
+            credentialsPath(),
+            { ...EXTERNAL, token: "burst-2" },
+            0,
+          ),
+          writeCredentialsFile(
+            credentialsPath(),
+            { ...EXTERNAL, token: "burst-3" },
+            0,
+          ),
+        ]);
 
-      await vi.waitFor(() => {
-        expect(changes.length).toBeGreaterThanOrEqual(1);
-      });
-      // Give the debounce window a little more time to prove no late extras.
-      await new Promise<void>((resolve) => setTimeout(resolve, 120));
-      // A burst must not produce one event per write; coalesce toward one.
-      expect(changes.length).toBeLessThan(3);
-      expect(changes.at(-1)?.present).toBe(true);
-      expect(changes.at(-1)?.userId).toBe(IDENTITY.id);
-      dispose();
-    });
+        await vi.waitFor(
+          () => {
+            expect(changes.length).toBeGreaterThanOrEqual(1);
+          },
+          { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+        );
+        // Give the debounce window a little more time to prove no late extras.
+        await new Promise<void>((resolve) => setTimeout(resolve, 120));
+        // A burst must not produce one event per write; coalesce toward one.
+        expect(changes.length).toBeLessThan(3);
+        expect(changes.at(-1)?.present).toBe(true);
+        expect(changes.at(-1)?.userId).toBe(IDENTITY.id);
+        dispose();
+      },
+      WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+    );
   });
 });

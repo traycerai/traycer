@@ -42,20 +42,25 @@ bunx nx run @traycer-clients/traycer-cli:build
 
 ## Pre-commit hooks
 
-We use [pre-commit](https://pre-commit.com) for hygiene checks (whitespace, large files, private keys, YAML/JSON, shell scripts). Install once:
+We use [pre-commit](https://pre-commit.com) for hygiene and affected workspace
+checks (build, compile, lint, and format). Install once:
 
 ```sh
 pipx install pre-commit   # or: brew install pre-commit
 pre-commit install
 ```
 
-The hooks then run on every commit; run them on demand with `pre-commit run --all-files`. Lint and format are enforced separately in CI.
+The hooks then run on every commit; run them on demand with
+`pre-commit run --all-files`. Tests are intentionally excluded from the hook
+and run as separate CI checks. Run a targeted test locally when it helps your
+development loop; the full suite does not need to run before each commit.
 
 ## Pull requests
 
 1. Fork and branch from `main`.
 2. Keep changes focused; add or update tests where it makes sense.
-3. Make sure `bun run build`, `bun run lint`, `bun run test`, and formatting all pass — CI runs the same four checks.
+3. Commit normally; pre-commit runs the affected static checks, and CI runs the
+   test suites separately.
 4. Open a PR with the template and link any related issue.
 
 ## Developer Certificate of Origin (DCO)

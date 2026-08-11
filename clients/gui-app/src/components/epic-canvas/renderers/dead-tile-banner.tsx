@@ -103,21 +103,22 @@ export function TerminalDeadTileBanner(
 
 export interface ManagedCommandDeletedBannerProps {
   /**
-   * "Monitor" or "Shell" - `null` only when the window never received a
-   * snapshot (restored for a command the host had already dropped), which is
-   * the one case where the kind is genuinely unknown.
+   * Whether the deletion itself was observed. `false` only when the window
+   * never received a snapshot (restored for a shell the host had already
+   * dropped), which is the one case where "deleted" cannot be confirmed -
+   * only that the shell is no longer there.
    */
-  readonly kindLabel: string | null;
+  readonly deletionConfirmed: boolean;
   readonly onClose: () => void;
   readonly testId: string;
 }
 
 /**
- * A managed command deleted while its output window was open. Sits ABOVE the
- * timeline rather than replacing it: the scrollback the viewer already has is
- * the last trace of a history the host just destroyed, so it stays readable
- * until the tab is closed. Nothing can be paged in behind it and no lifecycle
- * action remains - the command is gone, not merely stopped.
+ * A shell deleted while its output window was open. Sits ABOVE the timeline
+ * rather than replacing it: the scrollback the viewer already has is the last
+ * trace of a history the host just destroyed, so it stays readable until the
+ * tab is closed. Nothing can be paged in behind it and no lifecycle action
+ * remains - the shell is gone, not merely stopped.
  */
 export function ManagedCommandDeletedBanner(
   props: ManagedCommandDeletedBannerProps,
@@ -129,9 +130,9 @@ export function ManagedCommandDeletedBanner(
       role="status"
     >
       <span className="min-w-0 flex-1">
-        {props.kindLabel === null
-          ? "This monitor or shell is no longer on this host. Its output history is gone; what is shown below is only what this window had already read."
-          : `This ${props.kindLabel.toLowerCase()} was deleted. Its output history is gone; what is shown below is only what this window had already read.`}
+        {props.deletionConfirmed
+          ? "This shell was deleted. Its output history is gone; what is shown below is only what this window had already read."
+          : "This shell is no longer on this host. Its output history is gone; what is shown below is only what this window had already read."}
       </span>
       <Button type="button" variant="outline" size="sm" onClick={props.onClose}>
         Close tab

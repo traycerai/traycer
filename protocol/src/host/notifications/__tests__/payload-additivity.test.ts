@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   findBreakingChange,
+  toUnknownKeyTree,
   toJsonSchemaFingerprint,
 } from "@traycer/protocol/framework/json-schema-fingerprint";
 import {
@@ -67,6 +68,11 @@ describe("host notification payload additivity", () => {
       const breaking = findBreakingChange(
         PAYLOAD_FINGERPRINT_BASELINE[kind],
         current,
+        // The committed baseline is a stored fingerprint with no schema to
+        // re-render, so no input tree is available for the previous side;
+        // unknown-key policy is not part of what this guard checks.
+        null,
+        toUnknownKeyTree(LIVE_PAYLOAD_SCHEMAS[kind]),
       );
       const failure =
         breaking === null

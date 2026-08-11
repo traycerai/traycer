@@ -8,7 +8,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import {
+  landingTerminalLayoutFor,
+  useLandingTerminalStore,
+} from "@/stores/home/landing-terminal-store";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
   registerTerminalFocus,
@@ -143,6 +146,22 @@ import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-t
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+const TEST_LANDING_PAGE_ID = "test-landing-page";
+
+function testLayout() {
+  return landingTerminalLayoutFor(
+    useLandingTerminalStore.getState(),
+    TEST_LANDING_PAGE_ID,
+  );
+}
+
+function layoutFor(landingPageId: string) {
+  return landingTerminalLayoutFor(
+    useLandingTerminalStore.getState(),
+    landingPageId,
+  );
+}
+
 /**
  * The app mounts one `TooltipProvider` at the root; the strip's disabled "+"
  * tooltip needs it, so every render goes through this wrapper. The gesture
@@ -151,7 +170,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  * the host projects, so a rerender with a new `draftId` models a focus switch.
  */
 function panelUi() {
-  return panelUiForDraft(null);
+  return panelUiForDraft(TEST_LANDING_PAGE_ID);
 }
 
 function panelUiForDraft(draftId: string | null) {
@@ -331,11 +350,11 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("hides while no host is selected, preserving an open panel until selection", async () => {
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
     expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
     expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+    expect(testLayout().panelOpen).toBe(true);
 
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -345,7 +364,7 @@ describe("<LandingTerminalPanel />", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("landing-terminal-panel")).toBeTruthy();
-      expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+      expect(testLayout().panelOpen).toBe(true);
     });
   });
 
@@ -355,7 +374,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // Open: the header owns collapse; the floating reveal button must be gone
@@ -368,12 +387,102 @@ describe("<LandingTerminalPanel />", () => {
     // Collapsed: the panel keeps its (hidden) header mounted, so the reveal
     // button coming back is what proves the two never coexist on screen.
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().panelOpen).toBe(false);
+      expect(testLayout().panelOpen).toBe(false);
       expect(screen.getByTestId("landing-terminal-toggle")).toBeTruthy();
       expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
         "false",
       );
     });
+  });
+
+  it("isolates collapsed state between landing pages", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const view = render(panelUiForDraft("draft-b"));
+
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    await waitFor(() => {
+      expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
+        "true",
+      );
+    });
+
+    view.rerender(panelUiForDraft("draft-a"));
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    await waitFor(() => {
+      expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
+        "true",
+      );
+    });
+    fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
+    await waitFor(() => {
+      expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
+        "false",
+      );
+    });
+
+    view.rerender(panelUiForDraft("draft-b"));
+    expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
+      "true",
+    );
+  });
+
+  it("isolates resized width between landing pages", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const view = render(panelUiForDraft("draft-b"));
+
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    const resizeHandle = screen.getByTestId("landing-terminal-resize-handle");
+    fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
+      "39%",
+    );
+
+    view.rerender(panelUiForDraft("draft-a"));
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe("0%");
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
+      "36%",
+    );
+
+    view.rerender(panelUiForDraft("draft-b"));
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
+      "39%",
+    );
+  });
+
+  it("isolates fullscreen state between landing pages", () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const view = render(panelUiForDraft("draft-b"));
+
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Maximize terminal panel" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Restore terminal panel" }),
+    ).toBeTruthy();
+
+    view.rerender(panelUiForDraft("draft-a"));
+    expect(
+      screen.queryByRole("button", { name: "Restore terminal panel" }),
+    ).toBeNull();
+
+    view.rerender(panelUiForDraft("draft-b"));
+    expect(
+      screen.getByRole("button", { name: "Restore terminal panel" }),
+    ).toBeTruthy();
   });
 
   it("resizes through the boxless split-pane portal anchor", async () => {
@@ -382,7 +491,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen("draft-a", true);
     render(panelUiInBoxlessPaneAnchor());
 
     const handle = await screen.findByTestId("landing-terminal-resize-handle");
@@ -420,7 +529,7 @@ describe("<LandingTerminalPanel />", () => {
     );
 
     expect(panel.style.width).toBe("46%");
-    expect(useLandingTerminalStore.getState().panelWidthFraction).toBe(0.36);
+    expect(layoutFor("draft-a").panelWidthFraction).toBe(0.36);
 
     fireEvent(
       handle,
@@ -431,7 +540,7 @@ describe("<LandingTerminalPanel />", () => {
         button: 0,
       }),
     );
-    expect(useLandingTerminalStore.getState().panelWidthFraction).toBe(0.46);
+    expect(layoutFor("draft-a").panelWidthFraction).toBe(0.46);
   });
 
   it("auto-spawns in the host home when nothing is pinned", async () => {
@@ -440,7 +549,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -456,7 +565,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     expect(
@@ -478,7 +587,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     render(panelUi());
 
@@ -494,7 +603,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     // Opening an empty panel auto-spawns exactly one terminal.
@@ -521,7 +630,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -554,7 +663,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -590,7 +699,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -610,7 +719,7 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
     });
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(false);
+    expect(testLayout().panelOpen).toBe(false);
     // Every closed shell gets its own kill. (The tombstones they were written
     // with are drained by the reconciliation that follows, once the host list
     // confirms the sessions are gone - the durable write itself is pinned in
@@ -629,7 +738,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = listWith([runningSession("orphan")], "/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -651,7 +760,7 @@ describe("<LandingTerminalPanel />", () => {
       [runningSession("fresh-orphan")],
       "/Users/dev",
     );
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -678,8 +787,8 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("tab-1");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().closeTab(TEST_LANDING_PAGE_ID, "tab-1");
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -698,7 +807,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.clientActiveHostId = "host-a";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
     await waitFor(() => {
@@ -740,7 +849,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -793,7 +902,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -828,7 +937,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -877,7 +986,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await screen.findByTestId("landing-terminal-host-update");
@@ -901,7 +1010,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -921,7 +1030,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -946,7 +1055,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -962,7 +1071,7 @@ describe("<LandingTerminalPanel />", () => {
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(false);
+    expect(testLayout().panelOpen).toBe(false);
     await waitFor(() => {
       expect(composerFocus).toHaveBeenCalled();
     });
@@ -989,8 +1098,10 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelWidthFraction(0.42);
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore
+      .getState()
+      .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     const panel = screen.getByTestId("landing-terminal-panel");
@@ -1107,7 +1218,9 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelWidthFraction(0.42);
+    useLandingTerminalStore
+      .getState()
+      .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
     render(panelUi());
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
@@ -1158,7 +1271,7 @@ describe("<LandingTerminalPanel />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const terminalFocus = vi.fn();
     focusCleanups.push(registerTerminalFocus("tab-1", terminalFocus));
 
@@ -1209,7 +1322,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -1271,6 +1384,63 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
       spawned.instanceId,
     );
+  });
+
+  it("reconciles an exited terminal against the captured page after focus moves", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = emptyList(null);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "exited-tab",
+      sessionId: "exited-session",
+      hostId: "host-a",
+      cwd: "/workspace/draft-a",
+      name: "draft-a",
+      titleSource: "default",
+    });
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+      useLandingTerminalStore.getState().setPanelOpen("draft-b", true);
+    });
+    mocks.primaryWorkspacePath = "/workspace/draft-b";
+    view.rerender(panelUiForDraft("draft-b"));
+
+    await act(async () => {
+      for (let pass = 0; pass < 10; pass += 1) {
+        resolvers.splice(0).forEach((resolve) => {
+          resolve(
+            listWith(
+              [
+                {
+                  ...runningSession("exited-session"),
+                  status: "exited",
+                  exitCode: 0,
+                  exitReason: "process-exit",
+                },
+              ],
+              "/Users/dev",
+            ),
+          );
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    });
+    expect(layoutFor("draft-a").panelOpen).toBe(false);
+    expect(layoutFor("draft-b").panelOpen).toBe(false);
   });
 
   it("preserves a folderless opening gesture when focus switches to a foldered draft", async () => {
@@ -1569,7 +1739,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -1583,7 +1753,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("tab.close", router);
     });
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().panelOpen).toBe(false);
+      expect(testLayout().panelOpen).toBe(false);
       expect(composerFocus).toHaveBeenCalled();
     });
   });
@@ -1594,7 +1764,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -1650,7 +1820,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
     await waitFor(() => {
@@ -1712,7 +1882,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -1757,7 +1927,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = emptyList("/Users/dev");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const view = render(panelUi());
 
     await waitFor(() => {
@@ -1798,7 +1968,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/project";
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {
@@ -1827,7 +1997,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList(null);
     mocks.freshProbeData = emptyList(null);
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
     const router = fakeKeybindingRouter();
 
@@ -1856,7 +2026,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = null;
     mocks.probeData = emptyList("/Users/host-a");
     mocks.freshProbeData = emptyList("/Users/host-a");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
 
     type PendingList = {
       readonly hostId: string | null;
@@ -2000,7 +2170,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.primaryWorkspacePath = "/workspace/host-a-project";
     mocks.probeData = emptyList("/Users/host-a");
     mocks.freshProbeData = emptyList("/Users/host-a");
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     render(panelUi());
 
     await waitFor(() => {

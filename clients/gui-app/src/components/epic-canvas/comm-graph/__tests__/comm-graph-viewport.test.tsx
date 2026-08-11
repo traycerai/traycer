@@ -42,6 +42,7 @@ function renderCanvas(view: CommGraphTileViewState): void {
       agentIds={new Set([AGENT.id])}
       events={[]}
       hosts={[]}
+      initialHistoryCaughtUp={false}
       pulse={null}
       view={view}
       onViewChange={vi.fn()}

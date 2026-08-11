@@ -3363,17 +3363,14 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           "commandId": {
                                                             "type": "string"
                                                           },
-                                                          "kind": {
-                                                            "type": "string",
-                                                            "enum": [
-                                                              "monitor",
-                                                              "shell"
-                                                            ]
+                                                          "monitoring": {
+                                                            "default": false,
+                                                            "type": "boolean"
                                                           }
                                                         },
                                                         "required": [
                                                           "commandId",
-                                                          "kind"
+                                                          "monitoring"
                                                         ],
                                                         "additionalProperties": false
                                                       },

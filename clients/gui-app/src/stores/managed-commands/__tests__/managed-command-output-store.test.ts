@@ -14,7 +14,7 @@ import {
 } from "@/stores/managed-commands/managed-command-output-store";
 
 /**
- * The viewer half of "Monitors & Shells" (`UI.md` §4): one interleaved
+ * The viewer half of the Shells surface (`UI.md` §4): one interleaved
  * timeline, opened at the tail and paged backwards on demand. Gaplessness is
  * the host's contract - the client's job is to hand back the position it was
  * given and to append what arrives, in order.
@@ -22,7 +22,7 @@ import {
 
 const COMMAND: ManagedCommand = {
   id: "cmd-1",
-  kind: "monitor",
+  monitoring: true,
   description: "deploy watcher",
   status: { state: "running", pid: 4410, startedAtMs: 10 },
   chatId: "chat-1",

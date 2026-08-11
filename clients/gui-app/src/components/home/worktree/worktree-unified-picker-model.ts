@@ -255,13 +255,20 @@ export function worktreeImportRows(input: {
 }
 
 /** The intent emitted by the "New worktree" form for a source + branch name. */
-export function newWorktreeIntent(input: {
+type NewWorktreeIntentInput = {
   readonly workspacePath: string;
   readonly repoIdentifier: RepoIdentifier;
   readonly isPrimary: boolean;
   readonly source: UnifiedPickerSourceOption;
   readonly branchName: string;
-}): WorktreeFolderIntent | null {
+} & (
+  | { readonly collision: "fail" }
+  | { readonly collision: "random"; readonly retryIdentity: string }
+);
+
+export function newWorktreeIntent(
+  input: NewWorktreeIntentInput,
+): WorktreeFolderIntent | null {
   const branchName = input.branchName.trim();
   if (branchName.length === 0) return null;
   return {
@@ -270,11 +277,22 @@ export function newWorktreeIntent(input: {
     workspacePath: input.workspacePath,
     repoIdentifier: input.repoIdentifier,
     isPrimary: input.isPrimary,
-    branch: {
-      type: "new",
-      name: branchName,
-      source: input.source.name,
-      carryUncommittedChanges: input.source.carryUncommittedChanges,
-    },
+    branch:
+      input.collision === "random"
+        ? {
+            type: "new",
+            name: branchName,
+            source: input.source.name,
+            carryUncommittedChanges: input.source.carryUncommittedChanges,
+            collision: "random",
+            retryIdentity: input.retryIdentity,
+          }
+        : {
+            type: "new",
+            name: branchName,
+            source: input.source.name,
+            carryUncommittedChanges: input.source.carryUncommittedChanges,
+            collision: "fail",
+          },
   };
 }

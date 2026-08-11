@@ -51,8 +51,13 @@ function persistSnapshot(email: string): void {
       state: {
         tabs: [tab],
         activeInstanceId: tab.instanceId,
-        panelOpen: true,
-        panelWidthFraction: 0.36,
+        layoutsByLandingPageId: {
+          "landing-page": {
+            panelOpen: true,
+            panelWidthFraction: 0.36,
+            maximized: false,
+          },
+        },
         pendingKills: [],
       },
       version: 1,

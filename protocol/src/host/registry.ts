@@ -65,6 +65,7 @@ import {
   agentSelectionGuideGlobalSetV10,
   agentSendMessageV10,
   agentStopV10,
+  agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentConfigureDowngradeV20ToV10,
@@ -210,6 +211,7 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
+import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
@@ -359,6 +361,7 @@ import {
   hostNotificationsFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedMarkRead,
+  hostNotificationsCloudFeedMarkAllRead,
   hostNotificationsCloudFeedResolve,
   hostNotificationsCloudFeedClear,
   hostNotificationsCloudFeedClearAll,
@@ -413,8 +416,10 @@ import {
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
+  worktreeCreateRequestSchemaV10,
   worktreeCreateResponseSchema,
   worktreeCreatePathsRequestSchema,
+  worktreeCreatePathsRequestSchemaV10,
   worktreeCreatePathsResponseSchema,
   worktreeDeleteRequestSchema,
   worktreeDeleteResponseSchema,
@@ -577,6 +582,7 @@ import {
 
 export { hostGetRuntimeCapabilitiesV10 };
 export { hostGetRateLimitUsageV10 };
+export { hostUsageSummaryV10 };
 
 /**
  * Traycer 3.0 host RPC protocol.
@@ -766,15 +772,83 @@ export const worktreeListBranchesV10 = defineRpcContract({
 export const worktreeCreateV10 = defineRpcContract({
   method: "worktree.create",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeCreateRequestSchemaV10,
+  responseSchema: worktreeCreateResponseSchema,
+});
+
+export const worktreeCreateV11 = defineRpcContract({
+  method: "worktree.create",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: worktreeCreateRequestSchema,
   responseSchema: worktreeCreateResponseSchema,
+});
+
+export const worktreeCreateUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeCreateV10,
+  typeof worktreeCreateV11
+>({
+  from: worktreeCreateV10.schemaVersion,
+  to: worktreeCreateV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    entries: request.entries.map((entry) => {
+      if (entry.kind !== "worktree") return entry;
+      if (entry.branch.type === "existing") {
+        return { ...entry, branch: { ...entry.branch } };
+      }
+      return {
+        ...entry,
+        branch: {
+          type: "new" as const,
+          name: entry.branch.name,
+          source: entry.branch.source,
+          carryUncommittedChanges: entry.branch.carryUncommittedChanges,
+          collision: "fail" as const,
+        },
+      };
+    }),
+  }),
+  upgradeResponse: (response) => response,
 });
 
 export const worktreeCreatePathsV10 = defineRpcContract({
   method: "worktree.createPaths",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeCreatePathsRequestSchemaV10,
+  responseSchema: worktreeCreatePathsResponseSchema,
+});
+
+export const worktreeCreatePathsV11 = defineRpcContract({
+  method: "worktree.createPaths",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: worktreeCreatePathsRequestSchema,
   responseSchema: worktreeCreatePathsResponseSchema,
+});
+
+export const worktreeCreatePathsUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeCreatePathsV10,
+  typeof worktreeCreatePathsV11
+>({
+  from: worktreeCreatePathsV10.schemaVersion,
+  to: worktreeCreatePathsV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    entries: request.entries.map((entry) => {
+      if (entry.branch.type === "existing") {
+        return { ...entry, branch: { ...entry.branch } };
+      }
+      return {
+        ...entry,
+        branch: {
+          type: "new" as const,
+          name: entry.branch.name,
+          source: entry.branch.source,
+          carryUncommittedChanges: entry.branch.carryUncommittedChanges,
+          collision: "fail" as const,
+        },
+      };
+    }),
+  }),
+  upgradeResponse: (response) => response,
 });
 
 export const worktreeImportV10 = defineRpcContract({
@@ -3084,6 +3158,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.usage.summary": {
+    // Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` -
+    // this whole usage-summary surface is unreleased), registered like
+    // `snapshots.getLocalStorageSize` above: an old host simply lacks it,
+    // and the client feature-detects at handshake and hides the usage
+    // surface instead of hitting a fatal mismatch.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUsageSummaryV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "lifecycle.claimShutdown": {
     // Hosts predating the lifecycle layer cannot safely emulate a shutdown
     // claim, so reconciliation must re-probe and use its legacy-safe path.
@@ -3237,6 +3329,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostNotificationsListV21,
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
+          // The `host.operation.finished` arm added in 2.1 is emission-gated
+          // by design: the resolver derives arm inclusion from the version
+          // the caller negotiated, and the entry union's own contract
+          // (host-notifications.ts) mandates "a host-side projection that
+          // keeps the arm out of every older version's rows ... never a
+          // post-query filter". See host-notifications-resolvers.ts.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {
@@ -3381,6 +3480,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsCloudFeedResolve,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.cloudFeed.markAllRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedMarkAllRead,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4085,6 +4197,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Brand-new v1.0 method on the same `degrade: unsupported` channel as
+  // `terminal.readOutput` above: a host predating the wrapper fork RPC simply
+  // lacks it, so a caller (the CLI) gets per-call upgrade guidance instead of
+  // a fatal handshake mismatch.
+  "agent.fork": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentForkV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -5243,11 +5372,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.create": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeCreateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeCreateV11,
+          upgradeFromPreviousVersion: worktreeCreateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -5255,11 +5388,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.createPaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeCreatePathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeCreatePathsV11,
+          upgradeFromPreviousVersion: worktreeCreatePathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
