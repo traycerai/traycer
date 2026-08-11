@@ -125,7 +125,12 @@ export class PrimaryFocusCoordinator {
       this.fulfilledEndpoint = endpoint;
       return;
     }
-    if (this.interactionActive) return;
+    if (this.interactionActive) {
+      this.intent = null;
+      this.fulfilledEpoch = null;
+      this.fulfilledEndpoint = null;
+      return;
+    }
     this.intent = null;
     this.fulfilledEpoch = null;
     this.fulfilledEndpoint = null;

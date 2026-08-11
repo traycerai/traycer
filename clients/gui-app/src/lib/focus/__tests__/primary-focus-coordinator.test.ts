@@ -131,9 +131,38 @@ describe("PrimaryFocusCoordinator", () => {
 
     coordinator.setInteractionActive(true);
     coordinator.request(COMPOSER);
-    coordinator.handleFocusIn(document.createElement("button"));
     expect(focus).not.toHaveBeenCalled();
     coordinator.setInteractionActive(false);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a fulfilled intent after pointer focus moves outside its owner", () => {
+    let activeElement: Element | null = null;
+    const target = document.createElement("input");
+    const other = document.createElement("button");
+    const focus = vi.fn(() => {
+      activeElement = target;
+    });
+    const coordinator = new PrimaryFocusCoordinator({
+      activeElement: () => activeElement,
+      documentVisible: () => true,
+    });
+    coordinator.register(
+      COMPOSER,
+      endpoint({
+        focus,
+        activeElement: () => target,
+        eligible: () => true,
+      }),
+    );
+
+    coordinator.request(COMPOSER);
+    expect(focus).toHaveBeenCalledTimes(1);
+    coordinator.setInteractionActive(true);
+    activeElement = other;
+    coordinator.handleFocusIn(other);
+    coordinator.setInteractionActive(false);
+
     expect(focus).toHaveBeenCalledTimes(1);
   });
 
