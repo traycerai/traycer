@@ -370,8 +370,10 @@ async function lockFileAgeMs(lockPath: string): Promise<number | null> {
 // Cross-platform process-liveness probe: POSIX `process.kill(pid, 0)` (EPERM =>
 // alive, ESRCH => gone); Windows `tasklist`. Mirrors the CLI's shared
 // `isProcessAlive` (protocol cannot import upward into the CLI, and this variant
-// also feeds the start-time fingerprint below).
-function isProcessAlive(pid: number): boolean {
+// also feeds the start-time fingerprint below). Exported for the mutation
+// store's spent-base marker, which reuses the lock's exact holder-liveness
+// semantics for its own owner records.
+export function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (process.platform === "win32") {
     try {
@@ -399,7 +401,9 @@ function isProcessAlive(pid: number): boolean {
 
 let cachedOwnFingerprint: string | null | undefined;
 
-function ownPidStartFingerprint(): string | null {
+/** This process's own start-time fingerprint, cached (it cannot change). Also
+ *  consumed by the mutation store's spent-base marker for self-recognition. */
+export function ownPidStartFingerprint(): string | null {
   if (cachedOwnFingerprint === undefined) {
     cachedOwnFingerprint = queryPidStartFingerprint(process.pid);
   }

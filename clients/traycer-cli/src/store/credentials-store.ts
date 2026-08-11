@@ -125,9 +125,11 @@ export function createStoreBackedRevalidator(args: {
           return "rotated";
         case "refresh-network":
         case "lock-busy":
-          // Transient, bearer untouched: a refresh transport blip, or a lock
-          // held past the wait budget by a concurrent desktop/CLI mutation.
-          // Neither is a dead credential — stay in reconnect backoff and retry.
+        case "spend-pending":
+          // Transient, bearer untouched: a refresh transport blip, a lock held
+          // past the wait budget, or a sibling's still-landing spend of this
+          // base. None is a dead credential — stay in reconnect backoff and
+          // retry (the sibling's landed pair adopts via `superseded`).
           return "network-error";
         case "deleted":
         case "tombstoned":

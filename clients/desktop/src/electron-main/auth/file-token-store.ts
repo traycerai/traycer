@@ -66,6 +66,11 @@ const INIT_GATE_WAIT_MS = 2_000;
 // Collapse FS event bursts (rename + rename of .tmp, multi-process writers) to
 // one revisioned emit.
 const WATCHER_DEBOUNCE_MS = 50;
+// Reinstall backoff after a watcher error or a failed install. A dead watcher
+// leaves this slot permanently blind to sibling rotations (no reconcile, no
+// adoption), so it is retried forever rather than given up on.
+const WATCHER_REINSTALL_INITIAL_MS = 1_000;
+const WATCHER_REINSTALL_MAX_MS = 30_000;
 // §6 migration: overall abort deadline threaded through the probes, lock waits,
 // and the in-lock refresh. Set above one healthy probe + one refresh timeout
 // (~10s each is the inner bound) so a slow-but-alive rotate finishes on its own
@@ -96,6 +101,9 @@ export class FileTokenStore {
   private revision = 0;
   private watcher: FSWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private watcherReinstallTimer: NodeJS.Timeout | null = null;
+  private watcherReinstallDelayMs: number = WATCHER_REINSTALL_INITIAL_MS;
+  private watcherWasInterrupted = false;
   // §6 single-flight: every window reads the same shared localStorage pair, so
   // the first migration call drives it and all concurrent/later calls adopt the
   // same result (retained for the process lifetime; a `retryable` outcome
@@ -162,6 +170,11 @@ export class FileTokenStore {
    * Directory watch + basename filter (same pattern as host-lifecycle pid
    * metadata watcher). More reliable than watching the file path itself, which
    * drops when the file is deleted and recreated.
+   *
+   * Self-healing: an FSEvents stream error (or a failed install) schedules a
+   * backoff reinstall instead of leaving the store blind for the rest of the
+   * process lifetime, and a successful REinstall emits a catch-up change so
+   * anything written while the watch was down is reconciled immediately.
    */
   private installWatcher(): void {
     if (this.disposed || this.watcher !== null) {
@@ -176,6 +189,8 @@ export class FileTokenStore {
           error: describeLogError(error),
         },
       );
+      this.watcherWasInterrupted = true;
+      this.scheduleWatcherReinstall();
       return;
     }
     try {
@@ -192,22 +207,50 @@ export class FileTokenStore {
         }
       });
       watcher.on("error", (err) => {
-        // Null the reference so a later reinstall path can recover. Without
-        // this, an FSEvents stream-reset leaves `watcher` non-null but inert
-        // for the rest of the process lifetime (host-lifecycle pattern).
+        // Null the reference and schedule the reinstall. Without this, an
+        // FSEvents stream-reset leaves the store blind for the rest of the
+        // process lifetime (host-lifecycle pattern, now with recovery).
         log.warn("[file-token-store] credentials watcher error", {
           error: describeLogError(err),
         });
         if (this.watcher === watcher) {
           this.watcher = null;
+          this.watcherWasInterrupted = true;
+          this.scheduleWatcherReinstall();
         }
       });
       this.watcher = watcher;
+      this.watcherReinstallDelayMs = WATCHER_REINSTALL_INITIAL_MS;
+      if (this.watcherWasInterrupted) {
+        this.watcherWasInterrupted = false;
+        log.info("[file-token-store] credentials watcher reinstalled");
+        // Catch up on anything written while the watch was down - a change
+        // event is a hint and the reconcile re-reads the store, so a spurious
+        // one is harmless while a missed one is a stale-session hazard.
+        this.scheduleEmitChange();
+      }
     } catch (error) {
       log.warn("[file-token-store] unable to install credentials watcher", {
         error: describeLogError(error),
       });
+      this.watcherWasInterrupted = true;
+      this.scheduleWatcherReinstall();
     }
+  }
+
+  private scheduleWatcherReinstall(): void {
+    if (this.disposed || this.watcherReinstallTimer !== null) {
+      return;
+    }
+    const delayMs = this.watcherReinstallDelayMs;
+    this.watcherReinstallDelayMs = Math.min(
+      delayMs * 2,
+      WATCHER_REINSTALL_MAX_MS,
+    );
+    this.watcherReinstallTimer = setTimeout(() => {
+      this.watcherReinstallTimer = null;
+      this.installWatcher();
+    }, delayMs);
   }
 
   private scheduleEmitChange(): void {
@@ -404,6 +447,10 @@ export class FileTokenStore {
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
+    }
+    if (this.watcherReinstallTimer !== null) {
+      clearTimeout(this.watcherReinstallTimer);
+      this.watcherReinstallTimer = null;
     }
     if (this.watcher !== null) {
       this.watcher.close();

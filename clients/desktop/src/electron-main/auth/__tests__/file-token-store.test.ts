@@ -8,9 +8,11 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -546,6 +548,38 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
         dispose();
       },
       WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+    );
+
+    it(
+      "recovers the watch after a failed install and emits a catch-up change",
+      async () => {
+        // Plant a FILE where the credentials DIRECTORY must go: the
+        // constructor's watcher install fails (mkdir ENOTDIR) and schedules
+        // the backoff reinstall instead of leaving the store blind forever.
+        const credsDir = dirname(credentialsPath());
+        mkdirSync(dirname(credsDir), { recursive: true, mode: 0o700 });
+        writeFileSync(credsDir, "not a directory", { mode: 0o600 });
+        const store = makeStore();
+        const changes: TokenStoreChange[] = [];
+        const dispose = store.subscribe((change) => {
+          changes.push(change);
+        });
+
+        // Unblock and land a write BEFORE the reinstall fires - the catch-up
+        // emit after the reinstall must surface it even though the watch was
+        // down when it happened.
+        rmSync(credsDir);
+        await writeCredentialsFile(credentialsPath(), EXTERNAL, 0);
+
+        await vi.waitFor(
+          () => {
+            expect(changes.some((change) => change.present)).toBe(true);
+          },
+          { timeout: WATCHER_DELIVERY_TIMEOUT_MS + 2_000 },
+        );
+        dispose();
+      },
+      WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS + 3_000,
     );
 
     it(

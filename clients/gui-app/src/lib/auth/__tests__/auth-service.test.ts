@@ -1186,7 +1186,9 @@ describe("AuthService", () => {
     });
 
     const start = service.start();
-    await vi.runAllTimersAsync();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
     await start;
 
     expect(useAuthStore.getState().status).toBe("signed-out");
@@ -1199,6 +1201,100 @@ describe("AuthService", () => {
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
     ]);
+
+    // The anti-latch: a transient startup failure arms the recovery loop
+    // rather than parking signed-out until an app restart. The next tick
+    // re-runs the validate+rotate cycle.
+    const callsBefore = calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    expect(calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("reconcile hands an expired-but-present file to the recovery loop, which rotates it in", async () => {
+    // A sibling wrote (or left) a file whose access token has expired past its
+    // 4h TTL while its 30d refresh token is perfectly good. The watcher-driven
+    // reconcile must not latch signed-out over it: it hands off to the
+    // recovery loop, whose locked rotate mints a fresh pair and signs in.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      const bearer = init?.headers?.Authorization ?? "";
+      if (url === VALIDATION_URL) {
+        return bearer === "Bearer rotated-fresh-token"
+          ? okWithProfile()
+          : status(401);
+      }
+      if (url === REFRESH_URL) {
+        return okWithRefreshToken("rotated-fresh-token");
+      }
+      return status(500);
+    });
+
+    // The sibling's write lands: file present, access token expired.
+    await host.tokenStore.signIn(
+      { token: "expired-file-token", refreshToken: "good-refresh-token" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    // Let the reconcile settle: validate 401 -> recovery scheduled.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // First recovery tick: validate 401 -> locked rotate -> fresh pair -> in.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "rotated-fresh-token",
+    );
+    expect((await host.tokenStore.get())?.token).toBe("rotated-fresh-token");
+  });
+
+  it("recovers the stored session once authn becomes reachable again", async () => {
+    // The RCA headline case: the app boots while its authn is still coming up
+    // (or a sibling dev slot owns the file and this slot's backend lags). The
+    // transient failure must not latch - when authn answers, the recovery
+    // loop re-validates and signs back in with no user action.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "late-authn-token", refreshToken: "late-authn-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    let reachable = false;
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (!reachable) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    reachable = true;
+    // First recovery tick fires after the initial 1s backoff.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
+    expect(service.getLastError()).toBeNull();
   });
 
   it("keeps stored credentials when startup user lookup fails closed and refresh is transient", async () => {
@@ -1226,7 +1322,6 @@ describe("AuthService", () => {
     });
 
     const start = service.start();
-    await vi.runAllTimersAsync();
     await start;
 
     expect(useAuthStore.getState().status).toBe("signed-out");
@@ -1239,6 +1334,12 @@ describe("AuthService", () => {
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
     ]);
+
+    // Transient refresh (503) arms the recovery loop - the next tick retries
+    // the validate+rotate cycle instead of latching signed-out.
+    const callsBefore = calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls.length).toBeGreaterThan(callsBefore);
   });
 
   it("surfaces session-expired (file kept) when startup user lookup and refresh are genuinely rejected", async () => {

@@ -1,6 +1,14 @@
+import { createHash } from "node:crypto";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { readCredentialsFile, type StoredCredentials } from "./credentials";
-import { fileMtimeMsOrZero } from "./credentials-fs";
-import { withCredentialsLock } from "./credentials-lock";
+import { errorCode, fileMtimeMsOrZero } from "./credentials-fs";
+import {
+  isHolderProvablyDead,
+  isProcessAlive,
+  ownPidStartFingerprint,
+  queryPidStartFingerprint,
+  withCredentialsLock,
+} from "./credentials-lock";
 import {
   commitMutation,
   defaultSidecarState,
@@ -70,6 +78,7 @@ export type MutationOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "spend-pending"
   | "refresh-rejected"
   | "refresh-network"
   | "commit-failed";
@@ -80,8 +89,16 @@ export type MutationOutcome =
  *   - `superseded`    -> the file pair the caller should adopt instead;
  *   - `user-mismatch` -> the foreign file pair (for the reconcile worker);
  *   - `commit-failed` -> the minted pair the caller keeps active in memory;
- * and is `null` for `deleted`/`tombstoned`/`lock-busy`/`refresh-rejected`/
- * `refresh-network`.
+ * and is `null` for `deleted`/`tombstoned`/`lock-busy`/`spend-pending`/
+ * `refresh-rejected`/`refresh-network`.
+ *
+ * `spend-pending` is transient, exactly like `lock-busy`: a SIBLING process
+ * spent the on-disk refresh token but has not landed the successor pair yet
+ * (its local commit failed; its in-process continuation is retrying). Spending
+ * the same base again would be a server-side reuse - with rotation-replay
+ * controls live that reads as credential theft and can kill the whole refresh
+ * family - so the intent defers instead. The caller retries later; by then the
+ * sibling has landed (adopt via `superseded`) or its marker has aged out.
  */
 export interface MutationResult {
   readonly outcome: MutationOutcome;
@@ -191,6 +208,153 @@ type PendingContinuation =
       readonly tombstoneEpoch: number;
     };
 
+/**
+ * The spent-base marker - the cross-PROCESS complement of the in-memory
+ * commit-failed continuation. The continuation (below) is deliberately never
+ * written to disk, so without a marker a SIBLING process reading a spent base
+ * off disk would pass the CAS guard and spend the same refresh token a second
+ * time - server-side reuse, which rotation-replay controls read as credential
+ * theft (and can kill the whole refresh family).
+ *
+ * Lifecycle: armed under the lock IMMEDIATELY BEFORE the refresh spend (an
+ * intent record, so a crash at ANY point between spend and commit still
+ * leaves the base guarded), and cleared on every locally-settled outcome - a
+ * landed commit, an explicit `rejected` (the base is dead anyway), a landed
+ * or abandoned continuation, or a landed sign-in/sign-out. It deliberately
+ * SURVIVES a `network-error` refresh: whether that request spent the base
+ * server-side is unknowable, so siblings stay deferred while the owner (who
+ * recognizes its own marker) retries.
+ *
+ * The record carries ONLY a sha256 digest of the base's access token plus the
+ * owner's pid + start-time fingerprint - no secret material, nothing
+ * replayable. It lives in its own file (not a new `credentials.meta.json`
+ * key) because older builds' strict sidecar parsers would read an unknown key
+ * as malformed and fail automatic mutations closed; an extra sibling file is
+ * invisible to them.
+ *
+ * Unblocking mirrors the lock's holder-liveness rules exactly: a marker whose
+ * owner is provably dead (pid gone, or start-time fingerprint mismatch) is
+ * reclaimed immediately; an uncertain owner is assumed live and the
+ * `SPENT_BASE_MARKER_TTL_MS` age-out bounds the wait. Reclaiming risks at
+ * most one server-side replay/reject of an already-spent base - strictly
+ * better than the unconditional sibling re-spend it replaces.
+ */
+interface SpentBaseMarker {
+  readonly spentTokenDigest: string;
+  readonly at: string;
+  readonly ownerPid: number;
+  readonly ownerFingerprint: string | null;
+}
+
+const SPENT_BASE_MARKER_TTL_MS = 60_000;
+
+function spentBaseMarkerPath(credentialsPath: string): string {
+  return `${credentialsPath}.pending-spend.json`;
+}
+
+function digestToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+/** Total read: absent/malformed -> null (a marker is advisory coordination). */
+async function readSpentBaseMarker(
+  credentialsPath: string,
+): Promise<SpentBaseMarker | null> {
+  let raw: string;
+  try {
+    raw = await readFile(spentBaseMarkerPath(credentialsPath), "utf8");
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return null;
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof obj.spentTokenDigest !== "string" ||
+    obj.spentTokenDigest.length === 0 ||
+    typeof obj.at !== "string" ||
+    typeof obj.ownerPid !== "number"
+  ) {
+    return null;
+  }
+  return {
+    spentTokenDigest: obj.spentTokenDigest,
+    at: obj.at,
+    ownerPid: obj.ownerPid,
+    ownerFingerprint:
+      typeof obj.ownerFingerprint === "string" ? obj.ownerFingerprint : null,
+  };
+}
+
+function markerIsFresh(marker: SpentBaseMarker, nowMs: number): boolean {
+  const atMs = Date.parse(marker.at);
+  if (Number.isNaN(atMs)) return false;
+  // A future timestamp (clock step) must not extend the block window.
+  return nowMs - atMs < SPENT_BASE_MARKER_TTL_MS && atMs <= nowMs;
+}
+
+/** This process armed the marker. A live pid is unique, so a pid match while
+ *  we are running means us; the fingerprint only tightens the recycled-pid
+ *  case (where a mismatch is ALSO caught by the provably-dead probe). */
+function isOwnSpentBaseMarker(marker: SpentBaseMarker): boolean {
+  if (marker.ownerPid !== process.pid) return false;
+  const own = ownPidStartFingerprint();
+  return (
+    marker.ownerFingerprint === null ||
+    own === null ||
+    marker.ownerFingerprint === own
+  );
+}
+
+/** Same decision as the lock's dead-holder takeover, applied to the marker. */
+function markerOwnerProvablyDead(marker: SpentBaseMarker): boolean {
+  if (!isProcessAlive(marker.ownerPid)) return true;
+  return isHolderProvablyDead({
+    alive: true,
+    recordedFingerprint: marker.ownerFingerprint,
+    currentFingerprint: queryPidStartFingerprint(marker.ownerPid),
+  });
+}
+
+/** Best-effort: a failed arm degrades to the pre-marker behavior (no sibling
+ *  protection), never worse, so the failure is swallowed rather than turned
+ *  into a spurious rotate error on an otherwise-healthy path. */
+async function writeSpentBaseMarker(
+  credentialsPath: string,
+  spentToken: string,
+): Promise<void> {
+  const marker: SpentBaseMarker = {
+    spentTokenDigest: digestToken(spentToken),
+    at: new Date().toISOString(),
+    ownerPid: process.pid,
+    ownerFingerprint: ownPidStartFingerprint(),
+  };
+  try {
+    await writeFile(
+      spentBaseMarkerPath(credentialsPath),
+      JSON.stringify(marker) + "\n",
+      { encoding: "utf8", mode: 0o600 },
+    );
+  } catch {
+    // swallowed - see doc comment
+  }
+}
+
+/** Best-effort, ENOENT-tolerant. */
+async function clearSpentBaseMarker(credentialsPath: string): Promise<void> {
+  try {
+    await unlink(spentBaseMarkerPath(credentialsPath));
+  } catch {
+    // absent or unremovable - either way liveness + TTL bound the damage
+  }
+}
+
 export function createCredentialsMutationStore(
   options: CredentialsMutationStoreOptions,
 ): CredentialsMutationStore {
@@ -203,6 +367,19 @@ export function createCredentialsMutationStore(
   let pending: PendingContinuation | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
   let disposed = false;
+
+  /**
+   * Clear the spent-base marker ONLY if it still names `spentToken`'s digest.
+   * Runs under the lock. Guarded so a process resolving a long-abandoned
+   * continuation can never clobber a NEWER marker a sibling wrote for a later
+   * base (that marker still protects a live pending spend).
+   */
+  async function clearOwnSpentBaseMarker(spentToken: string): Promise<void> {
+    const marker = await readSpentBaseMarker(paths.credentialsPath);
+    if (marker !== null && marker.spentTokenDigest === digestToken(spentToken)) {
+      await clearSpentBaseMarker(paths.credentialsPath);
+    }
+  }
 
   async function loadState(interactive: boolean): Promise<SidecarState> {
     const read = await readSidecar(paths.metaPath);
@@ -241,13 +418,16 @@ export function createCredentialsMutationStore(
 
     if (p.kind === "pair") {
       // Sign-out won, a sibling rotated, or the account switched -> drop the
-      // pending pair and defer to disk (adopt on the next read).
+      // pending pair and defer to disk (adopt on the next read). The marker
+      // for OUR spent base is released with it: the base it guarded is no
+      // longer on disk, so there is nothing left to protect.
       if (
         file === null ||
         file.user.id !== p.pair.user.id ||
         file.token !== p.expectedToken
       ) {
         pending = null;
+        await clearOwnSpentBaseMarker(p.expectedToken);
         return state;
       }
       const commit = await commitMutation({
@@ -258,6 +438,7 @@ export function createCredentialsMutationStore(
       });
       if (commit.kind === "committed") {
         pending = null;
+        await clearOwnSpentBaseMarker(p.expectedToken);
         return commit.state;
       }
       return state; // still failing -> keep pending, retry later
@@ -426,6 +607,28 @@ export function createCredentialsMutationStore(
           // A sibling already rotated: adopt the file's pair, spend nothing.
           return { outcome: "superseded", credentials: file };
         }
+        // Cross-process spent-base gate (before the spend, like every other
+        // guard): a live sibling armed a marker for THIS base - it spent (or
+        // may have spent) the refresh token and has not landed the successor
+        // yet. Spending it again would be a server-side reuse, so defer. Our
+        // own residue, an orphan for a superseded base, a provably-dead
+        // owner's marker, or an aged-out one is reclaimed instead.
+        const marker = await readSpentBaseMarker(paths.credentialsPath);
+        if (marker !== null) {
+          const blocked =
+            marker.spentTokenDigest === digestToken(file.token) &&
+            !isOwnSpentBaseMarker(marker) &&
+            !markerOwnerProvablyDead(marker) &&
+            markerIsFresh(marker, Date.now());
+          if (blocked) {
+            return { outcome: "spend-pending", credentials: null };
+          }
+          await clearSpentBaseMarker(paths.credentialsPath);
+        }
+        // Arm the marker BEFORE the spend (an intent record): a crash at any
+        // point past the refresh call leaves the base guarded on disk, and a
+        // network-ambiguous refresh (below) keeps it armed on purpose.
+        await writeSpentBaseMarker(paths.credentialsPath, file.token);
         const refreshToken = args.refreshTokenOverride ?? file.refreshToken;
         const refreshed = await refresh({
           token: file.token,
@@ -433,9 +636,15 @@ export function createCredentialsMutationStore(
           signal: args.signal,
         });
         if (refreshed.kind === "network-error") {
+          // Whether the request spent the base server-side is unknowable, so
+          // the marker deliberately stays armed: siblings defer while this
+          // process (which recognizes its own marker) retries.
           return { outcome: "refresh-network", credentials: null };
         }
         if (refreshed.kind === "rejected") {
+          // The base is dead regardless of who spends it - nothing left for
+          // the marker to protect.
+          await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "refresh-rejected", credentials: null };
         }
         const next: StoredCredentials = {
@@ -451,10 +660,13 @@ export function createCredentialsMutationStore(
           currentState: state,
         });
         if (commit.kind === "committed") {
+          await clearSpentBaseMarker(paths.credentialsPath);
           return { outcome: "applied", credentials: next };
         }
-        // Post-spend local-commit failure: keep the minted pair active in memory
-        // and land it under a fresh lock later.
+        // Post-spend local-commit failure: keep the minted pair active in
+        // memory and land it under a fresh lock later. The armed marker is
+        // what stops a SIBLING process from re-spending the base this
+        // process just burned.
         pending = { kind: "pair", expectedToken: file.token, pair: next };
         scheduleContinuationRetry();
         return { outcome: "commit-failed", credentials: next };
@@ -492,10 +704,14 @@ export function createCredentialsMutationStore(
         });
         // Interactive intent: on a persistent local failure the caller surfaces
         // the error and the user retries - the device-flow pair is re-obtainable,
-        // so no background continuation is armed.
-        return commit.kind === "committed"
-          ? { outcome: "applied", credentials: resolved }
-          : { outcome: "commit-failed", credentials: resolved };
+        // so no background continuation is armed. A landed sign-in replaces the
+        // session wholesale, so any spent-base marker is an orphan - clear it
+        // rather than leave it to lazy cleanup.
+        if (commit.kind === "committed") {
+          await clearSpentBaseMarker(paths.credentialsPath);
+          return { outcome: "applied", credentials: resolved };
+        }
+        return { outcome: "commit-failed", credentials: resolved };
       },
     );
   }
@@ -512,10 +728,13 @@ export function createCredentialsMutationStore(
           currentState: state,
         });
         // A failed explicit sign-out must surface and stay signed in (§5), never
-        // claim signed-out without the delete landing.
-        return commit.kind === "committed"
-          ? { outcome: "deleted", credentials: null }
-          : { outcome: "commit-failed", credentials: null };
+        // claim signed-out without the delete landing. A landed sign-out deletes
+        // the file the marker was guarding - remove the marker with it.
+        if (commit.kind === "committed") {
+          await clearSpentBaseMarker(paths.credentialsPath);
+          return { outcome: "deleted", credentials: null };
+        }
+        return { outcome: "commit-failed", credentials: null };
       },
     );
   }

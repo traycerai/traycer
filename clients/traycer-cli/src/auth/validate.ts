@@ -137,6 +137,7 @@ async function rotateStaleCredentials(
         : { kind: "rejected" };
     case "refresh-network":
     case "lock-busy":
+    case "spend-pending":
       logger.warn("Stored credential validation rotate hit transient failure", {
         environment: config.environment,
         outcome: result.outcome,

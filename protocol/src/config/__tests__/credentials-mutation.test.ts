@@ -1,10 +1,13 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,6 +22,7 @@ import {
   type RefreshFn,
   type RefreshResult,
 } from "../credentials-mutation";
+import { queryPidStartFingerprint } from "../credentials-lock";
 import { writeSidecarState } from "../credentials-wal";
 
 const CREDS: StoredCredentials = {
@@ -719,6 +723,247 @@ describe("credentials mutation store", () => {
         expect(refresh.calls()).toBe(1); // no second spend
         expect(store.hasPendingContinuation()).toBe(true);
         chmodSync(workDir, 0o700); // afterEach also restores
+      },
+    );
+  });
+
+  describe("spent-base marker (cross-process double-spend gate)", () => {
+    function markerPath(): string {
+      return `${credentialsPath}.pending-spend.json`;
+    }
+
+    function sha256(token: string): string {
+      return createHash("sha256").update(token, "utf8").digest("hex");
+    }
+
+    // A marker as another LIVE process would have armed it: the vitest
+    // parent's pid + real fingerprint, so the provably-dead probe sees a
+    // living foreign owner.
+    function writeForeignMarker(over: {
+      readonly token: string;
+      readonly ageMs: number;
+    }): void {
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(over.token),
+          at: new Date(Date.now() - over.ageMs).toISOString(),
+          ownerPid: process.ppid,
+          ownerFingerprint: queryPidStartFingerprint(process.ppid),
+        }),
+        { mode: 0o600 },
+      );
+    }
+
+    async function waitUntil(check: () => boolean): Promise<void> {
+      const deadline = Date.now() + 3_000;
+      while (!check()) {
+        if (Date.now() > deadline) throw new Error("waitUntil timed out");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+
+    it("defers with spend-pending on a live foreign owner's fresh marker, spending nothing", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("spend-pending");
+      expect(stub.calls()).toBe(0);
+      // The marker survives - the owner still needs it.
+      expect(existsSync(markerPath())).toBe(true);
+    });
+
+    it("reclaims a foreign marker past the TTL and spends", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: CREDS.token, ageMs: 61_000 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("reclaims a provably-dead owner's marker immediately", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      // A pid that cannot be a live process paired with a real-shaped record.
+      writeFileSync(
+        markerPath(),
+        JSON.stringify({
+          spentTokenDigest: sha256(CREDS.token),
+          at: new Date().toISOString(),
+          ownerPid: 2 ** 22 - 7,
+          ownerFingerprint: "long-gone",
+        }),
+        { mode: 0o600 },
+      );
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+    });
+
+    it("ignores an orphaned marker for a superseded base", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: "some-older-token", ageMs: 0 });
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(stub.calls()).toBe(1);
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("keeps its own marker armed across a network-ambiguous refresh, without self-blocking the retry", async () => {
+      let mode: "network" | "ok" = "network";
+      const stub = refreshStub((token) =>
+        mode === "network" ? { kind: "network-error" } : rotateOk(token),
+      );
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+
+      const first = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      expect(first.outcome).toBe("refresh-network");
+      // The ambiguous spend leaves the marker guarding the base for siblings.
+      expect(existsSync(markerPath())).toBe(true);
+      const marker = JSON.parse(readFileSync(markerPath(), "utf8")) as {
+        spentTokenDigest: string;
+        ownerPid: number;
+      };
+      expect(marker.spentTokenDigest).toBe(sha256(CREDS.token));
+      expect(marker.ownerPid).toBe(process.pid);
+
+      // The owner's own retry is not blocked by its own marker.
+      mode = "ok";
+      const second = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+      expect(second.outcome).toBe("applied");
+      expect(stub.calls()).toBe(2);
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("clears the marker on an explicit refresh rejection", async () => {
+      const stub = refreshStub(() => ({ kind: "rejected" }));
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+
+      const result = await store.rotate({
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      });
+
+      expect(result.outcome).toBe("refresh-rejected");
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it("a landed interactive sign-in clears any marker", async () => {
+      const stub = refreshStub(rotateOk);
+      const store = makeStore(stub.fn);
+      await seedSignedIn(store);
+      writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+
+      await seedSignedIn(store);
+
+      expect(existsSync(markerPath())).toBe(false);
+    });
+
+    it.runIf(canForceCommitFailure)(
+      "arms the marker through a post-spend commit failure; a foreign owner defers; the landed continuation releases it",
+      async () => {
+        const stubA = refreshStub((token) => {
+          // Freeze the credentials+meta dir AFTER the marker is armed and the
+          // spend has happened, so only the WAL commit fails.
+          chmodSync(workDir, 0o500);
+          return rotateOk(token);
+        });
+        const storeA = makeStore(stubA.fn);
+        await seedSignedIn(storeA);
+
+        const failed = await storeA.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(failed.outcome).toBe("commit-failed");
+        expect(storeA.hasPendingContinuation()).toBe(true);
+        // The marker landed BEFORE the freeze and guards the spent base.
+        expect(existsSync(markerPath())).toBe(true);
+
+        // Simulate the sibling-PROCESS view: in-process, store B shares our
+        // pid, so re-stamp the marker's owner as the (live) parent process.
+        chmodSync(workDir, 0o700);
+        writeForeignMarker({ token: CREDS.token, ageMs: 0 });
+        chmodSync(workDir, 0o500);
+
+        const stubB = refreshStub(rotateOk);
+        const storeB = makeStore(stubB.fn);
+        const deferred = await storeB.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(deferred.outcome).toBe("spend-pending");
+        expect(stubB.calls()).toBe(0);
+
+        // Unfreeze: A's continuation lands the minted pair and releases the
+        // marker; B then adopts via the normal superseded path.
+        chmodSync(workDir, 0o700);
+        await waitUntil(() => !storeA.hasPendingContinuation());
+        expect(existsSync(markerPath())).toBe(false);
+
+        const adopted = await storeB.rotate({
+          expectedUserId: CREDS.user.id,
+          expectedToken: CREDS.token,
+          refreshTokenOverride: null,
+          signal: null,
+        });
+        expect(adopted.outcome).toBe("superseded");
+        expect(stubB.calls()).toBe(0);
+        expect(adopted.credentials?.token).toBe(`${CREDS.token}::r`);
       },
     );
   });
