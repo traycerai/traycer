@@ -1,6 +1,7 @@
 /**
  * Artifact image node view: loading / unavailable / ready states, SVG
- * thumbnails via <img>, and shared lightbox path.
+ * thumbnails via <img>, and shared lightbox path. mediaType is stored on the
+ * node (from prepare) and forwarded to the blob resolver + lightbox.
  */
 import {
   cleanup,
@@ -28,14 +29,29 @@ const blobSrcState = vi.hoisted((): { value: AttachmentBlobState } => ({
   },
 }));
 
+const useAttachmentBlobSrcMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      _hash: string | null,
+      _mediaType: string,
+      _dataUrl: string | null,
+    ): AttachmentBlobState => blobSrcState.value,
+  ),
+);
+
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
-  useAttachmentBlobSrc: () => blobSrcState.value,
+  useAttachmentBlobSrc: (
+    hash: string | null,
+    mediaType: string,
+    dataUrl: string | null,
+  ) => useAttachmentBlobSrcMock(hash, mediaType, dataUrl),
 }));
 
 function mountImageEditor(attrs: {
   readonly src: string;
   readonly alt: string;
   readonly attachmentHash: string;
+  readonly mediaType: string | null;
 }): Editor {
   const ydoc = new Y.Doc();
   const fragment = ydoc.getXmlFragment("default");
@@ -63,10 +79,13 @@ function mountImageEditor(attrs: {
 afterEach(() => {
   cleanup();
   blobSrcState.value = { status: "loading", src: null };
+  useAttachmentBlobSrcMock.mockClear();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
   blobSrcState.value = { status: "loading", src: null };
+  useAttachmentBlobSrcMock.mockClear();
 });
 
 describe("ArtifactImageNodeView", () => {
@@ -76,6 +95,7 @@ describe("ArtifactImageNodeView", () => {
       src: "images/hash.png",
       alt: "pending",
       attachmentHash: "hash",
+      mediaType: "image/png",
     });
     render(
       <EditorContext.Provider value={{ editor }}>
@@ -84,6 +104,11 @@ describe("ArtifactImageNodeView", () => {
     );
     expect(await screen.findByText(/waiting for image sync/i)).toBeTruthy();
     expect(screen.queryByRole("img")).toBeNull();
+    expect(useAttachmentBlobSrcMock).toHaveBeenCalledWith(
+      "hash",
+      "image/png",
+      null,
+    );
     editor.destroy();
   });
 
@@ -93,6 +118,7 @@ describe("ArtifactImageNodeView", () => {
       src: "images/missing.png",
       alt: "gone",
       attachmentHash: "missing",
+      mediaType: "image/png",
     });
     render(
       <EditorContext.Provider value={{ editor }}>
@@ -101,10 +127,15 @@ describe("ArtifactImageNodeView", () => {
     );
     expect(await screen.findByText(/image is unavailable/i)).toBeTruthy();
     expect(screen.queryByRole("img")).toBeNull();
+    expect(useAttachmentBlobSrcMock).toHaveBeenCalledWith(
+      "missing",
+      "image/png",
+      null,
+    );
     editor.destroy();
   });
 
-  it("renders a ready PNG through the shared lightbox path", async () => {
+  it("renders a ready PNG through the shared lightbox path with stored mediaType", async () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/ready-png",
@@ -113,6 +144,7 @@ describe("ArtifactImageNodeView", () => {
       src: "images/ready.png",
       alt: "ready shot",
       attachmentHash: "ready",
+      mediaType: "image/png",
     });
     const { container } = render(
       <EditorContext.Provider value={{ editor }}>
@@ -126,6 +158,11 @@ describe("ArtifactImageNodeView", () => {
     });
     expect(img.getAttribute("src")).toBe("blob:http://localhost/ready-png");
     expect(img.getAttribute("alt")).toBe("ready shot");
+    expect(useAttachmentBlobSrcMock).toHaveBeenCalledWith(
+      "ready",
+      "image/png",
+      null,
+    );
     // Lightbox trigger wraps the thumbnail.
     expect(
       screen.getByRole("button", { name: /open ready shot/i }),
@@ -134,15 +171,27 @@ describe("ArtifactImageNodeView", () => {
     editor.destroy();
   });
 
-  it("renders SVG thumbnails with <img>, not inline SVG markup", async () => {
+  it("renders SVG thumbnails with <img> and opens the shared sanitizer lightbox", async () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/ready-svg",
     };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response("<svg xmlns='http://www.w3.org/2000/svg'></svg>", {
+            status: 200,
+            headers: { "Content-Type": "image/svg+xml" },
+          }),
+        ),
+      ),
+    );
     const editor = mountImageEditor({
       src: "images/icon.svg",
       alt: "icon",
       attachmentHash: "icon-hash",
+      mediaType: "image/svg+xml",
     });
     const { container } = render(
       <EditorContext.Provider value={{ editor }}>
@@ -159,7 +208,25 @@ describe("ArtifactImageNodeView", () => {
     // Thumbnail is an <img> (chat SVG policy). Lucide action icons may still
     // appear as decorative SVGs in the shared lightbox chrome.
     expect(container.querySelectorAll("img")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /open icon/i })).toBeTruthy();
+    expect(useAttachmentBlobSrcMock).toHaveBeenCalledWith(
+      "icon-hash",
+      "image/svg+xml",
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /open icon/i }));
+    // Shared SVG lightbox loads through the sanitizer path (not a raw <img>).
+    expect(await screen.findByLabelText(/loading svg/i)).toBeTruthy();
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const [url, init] = calls[0] as [
+        RequestInfo | URL,
+        RequestInit | undefined,
+      ];
+      expect(url).toBe("blob:http://localhost/ready-svg");
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
     editor.destroy();
   });
 });

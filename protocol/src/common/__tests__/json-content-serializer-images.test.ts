@@ -71,4 +71,25 @@ describe("jsonContentToMarkdown image nodes", () => {
       }),
     ).toBe("after");
   });
+
+  it("escapes brackets and backslashes in filename-derived alt text", () => {
+    const hash = "feedface0123456789";
+    const markdown = toMarkdown({
+      type: "doc",
+      content: [
+        {
+          type: "image",
+          attrs: {
+            src: `images/${hash}.png`,
+            alt: String.raw`a]b\c.png`,
+            attachmentHash: hash,
+          },
+        },
+      ],
+    });
+    expect(markdown).toBe(String.raw`![a\]b\\c.png](images/${hash}.png)`);
+    expect(markdown).not.toMatch(/attachmentHash/i);
+    // Hash may appear in the relative src path, never as a free-standing token.
+    expect(markdown).not.toContain(`(${hash})`);
+  });
 });

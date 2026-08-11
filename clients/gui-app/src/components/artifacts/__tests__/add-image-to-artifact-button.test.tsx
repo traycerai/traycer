@@ -37,7 +37,11 @@ const prepareRemote = vi.hoisted(() =>
   ),
 );
 const finish = vi.hoisted(() =>
-  vi.fn((): Promise<boolean> => Promise.resolve(true)),
+  vi.fn(
+    (): Promise<
+      "committed" | "aborted" | "not-yet-converged" | "unknown-operation"
+    > => Promise.resolve("committed"),
+  ),
 );
 
 const acquireArtifactBodyLease = vi.hoisted(() =>
@@ -123,7 +127,7 @@ afterEach(() => {
     mediaType: "image/png" as const,
     src: "images/hash-remote.png",
   });
-  finish.mockResolvedValue(true);
+  finish.mockResolvedValue("committed");
   vi.unstubAllGlobals();
 });
 
@@ -173,8 +177,8 @@ describe("AddImageToArtifactButton", () => {
     expect(acquireArtifactBodyLease).toHaveBeenCalledWith("artifact-a");
   });
 
-  it("rolls back the Y node and aborts the operation when finish fails mid-sequence", async () => {
-    finish.mockResolvedValueOnce(false);
+  it("rolls back the Y node when finish returns aborted mid-sequence", async () => {
+    finish.mockResolvedValueOnce("aborted");
     render(
       <AddImageToArtifactButton
         source={{ kind: "client", url: "blob:http://localhost/img" }}
@@ -191,6 +195,50 @@ describe("AddImageToArtifactButton", () => {
     expect(await screen.findByText(/could not be committed/i)).toBeTruthy();
     expect(imageNodeCount()).toBe(0);
     expect(finish).toHaveBeenCalledWith("artifact-a", "op-client", true);
+  });
+
+  it("keeps the Y node when finish returns not-yet-converged", async () => {
+    finish.mockResolvedValueOnce("not-yet-converged");
+    render(
+      <AddImageToArtifactButton
+        source={{ kind: "client", url: "blob:http://localhost/img" }}
+        alt="from chat"
+        className={undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /add image to artifact/i }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /spec a/i }));
+
+    await waitFor(() => {
+      expect(finish).toHaveBeenCalledWith("artifact-a", "op-client", true);
+    });
+    expect(imageNodeCount()).toBe(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the Y node when finish returns unknown-operation", async () => {
+    finish.mockResolvedValueOnce("unknown-operation");
+    render(
+      <AddImageToArtifactButton
+        source={{ kind: "client", url: "blob:http://localhost/img" }}
+        alt="from chat"
+        className={undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /add image to artifact/i }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /spec a/i }));
+
+    await waitFor(() => {
+      expect(finish).toHaveBeenCalledWith("artifact-a", "op-client", true);
+    });
+    expect(imageNodeCount()).toBe(1);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("surfaces remote HTTPS snapshot-on-add failure in the picker and leaves no broken node", async () => {

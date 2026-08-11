@@ -1,12 +1,22 @@
 /**
  * Artifact paste/drop: prepare → insert at caret → finish commit, with
  * abort on failure/uninserted and size/type classification.
+ * Non-image path paste is disabled (`beginPathInsertion: () => null`).
  */
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { Editor } from "@tiptap/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
+import type { ArtifactImageFinishStatus } from "@/hooks/artifacts/use-artifact-image-operations";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
@@ -28,10 +38,13 @@ const finish = vi.hoisted(() =>
       _artifactId: string,
       _operationId: string,
       _commit: boolean,
-    ): Promise<boolean> => Promise.resolve(true),
+    ): Promise<ArtifactImageFinishStatus> => Promise.resolve("committed"),
   ),
 );
 const reportableErrorToast = vi.hoisted(() => vi.fn());
+const resolveDroppedFilePaths = vi.hoisted(() =>
+  vi.fn((_files: ReadonlyArray<File>) => Promise.resolve([] as string[])),
+);
 
 vi.mock("@/hooks/artifacts/use-artifact-image-operations", () => ({
   useArtifactImageOperations: () => ({
@@ -45,13 +58,12 @@ vi.mock("@/hooks/artifacts/use-artifact-image-operations", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
+      resolveDroppedFilePaths,
       copyDroppedFilePaths: (paths: string[]) => Promise.resolve([...paths]),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
   }),
 }));
-
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast,
 }));
@@ -88,6 +100,17 @@ function countImages(editor: Editor): number {
   return count;
 }
 
+function imageAlts(editor: Editor): string[] {
+  const alts: string[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "image") {
+      alts.push(String(node.attrs.alt ?? ""));
+    }
+    return true;
+  });
+  return alts;
+}
+
 function tinyPngFile(name: string): File {
   const bytes = Uint8Array.from(
     atob(
@@ -96,6 +119,45 @@ function tinyPngFile(name: string): File {
     (c) => c.charCodeAt(0),
   );
   return new File([bytes], name, { type: "image/png" });
+}
+
+function makeFileTransfer(files: ReadonlyArray<File>): {
+  readonly files: ReadonlyArray<File>;
+  readonly types: ReadonlyArray<string>;
+  readonly items: ReadonlyArray<{
+    readonly kind: string;
+    readonly type: string;
+    getAsFile: () => File | null;
+  }>;
+  getData: (type: string) => string;
+} {
+  return {
+    files,
+    types: files.length > 0 ? ["Files"] : [],
+    items: files.map((file) => ({
+      kind: "file",
+      type: file.type,
+      getAsFile: () => file,
+    })),
+    getData: () => "",
+  };
+}
+
+function editorHasAbsolutePathOrCode(editor: Editor, path: string): boolean {
+  if (editor.getText().includes(path)) return true;
+  if (editor.getHTML().includes(path)) return true;
+  let hasCode = false;
+  editor.state.doc.descendants((node) => {
+    if (
+      node.type.name === "code" ||
+      node.marks.some((m) => m.type.name === "code")
+    ) {
+      hasCode = true;
+      return false;
+    }
+    return true;
+  });
+  return hasCode;
 }
 
 afterEach(() => {
@@ -111,16 +173,18 @@ afterEach(() => {
     }),
   );
   finish.mockReset();
-  finish.mockResolvedValue(true);
+  finish.mockResolvedValue("committed");
   reportableErrorToast.mockReset();
+  resolveDroppedFilePaths.mockReset();
+  resolveDroppedFilePaths.mockResolvedValue([]);
 });
 
 beforeEach(() => {
   prepareBytes.mockClear();
   finish.mockClear();
   reportableErrorToast.mockClear();
+  resolveDroppedFilePaths.mockClear();
 });
-
 describe("useArtifactImagePaste", () => {
   it("ingests a pasteable image at the caret and finishes with commit", async () => {
     const editor = makeEditor();
@@ -168,8 +232,8 @@ describe("useArtifactImagePaste", () => {
     editor.destroy();
   });
 
-  it("removes the inserted node and surfaces when finish commit fails", async () => {
-    finish.mockResolvedValueOnce(false);
+  it("removes the inserted node and surfaces when finish commit returns aborted", async () => {
+    finish.mockResolvedValueOnce("aborted");
     const editor = makeEditor();
     const { result } = renderHook(() =>
       useArtifactImagePaste(editor, "epic-1", "artifact-1"),
@@ -186,6 +250,107 @@ describe("useArtifactImagePaste", () => {
       expect(countImages(editor)).toBe(0);
     });
     expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+    editor.destroy();
+  });
+
+  it("keeps the inserted node when finish returns not-yet-converged", async () => {
+    finish.mockResolvedValueOnce("not-yet-converged");
+    const editor = makeEditor();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+    });
+
+    await waitFor(() => {
+      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(countImages(editor)).toBe(1);
+    expect(reportableErrorToast).not.toHaveBeenCalled();
+    editor.destroy();
+  });
+
+  it("keeps the inserted node when finish returns unknown-operation", async () => {
+    finish.mockResolvedValueOnce("unknown-operation");
+    const editor = makeEditor();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+    });
+
+    await waitFor(() => {
+      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(countImages(editor)).toBe(1);
+    expect(reportableErrorToast).not.toHaveBeenCalled();
+    editor.destroy();
+  });
+
+  it("settles multi-image paste: removes only failed nodes and retains successful commits", async () => {
+    let prepareCount = 0;
+    prepareBytes.mockImplementation(() => {
+      prepareCount += 1;
+      const n = prepareCount;
+      return Promise.resolve({
+        ok: true as const,
+        operationId: `op-${n}`,
+        attachmentHash: `hash-${n}`,
+        mediaType: "image/png" as const,
+        src: `images/hash-${n}.png`,
+      });
+    });
+    finish.mockImplementation(
+      (
+        _artifactId: string,
+        operationId: string,
+        commit: boolean,
+      ): Promise<ArtifactImageFinishStatus> => {
+        if (!commit) return Promise.resolve("aborted");
+        if (operationId === "op-1") return Promise.resolve("aborted");
+        return Promise.resolve("committed");
+      },
+    );
+
+    const editor = makeEditor();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([
+        tinyPngFile("one.png"),
+        tinyPngFile("two.png"),
+        tinyPngFile("three.png"),
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+      expect(finish).toHaveBeenCalledWith("artifact-1", "op-2", true);
+      expect(finish).toHaveBeenCalledWith("artifact-1", "op-3", true);
+    });
+    await waitFor(() => {
+      expect(reportableErrorToast).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(countImages(editor)).toBe(2);
+    });
+    expect(imageAlts(editor).sort()).toEqual(["three.png", "two.png"]);
+    expect(finish).not.toHaveBeenCalledWith("artifact-1", "op-2", false);
+    expect(finish).not.toHaveBeenCalledWith("artifact-1", "op-3", false);
     editor.destroy();
   });
 
@@ -222,6 +387,44 @@ describe("useArtifactImagePaste", () => {
     expect(countImages(editor)).toBe(0);
     // Non-image files are filtered, not toasted as failures.
     expect(reportableErrorToast).not.toHaveBeenCalled();
+    editor.destroy();
+  });
+
+  it("does not insert absolute machine paths or inline-code for non-image paste", async () => {
+    const absolutePath = "/Users/me/projects/secret/notes.txt";
+    resolveDroppedFilePaths.mockResolvedValue([absolutePath]);
+    const editor = makeEditor();
+    const initialText = editor.getText();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    render(
+      <div
+        data-testid="artifact-paste-zone"
+        onPaste={result.current.paste.onPaste}
+        onDrop={result.current.paste.onDrop}
+      />,
+    );
+
+    const textFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+    fireEvent.paste(screen.getByTestId("artifact-paste-zone"), {
+      clipboardData: makeFileTransfer([textFile]),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // beginPathInsertion is disabled: no resolve, no absolute path, no code span.
+    expect(resolveDroppedFilePaths).not.toHaveBeenCalled();
+    expect(result.current.paste.isResolvingFilePaths).toBe(false);
+    expect(editor.getText()).toBe(initialText);
+    expect(editorHasAbsolutePathOrCode(editor, absolutePath)).toBe(false);
+    expect(prepareBytes).not.toHaveBeenCalled();
+    expect(countImages(editor)).toBe(0);
     editor.destroy();
   });
 });
