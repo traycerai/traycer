@@ -3960,6 +3960,37 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     ).toBe("merged");
   });
 
+  it("keeps the last-known tier when the refreshed base is unresolved", () => {
+    const lastKnown = entry({
+      worktreePath: "/wt/cold-base",
+      branch: "feat-cold-base",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const unresolvedBase: WorktreeHostEntryV14 = {
+      ...lastKnown,
+      branch: null,
+      gitRemovable: false,
+      owners: [],
+      branchStatus: null,
+      resolvedAt: null,
+    };
+    render(
+      listElement({
+        worktrees: [unresolvedBase],
+        enrichedByPath: new Map([[lastKnown.worktreePath, lastKnown]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("merged");
+  });
+
   it("combines retained activity with authoritative refreshed base facts", () => {
     const landed = entry({
       worktreePath: "/wt/landed",
@@ -4760,6 +4791,7 @@ describe("WorktreesList PR-number search", () => {
     screen.getByRole("button", {
       name: "Worktree actions for feat-pr-refresh",
     });
+    screen.getByRole("link", { name: /#731/ });
     expect(screen.queryByText("No worktrees match your search.")).toBeNull();
   });
 });

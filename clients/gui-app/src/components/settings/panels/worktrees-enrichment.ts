@@ -227,11 +227,6 @@ function selectSweepChunk(args: {
       perPathEnrichmentQueryKey(hostId, path),
     );
     if (state?.fetchStatus === "fetching") continue;
-    // An inactive filtered query can be garbage-collected after its retry
-    // budget is exhausted. Its old ledger entry must not outlive the cache
-    // entry: with no viewport observer and nothing left for Refresh to
-    // invalidate, that would otherwise make the path permanently ineligible.
-    if (state === undefined) ledger.delete(path);
     const needsProbe =
       state?.data === undefined ||
       state.isInvalidated ||
@@ -687,6 +682,7 @@ export function useWorktreeActivityEnrichment(
   const [sweepTick, bumpSweepTick] = useReducer((tick: number) => tick + 1, 0);
   const [seedTick, bumpSeedTick] = useReducer((tick: number) => tick + 1, 0);
   const seedsOutstandingRef = useRef(false);
+  const sweepLedgerRef = useRef<Map<string, SweepRetryState>>(new Map());
   // Two wake signals the identity-stable fold deliberately does NOT carry:
   //  - `invalidate` actions change no data, so the fold ignores them - but a
   //    refresh marks observer-less swept entries invalidated WITHOUT
@@ -705,6 +701,17 @@ export function useWorktreeActivityEnrichment(
       if (event.type !== "updated") return;
       if (!queryKeyHasPrefix(event.query.queryKey, scope)) return;
       if (event.action.type === "invalidate") {
+        // A filtered path's inactive query may have been GC'd after exhausting
+        // its retry budget, so there is no per-path query left for Refresh to
+        // invalidate. The method-scope invalidation is the explicit user-driven
+        // retry signal: re-arm only those missing queries here, never on GC
+        // alone (which would create periodic ten-probe bursts forever).
+        for (const path of sweepLedgerRef.current.keys()) {
+          const state = queryClient.getQueryState(
+            perPathEnrichmentQueryKey(hostId, path),
+          );
+          if (state === undefined) sweepLedgerRef.current.delete(path);
+        }
         bumpSweepTick();
       } else if (
         event.action.type === "success" &&
@@ -714,7 +721,6 @@ export function useWorktreeActivityEnrichment(
       }
     });
   }, [queryClient, hostId]);
-  const sweepLedgerRef = useRef<Map<string, SweepRetryState>>(new Map());
   const sweepInFlightRef = useRef(false);
   const sweepWakeTimerRef = useRef<number | null>(null);
   const sweepStatsRef = useRef({ fetchedCount: 0, drainLogged: true });

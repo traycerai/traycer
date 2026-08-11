@@ -784,10 +784,30 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       expect(requests).toHaveLength(10);
 
       // A strict filter can keep this path observer-less until TanStack
-      // garbage-collects its failed/cold query. Eviction must also retire the
-      // spent sweep ledger entry, otherwise no observer or later Refresh can
-      // ever recreate the query.
+      // garbage-collects its failed/cold query. GC alone must preserve the
+      // exhausted tombstone, or a permanently cold path would receive a new
+      // ten-probe burst every cache lifetime.
       fixture.queryClient.removeQueries({ queryKey: perPathKey("/wt/a") });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(10);
+
+      // A deliberate method-scope refresh is the recovery signal even though
+      // the missing per-path query itself no longer exists to be invalidated.
+      await act(async () => {
+        fixture.queryClient.setQueryData(baseKey(), {
+          worktrees: [],
+          nextCursor: null,
+        });
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "none",
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
       });

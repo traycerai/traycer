@@ -153,6 +153,11 @@ type WorktreeEnrichmentState = "ready" | "pending" | "unknown" | "unavailable";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
+
+const STALE_CLASSIFICATION_ENTRY_CACHE = new WeakMap<
+  WorktreeHostEntryV14,
+  WeakMap<WorktreeHostEntryV14, WorktreeHostEntryV14>
+>();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 
@@ -1947,7 +1952,18 @@ function mergeStaleActivityOntoBase(
   base: WorktreeHostEntryV14,
   enriched: WorktreeHostEntryV14,
 ): WorktreeHostEntryV14 {
-  return {
+  // A v1.4 unresolved base row is a schema-safe sentinel, not fresh truth.
+  // Preserve the last resolved entry wholesale until the base becomes
+  // authoritative; otherwise its null branch/owners would destabilize tiers.
+  if (base.resolvedAt === null) return enriched;
+  let byEnriched = STALE_CLASSIFICATION_ENTRY_CACHE.get(base);
+  if (byEnriched === undefined) {
+    byEnriched = new WeakMap();
+    STALE_CLASSIFICATION_ENTRY_CACHE.set(base, byEnriched);
+  }
+  const cached = byEnriched.get(enriched);
+  if (cached !== undefined) return cached;
+  const merged: WorktreeHostEntryV14 = {
     ...base,
     lastActivityAt: enriched.lastActivityAt,
     branchStatus: enriched.branchStatus,
@@ -1959,6 +1975,8 @@ function mergeStaleActivityOntoBase(
     atBaseCommit: enriched.atBaseCommit,
     resolvedAt: enriched.resolvedAt,
   };
+  byEnriched.set(enriched, merged);
+  return merged;
 }
 
 function worktreeFilterResolutionStatusText(
@@ -2255,6 +2273,7 @@ const WorktreeRow = memo(function WorktreeRow(
     entry.resolvedAt === null ? null : classifyWorktree(entry);
   const tierClassification =
     classificationEntry === null ? null : classifyWorktree(classificationEntry);
+  const displayEntry = classificationEntry ?? entry;
   const navigate = useNavigate();
   const openTask = useCallback(
     (epicId: string): void => {
@@ -2315,7 +2334,9 @@ const WorktreeRow = memo(function WorktreeRow(
             tier={tierClassification?.tier ?? classification?.tier ?? "review"}
             state={enrichment}
           />
-          {entry.resolvedAt === null ? null : <WorktreePrChips entry={entry} />}
+          {displayEntry.resolvedAt === null ? null : (
+            <WorktreePrChips entry={displayEntry} />
+          )}
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
