@@ -633,6 +633,70 @@ describe("createChatSessionStore", () => {
     ).toBeNull();
   });
 
+  it("acknowledges an earlier stream failure only on a live completed turn", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity(OWNER_ID);
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const notificationId =
+      "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
+    const fatalClose = {
+      kind: "fatalError" as const,
+      details: {
+        code: "CONNECTION_LOST",
+        reason: "Connection lost",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+
+    callbacks.onConnectionStatus("closed", fatalClose);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+
+    harness.handle.store.getState().retry();
+    const recoveredCallbacks = harness.callbacks();
+    startRunningTurn(recoveredCallbacks);
+    recoveredCallbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "turn.completed",
+        blockId: "turn-0",
+        timestamp: 4,
+        turnId: "turn-0",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+
+    recoveredCallbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "turn.completed",
+        blockId: "turn-1",
+        timestamp: 4,
+        turnId: "turn-1",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).not.toBeNull();
+
+    recoveredCallbacks.onConnectionStatus("closed", fatalClose);
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
+    ).toBeNull();
+  });
+
   it("retry re-subscribes and clears the fatal close", () => {
     let factoryCalls = 0;
     let lastCallbacks: ChatStreamCallbacks | null = null;

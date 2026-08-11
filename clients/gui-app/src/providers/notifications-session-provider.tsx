@@ -136,7 +136,6 @@ export function NotificationsSessionProvider(
   const previousStreamClientRef =
     useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(localStreamClient);
   const previousLocalHostIdRef = useRef<string | null>(localHostId);
-  const localSnapshotHostsRef = useRef(new Set<string>());
   // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
   const previousFeedModeRef = useRef<
@@ -147,23 +146,23 @@ export function NotificationsSessionProvider(
   const markEntityReadMutation = useNotificationMarkEntityRead();
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
-  // Producer timestamps come from different host clocks, while app-local
-  // failures use this renderer's clock. First observation of a completion is
-  // therefore the only causal boundary shared by both sources. The app-local
-  // store remembers it durably so reconnect snapshots and provider/renderer
-  // remounts cannot replay an old completion over a later failure.
+  // Notification-feed delivery is independent from the live chat stream. A
+  // newly observed row may describe an older turn that replicated late, so it
+  // cannot causally consume a renderer-local transport failure. Seed every
+  // completion into the durable replay ledger only; the live
+  // `turn.completed` event acknowledges app-local failures at the chat-store
+  // boundary where ordering is authoritative.
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
         readonly entry: HostNotificationEntryV21;
         readonly originHostId: string;
         readonly semanticId: string;
-        readonly mode: "observe" | "seed";
       }>,
     ): void => {
       const observedAt = Date.now();
       useAppLocalNotificationsStore.getState().recordCompletions(
-        inputs.flatMap(({ entry, originHostId, semanticId, mode }) => {
+        inputs.flatMap(({ entry, originHostId, semanticId }) => {
           if (entry.severity !== "done") return [];
           const entity = notificationEntityFromHostEntry(entry);
           if (entity === null) return [];
@@ -178,7 +177,7 @@ export function NotificationsSessionProvider(
                   sourceRef: entry.sourceRef,
                 }),
               },
-              entity: mode === "seed" ? null : entity,
+              entity: null,
               observedAt,
             },
           ];
@@ -279,20 +278,15 @@ export function NotificationsSessionProvider(
       if (localHostId !== hostId) return;
       if (frame.kind === "snapshot") {
         invalidateNotificationIndicators(queryClient, hostId, hostClient);
-        const mode = localSnapshotHostsRef.current.has(hostId)
-          ? "observe"
-          : "seed";
         recordCompletions(
           [...frame.attention.entries, ...frame.recent.entries].map(
             (entry) => ({
               entry,
               originHostId: hostId,
               semanticId: entry.id,
-              mode,
             }),
           ),
         );
-        localSnapshotHostsRef.current.add(hostId);
         return;
       }
       if (frame.kind === "cleared" || frame.kind === "removed") {
@@ -337,7 +331,6 @@ export function NotificationsSessionProvider(
           entry: frame.entry,
           originHostId: hostId,
           semanticId: frame.entry.id,
-          mode: "observe",
         },
       ]);
       const activeEntity = activeEntityRef.current;
@@ -581,13 +574,11 @@ export function NotificationsSessionProvider(
         onAuthError,
         onEntitlementDenied,
         ({ rows, arrivals }) => {
-          const arrivalIds = new Set(arrivals.map((row) => row.entryId));
           recordCompletions(
             rows.map((row) => ({
               entry: row.entry,
               originHostId: row.originHostId,
               semanticId: row.entryId,
-              mode: arrivalIds.has(row.entryId) ? "observe" : "seed",
             })),
           );
           displayCloudSnapshotArrivals(arrivals, {
@@ -603,11 +594,10 @@ export function NotificationsSessionProvider(
       useCloudNotificationsStore.getState().setConnectionState("unavailable");
       return;
     }
-    // Every transport session starts with a baseline snapshot. Receipts make
-    // previously seen completions harmless, while seeding unseen baseline
-    // rows keeps a reconnect or same-host user switch from treating retained
-    // history as a new causal success.
-    localSnapshotHostsRef.current.delete(streamHostId);
+    // Every transport session starts with a baseline snapshot. Keep durable,
+    // bounded receipts for replay bookkeeping, but never treat a row from
+    // this independently ordered feed as causal evidence over a renderer-local
+    // failure.
     disposerRef.current = openNotificationsStream(
       createNotificationsStream,
       onAuthError,

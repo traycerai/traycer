@@ -22,7 +22,10 @@ import type {
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
-import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
+import {
+  emitChatStreamErrorNotification,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
@@ -1323,6 +1326,27 @@ export function createChatSessionStore(
       onBlockDelta: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
+        }
+        // The chat stream is the only source that can prove a success happened
+        // after a renderer-local transport failure. Notification-feed rows
+        // arrive on an independent replicated stream, so their arrival order
+        // cannot establish lifecycle order. A live terminal completion can:
+        // acknowledge only this host-bound chat's earlier local failure.
+        // Matching the active turn also keeps a late terminal delta from an
+        // older turn from consuming a failure that belongs to the current
+        // one. If the connection closes after this event, the recurring
+        // failure write below flips the row unread again.
+        if (
+          frame.event.type === "turn.completed" &&
+          get().activeTurn?.turnId === frame.event.turnId
+        ) {
+          useAppLocalNotificationsStore
+            .getState()
+            .markEntityAsRead(
+              options.hostId,
+              { epicId: options.epicId, chatId: options.chatId },
+              Date.now(),
+            );
         }
         bufferedDeltas.push(frame.event);
         lease.requestFlush();

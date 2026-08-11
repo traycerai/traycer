@@ -908,7 +908,7 @@ describe("<NotificationsSessionProvider />", () => {
     expect(showNotificationMock).toHaveBeenCalledTimes(1);
   });
 
-  it("seeds cloud baselines without consuming failures, then consumes a new completion", async () => {
+  it("never lets an independently arriving cloud completion consume a local failure", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
@@ -1073,11 +1073,11 @@ describe("<NotificationsSessionProvider />", () => {
         useAppLocalNotificationsStore.getState().byId[
           "cross-plane-later-failure"
         ].readAt,
-      ).not.toBeNull();
+      ).toBeNull();
       expect(
         useAppLocalNotificationsStore.getState().byId["stale-frame-failure"]
           .readAt,
-      ).not.toBeNull();
+      ).toBeNull();
     });
   });
 
@@ -2150,7 +2150,7 @@ describe("<NotificationsSessionProvider />", () => {
     ).not.toBeNull();
   });
 
-  it("uses renderer observation order when the same chat completes", async () => {
+  it("does not infer causality from notification-feed observation order", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls, streamClient } =
       await renderHostNotificationsProvider();
@@ -2192,12 +2192,10 @@ describe("<NotificationsSessionProvider />", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(
-        useAppLocalNotificationsStore.getState().byId["observed-local-error"]
-          .readAt,
-      ).not.toBeNull();
-    });
+    expect(
+      useAppLocalNotificationsStore.getState().byId["observed-local-error"]
+        .readAt,
+    ).toBeNull();
     useAppLocalNotificationsStore.getState().upsert({
       id: "later-local-error",
       originHostId: mockLocalHostEntry.hostId,
