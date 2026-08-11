@@ -44,6 +44,7 @@ import { UsageHostSplit } from "@/components/usage-analytics/usage-host-split";
 import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
 import {
   buildUsageActivityCalendar,
+  USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
   USAGE_ACTIVITY_WINDOW_DAYS,
 } from "@/lib/usage-analytics/usage-activity";
 import {
@@ -123,6 +124,26 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     props.client,
     activityRequest,
     true,
+    false,
+  );
+  // Hosts update independently of the app: one released before ticket 15
+  // caps `windowDays` at 90 and rejects the year outright. Only then does
+  // this narrower read run, so the calendar degrades to a shorter span
+  // instead of the section showing an error for a host that can never
+  // answer it.
+  const activityFallbackRequest = useMemo(
+    () =>
+      buildUsageSummaryRequest({
+        windowDays: USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS,
+        epicId: null,
+        hostId,
+      }),
+    [hostId],
+  );
+  const activityFallbackQuery = useUsageSummaryForClient(
+    props.client,
+    activityFallbackRequest,
+    activityQuery.error !== null,
     false,
   );
   const days = useMemo(() => daysForResponse(query.data), [query.data]);
@@ -217,6 +238,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
       <UsageSummaryPanelBody
         query={query}
         activityQuery={activityQuery}
+        activityFallbackQuery={activityFallbackQuery}
         metric={metric}
         days={days}
         breakdownGroupBy={breakdownGroupBy}
@@ -308,6 +330,8 @@ function UsageSummaryPanelBody(props: {
    * back. It stays SECONDARY (its own inline error, never the page's).
    */
   readonly activityQuery: UsageSummaryQueryResult;
+  /** The narrower read that runs only once {@link activityQuery} has failed. */
+  readonly activityFallbackQuery: UsageSummaryQueryResult;
   readonly metric: UsageMetric;
   readonly days: readonly string[];
   readonly breakdownGroupBy: UsageBreakdownGroupBy;
@@ -319,6 +343,7 @@ function UsageSummaryPanelBody(props: {
   const {
     query,
     activityQuery,
+    activityFallbackQuery,
     metric,
     days,
     breakdownGroupBy,
@@ -409,7 +434,11 @@ function UsageSummaryPanelBody(props: {
         )}
       </div>
       <UsageDailyChart columns={columns} scale={scale} metric={metric} />
-      <UsageActivitySection query={activityQuery} metric={metric} />
+      <UsageActivitySection
+        query={activityQuery}
+        fallbackQuery={activityFallbackQuery}
+        metric={metric}
+      />
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-ui-sm font-medium text-foreground">Breakdown</h3>
@@ -443,10 +472,35 @@ function UsageSummaryPanelBody(props: {
  */
 function UsageActivitySection(props: {
   readonly query: UsageSummaryQueryResult;
+  readonly fallbackQuery: UsageSummaryQueryResult;
   readonly metric: UsageMetric;
 }): ReactNode {
-  const { query, metric } = props;
-  if (query.error !== null) {
+  const { query, fallbackQuery, metric } = props;
+  // A host too old for the year window answers the narrower read instead -
+  // a shorter calendar, not an error.
+  const data = query.data ?? fallbackQuery.data;
+  if (data !== undefined) {
+    return (
+      <div className="flex flex-col gap-2" data-testid="usage-activity-section">
+        <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
+        <UsageActivityHeatmap
+          calendar={buildUsageActivityCalendar(
+            lastNCalendarDays(
+              data.summary.window.windowDays,
+              data.summary.window.timezone,
+              data.summary.window.endAtExclusive - 1,
+            ),
+            data.summary.buckets,
+            metric,
+          )}
+          metric={metric}
+        />
+      </div>
+    );
+  }
+  // Both reads failed (or the fallback is still in flight after the first
+  // failed): only now is there nothing to show.
+  if (query.error !== null && fallbackQuery.error !== null) {
     return (
       <div className="flex flex-col gap-2" data-testid="usage-activity-section">
         <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
@@ -454,28 +508,11 @@ function UsageActivitySection(props: {
           error={query.error}
           onRetry={() => {
             void query.refetch();
+            void fallbackQuery.refetch();
           }}
         />
       </div>
     );
   }
-  if (query.data === undefined) return null;
-  const { window, buckets } = query.data.summary;
-  return (
-    <div className="flex flex-col gap-2" data-testid="usage-activity-section">
-      <h3 className="text-ui-sm font-medium text-foreground">Activity</h3>
-      <UsageActivityHeatmap
-        calendar={buildUsageActivityCalendar(
-          lastNCalendarDays(
-            USAGE_ACTIVITY_WINDOW_DAYS,
-            window.timezone,
-            window.endAtExclusive - 1,
-          ),
-          buckets,
-          metric,
-        )}
-        metric={metric}
-      />
-    </div>
-  );
+  return null;
 }

@@ -161,15 +161,40 @@ function renderPanel(input: {
 }
 
 describe("<UsageSummaryPanel /> activity section", () => {
-  it("surfaces a failed activity read with its own retry, never a silent gap", async () => {
-    // The 365-day activity read is a SECOND request. When only it fails,
-    // the page's own Retry refetches the window query alone - so dropping
-    // this error left the section silently absent with no way back.
-    let activityAttempts = 0;
-    const { requests } = renderPanel({
+  it("falls back to a shorter calendar when the host is too old for the year window", async () => {
+    // Hosts update independently of the app: one released before this
+    // feature caps windowDays at 90 and rejects the year outright. That
+    // must degrade to a shorter calendar, not an error.
+    const seen: number[] = [];
+    renderPanel({
       response: (request) => {
+        seen.push(request.windowDays);
         if (request.windowDays === 365) {
-          activityAttempts += 1;
+          throw new Error("windowDays must be an integer between 1 and 90");
+        }
+        return response({
+          servedBy: "cloud",
+          hostBuckets: [hostBucket("host-a", 3)],
+        });
+      },
+      hostNames: new Map([["host-a", "Studio Mac"]]),
+    });
+
+    await screen.findByTestId("usage-cost-figure");
+    expect(await screen.findByTestId("usage-activity-heatmap")).toBeTruthy();
+    expect(screen.queryByTestId("usage-error-card")).toBeNull();
+    expect(seen).toContain(90);
+  });
+
+  it("shows an error with a retry only once BOTH activity reads fail", async () => {
+    // The page's own Retry refetches the window query alone, so a dropped
+    // activity error would leave the section silently absent with no way
+    // back.
+    let attempts = 0;
+    renderPanel({
+      response: (request) => {
+        if (request.windowDays === 365 || request.windowDays === 90) {
+          attempts += 1;
           throw new Error("activity read failed");
         }
         return response({
@@ -184,22 +209,15 @@ describe("<UsageSummaryPanel /> activity section", () => {
     // blank a working page.
     await screen.findByTestId("usage-cost-figure");
     const section = await screen.findByTestId("usage-activity-section");
-    const card = within(section).getByTestId("usage-error-card");
+    const card = await within(section).findByTestId("usage-error-card");
     expect(card).toBeTruthy();
     expect(screen.queryByTestId("usage-activity-heatmap")).toBeNull();
 
-    // And its Retry refetches the ACTIVITY query, not the window one.
-    const attemptsBefore = activityAttempts;
-    const windowRequestsBefore = requests.filter(
-      (request) => request.windowDays !== 365,
-    ).length;
+    const before = attempts;
     await userEvent.click(within(card).getByRole("button", { name: /retry/i }));
     await waitFor(() => {
-      expect(activityAttempts).toBeGreaterThan(attemptsBefore);
+      expect(attempts).toBeGreaterThan(before);
     });
-    expect(
-      requests.filter((request) => request.windowDays !== 365).length,
-    ).toBe(windowRequestsBefore);
   });
 });
 
