@@ -2188,7 +2188,7 @@ const ARCHIVED_ROW_CLASS = "opacity-55";
  * user while the click fell back to a live ref, promising a read-only copy and
  * then dialing the dead host - so the decision lives here and both read it.
  */
-export function chatRowOpensPublishedCopy(input: {
+function chatRowOpensPublishedCopy(input: {
   readonly isChat: boolean;
   readonly ownerHostId: string | null;
   readonly ownerUserId: string | null;
