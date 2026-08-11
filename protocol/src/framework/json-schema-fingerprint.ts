@@ -160,7 +160,6 @@ function unknownKeyPolicy(node: unknown): UnknownKeyPolicy {
   return { kind: "strip" };
 }
 
-
 /** Input-tree counterpart of an object property, for lockstep descent. */
 function inputProperty(previousInput: unknown, field: string): unknown {
   const shape = asSchemaNode(previousInput);
@@ -631,7 +630,9 @@ function classifySchemaNode(node: unknown): ClassifiedSchemaNode {
     items?: unknown;
   };
   const requiredFields = Array.isArray(shape.required)
-    ? shape.required.filter((field): field is string => typeof field === "string")
+    ? shape.required.filter(
+        (field): field is string => typeof field === "string",
+      )
     : [];
 
   // Normalized-fingerprint forms first: `type: "enum"` / `type: "anyOf"`
@@ -829,14 +830,17 @@ function constrainingRecord(node: unknown): Record<string, unknown> | null {
 }
 
 function constrainingShape(node: unknown): string {
-  if (typeof node !== "object" || node === null) return JSON.stringify(node) ?? String(node);
+  if (typeof node !== "object" || node === null)
+    return JSON.stringify(node) ?? String(node);
   if (Array.isArray(node)) {
     return `[${node.map(constrainingShape).join(",")}]`;
   }
   const entries = Object.entries(node as Record<string, unknown>)
     .filter(([key]) => !NON_CONSTRAINING_SCHEMA_KEYS.has(key))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([key, value]) => `${JSON.stringify(key)}:${constrainingShape(value)}`);
+    .map(
+      ([key, value]) => `${JSON.stringify(key)}:${constrainingShape(value)}`,
+    );
   return `{${entries.join(",")}}`;
 }
 
@@ -980,7 +984,11 @@ function findNodeAdditivityViolation(
     // the policies themselves catches it - and the newer schema then emits
     // undeclared keys the older one rejects.
     const nextPolicy = unknownKeyPolicy(nextInput);
-    const policyViolation = unknownKeyPolicyRelaxation(policy, nextPolicy, path);
+    const policyViolation = unknownKeyPolicyRelaxation(
+      policy,
+      nextPolicy,
+      path,
+    );
     if (policyViolation !== null) return policyViolation;
     // Relaxing required -> optional is not additive: the newer peer may omit
     // the field, and the older schema rejects the payload outright.
