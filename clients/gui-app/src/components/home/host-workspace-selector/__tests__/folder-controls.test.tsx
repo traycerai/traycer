@@ -649,9 +649,9 @@ describe("FolderRow", () => {
       },
       NOOP,
     );
-    expect(screen.getByTestId("folder-row-not-available").textContent).toContain(
-      "Not available on Staging VM",
-    );
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on Staging VM");
     expect(screen.getByTestId("folder-row-locate").textContent).toContain(
       "Locate on this host",
     );
@@ -680,9 +680,9 @@ describe("FolderRow", () => {
         />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("folder-row-not-available").textContent).toContain(
-      "Not available on Staging VM",
-    );
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on Staging VM");
     expect(screen.queryByTestId("folder-row-locate")).toBeNull();
     expect(screen.queryByTestId("folder-remove")).toBeNull();
   });

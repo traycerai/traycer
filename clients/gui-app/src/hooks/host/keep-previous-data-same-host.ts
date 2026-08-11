@@ -17,7 +17,9 @@
  * assignable regardless of the query's error type — TanStack's
  * `Query<…, HostRpcError, …>` is invariant in the error type.
  */
-export function keepPreviousDataForSameHost(currentHostId: string | null): <T>(
+export function keepPreviousDataForSameHost(
+  currentHostId: string | null,
+): <T>(
   previousData: T | undefined,
   previousQuery: { readonly queryKey: readonly unknown[] } | undefined,
 ) => T | undefined {

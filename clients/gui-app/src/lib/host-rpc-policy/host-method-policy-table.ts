@@ -1075,7 +1075,11 @@ export const HOST_METHOD_POLL_TABLE = {
   "config.shell.probe": { ...LATEST_SCHEDULING, poll: null },
   "config.env.list": { ...LATEST_SCHEDULING, poll: null },
   "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "config.env.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.env.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.logLevels.get": { ...LATEST_SCHEDULING, poll: null },
   "config.logLevels.set": {
     mode: "fifo",

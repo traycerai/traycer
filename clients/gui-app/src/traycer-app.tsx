@@ -131,6 +131,13 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
   const configureShell = useCallback(() => {
     void router.navigate({ to: "/settings/shell" });
   }, [router]);
+  // The host-unavailable card's escape hatch. `/settings/host` rather than the
+  // settings index: the card is shown when no host can be reached, and that is
+  // the page that manages them. Settings bypasses the readiness gate, so this
+  // stays reachable from inside a full-screen block.
+  const openSettings = useCallback(() => {
+    void router.navigate({ to: "/settings/host" });
+  }, [router]);
 
   return (
     <RunnerHostProvider runnerHost={props.runnerHost}>
@@ -155,6 +162,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                     <HostCompatibilityProvider>
                       <HostReadinessControllerProvider
                         onConfigureShell={configureShell}
+                        onOpenSettings={openSettings}
                       >
                         <RootErrorBoundary router={router}>
                           <TraycerAuthenticatedRuntime router={router} />

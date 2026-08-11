@@ -88,6 +88,33 @@ export interface DefaultHostReadinessPresentation {
   readonly forceProvisioning: () => void;
   readonly reinstall: () => void;
   readonly configureShell: () => void;
+  /**
+   * The three recoveries for the residual "no host is dialable" card (D7).
+   *
+   * They are host-MANAGEMENT-free on purpose: that card is reached when the
+   * auto-failover had nowhere to go, which includes directories holding only
+   * machines this app cannot manage. Re-reading the registry, opening the
+   * picker and opening settings are the three things a user can do about that
+   * from anywhere, and the card carried none of them - it shipped with
+   * `actions: []`.
+   */
+  readonly refreshDirectory: () => void;
+  readonly openHostPicker: () => void;
+  readonly openSettings: () => void;
+  /**
+   * Whether AT LEAST ONE entry in the merged directory can currently be
+   * dialed.
+   *
+   * The host-unavailable card files a pre-filled report, and which failure it
+   * names has to be a fact rather than an assumption about how the card was
+   * reached. "No host in the directory could be reached" is false in two
+   * states that reach the very same card: the two-read wait before an
+   * auto-failover, where another host is dialable and about to be taken, and
+   * this machine's own host booting while a remote is listed (which is never
+   * failed away from). Filing a zero-hosts report from either one sends triage
+   * after a directory-wide outage that is not happening.
+   */
+  readonly anyHostDialable: boolean;
   // Owned once by the readiness controller, not per slot: two default-host
   // members in a split must share one respawn mutation so a single click issues
   // exactly one request and locks the action in every slot.
@@ -149,6 +176,10 @@ const EMPTY_DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
   forceProvisioning: () => undefined,
   reinstall: () => undefined,
   configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openHostPicker: () => undefined,
+  openSettings: () => undefined,
+  anyHostDialable: false,
   requestRespawn: () => undefined,
   respawnPending: false,
   compatibility: {

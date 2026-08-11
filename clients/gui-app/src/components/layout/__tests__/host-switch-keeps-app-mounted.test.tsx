@@ -78,6 +78,10 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   forceProvisioning: () => undefined,
   reinstall: () => undefined,
   configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openHostPicker: () => undefined,
+  openSettings: () => undefined,
+  anyHostDialable: false,
   requestRespawn: () => undefined,
   respawnPending: false,
   compatibility: {

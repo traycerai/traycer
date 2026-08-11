@@ -40,10 +40,7 @@ describe("locateReplaceBoundFolder", () => {
     const outcome = await locateReplaceBoundFolder({
       absentPath: ABSENT,
       pick: {
-        folders: [
-          { workspacePath: NEW_A },
-          { workspacePath: NEW_B },
-        ],
+        folders: [{ workspacePath: NEW_A }, { workspacePath: NEW_B }],
       },
       add,
       remove,
@@ -66,10 +63,7 @@ describe("locateReplaceBoundFolder", () => {
     const outcome = await locateReplaceBoundFolder({
       absentPath: ABSENT,
       pick: {
-        folders: [
-          { workspacePath: NEW_A },
-          { workspacePath: NEW_B },
-        ],
+        folders: [{ workspacePath: NEW_A }, { workspacePath: NEW_B }],
       },
       add,
       remove,
@@ -80,11 +74,7 @@ describe("locateReplaceBoundFolder", () => {
       addedPaths: [NEW_A],
     });
     // Partial multi-pick: one success is enough; remove follows adds.
-    expect(order).toEqual([
-      `add:${NEW_A}`,
-      `add:${NEW_B}`,
-      `remove:${ABSENT}`,
-    ]);
+    expect(order).toEqual([`add:${NEW_A}`, `add:${NEW_B}`, `remove:${ABSENT}`]);
   });
 
   it("same-path re-pick does not remove the binding entry", async () => {

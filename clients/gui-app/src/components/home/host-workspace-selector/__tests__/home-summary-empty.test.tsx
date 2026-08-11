@@ -554,9 +554,9 @@ describe("landing workspace summary empty state", () => {
 
     const queryClient = renderControl("stacked");
 
-    expect(screen.getByTestId("folder-row-not-available").textContent).toContain(
-      "Not available on",
-    );
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on");
     expect(screen.getByTestId("folder-row-locate").textContent).toContain(
       "Locate on this host",
     );
@@ -776,9 +776,9 @@ describe("landing workspace summary empty state", () => {
     const queryClient = renderControl("stacked");
 
     expect(screen.queryByTestId("folder-row-loading")).toBeNull();
-    expect(screen.getByTestId("folder-row-not-available").textContent).toContain(
-      "Not available on",
-    );
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on");
     expect(screen.getByTestId("folder-row-locate").textContent).toContain(
       "Locate on this host",
     );

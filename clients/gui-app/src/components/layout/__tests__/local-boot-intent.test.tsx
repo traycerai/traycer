@@ -196,7 +196,10 @@ function mountRealChain(
           fallback={<div data-testid="runtime-fallback">runtime loading</div>}
         >
           <HostCompatibilityProvider>
-            <HostReadinessControllerProvider onConfigureShell={() => undefined}>
+            <HostReadinessControllerProvider
+              onConfigureShell={() => undefined}
+              onOpenSettings={() => undefined}
+            >
               <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
                 <main>app</main>
               </SurfaceReadinessBoundary>

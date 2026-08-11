@@ -49,6 +49,7 @@ import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 /** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
   readonly onConfigureShell: () => void;
+  readonly onOpenSettings: () => void;
   readonly children: ReactNode;
 }): ReactNode {
   const binding = useHostBinding();
@@ -92,6 +93,23 @@ export function HostReadinessControllerProvider(props: {
   // belonging to a machine the user is not pointed at. `hasLocalHost` is
   // folded into the intent - a shell with no local host is never booting one.
   const canProvision = authStatus === "signed-in" && localBootIntent;
+  const directory = binding === null ? null : binding.directory;
+  // Stable identities: the presentation is memoized on its inputs, and a
+  // fresh closure each render would re-run every readiness consumer in the
+  // surface tree.
+  const refreshDirectory = useCallback(() => {
+    void directory?.refresh();
+  }, [directory]);
+  const openHostPicker = useCallback(() => {
+    runnerHost.hostPicker.requestOpen();
+  }, [runnerHost]);
+  // The live directory-wide fact behind the host-unavailable card's report
+  // family. Computed here, from the same entries readiness is resolved from,
+  // so the card states what the directory actually says rather than inferring
+  // it from the readiness kind that brought it here.
+  const anyHostDialable = directoryEntries.some((entry) =>
+    isHostDialable(entry),
+  );
 
   return (
     <HostProvisioningController
@@ -113,6 +131,10 @@ export function HostReadinessControllerProvider(props: {
           targetKind={targetKind}
           localBootIntent={localBootIntent}
           onConfigureShell={props.onConfigureShell}
+          onRefreshDirectory={refreshDirectory}
+          onOpenHostPicker={openHostPicker}
+          onOpenSettings={props.onOpenSettings}
+          anyHostDialable={anyHostDialable}
           onRequestRespawn={respawn.mutate}
           respawnPending={respawn.isPending}
         >
@@ -135,6 +157,10 @@ function HostReadinessControllerContents(props: {
   readonly targetKind: HostTargetKind;
   readonly localBootIntent: boolean;
   readonly onConfigureShell: () => void;
+  readonly onRefreshDirectory: () => void;
+  readonly onOpenHostPicker: () => void;
+  readonly onOpenSettings: () => void;
+  readonly anyHostDialable: boolean;
   readonly onRequestRespawn: () => void;
   readonly respawnPending: boolean;
   readonly children: ReactNode;
@@ -147,6 +173,10 @@ function HostReadinessControllerContents(props: {
         targetKind: props.targetKind,
         localBootIntent: props.localBootIntent,
         configureShell: props.onConfigureShell,
+        refreshDirectory: props.onRefreshDirectory,
+        openHostPicker: props.onOpenHostPicker,
+        openSettings: props.onOpenSettings,
+        anyHostDialable: props.anyHostDialable,
         requestRespawn: props.onRequestRespawn,
         respawnPending: props.respawnPending,
       }),
@@ -156,6 +186,10 @@ function HostReadinessControllerContents(props: {
       props.localBootIntent,
       props.targetKind,
       props.onConfigureShell,
+      props.onRefreshDirectory,
+      props.onOpenHostPicker,
+      props.onOpenSettings,
+      props.anyHostDialable,
       props.onRequestRespawn,
       props.respawnPending,
     ],
@@ -264,6 +298,10 @@ function presentationFromLifecycle(args: {
   readonly targetKind: HostTargetKind;
   readonly localBootIntent: boolean;
   readonly configureShell: () => void;
+  readonly refreshDirectory: () => void;
+  readonly openHostPicker: () => void;
+  readonly openSettings: () => void;
+  readonly anyHostDialable: boolean;
   readonly requestRespawn: () => void;
   readonly respawnPending: boolean;
 }): DefaultHostReadinessPresentation {
@@ -284,6 +322,10 @@ function presentationFromLifecycle(args: {
     forceProvisioning: args.lifecycle.provisioning.force,
     reinstall: args.lifecycle.provisioning.reinstall,
     configureShell: args.configureShell,
+    refreshDirectory: args.refreshDirectory,
+    openHostPicker: args.openHostPicker,
+    openSettings: args.openSettings,
+    anyHostDialable: args.anyHostDialable,
     requestRespawn: args.requestRespawn,
     respawnPending: args.respawnPending,
     compatibility: compatibilityPresentation(args.compatibility),
@@ -399,7 +441,7 @@ function SurfaceReadinessFallback(props: {
   return (
     <FallbackFrame
       variant={props.variant}
-      fallback={fallbackContent(props.readiness, presentation)}
+      fallback={fallbackContent(props.readiness, presentation, props.scope)}
       testId={testId}
       messageTestId={
         props.readiness.kind === "mobile-no-host" ? "mobile-no-host" : null
@@ -640,6 +682,7 @@ interface ReadinessFallback {
 function fallbackContent(
   readiness: Exclude<SurfaceReadiness, { readonly kind: "ready" }>,
   presentation: DefaultHostReadinessPresentation,
+  scope: HostReadinessScope,
 ): ReadinessFallback {
   switch (readiness.kind) {
     case "restoring-request-context":
@@ -660,7 +703,7 @@ function fallbackContent(
         actions: [],
       };
     case "unavailable-host":
-      return unavailableFallback();
+      return unavailableFallback(scope, presentation);
     case "loading-host":
     case "provisioning-host":
     case "compatibility-checking":
@@ -941,17 +984,111 @@ function IncompatibleDetail(props: {
 }
 
 /**
- * A tab bound to a host that is not dialable. The default-host arm never lands
- * here in its recoverable states - `SurfaceReadinessFallback` routes a slow
- * local host to the Retry card first - so this copy can stay tab-specific.
+ * A host that is not dialable, in whichever scope asked.
+ *
+ * The copy is scope-aware because the two scopes are not the same failure and
+ * were never the same sentence. "This tab's host is unavailable." called the
+ * whole app a tab whenever the DEFAULT host reached this state - and it is
+ * the default host that reaches it, since no production surface uses the
+ * `tab-host` scope today (`top-level-tab-host.tsx` hardcodes a null tab host;
+ * real per-tile deaths render `dead-tile-banner`). The tab wording is kept for
+ * the day a real `tab-host` scope exists.
+ *
+ * With D7's auto-failover in place the default-host arm usually means nothing
+ * in the directory is dialable - but not always: the two-read wait before a
+ * failover and a booting local host with a dialable remote reach it too, which
+ * is why the report family branches on the live `anyHostDialable` fact instead
+ * of assuming zero-dialable. Either way this is the state that needs actions.
+ * It shipped with none:
+ * `actions: []`, `footer: null`, rendered full-screen with the tab strip and
+ * the header's settings entry gone. All four here are reachable without a
+ * host: re-read the registry, open the picker (mounted outside the gate,
+ * `traycer-app.tsx`), open settings (`/settings` bypasses the gate), and
+ * report - the one affordance every other failure card already carried.
  */
-function unavailableFallback(): ReadinessFallback {
+function unavailableFallback(
+  scope: HostReadinessScope,
+  presentation: DefaultHostReadinessPresentation,
+): ReadinessFallback {
+  if (scope !== "default-host") {
+    return {
+      message: "This tab's host is unavailable.",
+      detail: null,
+      body: null,
+      footer: null,
+      actions: [],
+    };
+  }
+  const report = presentation.anyHostDialable
+    ? // Something in the directory IS dialable, so this is one host that
+      // cannot be reached - the two-read wait before a failover takes the
+      // other one, or this machine's own host booting while a remote is
+      // listed. Both are real states of this card, and neither is a
+      // directory-wide outage.
+      {
+        title: "Selected Traycer Host is not reachable",
+        message: "The selected Traycer Host could not be reached.",
+        code: "HOST_SELECTED_UNREACHABLE",
+      }
+    : {
+        title: "No Traycer Host is reachable",
+        message: "No host in the directory could be reached.",
+        code: "HOST_NONE_DIALABLE",
+      };
   return {
-    message: "This tab's host is unavailable.",
-    detail: null,
+    message: "Traycer Host is unavailable",
+    // Says only what holds on EVERY path that reaches this arm. "Traycer will
+    // switch you automatically" reads well and would be a lie here: the
+    // failover moves a REMOTE selection with a dialable alternative, and this
+    // card is also what a local host that is down renders (its own lifecycle
+    // owns that recovery, and it is never failed away from).
+    detail: presentation.anyHostDialable
+      ? "Traycer can't reach this host right now. Another host is available - switch to it, or retry."
+      : "Traycer can't reach this host right now, and no other host in the directory is reachable either.",
     body: null,
-    footer: null,
-    actions: [],
+    // Two families, chosen by a FACT the directory answers
+    // (`anyHostDialable`), never by the readiness kind that led here - the
+    // card is reached from states that mean different things. Neither is the
+    // slow-local-host card's `HOST_UNAVAILABLE` / "Host startup": that one
+    // means "this machine's host did not come up", and collapsing distinct
+    // causes into one title is the 2026-07-31 triage failure
+    // `hostFailureReportIssueAction` exists to end.
+    footer: hostFailureReportIssueAction({
+      title: report.title,
+      message: report.message,
+      code: report.code,
+      source: "Host connection",
+      presentation,
+      // Any retained install stage belongs to an earlier, finished episode -
+      // pointing triage at provisioning would be the wrong place.
+      includeRetainedProgress: false,
+    }),
+    actions: [
+      {
+        label: "Retry",
+        testId: "host-unavailable-retry",
+        variant: "outline",
+        disabled: false,
+        pending: false,
+        onClick: presentation.refreshDirectory,
+      },
+      {
+        label: "Switch host",
+        testId: "host-unavailable-switch-host",
+        variant: "outline",
+        disabled: false,
+        pending: false,
+        onClick: presentation.openHostPicker,
+      },
+      {
+        label: "Open settings",
+        testId: "host-unavailable-open-settings",
+        variant: "outline",
+        disabled: false,
+        pending: false,
+        onClick: presentation.openSettings,
+      },
+    ],
   };
 }
 

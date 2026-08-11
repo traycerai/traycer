@@ -12,7 +12,12 @@ export type AnalyticsSource =
   | "notification"
   | "history"
   | "deep_link"
-  | "restored_session";
+  | "restored_session"
+  // The app moved itself: the selected host stopped being dialable and the
+  // directory re-homed the window (or handed it back when that host
+  // returned). Distinct from every other source here because there was no
+  // gesture at all behind it.
+  | "host_failover";
 
 export type AnalyticsBlocker =
   | "authentication"

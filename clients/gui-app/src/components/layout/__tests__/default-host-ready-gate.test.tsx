@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   type RenderResult,
@@ -78,6 +79,10 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   forceProvisioning: () => undefined,
   reinstall: () => undefined,
   configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openHostPicker: () => undefined,
+  openSettings: () => undefined,
+  anyHostDialable: false,
   requestRespawn: () => undefined,
   respawnPending: false,
   compatibility: {
@@ -445,5 +450,128 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByRole("main")).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByText("boom")).toBeTruthy();
+  });
+
+  it("names the zero-dialable default-host card without calling the app a tab", () => {
+    // D7 zero-dialable arm: default-host reaches unavailable-host only when
+    // nothing is dialable. The tab wording mislabelled the whole app; the
+    // slow-local branch (localHostState unavailable + stage slow) is a
+    // different card and must not be taken here.
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+      },
+    );
+    expect(screen.getByText("Traycer Host is unavailable")).toBeTruthy();
+    expect(screen.queryByText("This tab's host is unavailable.")).toBeNull();
+    // Must not have been routed to the slow-local startup card.
+    expect(screen.queryByTestId("local-host-retry")).toBeNull();
+  });
+
+  it("offers retry, switch host, open settings, and report-issue on the zero-dialable card", () => {
+    // Pins the four affordances that ship with the zero-dialable card: re-read
+    // the registry, open the picker, open settings, and report. Each used to
+    // be missing (`actions: []`, `footer: null`) behind a full-screen block.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const refreshDirectory = vi.fn();
+    const openHostPicker = vi.fn();
+    const openSettings = vi.fn();
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+        anyHostDialable: false,
+        refreshDirectory,
+        openHostPicker,
+        openSettings,
+      },
+    );
+
+    fireEvent.click(screen.getByTestId("host-unavailable-retry"));
+    fireEvent.click(screen.getByTestId("host-unavailable-switch-host"));
+    fireEvent.click(screen.getByTestId("host-unavailable-open-settings"));
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+    expect(openHostPicker).toHaveBeenCalledTimes(1);
+    expect(openSettings).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+  });
+
+  it("files HOST_NONE_DIALABLE when no host in the directory is dialable", () => {
+    // Pins the report family chosen by a fact (`anyHostDialable`), not by
+    // readiness kind alone - collapsing distinct causes into one code is the
+    // triage failure these families exist to end.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+        anyHostDialable: false,
+      },
+    );
+
+    expect(
+      screen.getByText(
+        "Traycer can't reach this host right now, and no other host in the directory is reachable either.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Traycer can't reach this host right now. Another host is available - switch to it, or retry.",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(context?.code).toBe("HOST_NONE_DIALABLE");
+    expect(context?.source).toBe("Host connection");
+  });
+
+  it("files HOST_SELECTED_UNREACHABLE when another host in the directory is dialable", () => {
+    // Counterpart family: selected host dead but something else is reachable
+    // (two-read wait before failover, or this machine booting while a remote
+    // is listed). Detail copy must not silently converge with the zero-dialable
+    // arm.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+        anyHostDialable: true,
+      },
+    );
+
+    expect(
+      screen.getByText(
+        "Traycer can't reach this host right now. Another host is available - switch to it, or retry.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Traycer can't reach this host right now, and no other host in the directory is reachable either.",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(context?.code).toBe("HOST_SELECTED_UNREACHABLE");
+    expect(context?.source).toBe("Host connection");
   });
 });

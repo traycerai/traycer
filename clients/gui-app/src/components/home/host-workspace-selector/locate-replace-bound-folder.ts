@@ -23,7 +23,9 @@ export async function locateReplaceBoundFolder(args: {
    * `null` = user cancelled the picker. Non-null with empty `folders` is a
    * wire-valid empty pick that must not touch the binding.
    */
-  readonly pick: { readonly folders: ReadonlyArray<{ readonly workspacePath: string }> } | null;
+  readonly pick: {
+    readonly folders: ReadonlyArray<{ readonly workspacePath: string }>;
+  } | null;
   readonly add: (workspacePath: string) => Promise<boolean>;
   readonly remove: (workspacePath: string) => Promise<boolean>;
 }): Promise<LocateReplaceBoundOutcome> {

@@ -31,7 +31,9 @@ function createFixture() {
           epicId: params.epicId,
           root: "root" in params.reference ? params.reference.root : "",
           outcome: "ready" as const,
-          results: [{ kind: "file" as const, relPath: "src/app.ts", name: "app.ts" }],
+          results: [
+            { kind: "file" as const, relPath: "src/app.ts", name: "app.ts" },
+          ],
           truncated: false,
         };
       },
