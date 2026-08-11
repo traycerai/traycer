@@ -441,24 +441,8 @@ export const toolCallProgressEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("tool_call.progress"),
   update: z.string(),
-  // Image-generation phase for future partials (`chat.subscribe@1.7`). No
-  // producer emits this yet - reserved so a later phased-generation emitter
-  // doesn't need another wire bump. Nullable/defaulted so an emitter that
-  // never sends it reproduces today's shipped behavior exactly.
-  imageGenerationPhase: z.string().nullable().default(null),
 });
 export type ToolCallProgressEvent = z.infer<typeof toolCallProgressEventSchema>;
-
-// Wire-freeze copy of `toolCallProgressEventSchema` from before
-// `imageGenerationPhase` existed. Bound (via `runtimeEventSchemaPreImage` /
-// `runtimeEventSchemaV12PreInReplyTo`) to every released `chat.subscribe`
-// minor so those lines can never observe it. Hand-frozen, NOT derived from
-// the live shape.
-export const toolCallProgressEventSchemaPreImage = z.object({
-  ...baseRuntimeEventFields,
-  type: z.literal("tool_call.progress"),
-  update: z.string(),
-});
 
 export const approvalRequestedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1233,7 +1217,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   toolCallStartedEventSchema,
   toolCallCompletedEventSchemaPreImage,
   toolCallErroredEventSchema,
-  toolCallProgressEventSchemaPreImage,
+  toolCallProgressEventSchema,
   approvalRequestedEventSchema,
   approvalResolvedEventSchema,
   todoUpdatedEventSchema,
@@ -1284,7 +1268,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   toolCallStartedEventSchema,
   toolCallCompletedEventSchemaPreImage,
   toolCallErroredEventSchema,
-  toolCallProgressEventSchemaPreImage,
+  toolCallProgressEventSchema,
   approvalRequestedEventSchema,
   approvalResolvedEventSchema,
   todoUpdatedEventSchema,

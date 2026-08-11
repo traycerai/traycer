@@ -2139,39 +2139,6 @@ describe("chat.subscribe@1.7 (image generation)", () => {
     }
   });
 
-  it("round-trips tool_call.progress with and without imageGenerationPhase", () => {
-    const withPhase = chatSubscribeV17.serverFrameSchema.parse(
-      blockDeltaFrame({
-        type: "tool_call.progress",
-        blockId: "tool-image-1",
-        timestamp: 4950,
-        update: "generating…",
-        imageGenerationPhase: "draft",
-      }),
-    );
-    if (withPhase.kind !== "blockDelta") throw new Error("expected blockDelta");
-    if (withPhase.event.type !== "tool_call.progress") {
-      throw new Error("expected tool_call.progress");
-    }
-    expect(withPhase.event.imageGenerationPhase).toBe("draft");
-
-    const withoutPhase = chatSubscribeV17.serverFrameSchema.parse(
-      blockDeltaFrame({
-        type: "tool_call.progress",
-        blockId: "tool-image-1",
-        timestamp: 4950,
-        update: "still working",
-      }),
-    );
-    if (withoutPhase.kind !== "blockDelta") {
-      throw new Error("expected blockDelta");
-    }
-    if (withoutPhase.event.type !== "tool_call.progress") {
-      throw new Error("expected tool_call.progress");
-    }
-    expect(withoutPhase.event.imageGenerationPhase).toBeNull();
-  });
-
   it("carries imageResults and imageResolutions through a live 1.7 snapshot", () => {
     const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
@@ -2199,13 +2166,6 @@ describe("chat.subscribe@1.7 (image generation)", () => {
       timestamp: 5000,
       toolName: "image_gen",
       imageResults: [imageResultA],
-    });
-    const progressWithPhase = blockDeltaFrame({
-      type: "tool_call.progress",
-      blockId: "tool-image-1",
-      timestamp: 4950,
-      update: "generating…",
-      imageGenerationPhase: "draft",
     });
     const resolutionUpdated = blockDeltaFrame({
       type: "image_resolution.updated",
@@ -2242,13 +2202,6 @@ describe("chat.subscribe@1.7 (image generation)", () => {
       }
       expect(completed.event.type, label).toBe("tool_call.completed");
       expect(completed.event, label).not.toHaveProperty("imageResults");
-
-      const progress = contract.serverFrameSchema.parse(progressWithPhase);
-      if (progress.kind !== "blockDelta") {
-        throw new Error(`expected blockDelta on ${label}`);
-      }
-      expect(progress.event.type, label).toBe("tool_call.progress");
-      expect(progress.event, label).not.toHaveProperty("imageGenerationPhase");
 
       // New event variant must not exist on any pre-image line.
       expect(

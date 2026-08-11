@@ -512,14 +512,12 @@ describe("accumulateEvent", () => {
       blockId: "tc1",
       timestamp: 5,
       update: "Fetched 1/10",
-      imageGenerationPhase: null,
     });
     blocks = accumulateEvent(blocks, {
       type: "tool_call.progress",
       blockId: "tc1",
       timestamp: 9,
       update: "Fetched 7/10",
-      imageGenerationPhase: null,
     });
 
     expect(blocks).toHaveLength(1);
@@ -539,7 +537,6 @@ describe("accumulateEvent", () => {
       blockId: "missing",
       timestamp: 5,
       update: "ignored",
-      imageGenerationPhase: null,
     });
 
     expect(next).toBe(blocks);
