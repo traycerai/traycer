@@ -22,6 +22,21 @@ local layers for multi-project work and team templates.
 - **Local single-user posture** — optional kill of official auto-update feed so
   a personal build is not overwritten by upstream packaging defaults.
 
+### Screenshots
+
+Orchestrations home: teams, the active-for-new-chats binding, and model packs.
+
+![Orchestrations home](docs/images/orchestrations-teams.png)
+
+Model pack editor: rotation-ordered shelves per tier (first model tried first,
+the rest are fallbacks), including cross-provider rotation.
+
+![Model pack tiers](docs/images/orchestrations-pack-editor.png)
+
+Pack rules and the premium shelf (team-level guardrails travel with the pack).
+
+![Model pack rules](docs/images/orchestrations-model-pack-default.png)
+
 ## Upstream
 
 Upstream project: [traycerai/traycer](https://github.com/traycerai/traycer)  
