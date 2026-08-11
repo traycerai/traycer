@@ -219,7 +219,7 @@ describe("EpicSidebarCloudChatRow", () => {
           epicId={CHAT.identity.taskId}
           tabId="tab-1"
           depth={0}
-          selectionMode={true}
+          selectionMode
         />,
       );
       clickRow();
