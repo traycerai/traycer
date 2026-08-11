@@ -25,6 +25,7 @@ import {
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
 export interface LandingTerminalTileProps {
+  readonly landingPageId: string;
   readonly tab: LandingTerminalTabRef;
   readonly active: boolean;
   /** True only after active-host probe/reconciliation has settled. */
@@ -82,8 +83,13 @@ function LandingTerminalTileBootstrap(
 
   useEffect(() => {
     if (!bootstrap.hostSessionExited) return;
-    removeExitedTab(props.tab.instanceId);
-  }, [bootstrap.hostSessionExited, props.tab.instanceId, removeExitedTab]);
+    removeExitedTab(props.landingPageId, props.tab.instanceId);
+  }, [
+    bootstrap.hostSessionExited,
+    props.landingPageId,
+    props.tab.instanceId,
+    removeExitedTab,
+  ]);
 
   useEffect(() => {
     if (bootstrap.createError?.code !== "TERMINAL_ID_TAKEN") return;
@@ -135,7 +141,9 @@ function LandingTerminalTileBootstrap(
     <LandingTerminalTileLive
       handle={bootstrap.handle}
       tab={props.tab}
-      onExited={removeExitedTab}
+      onExited={(instanceId) =>
+        removeExitedTab(props.landingPageId, instanceId)
+      }
     />
   );
 }

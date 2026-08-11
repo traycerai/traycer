@@ -54,6 +54,7 @@ function abortableRequest<Value>(
 }
 
 interface LandingTerminalReconciliationArgs {
+  readonly landingPageId: string;
   readonly activeHostId: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
@@ -106,6 +107,7 @@ export function useLandingTerminalReconciliation(
   const {
     activeHostId,
     availability,
+    landingPageId,
     panelOpen,
     primaryWorkspacePath,
     client,
@@ -231,6 +233,7 @@ export function useLandingTerminalReconciliation(
         mintInstanceId: () => `landing-terminal-${uuidv4()}`,
       });
       current.applyReconciliation(
+        landingPageId,
         reconciliation.tabs,
         reconciliation.activeInstanceId,
         reconciliation.collapseWhenEmpty,
@@ -255,6 +258,7 @@ export function useLandingTerminalReconciliation(
     client,
     connectionEpoch,
     killTerminal,
+    landingPageId,
     onReconciled,
     onSettled,
     panelOpen,

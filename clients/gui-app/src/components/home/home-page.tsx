@@ -100,7 +100,7 @@ export function HomePage() {
           </div>
         </div>
       </div>
-      <LandingTerminalPanel draftId={draftId} />
+      <LandingTerminalPanel draftId={draftId} landingPageId={composerMountId} />
     </div>
   );
 }

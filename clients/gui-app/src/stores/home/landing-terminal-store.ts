@@ -22,29 +22,55 @@ export interface LandingTerminalPendingKill {
   readonly sessionId: string;
 }
 
+export interface LandingTerminalLayout {
+  readonly panelOpen: boolean;
+  readonly panelWidthFraction: number;
+  readonly maximized: boolean;
+}
+
+export const DEFAULT_LANDING_TERMINAL_LAYOUT: LandingTerminalLayout = {
+  panelOpen: false,
+  panelWidthFraction: DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+  maximized: false,
+};
+
 export interface LandingTerminalStoreState {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
-  readonly panelOpen: boolean;
-  readonly panelWidthFraction: number;
+  readonly layoutsByLandingPageId: Readonly<
+    Record<string, LandingTerminalLayout>
+  >;
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
-  readonly setPanelOpen: (open: boolean) => void;
-  readonly setPanelWidthFraction: (fraction: number) => void;
+  readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
+  readonly setPanelWidthFraction: (
+    landingPageId: string,
+    fraction: number,
+  ) => void;
+  readonly setPanelMaximized: (
+    landingPageId: string,
+    maximized: boolean,
+  ) => void;
   readonly addTab: (tab: LandingTerminalTabRef) => void;
   readonly activateTab: (instanceId: string) => void;
   readonly renameTab: (instanceId: string, name: string) => void;
   /** Atomically tombstones then removes a user-closed tab. */
-  readonly closeTab: (instanceId: string) => LandingTerminalTabRef | null;
+  readonly closeTab: (
+    landingPageId: string,
+    instanceId: string,
+  ) => LandingTerminalTabRef | null;
   /**
    * Atomically tombstones then removes every tab, returning the removed refs so
    * the caller can dispatch one kill each. Same durability contract as
    * {@link closeTab}: the tombstones are written before any kill leaves the
    * renderer, so a reload mid-kill can never re-adopt a closed shell.
    */
-  readonly closeAllTabs: () => ReadonlyArray<LandingTerminalTabRef>;
+  readonly closeAllTabs: (
+    landingPageId: string,
+  ) => ReadonlyArray<LandingTerminalTabRef>;
   /** Removes a self-exited tab without asking the host to kill it again. */
-  readonly removeExitedTab: (instanceId: string) => void;
+  readonly removeExitedTab: (landingPageId: string, instanceId: string) => void;
   readonly applyReconciliation: (
+    landingPageId: string,
     tabs: ReadonlyArray<LandingTerminalTabRef>,
     activeInstanceId: string | null,
     collapseWhenEmpty: boolean,
@@ -57,8 +83,9 @@ export interface LandingTerminalStoreState {
 interface PersistedLandingTerminalState {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
-  readonly panelOpen: boolean;
-  readonly panelWidthFraction: number;
+  readonly layoutsByLandingPageId: Readonly<
+    Record<string, LandingTerminalLayout>
+  >;
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
 }
 
@@ -66,10 +93,19 @@ function initialLandingTerminalState(): PersistedLandingTerminalState {
   return {
     tabs: [],
     activeInstanceId: null,
-    panelOpen: false,
-    panelWidthFraction: DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+    layoutsByLandingPageId: {},
     pendingKills: [],
   };
+}
+
+export function landingTerminalLayoutFor(
+  state: Pick<LandingTerminalStoreState, "layoutsByLandingPageId">,
+  landingPageId: string,
+): LandingTerminalLayout {
+  return (
+    state.layoutsByLandingPageId[landingPageId] ??
+    DEFAULT_LANDING_TERMINAL_LAYOUT
+  );
 }
 
 export function clampLandingTerminalPanelWidthFraction(value: number): number {
@@ -115,11 +151,9 @@ export function parsePersistedLandingTerminalState(
   return {
     tabs,
     activeInstanceId: parseActiveInstanceId(value.activeInstanceId, tabs),
-    panelOpen: value.panelOpen === true,
-    panelWidthFraction:
-      typeof value.panelWidthFraction === "number"
-        ? clampLandingTerminalPanelWidthFraction(value.panelWidthFraction)
-        : initial.panelWidthFraction,
+    layoutsByLandingPageId: parseLandingTerminalLayouts(
+      value.layoutsByLandingPageId,
+    ),
     pendingKills: parsePendingKills(value.pendingKills),
   };
 }
@@ -128,12 +162,28 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
   persist(
     (set, get) => ({
       ...initialLandingTerminalState(),
-      setPanelOpen: (panelOpen) => set({ panelOpen }),
-      setPanelWidthFraction: (panelWidthFraction) =>
-        set({
-          panelWidthFraction:
-            clampLandingTerminalPanelWidthFraction(panelWidthFraction),
-        }),
+      setPanelOpen: (landingPageId, panelOpen) =>
+        set((state) =>
+          updateLandingTerminalLayout(state, landingPageId, {
+            ...landingTerminalLayoutFor(state, landingPageId),
+            panelOpen,
+          }),
+        ),
+      setPanelWidthFraction: (landingPageId, panelWidthFraction) =>
+        set((state) =>
+          updateLandingTerminalLayout(state, landingPageId, {
+            ...landingTerminalLayoutFor(state, landingPageId),
+            panelWidthFraction:
+              clampLandingTerminalPanelWidthFraction(panelWidthFraction),
+          }),
+        ),
+      setPanelMaximized: (landingPageId, maximized) =>
+        set((state) =>
+          updateLandingTerminalLayout(state, landingPageId, {
+            ...landingTerminalLayoutFor(state, landingPageId),
+            maximized,
+          }),
+        ),
       addTab: (tab) =>
         set((state) => {
           const existing = state.tabs.find(
@@ -169,7 +219,7 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
           ),
         }));
       },
-      closeTab: (instanceId) => {
+      closeTab: (landingPageId, instanceId) => {
         const closed = get().tabs.find(
           (entry) => entry.instanceId === instanceId,
         );
@@ -195,12 +245,17 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               state.activeInstanceId,
             ),
             pendingKills,
-            panelOpen: tabs.length === 0 ? false : state.panelOpen,
+            ...(tabs.length === 0
+              ? updateLandingTerminalLayout(state, landingPageId, {
+                  ...landingTerminalLayoutFor(state, landingPageId),
+                  panelOpen: false,
+                })
+              : {}),
           };
         });
         return closed;
       },
-      closeAllTabs: () => {
+      closeAllTabs: (landingPageId) => {
         const closed = get().tabs;
         if (closed.length === 0) return [];
         set((state) => ({
@@ -216,11 +271,14 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
                   ],
             state.pendingKills,
           ),
-          panelOpen: false,
+          ...updateLandingTerminalLayout(state, landingPageId, {
+            ...landingTerminalLayoutFor(state, landingPageId),
+            panelOpen: false,
+          }),
         }));
         return closed;
       },
-      removeExitedTab: (instanceId) =>
+      removeExitedTab: (landingPageId, instanceId) =>
         set((state) => {
           const tabs = state.tabs.filter(
             (tab) => tab.instanceId !== instanceId,
@@ -232,15 +290,29 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               tabs,
               state.activeInstanceId,
             ),
-            panelOpen: tabs.length === 0 ? false : state.panelOpen,
+            ...(tabs.length === 0
+              ? updateLandingTerminalLayout(state, landingPageId, {
+                  ...landingTerminalLayoutFor(state, landingPageId),
+                  panelOpen: false,
+                })
+              : {}),
           };
         }),
-      applyReconciliation: (tabs, activeInstanceId, collapseWhenEmpty) =>
+      applyReconciliation: (
+        landingPageId,
+        tabs,
+        activeInstanceId,
+        collapseWhenEmpty,
+      ) =>
         set((state) => ({
           tabs,
           activeInstanceId: parseActiveInstanceId(activeInstanceId, tabs),
-          panelOpen:
-            collapseWhenEmpty && tabs.length === 0 ? false : state.panelOpen,
+          ...(collapseWhenEmpty && tabs.length === 0
+            ? updateLandingTerminalLayout(state, landingPageId, {
+                ...landingTerminalLayoutFor(state, landingPageId),
+                panelOpen: false,
+              })
+            : {}),
         })),
       clearPendingKill: (hostId, sessionId) =>
         set((state) => ({
@@ -263,8 +335,7 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
       partialize: (state): PersistedLandingTerminalState => ({
         tabs: state.tabs,
         activeInstanceId: state.activeInstanceId,
-        panelOpen: state.panelOpen,
-        panelWidthFraction: state.panelWidthFraction,
+        layoutsByLandingPageId: state.layoutsByLandingPageId,
         pendingKills: state.pendingKills,
       }),
       merge: (persistedState, currentState) => ({
@@ -274,6 +345,43 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
     },
   ),
 );
+
+function updateLandingTerminalLayout(
+  state: Pick<LandingTerminalStoreState, "layoutsByLandingPageId">,
+  landingPageId: string,
+  layout: LandingTerminalLayout,
+): Pick<LandingTerminalStoreState, "layoutsByLandingPageId"> {
+  return {
+    layoutsByLandingPageId: {
+      ...state.layoutsByLandingPageId,
+      [landingPageId]: layout,
+    },
+  };
+}
+
+function parseLandingTerminalLayouts(
+  value: unknown,
+): Readonly<Record<string, LandingTerminalLayout>> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([landingPageId, raw]) => {
+      if (landingPageId.trim().length === 0 || !isRecord(raw)) return [];
+      return [
+        [
+          landingPageId,
+          {
+            panelOpen: raw.panelOpen === true,
+            panelWidthFraction:
+              typeof raw.panelWidthFraction === "number"
+                ? clampLandingTerminalPanelWidthFraction(raw.panelWidthFraction)
+                : DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+            maximized: raw.maximized === true,
+          },
+        ],
+      ];
+    }),
+  );
+}
 
 function parseTabs(value: unknown): ReadonlyArray<LandingTerminalTabRef> {
   if (!Array.isArray(value)) return [];
