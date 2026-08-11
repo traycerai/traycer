@@ -71,6 +71,7 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
   providerTabInputs,
+  providerTabLabel,
   supportedTabsFor as resolveSupportedTabs,
   type ProviderTabKey,
 } from "./provider-settings-tabs";
@@ -939,7 +940,7 @@ function ProviderDetail({
           >
             {tabs.map((tab) => (
               <TabsTrigger key={tab} value={tab} className="flex-none px-3">
-                {PROVIDER_TAB_LABELS[tab]}
+                {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
               </TabsTrigger>
             ))}
           </TabsList>

@@ -1649,22 +1649,29 @@ describe("ProviderModelProvidersTab layout", () => {
     expect(screen.getByText("No model providers")).toBeTruthy();
   });
 
-  it("pins the search controls so they survive scrolling", () => {
-    // The panel owns the only scroll context, so controls that scrolled away
-    // would leave ~180 rows with no way to narrow them without scrolling back
-    // up. jsdom has no layout engine, so this is structural.
+  it("keeps the search controls an ORDINARY header control", () => {
+    // Sticky was requested, shipped, and then retired on live testing: pinning
+    // needs a fill, this pane is `bg-card/40` composited over the settings
+    // background, and the repainted fill stopped at the padded container's
+    // edges - a visible band beside the input on every frame. The Skills tab's
+    // plain placement is the convention, and scrolling up to search a long
+    // catalog is the accepted trade.
+    //
+    // Structural, because jsdom has no layout engine: what can be asserted is
+    // that no ancestor pins the control and no composite fill survives.
     renderTab({
       result: { ok: true, providers: [entry({}), entry({ id: "openai" })] },
       capabilities: FULL_CAPS,
     });
     const search = screen.getByPlaceholderText(/Search/);
-    const pinned = search.closest(".sticky");
-    expect(pinned).not.toBeNull();
-    // The fill is the pane's own recipe - `bg-background` under `bg-card/40` -
-    // rather than an approximation. A near-miss colour reads as a band
-    // floating over the pane, which is what the first attempt shipped.
-    expect(pinned?.className).toContain("bg-background");
-    expect(pinned?.querySelector(".bg-card\\/40")).not.toBeNull();
+    expect(search.closest(".sticky")).toBeNull();
+    const tab = screen.getByTestId("provider-model-providers-tab");
+    expect(tab.querySelector(".bg-card\\/40")).toBeNull();
+    // Still a sibling above the list rather than inside it - the list's own
+    // first row belongs to Add custom provider.
+    expect(
+      search.compareDocumentPosition(screen.getByTestId("model-provider-list")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it("keeps Add custom provider as the FIRST item, inside the list", () => {

@@ -454,6 +454,23 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       as **"CLI & Args"** and `usage` as **"Profiles & Limits"** while both ids
       stay put. The old "General" named nothing about its contents, which is
       what the rename fixes.
+      **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
+      managed profiles and usage limits, but managed profiles exist for
+      `claude-code` and `codex` only — so on the other ten providers the fixed
+      label promised a section that is not there. Elsewhere it reads
+      **"Usage limits"**, which is the panel's own words for what remains (the
+      section inside is headed exactly that). The ID never varies; this is
+      presentation.
+      The predicate is a deliberate MIRROR of the host's
+      `providerSupportsManagedProfiles`, which is itself an id check — there is
+      no capability on the wire to read instead, because the host answers this
+      before it builds one. `profiles` cannot stand in for it: for an
+      unsupported provider it is empty BY RULE
+      (`resolveProfileWireEntries` returns `[]` without consulting the
+      registry), and an unseeded `claude-code` is empty too, so a label keyed on
+      the count would name the wrong tab and then change under the user. Adding
+      a profile-capable provider means updating both sides; the cost of missing
+      it is a tab that under-promises for a round.
     - **`account` is CLIENT-ONLY and deliberately not in the wire enum.** It is
       derived from `state.apiKey.supported` alone. The API key and the
       profile/limits surfaces answer different questions ("how does this
@@ -1110,13 +1127,27 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       forbids the safe implementation rather than the unsafe state. The test now
       asserts the real invariant: no control and no request while the scope is
       unusable.
-    - **Structure: ONE scroll context, sticky search, Add as the first row.**
+    - **Structure: ONE scroll context, plain search, Add as the first row.**
       The list no longer caps itself against the viewport or scrolls
       internally — that nested a second scrollbar inside the panel's own, so
       one list had two tracks and the outer one moved the tab while the inner
       moved the rows. The panel scrolls; the list just gets long.
-      The search controls are **sticky** under the tab header, because they are
-      now the only way to narrow a catalog that runs its full length.
+      The search controls are an **ordinary control in the header area** that
+      scrolls with the tab — the Skills tab's shape, where `ProviderListSearch`
+      is a plain sibling above its list.
+      **REVERSED, and worth the record.** Sticky was requested (the panel owns
+      the only scroll context, so on ~180 rows the controls scroll away), built,
+      and then retired on the user's live pass. Pinning requires a fill, since
+      rows scroll underneath; this pane is `bg-card/40` composited over the
+      settings background, so the sticky child had to repaint BOTH layers to
+      look like the surface it covers. The first attempt (`bg-background/95` +
+      backdrop blur) was a different colour and read as a lighter band. The
+      second used the pane's own recipe and was correct in the middle, but the
+      fill stopped at the padded container's edges, leaving a visible seam
+      beside the input. Two failures with the same root: a pinned child cannot
+      reproduce a composited translucent parent it does not own the bounds of.
+      The accepted trade is scrolling back up to search a long catalog — one
+      gesture, versus an artifact on every frame.
       **"Add custom provider" is the list's FIRST item** and scrolls with the
       content. It stays rendered whatever the search or filter says — including
       when they match nothing, which is why every empty state renders INSIDE the

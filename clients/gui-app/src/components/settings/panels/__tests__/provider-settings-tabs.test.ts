@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
 import {
   PROVIDER_TAB_ORDER,
+  providerTabLabel,
   supportedTabsFor,
 } from "@/components/settings/panels/provider-settings-tabs";
 
@@ -177,5 +178,52 @@ describe("supportedTabsFor", () => {
         advertised: [],
       }),
     ).toEqual(["account"]);
+  });
+
+  describe("the usage tab's label", () => {
+    // The tab holds managed profiles AND usage limits, but profiles exist for
+    // exactly two providers - so a fixed "Profiles & Limits" promised a section
+    // that is not there on the other ten.
+    const LABELS = {
+      general: "CLI & Args",
+      account: "Account",
+      usage: "Profiles & Limits",
+      env: "Env",
+      mcp: "MCP",
+      plugins: "Plugins",
+      skills: "Skills",
+      modelProviders: "Model Providers",
+    } as const;
+
+    it("promises profiles only where profiles exist", () => {
+      for (const providerId of ["claude-code", "codex"] as const) {
+        expect(providerTabLabel("usage", LABELS, providerId)).toBe(
+          "Profiles & Limits",
+        );
+      }
+    });
+
+    it("names what the tab actually holds everywhere else", () => {
+      // The panel's own words: the section inside is headed "Usage limits".
+      for (const providerId of [
+        "grok",
+        "openrouter",
+        "opencode",
+        "cursor",
+        "amp",
+      ] as const) {
+        expect(providerTabLabel("usage", LABELS, providerId)).toBe(
+          "Usage limits",
+        );
+      }
+    });
+
+    it("leaves every other tab's label alone", () => {
+      // Only `usage` varies, and the tab ID never does - it is the wire enum.
+      for (const tab of ["general", "env", "mcp", "skills"] as const) {
+        expect(providerTabLabel(tab, LABELS, "grok")).toBe(LABELS[tab]);
+        expect(providerTabLabel(tab, LABELS, "claude-code")).toBe(LABELS[tab]);
+      }
+    });
   });
 });

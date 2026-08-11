@@ -1,5 +1,8 @@
 import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 
 /**
  * A tab the detail pane can render. Every wire tab, plus `account` — which is
@@ -107,4 +110,48 @@ export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
     apiKeySupported: state.apiKey.supported,
     advertised: state.nativeCapabilities.supportedTabs,
   };
+}
+
+/**
+ * Whether this provider has MANAGED PROFILES at all.
+ *
+ * A deliberate mirror of the host's `providerSupportsManagedProfiles`
+ * (`traycer-host/src/domain/providers/provider-profile-support.ts`), which is
+ * itself an id check - there is no capability on the wire to read instead,
+ * because the host answers this question before it builds one. For a provider
+ * outside this set `profiles` is empty BY RULE rather than by chance
+ * (`resolveProfileWireEntries` returns `[]` without consulting the registry),
+ * so the array cannot stand in for the rule: an unseeded claude-code is empty
+ * too, and a label that reads the count would announce the wrong tab until the
+ * first profile appears and then change under the user.
+ *
+ * Adding a profile-capable provider means updating BOTH sides. The cost of
+ * missing this one is a tab that under-promises for a round, not a broken
+ * surface - which is why the label mirrors the rule rather than inventing a
+ * second source of truth for it.
+ */
+function providerSupportsManagedProfiles(providerId: ProviderId): boolean {
+  return providerId === "claude-code" || providerId === "codex";
+}
+
+/**
+ * The tab's label for THIS provider.
+ *
+ * Only `usage` varies. The tab holds managed profiles and usage limits, and for
+ * every provider but two it holds only the second - so a fixed
+ * "Profiles & Limits" promised a section that is not there, on ~10 of 12
+ * providers. The short form is the panel's own words for what remains: the
+ * section inside is headed "Usage limits".
+ *
+ * The tab ID is untouched - it is the wire enum, and this is presentation.
+ */
+export function providerTabLabel(
+  tab: ProviderTabKey,
+  labels: Readonly<Record<ProviderTabKey, string>>,
+  providerId: ProviderId,
+): string {
+  if (tab !== "usage" || providerSupportsManagedProfiles(providerId)) {
+    return labels[tab];
+  }
+  return "Usage limits";
 }

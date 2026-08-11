@@ -1099,6 +1099,17 @@ function openProfilesTab(): void {
 }
 
 /**
+ * The SAME tab for a provider without managed profiles, which is most of them.
+ *
+ * The label is per-provider now: the tab holds profiles and usage limits, and
+ * for a provider that cannot have profiles it holds only the second - so
+ * promising them in the rail was promising a section that is not there.
+ */
+function openUsageLimitsTab(): void {
+  selectTab("Usage limits");
+}
+
+/**
  * The provider header and tab rail are PINNED rows; only the active tab's body
  * scrolls.
  *
@@ -1330,12 +1341,12 @@ describe("<ProvidersSettingsPanel />", () => {
     // Not consumed here: the pane stays on the rail's first provider rather
     // than opening the deep link's target on the wrong machine. The probe is
     // that provider's DEFAULT tab, which is the first entry of
-    // PROVIDER_TAB_ORDER it supports - "Profiles & Limits" here, since
+    // PROVIDER_TAB_ORDER it supports - "Usage limits" here, since
     // FULL_TABS advertises `usage` and `providerState` leaves the API key
     // unsupported so no Account tab precedes it.
     expect(
       screen
-        .getByRole("tab", { name: "Profiles & Limits" })
+        .getByRole("tab", { name: "Usage limits" })
         .getAttribute("data-state"),
     ).toBe("active");
     expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
@@ -2255,12 +2266,12 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    openProfilesTab();
+    openUsageLimitsTab();
 
     expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(
-      screen.getByRole("tab", { name: "Profiles & Limits" }),
+      screen.getByRole("tab", { name: "Usage limits" }),
     ).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
@@ -2271,7 +2282,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
 
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Profiles & Limits" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
@@ -2437,7 +2448,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // from the RAIL'S FIRST provider actively wrong: opencode has no API key
     // and defaults to `usage`, and because amp also advertises `usage` the
     // stale value survives `resolveTabForProvider` and the pane settles on
-    // "Profiles & Limits" - never showing the key field the CTA exists to
+    // the usage tab - never showing the key field the CTA exists to
     // reach.
     useProvidersFocusStore.getState().setFocusHarnessId("amp");
 
@@ -2470,12 +2481,12 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
     ).toBe("active");
-    // Discriminating: "Profiles & Limits" is rendered and selectable for amp,
+    // Discriminating: the usage tab is rendered and selectable for amp,
     // so this is the deep link picking the right one of two live tabs rather
     // than the wrong one being absent.
     expect(
       screen
-        .getByRole("tab", { name: "Profiles & Limits" })
+        .getByRole("tab", { name: "Usage limits" })
         .getAttribute("data-state"),
     ).toBe("inactive");
     expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
@@ -5122,7 +5133,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // Profiles & Limits is now the default first tab for providers without an
+    // The usage tab is now the default first tab for providers without an
     // API-key Account tab, so startSignIn opens the dialog immediately. That
     // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
     // fail getByRole("tab") without { hidden: true }.

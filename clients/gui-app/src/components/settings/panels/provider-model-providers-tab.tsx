@@ -625,28 +625,25 @@ export function ProviderModelProvidersTab(props: {
       </p>
 
       {entries.length > 0 ? (
-        // STICKY: the panel owns the only scroll context now, so a search box
-        // that scrolled away would leave ~180 rows with no way to narrow them
-        // without scrolling back up.
+        // An ORDINARY control in the header area, scrolling with the tab - the
+        // Skills tab's shape, where `ProviderListSearch` is a plain sibling
+        // above its list.
         //
-        // The fill is the pane's own recipe, not an approximation of it. This
-        // pane is `bg-card/40` painted over the settings background, so a
-        // sticky child needs BOTH layers to look like the surface it covers -
-        // `bg-background` underneath and `bg-card/40` over it reproduces the
-        // composite exactly. A first attempt used `bg-background/95` plus a
-        // backdrop blur, which is a different colour from the pane and read as
-        // a lighter band floating on top of it.
-        <div className="sticky top-0 z-10 -mx-5 bg-background px-5">
-          <div className="bg-card/40 py-2">
-            <ModelProviderListControls
-              query={searchQuery}
-              onQueryChange={setSearchQuery}
-              filter={methodFilter}
-              onFilterChange={setMethodFilter}
-              resultCount={filtered.length}
-            />
-          </div>
-        </div>
+        // Sticky was tried and retired. It needs a fill, because the rows scroll
+        // under it, and this pane is `bg-card/40` composited over the settings
+        // background - so the sticky child had to repaint both layers to look
+        // like the surface it covers. It never did, exactly: the fill stopped
+        // at the padded container's edges and left a visible band beside the
+        // input. The trade accepted instead is scrolling back up to search a
+        // long catalog, which costs a gesture rather than showing an artifact
+        // on every frame.
+        <ModelProviderListControls
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          filter={methodFilter}
+          onFilterChange={setMethodFilter}
+          resultCount={filtered.length}
+        />
       ) : null}
 
       <ModelProvidersBody
