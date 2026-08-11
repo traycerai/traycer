@@ -650,9 +650,17 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       expect(requests).toHaveLength(step.expectedCount);
     }
 
-    // Retries 6-10 wait the 20s cap each; past the budget, silence.
+    // Retries 6-9 wait at the 20s cap. Scheduling retry 10 does NOT settle the
+    // row: its final backoff/probe is still pending.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(110_000);
+      await vi.advanceTimersByTimeAsync(80_000);
+    });
+    expect(requests).toHaveLength(10);
+    expect(result.current.erroredPaths).toEqual(new Set());
+
+    // Only the final refetch settling cold exhausts this generation.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(21_000);
     });
     expect(requests).toHaveLength(11);
     await act(async () => {

@@ -95,11 +95,13 @@ const WORKTREE_ACTIVITY_PERSIST_DEBOUNCE_MS = 1_500;
 interface ColdPrRefetchState {
   readonly attempts: number;
   readonly timer: number | null;
+  readonly terminal: boolean;
 }
 
 interface ViewportRetryStore {
   readonly scopeToken: object;
   readonly getSnapshot: () => ReadonlyMap<string, ColdPrRefetchState>;
+  readonly getGeneration: () => number;
   readonly subscribe: (listener: () => void) => () => void;
   readonly set: (path: string, state: ColdPrRefetchState) => void;
   readonly delete: (path: string) => void;
@@ -108,6 +110,7 @@ interface ViewportRetryStore {
 
 function createViewportRetryStore(scopeToken: object): ViewportRetryStore {
   let snapshot: ReadonlyMap<string, ColdPrRefetchState> = new Map();
+  let generation = 0;
   const listeners = new Set<() => void>();
   const publish = (next: ReadonlyMap<string, ColdPrRefetchState>): void => {
     snapshot = next;
@@ -116,13 +119,18 @@ function createViewportRetryStore(scopeToken: object): ViewportRetryStore {
   return {
     scopeToken,
     getSnapshot: () => snapshot,
+    getGeneration: () => generation,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     set: (path, state) => {
       const prior = snapshot.get(path);
-      if (prior?.attempts === state.attempts && prior.timer === state.timer)
+      if (
+        prior?.attempts === state.attempts &&
+        prior.timer === state.timer &&
+        prior.terminal === state.terminal
+      )
         return;
       publish(new Map(snapshot).set(path, state));
     },
@@ -133,6 +141,7 @@ function createViewportRetryStore(scopeToken: object): ViewportRetryStore {
       publish(next);
     },
     reset: () => {
+      generation += 1;
       if (snapshot.size === 0) return;
       publish(new Map());
     },
@@ -682,6 +691,7 @@ export function useWorktreeActivityEnrichment(
       const state = viewportRetryStore.getSnapshot().get(path) ?? {
         attempts: 0,
         timer: null,
+        terminal: false,
       };
       // Cold rows (see `responseHasColdPrState`) retry on a bounded budget: the
       // per-path refetch re-probes every leg (superproject AND submodules), so
@@ -703,19 +713,41 @@ export function useWorktreeActivityEnrichment(
       }
 
       const nextAttempts = state.attempts + 1;
+      const retryGeneration = viewportRetryStore.getGeneration();
       const timer = window.setTimeout(() => {
         const latest = viewportRetryStore.getSnapshot().get(path);
         if (latest !== undefined) {
           viewportRetryStore.set(path, {
             attempts: latest.attempts,
             timer: null,
+            terminal: false,
           });
         }
-        void result.refetch();
+        void result.refetch().then((nextResult) => {
+          if (viewportRetryStore.getGeneration() !== retryGeneration) return;
+          const settled = viewportRetryStore.getSnapshot().get(path);
+          if (settled?.attempts !== nextAttempts) return;
+          const stillUnresolved =
+            nextResult.isError ||
+            (nextResult.data !== undefined &&
+              responseHasColdPrState(nextResult.data));
+          if (!stillUnresolved) {
+            viewportRetryStore.delete(path);
+            return;
+          }
+          if (nextAttempts >= WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS) {
+            viewportRetryStore.set(path, {
+              attempts: nextAttempts,
+              timer: null,
+              terminal: true,
+            });
+          }
+        });
       }, coldRetryDelayMs(nextAttempts));
       viewportRetryStore.set(path, {
         attempts: nextAttempts,
         timer,
+        terminal: false,
       });
     });
   }, [requestedPaths, results, viewportRetryStore]);
@@ -1054,8 +1086,7 @@ export function useWorktreeActivityEnrichment(
       const sweepExhausted =
         sweepExhaustion.hostId === hostId && sweepExhaustion.paths.has(path);
       const viewportExhausted =
-        (viewportRetrySnapshot.get(path)?.attempts ?? 0) >=
-        WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS;
+        viewportRetrySnapshot.get(path)?.terminal === true;
       const hasColdData =
         state?.data !== undefined && responseHasColdPrState(state.data);
       if (
