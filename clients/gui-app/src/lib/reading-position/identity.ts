@@ -17,9 +17,25 @@ function durableIdentity(args: {
     contentKey,
     deletionKey: contentKey,
     epicId: args.epicId,
-    hostId: args.node.hostId,
+    hostId: durableHostId(args.node),
     durability: "durable",
   };
+}
+
+/**
+ * The host a durable record is SCOPED to, or `null` for a kind whose content is
+ * not the reading host's to begin with.
+ *
+ * Leaving the host out of `contentParts` is only half of host-neutral, and the
+ * missing half was load-bearing: `recordMatches` (see `service.ts`) compares the
+ * stored `identity.hostId` with the requested one, so a published copy that kept
+ * the host it happened to be read through had its content-key record REJECTED -
+ * and then removed - the first time the same transcript was reopened while a
+ * different host was serving. The scroll position went missing for a chat that
+ * had not moved, which is exactly what keying it by cloud identity was for.
+ */
+function durableHostId(node: EpicCanvasTileRef): string | null {
+  return node.type === "published-chat" ? null : node.hostId;
 }
 
 function liveIdentity(
@@ -102,11 +118,12 @@ function durableContentParts(
         node.repo,
         String(node.prNumber),
       ];
-    // Durable, and keyed WITHOUT the reading host: the content is a published
-    // copy addressed by its cloud identity triple, and which host piped the
-    // bytes down is incidental to it. Keying on `hostId` like the live kinds do
-    // would drop the reader's scroll position every time the app's active host
-    // changed, for a transcript that did not move.
+    // Durable, and keyed WITHOUT the reading host - in the content key here AND
+    // in the record's own `hostId` (see `durableHostId`). The content is a
+    // published copy addressed by its cloud identity triple, and which host
+    // piped the bytes down is incidental to it; keying on `hostId` like the live
+    // kinds do would drop the reader's scroll position every time another host
+    // served the reopen, for a transcript that did not move.
     case "published-chat":
       return [node.type, node.taskId, node.ownerUserId, node.chatId];
     default:

@@ -77,6 +77,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
+  CHAT_ORIGIN,
   isChatFilterActive,
   useAcknowledgedRootCreatePending,
   useChatArchiveVisibility,
@@ -84,6 +85,7 @@ import {
   useChatSort,
   useLocalRootCreatePending,
   type ChatArchiveVisibility,
+  type ChatFilter,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
 import {
@@ -126,7 +128,10 @@ import {
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  isCloudChatListSettled,
+  useCloudChatList,
+} from "@/hooks/chats/use-cloud-chat-queries";
 import {
   publicationTargetMap,
   useChatPublicationTargets,
@@ -526,6 +531,37 @@ function useChatVisibleIds(epicId: string): ReadonlySet<string> | null {
   }, [filter, liveRecords, tree]);
 }
 
+/**
+ * Whether a cloud row survives the archive filter.
+ *
+ * The row carries its own `isArchived`, so this is the same question the local
+ * tree answers from `archiveHiddenIds` - just asked of a row that is not in the
+ * tree to be hidden from.
+ */
+function cloudRowMatchesArchiveVisibility(
+  chat: CloudChatSummary,
+  visibility: ChatArchiveVisibility,
+): boolean {
+  if (visibility === CHAT_ARCHIVE_VISIBILITY.All) return true;
+  return visibility === CHAT_ARCHIVE_VISIBILITY.Archived
+    ? chat.isArchived
+    : !chat.isArchived;
+}
+
+/**
+ * Whether a cloud row survives the origin filter.
+ *
+ * Every cloud row is a GUI chat - the cloud list carries chats, and a terminal
+ * agent is not one - so a TUI-origin filter excludes all of them and any other
+ * state includes all of them. It takes no row argument for that reason; the
+ * signature stays row-shaped at the call site so a future origin that IS
+ * expressible per row has an obvious place to go.
+ */
+function cloudRowMatchesOriginFilter(filter: ChatFilter): boolean {
+  if (!isChatFilterActive(filter)) return true;
+  return filter.origin !== CHAT_ORIGIN.Tui;
+}
+
 // Panel body composes sort/filter/expansion/selection/pending-create hooks in
 // a stable order; child row complexity is isolated below.
 // eslint-disable-next-line complexity
@@ -541,6 +577,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const originVisibleIds = useChatVisibleIds(epicId);
   const tree = useEpicTreeIndex();
   const archiveVisibility = useChatArchiveVisibility(epicId);
+  // The origin filter's own value, for the cloud rows. The local tree consumes
+  // it as the id set `useChatVisibleIds` expands it into; a cloud row is not in
+  // the tree, so it answers the filter directly.
+  const chatFilter = useChatFilter(epicId);
   const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   const originRootIds = useMemo(
@@ -640,6 +680,24 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         ),
       }),
     [cloudChats.data, localChatIds, publicationTargets.data],
+  );
+  // The sidebar's own filters apply to cloud rows too. They were reaching only
+  // the local tree, so an "Unarchived only" list still drew archived remote
+  // chats (and "Archived only" drew unarchived ones), and a TUI-origin filter
+  // left every cloud row in place - each row carries the fact the filter asks
+  // about, so showing it anyway is the list contradicting its own filter chips.
+  //
+  // No attention-reveal exception, unlike the local side's `alwaysVisibleIds`:
+  // that exists so a row whose activity THIS device tracks cannot be archived
+  // into invisibility, and a cloud row's indicators belong to its owner.
+  const visibleCloudChats = useMemo(
+    () =>
+      unfoldedCloudChats.filter(
+        (chat) =>
+          cloudRowMatchesArchiveVisibility(chat, archiveVisibility) &&
+          cloudRowMatchesOriginFilter(chatFilter),
+      ),
+    [unfoldedCloudChats, archiveVisibility, chatFilter],
   );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
@@ -749,14 +807,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     renderedAcknowledgedRootPending !== null ||
     renderedPreAckRootCreates.length > 0 ||
     renderedPendingRootCreates.length > 0;
-  const filteredTreeEmpty = isFilteredTreeEmpty({
-    visibleIds: originVisibleIds,
-    rootIds: originRootIds,
-    localRootPending: renderedLocalRootPending,
-    acknowledgedRootPending: renderedAcknowledgedRootPending,
-    preAckRootCreates: renderedPreAckRootCreates,
-    visiblePendingRootCreates: renderedPendingRootCreates,
-  });
+  // Local-tree emptiness AND no surviving cloud row: a GUI-origin filter over a
+  // task whose only chats are remote leaves the tree empty and the list full, so
+  // asking the tree alone would announce "no matches" over rows on screen.
+  const filteredTreeEmpty =
+    isFilteredTreeEmpty({
+      visibleIds: originVisibleIds,
+      rootIds: originRootIds,
+      localRootPending: renderedLocalRootPending,
+      acknowledgedRootPending: renderedAcknowledgedRootPending,
+      preAckRootCreates: renderedPreAckRootCreates,
+      visiblePendingRootCreates: renderedPendingRootCreates,
+    }) && visibleCloudChats.length === 0;
   // One list: local roots and unreachable-host rows, interleaved. Nested local
   // children still render under their parents through `ChatNode`; only ROOTS
   // take part in the interleave, and a cloud row is always a leaf.
@@ -765,24 +827,37 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       mergeChatListEntries({
         localRootIds: rootIds,
         nodeById: tree.nodeById,
-        cloudChats: unfoldedCloudChats,
+        cloudChats: visibleCloudChats,
         comparator,
       }),
-    [rootIds, tree.nodeById, unfoldedCloudChats, comparator],
+    [rootIds, tree.nodeById, visibleCloudChats, comparator],
   );
   // "No agents yet" is now a statement about the TASK rather than this device,
   // so a task whose only agents live on an unreachable host is not empty - it
   // is a list of locked rows. That is the whole restoration.
+  //
+  // Gated on the list having ANSWERED as well: an in-flight list looks exactly
+  // like a task with no remote agents, so without this the panel claims "No
+  // agents yet." for a moment and then fills with rows - see
+  // `isCloudChatListSettled` for why the query's own predicate is the one to
+  // ask. Pre-filter on purpose: this arm means the task HAS nothing, so a row
+  // the user's own filter is hiding still counts as something.
   const showEmptyState =
     originVisibleIds === null &&
     allRootIds.length === 0 &&
     unfoldedCloudChats.length === 0 &&
+    isCloudChatListSettled(cloudChats) &&
     !hasPendingRootRows;
   // Rows exist and survive the origin filter, yet archiving hid every one of
   // them. Distinct from both other arms: the tree is neither empty nor filtered
-  // down to nothing, and the user needs to be told where the rows went.
+  // down to nothing, and the user needs to be told where the rows went. Cloud
+  // rows count on both sides of that sentence, or an all-archived remote list
+  // would fall through to "No agents yet."
   const archiveHidEverything =
-    !hasPendingRootRows && rootIds.length === 0 && originRootIds.length > 0;
+    !hasPendingRootRows &&
+    rootIds.length === 0 &&
+    visibleCloudChats.length === 0 &&
+    (originRootIds.length > 0 || unfoldedCloudChats.length > 0);
   const archiveEmptyState = archiveEmptyStateCopy(
     archiveVisibility,
     canArchive,

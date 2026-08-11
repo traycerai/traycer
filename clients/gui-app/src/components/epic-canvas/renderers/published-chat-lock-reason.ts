@@ -40,7 +40,7 @@ export function publishedChatLockReason(input: {
     ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
     : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
   if (input.unreadableCount > 0) {
-    return `${base} ${input.unreadableCount} item${input.unreadableCount === 1 ? "" : "s"} need a newer version of Traycer to render.`;
+    return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }
   if (input.fidelityNotice !== null) return `${base} ${input.fidelityNotice}`;
   return base;
@@ -67,7 +67,21 @@ export function replicaChatLockReason(input: {
     ? `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
     : `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
   if (input.unreadableCount > 0) {
-    return `${base} ${input.unreadableCount} item${input.unreadableCount === 1 ? "" : "s"} need a newer version of Traycer to render.`;
+    return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }
   return base;
+}
+
+/**
+ * "1 item needs..." / "2 items need...".
+ *
+ * Both halves of the agreement, in one place: the noun was already pluralized
+ * per count and the verb was not, so a single unreadable block read as
+ * "1 item need a newer version of Traycer". Shared by the published and
+ * doc-replica builders, which say the same sentence.
+ */
+function unreadableItemsSentence(count: number): string {
+  return count === 1
+    ? "1 item needs a newer version of Traycer to render."
+    : `${count} items need a newer version of Traycer to render.`;
 }

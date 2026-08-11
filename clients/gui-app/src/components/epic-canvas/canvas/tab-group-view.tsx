@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
@@ -635,16 +636,41 @@ function usePublishedChatFallbackRef(args: {
     liveArtifactOwnerUserId,
   });
   const { substitute, reason, ownerUserId } = decision;
+  // The SERVING host is chosen once, when this fallback first opens, and then
+  // held. `activeHostId` has to stay reactive for the decision above it (the
+  // record gate and `isSameHost` are questions about the projection this render
+  // is reading), but it must not reach the REF: the ref's `hostId` is what
+  // `renderTile` binds its `TabHostProvider` to, so following the app-wide host
+  // would move an already-open copy's reads onto a different client mid-session -
+  // a readable tab turning loading, failed or unsupported with nothing about the
+  // tab or the chat having changed. Same rule the sidebar row follows by
+  // capturing its reading host at click time, and the one the published tile's
+  // own doc comment states.
+  //
+  // Captured once, when this tab body mounts - the same `useState` snapshot
+  // `chat-tile.tsx` takes for its own cross-host decision, and for the same
+  // reason: an app-wide host swap must not reach a tab that is already open. A
+  // swap does not remount this body, so the snapshot holds for the tab's life;
+  // activating the tab again is what re-takes it.
+  //
+  // A null snapshot (the binding was still resolving) yields no fallback for
+  // that mount, and the tab keeps the dead-tile banner and its clone CTA. That is
+  // the same "null is ignorance, not evidence" tradeoff `isCrossHostOpen`
+  // documents, and reopening the tab recovers it - where a latch that filled
+  // itself later would need either a render-time ref write or a
+  // set-state-in-effect, both unsafe under concurrent rendering and both refused
+  // by `react-hooks/*` here.
+  const [readingHostId] = useState<string | null>(() => activeHostId);
   const fallbackRef = useMemo(
     () =>
-      substitute && ownerUserId !== null && activeHostId !== null
+      substitute && ownerUserId !== null && readingHostId !== null
         ? makePublishedChatTileRef({
             taskId: epicId,
             chatId: activeTab.id,
             ownerUserId,
             ownerHostId: activeTab.hostId,
             name: activeTab.name,
-            hostId: activeHostId,
+            hostId: readingHostId,
           })
         : null,
     [
@@ -653,7 +679,7 @@ function usePublishedChatFallbackRef(args: {
       activeTab.name,
       activeTab.hostId,
       ownerUserId,
-      activeHostId,
+      readingHostId,
       epicId,
     ],
   );

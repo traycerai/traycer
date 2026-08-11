@@ -194,11 +194,21 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
         isOwnedByViewer: true,
       })),
     },
+    // `isEnabled` too: the sweep asks `isCloudChatListSettled`, which reads a
+    // DISABLED query as settled (nothing will answer it). A stub omitting this
+    // answers `undefined`, which that predicate reads as disabled - the gate
+    // would then be open in every test whatever the other flags said.
+    isEnabled: true,
     isSuccess: true,
     isError: false,
     isPending: false,
     isFetching: false,
   }),
+  isCloudChatListSettled: (query: {
+    readonly isEnabled: boolean;
+    readonly isSuccess: boolean;
+    readonly isError: boolean;
+  }) => !query.isEnabled || query.isSuccess || query.isError,
 }));
 
 const EPIC_ID = "route-sync-epic";
@@ -987,7 +997,31 @@ describe("useEpicRouteSynchronization", () => {
       previewTabId: null,
       activationHistory: [cloudKnownChat.instanceId],
     };
-    testState.canvasTiles = { [cloudKnownChat.instanceId]: cloudKnownChat };
+    // The POSITIVE control, in the same pane: a chat that is neither
+    // record-backed nor cloud-known, which the sweep must close. Waiting for
+    // THAT close is what proves the sweep ran at all - `not.toHaveBeenCalled()`
+    // on its own is satisfied by the first poll and passes just as happily when
+    // `snapshotLoaded` or the cloud-list gate left the effect switched off,
+    // which is the failure this suite's own mock comment warns about.
+    const reapedChat: EpicCanvasTileRef = {
+      id: "unknown-chat",
+      instanceId: "inst-unknown-chat",
+      type: "chat",
+      name: "Neither local nor cloud-known",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [cloudKnownChat.instanceId, reapedChat.instanceId],
+      activeTabId: cloudKnownChat.instanceId,
+      previewTabId: null,
+      activationHistory: [cloudKnownChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [cloudKnownChat.instanceId]: cloudKnownChat,
+      [reapedChat.instanceId]: reapedChat,
+    };
 
     renderHook(
       (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
@@ -1005,8 +1039,17 @@ describe("useEpicRouteSynchronization", () => {
     );
 
     await waitFor(() => {
-      expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalled();
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        reapedChat.instanceId,
+      );
     });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      cloudKnownChat.instanceId,
+    );
   });
 
   it("keeps editor focus when a canvas mutation re-runs an already-applied nested focus target", async () => {

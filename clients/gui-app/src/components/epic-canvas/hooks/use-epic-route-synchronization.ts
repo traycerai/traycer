@@ -15,7 +15,10 @@ import {
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostClient } from "@/lib/host";
-import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  isCloudChatListSettled,
+  useCloudChatList,
+} from "@/hooks/chats/use-cloud-chat-queries";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -434,9 +437,14 @@ export function useEpicRouteSynchronization(
   // the difference from `data` alone: while the list is in flight every cloud
   // row reads as absent, which is exactly the never-adopted same-host chat the
   // exemption below exists for - and closing its tab is not undoable by the
-  // response that would have saved it. A list that FAILED (an older host
-  // answering `E_HOST_UNSUPPORTED`) is a settled answer, so the sweep proceeds.
-  const cloudChatsSettled = cloudChats.isSuccess || cloudChats.isError;
+  // response that would have saved it.
+  //
+  // The predicate is the query's own, not `isSuccess || isError` spelled out
+  // here: a failed list is a settled answer (an older host will keep answering
+  // `E_HOST_UNSUPPORTED`), and so is a DISABLED one - with no client or no
+  // resolved viewer nothing will ever answer, and gating on the two flags alone
+  // left record policing switched off for as long as that lasted.
+  const cloudChatsSettled = isCloudChatListSettled(cloudChats);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (!cloudChatsSettled) return;

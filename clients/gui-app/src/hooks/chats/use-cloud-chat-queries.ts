@@ -95,6 +95,32 @@ export function useCloudChatList(
   });
 }
 
+/**
+ * Whether a cloud-chat list has ANSWERED - including the answer "nothing is
+ * going to ask".
+ *
+ * Two surfaces make a decision that is only sound once this list is in hand: the
+ * canvas's record-liveness sweep (an in-flight list reads every cloud row as
+ * absent, so it would reap exactly the never-adopted chats the exemption exists
+ * for) and the sidebar's "No agents yet." state (a task whose only agents are
+ * remote is not empty). Both derived it locally and both got it wrong in a
+ * different direction, which is why the predicate lives here, beside the query it
+ * describes.
+ *
+ * `isSuccess || isError` alone is NOT it: this query disables itself when there
+ * is no client or no resolved viewer, and a disabled query never reaches either
+ * flag - so a consumer gating on them waits forever for a response nobody will
+ * send. A query that will not run has given its final answer.
+ */
+export function isCloudChatListSettled(
+  query: Pick<
+    UseQueryResult<unknown, HostRpcError>,
+    "isEnabled" | "isSuccess" | "isError"
+  >,
+): boolean {
+  return !query.isEnabled || query.isSuccess || query.isError;
+}
+
 export interface UseCloudChatReadArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   /**

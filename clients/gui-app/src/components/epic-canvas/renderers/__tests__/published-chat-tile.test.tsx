@@ -405,7 +405,7 @@ describe("PublishedChatTile - doc-replica fallback", () => {
 
     const view = screen.getByTestId("chat-tile-session-view");
     expect(view.textContent).toContain(
-      "1 item need a newer version of Traycer to render",
+      "1 item needs a newer version of Traycer to render",
     );
   });
 });
