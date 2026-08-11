@@ -203,8 +203,8 @@ function base64PayloadFromDataUrl(dataUrl: string): string {
  * never earlier. A surface with no such reservation (chat / new-conversation,
  * whose base64 ingest owns no budget) simply omits it.
  */
-export interface ComposerImageConversionResult {
-  readonly attrs: ReadonlyArray<ImageAttachmentAttrs>;
+export interface ComposerImageConversionResult<Attrs = ImageAttachmentAttrs> {
+  readonly attrs: ReadonlyArray<Attrs>;
   readonly release?: () => void;
 }
 
@@ -216,23 +216,23 @@ export interface ComposerImageConversionResult {
  * editor isn't ready) - each surface's own bookkeeping (analytics, orphaned-
  * byte reconciliation) depends on that distinction.
  */
-export interface ComposerImageIngest {
+export interface ComposerImageIngest<Attrs = ImageAttachmentAttrs> {
   readonly convert: (
     files: ReadonlyArray<File>,
     signal: AbortSignal,
-  ) => Promise<ComposerImageConversionResult>;
+  ) => Promise<ComposerImageConversionResult<Attrs>>;
   readonly onSettled: (
-    accepted: ReadonlyArray<ImageAttachmentAttrs>,
-    converted: ReadonlyArray<ImageAttachmentAttrs>,
-  ) => void;
+    accepted: ReadonlyArray<Attrs>,
+    converted: ReadonlyArray<Attrs>,
+  ) => Promise<void> | void;
   readonly onRejected: (error: unknown, aborted: boolean) => void;
 }
 
-async function runImageIngest(
+async function runImageIngest<Attrs>(
   files: ReadonlyArray<File>,
   signal: AbortSignal,
-  imageIngest: ComposerImageIngest,
-  insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
+  imageIngest: ComposerImageIngest<Attrs>,
+  insertAttrs: (attrs: ReadonlyArray<Attrs>) => number,
 ): Promise<void> {
   let release: (() => void) | undefined;
   try {
@@ -244,7 +244,7 @@ async function runImageIngest(
       converted.length,
       Math.max(0, insertAttrs(converted)),
     );
-    imageIngest.onSettled(converted.slice(0, acceptedCount), converted);
+    await imageIngest.onSettled(converted.slice(0, acceptedCount), converted);
   } catch (error) {
     imageIngest.onRejected(error, signal.aborted);
   } finally {
@@ -508,9 +508,9 @@ async function resolveAndInsertNativeClipboardFilePaths(
  * Non-image file/URL entries resolve through `filePaths`, while images keep
  * their existing independent ingest behavior.
  */
-export function useComposerPasteEvents(
-  imageIngest: ComposerImageIngest,
-  insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
+export function useComposerPasteEvents<Attrs>(
+  imageIngest: ComposerImageIngest<Attrs>,
+  insertAttrs: (attrs: ReadonlyArray<Attrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
 ): UseComposerPasteResult {
   const [dragState, setDragState] = useState<ComposerDragState>(

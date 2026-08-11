@@ -1088,6 +1088,79 @@ export type SetChatArchivedResponse = z.infer<
   typeof setChatArchivedResponseSchema
 >;
 
+// Optional two-phase artifact-image ingest. Prepare validates and retains
+// recoverable bytes; finish commits the artifact reference index or aborts.
+export const MAX_ARTIFACT_IMAGE_BYTES = 30 * 1024 * 1024;
+const MAX_ARTIFACT_IMAGE_BASE64_LENGTH =
+  Math.ceil((MAX_ARTIFACT_IMAGE_BYTES * 4) / 3) + 4;
+const artifactImageBase64Schema = z
+  .string()
+  .max(MAX_ARTIFACT_IMAGE_BASE64_LENGTH)
+  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+
+export const prepareArtifactImageRequestSchema = z.object({
+  epicId: z.string(),
+  source: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("bytes"), base64: artifactImageBase64Schema }),
+    z.object({ kind: z.literal("remote"), url: z.string().url() }),
+  ]),
+});
+export type PrepareArtifactImageRequest = z.infer<
+  typeof prepareArtifactImageRequestSchema
+>;
+
+const artifactImageIngestErrorStateSchema = z.enum([
+  "invalid-path",
+  "blocked-path",
+  "consent-required",
+  "oversized",
+  "invalid-image",
+  "not-found",
+  "budget-exceeded",
+  "io-error",
+]);
+const artifactImageMediaTypeSchema = z.enum([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+]);
+export const prepareArtifactImageResponseSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    operationId: z.string(),
+    attachmentHash: z.string(),
+    mediaType: artifactImageMediaTypeSchema,
+    src: z.string(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    state: artifactImageIngestErrorStateSchema,
+    message: z.string(),
+  }),
+]);
+export type PrepareArtifactImageResponse = z.infer<
+  typeof prepareArtifactImageResponseSchema
+>;
+
+export const finishArtifactImageRequestSchema = z.object({
+  epicId: z.string(),
+  artifactId: z.string(),
+  operationId: z.string(),
+  commit: z.boolean(),
+});
+export type FinishArtifactImageRequest = z.infer<
+  typeof finishArtifactImageRequestSchema
+>;
+
+export const finishArtifactImageResponseSchema = z.object({
+  finished: z.boolean(),
+});
+export type FinishArtifactImageResponse = z.infer<
+  typeof finishArtifactImageResponseSchema
+>;
+
 export const reparentChatRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),

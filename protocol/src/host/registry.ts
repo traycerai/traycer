@@ -249,6 +249,7 @@ import {
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
   epicEditCommentV10,
+  epicFinishArtifactImageV10,
   epicGetTaskContextsV10,
   epicGrantAccessV10,
   epicListCollaboratorsV10,
@@ -263,6 +264,7 @@ import {
   epicMentionSpecsV10,
   epicMentionStoriesV10,
   epicMentionTicketsV10,
+  epicPrepareArtifactImageV10,
   epicRemoveRepoV10,
   epicRecordViewedV10,
   epicRenameArtifactV10,
@@ -4674,6 +4676,32 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicSetChatArchivedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.prepareArtifactImage": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicPrepareArtifactImageV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.finishArtifactImage": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicFinishArtifactImageV10,
           upgradeFromPreviousVersion: null,
         },
       },
