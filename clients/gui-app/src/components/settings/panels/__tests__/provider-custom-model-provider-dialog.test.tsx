@@ -364,7 +364,9 @@ describe("custom model provider dialog", () => {
       submitError: null,
     });
     expect(screen.queryByRole("button", { name: "Remove model 1" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove header 1" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove header 1" }),
+    ).toBeNull();
   });
 
   it("keeps the trash on a row added during this session", () => {

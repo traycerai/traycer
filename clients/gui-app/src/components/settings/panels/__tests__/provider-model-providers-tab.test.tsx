@@ -925,9 +925,7 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     expect(screen.getAllByLabelText("ID")[1].hasAttribute("readonly")).toBe(
       false,
     );
-    expect(
-      screen.getByRole("button", { name: "Remove model 2" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove model 2" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Remove model 1" })).toBeNull();
   });
 

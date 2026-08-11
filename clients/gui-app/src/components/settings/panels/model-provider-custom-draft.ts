@@ -236,9 +236,7 @@ export function relockCustomProviderDraft(
   // stored key - matching case-sensitively would leave one of them unlocked.
   const headerKeys = new Set(stored.headers.map((key) => key.toLowerCase()));
   const models = draft.models.map((row) =>
-    row.locked || !modelIds.has(row.id.trim())
-      ? row
-      : { ...row, locked: true },
+    row.locked || !modelIds.has(row.id.trim()) ? row : { ...row, locked: true },
   );
   const headers = draft.headers.map((row) =>
     row.locked || !headerKeys.has(row.key.trim().toLowerCase())
