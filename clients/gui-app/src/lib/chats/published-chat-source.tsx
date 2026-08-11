@@ -4,6 +4,7 @@ import type { FileEditReason } from "@traycer/protocol/persistence/epic/content-
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatPayload } from "@/hooks/chats/use-cloud-chat-queries";
+import type { CloudChatPayloadBytes } from "@/lib/chats/cloud-chat-payloads";
 
 /**
  * Where a chat surface's HEAVY content comes from, when it is not this
@@ -91,7 +92,8 @@ export interface PublishedSnapshotDiff {
 
 /** One side's answer, as much of a payload query as the derivation reads. */
 interface SnapshotSideAnswer {
-  readonly data: { readonly kind: string } | undefined;
+  /** The decoder's union, so a contract change reaches this file as an error. */
+  readonly data: CloudChatPayloadBytes | undefined;
   readonly isError: boolean;
 }
 
@@ -227,18 +229,16 @@ export interface PayloadExtent {
 }
 
 function payloadExtent(
-  payload:
-    | {
-        readonly kind: string;
-        readonly isTruncated?: boolean;
-        readonly byteLength?: number;
-      }
-    | undefined,
+  // The decoder's own union, not a structural echo of it. Optional fields here
+  // would keep compiling if `text` ever stopped carrying `isTruncated` - and
+  // the truncation notice would just stop appearing, which is the one failure
+  // this whole path exists to prevent.
+  payload: CloudChatPayloadBytes | undefined,
 ): PayloadExtent | null {
   if (payload === undefined) return null;
   if (payload.kind !== "text") return null;
-  if (payload.isTruncated !== true) return null;
-  return { isTruncated: true, byteLength: payload.byteLength ?? 0 };
+  if (!payload.isTruncated) return null;
+  return { isTruncated: true, byteLength: payload.byteLength };
 }
 
 /**
@@ -260,9 +260,9 @@ export function payloadTruncationNotice(extent: PayloadExtent): string {
  * is not here".
  */
 function payloadText(
-  payload: { readonly kind: string; readonly text?: string } | undefined,
+  payload: CloudChatPayloadBytes | undefined,
 ): string | null {
   if (payload === undefined) return null;
   if (payload.kind !== "text") return null;
-  return payload.text ?? null;
+  return payload.text;
 }
