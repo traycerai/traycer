@@ -1,4 +1,10 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { ArrowLeft, Folder } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -10,6 +16,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { InputGroupButton } from "@/components/ui/input-group";
+import { registerPrimaryFocusEndpoint } from "@/lib/focus/primary-focus-coordinator";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 
 export interface LandingTerminalDirectoryPickerProps {
@@ -17,7 +24,6 @@ export interface LandingTerminalDirectoryPickerProps {
   readonly workspacePaths: ReadonlyArray<string>;
   readonly primaryWorkspacePath: string;
   readonly error: string | null;
-  readonly restoreTriggerFocus: boolean;
   readonly onSelect: (workspacePath: string) => void;
   readonly onCancel: () => void;
 }
@@ -27,23 +33,33 @@ export function LandingTerminalDirectoryPicker(
   props: LandingTerminalDirectoryPickerProps,
 ): ReactNode {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => window.clearTimeout(timer);
-  }, [props.primaryWorkspacePath, props.requestKey]);
+  const [selection, setSelection] = useState({
+    primaryPath: props.primaryWorkspacePath,
+    selectedPath: props.primaryWorkspacePath,
+  });
+  const selectedPath =
+    selection.primaryPath === props.primaryWorkspacePath
+      ? selection.selectedPath
+      : props.primaryWorkspacePath;
+  useLayoutEffect(
+    () =>
+      registerPrimaryFocusEndpoint(
+        {
+          kind: "landing-terminal-directory",
+          requestId: props.requestKey,
+        },
+        {
+          focus: () => inputRef.current?.focus(),
+          containsActiveElement: (activeElement) =>
+            activeElement === inputRef.current,
+          isEligible: () => inputRef.current !== null,
+        },
+      ),
+    [props.requestKey],
+  );
 
   const cancel = (): void => {
-    const trigger = props.restoreTriggerFocus
-      ? (inputRef.current
-          ?.closest("[data-landing-terminal-panel]")
-          ?.querySelector<HTMLElement>(
-            "[data-testid='landing-terminal-new-tab']",
-          ) ?? null)
-      : null;
     props.onCancel();
-    if (trigger !== null) {
-      window.setTimeout(() => trigger.focus(), 0);
-    }
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -59,8 +75,13 @@ export function LandingTerminalDirectoryPicker(
       className="flex h-full min-h-0 w-full flex-col"
     >
       <Command
-        key={`${props.requestKey}:${props.primaryWorkspacePath}`}
-        defaultValue={props.primaryWorkspacePath}
+        value={selectedPath}
+        onValueChange={(nextPath) => {
+          setSelection({
+            primaryPath: props.primaryWorkspacePath,
+            selectedPath: nextPath,
+          });
+        }}
         label="Create terminal in workspace"
         loop
         onKeyDown={handleKeyDown}

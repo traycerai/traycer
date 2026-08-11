@@ -11,6 +11,10 @@ import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/termin
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
+  reconcilePrimaryFocus,
+  resetPrimaryFocusCoordinatorForTests,
+} from "@/lib/focus/primary-focus-coordinator";
+import {
   registerTerminalFocus,
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
@@ -293,6 +297,7 @@ describe("<LandingTerminalPanel />", () => {
   const focusCleanups: Array<() => void> = [];
 
   beforeEach(() => {
+    resetPrimaryFocusCoordinatorForTests();
     resetTerminalFocusRegistryForTests();
     mocks.activeHostId = null;
     mocks.clientActiveHostId = null;
@@ -329,6 +334,7 @@ describe("<LandingTerminalPanel />", () => {
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
+    resetPrimaryFocusCoordinatorForTests();
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
   });
@@ -959,8 +965,15 @@ describe("<LandingTerminalPanel />", () => {
     const tab = useLandingTerminalStore.getState().tabs[0];
     const terminalFocus = vi.fn();
     const composerFocus = vi.fn();
-    focusCleanups.push(registerTerminalFocus(tab.instanceId, terminalFocus));
-    focusCleanups.push(registerComposerFocus(composerFocus, true));
+    focusCleanups.push(
+      registerTerminalFocus(
+        tab.instanceId,
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
+    );
+    focusCleanups.push(registerComposerFocus(composerFocus, true, () => true));
 
     act(() => {
       dispatchAction("app.terminal.toggle", router);
@@ -1163,7 +1176,14 @@ describe("<LandingTerminalPanel />", () => {
     });
     useLandingTerminalStore.getState().setPanelOpen(true);
     const terminalFocus = vi.fn();
-    focusCleanups.push(registerTerminalFocus("tab-1", terminalFocus));
+    focusCleanups.push(
+      registerTerminalFocus(
+        "tab-1",
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
+    );
 
     render(panelUi());
 
@@ -1199,14 +1219,19 @@ describe("<LandingTerminalPanel />", () => {
     // request must fire exactly then, not get lost.
     const terminalFocus = vi.fn();
     focusCleanups.push(
-      registerTerminalFocus(created.instanceId, terminalFocus),
+      registerTerminalFocus(
+        created.instanceId,
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
     );
     await waitFor(() => {
       expect(terminalFocus).toHaveBeenCalledTimes(1);
     });
   });
 
-  it("fulfils tab-activation focus only after the commit, never synchronously", async () => {
+  it("parks tab-activation focus until the endpoint becomes eligible", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1224,23 +1249,30 @@ describe("<LandingTerminalPanel />", () => {
     });
     const [first] = useLandingTerminalStore.getState().tabs;
     const firstFocus = vi.fn();
-    focusCleanups.push(registerTerminalFocus(first.instanceId, firstFocus));
+    let firstEligible = true;
+    focusCleanups.push(
+      registerTerminalFocus(
+        first.instanceId,
+        firstFocus,
+        () => true,
+        () => firstEligible,
+      ),
+    );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     firstFocus.mockClear();
 
-    // At click time the target tile's wrapper is still `invisible` (React has
-    // not committed the active flip), and a browser rejects focus on hidden
-    // elements without retrying - so the registry must defer fulfilment past
-    // the commit instead of invoking the callback inside the click handler.
+    firstEligible = false;
     fireEvent.click(
       screen.getByTestId(`landing-terminal-tab-${first.instanceId}`),
     );
     expect(firstFocus).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(firstFocus).toHaveBeenCalledTimes(1);
+    act(() => {
+      firstEligible = true;
+      reconcilePrimaryFocus();
     });
+    expect(firstFocus).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an opening gesture on draft A when focus switches to draft B before terminal.list settles", async () => {
@@ -1580,7 +1612,7 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
     const composerFocus = vi.fn();
-    focusCleanups.push(registerComposerFocus(composerFocus, true));
+    focusCleanups.push(registerComposerFocus(composerFocus, true, () => true));
 
     act(() => {
       dispatchAction("tab.close", router);
@@ -1698,14 +1730,24 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
     const router = fakeKeybindingRouter();
     focusCleanups.push(
-      registerTerminalFocus("project-tab", () => {
-        screen.getByTestId("landing-terminal-tab-project-tab").focus();
-      }),
+      registerTerminalFocus(
+        "project-tab",
+        () => {
+          screen.getByTestId("landing-terminal-tab-project-tab").focus();
+        },
+        () => true,
+        () => true,
+      ),
     );
     focusCleanups.push(
-      registerTerminalFocus("other-tab", () => {
-        screen.getByTestId("landing-terminal-tab-other-tab").focus();
-      }),
+      registerTerminalFocus(
+        "other-tab",
+        () => {
+          screen.getByTestId("landing-terminal-tab-other-tab").focus();
+        },
+        () => true,
+        () => true,
+      ),
     );
 
     act(() => {
@@ -1793,7 +1835,7 @@ describe("<LandingTerminalPanel />", () => {
     render(panelUi());
     const router = fakeKeybindingRouter();
     const composerFocus = vi.fn();
-    focusCleanups.push(registerComposerFocus(composerFocus, true));
+    focusCleanups.push(registerComposerFocus(composerFocus, true, () => true));
 
     act(() => {
       dispatchAction("app.terminal.toggle", router);
@@ -1869,6 +1911,14 @@ describe("<LandingTerminalPanel />", () => {
         screen.queryByTestId("landing-terminal-directory-picker"),
       ).toBeNull();
     });
+
+    const router = fakeKeybindingRouter();
+    act(() => {
+      dispatchAction("tab.new", router);
+    });
+    expect(
+      await screen.findByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
   });
 
   it("reopens onto the pinned folder: spawns there when no terminal matches, reuses one that does", async () => {
@@ -1982,7 +2032,12 @@ describe("<LandingTerminalPanel />", () => {
     // fires when the auto-spawned tile engine registers after create.
     const terminalFocus = vi.fn();
     focusCleanups.push(
-      registerTerminalFocus(created.instanceId, terminalFocus),
+      registerTerminalFocus(
+        created.instanceId,
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
     );
     await waitFor(() => {
       expect(terminalFocus).toHaveBeenCalledTimes(1);

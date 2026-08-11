@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -29,6 +30,10 @@ import {
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import {
+  reconcilePrimaryFocus,
+  requestPrimaryFocus,
+} from "@/lib/focus/primary-focus-coordinator";
 import {
   clearPendingTerminalFocus,
   focusTerminalInstance,
@@ -231,6 +236,12 @@ export function LandingTerminalPanel(): ReactNode {
     (request: LandingTerminalDirectoryRequest | null): void => {
       directoryRequestRef.current = request;
       setDirectoryRequest(request);
+      if (request !== null && request.selectedTarget === null) {
+        requestPrimaryFocus({
+          kind: "landing-terminal-directory",
+          requestId: request.key,
+        });
+      }
     },
     [],
   );
@@ -291,7 +302,10 @@ export function LandingTerminalPanel(): ReactNode {
   // set suppresses the open reconciliation's auto-spawn). If already open, it is
   // just a `+` - create against the effective target, never re-capturing.
   const revealAndCreateTerminal = useCallback(() => {
-    if (directoryRequestRef.current !== null) return;
+    if (directoryRequestRef.current !== null) {
+      if (panelOpen) return;
+      replaceDirectoryRequest(null);
+    }
     if (panelOpen) {
       const request =
         target.workspacePaths.length > 1
@@ -335,7 +349,11 @@ export function LandingTerminalPanel(): ReactNode {
     clearPending();
     if (request.closePanelOnCancel) {
       setPanelOpen(false);
+      clearPendingTerminalFocus();
+      focusActiveComposer();
+      return;
     }
+    requestPrimaryFocus({ kind: "landing-terminal-new-tab" });
   }, [clearPending, replaceDirectoryRequest, setPanelOpen]);
 
   const selectDirectory = useCallback(
@@ -380,40 +398,6 @@ export function LandingTerminalPanel(): ReactNode {
     [activateTab, clearPending, replaceDirectoryRequest],
   );
 
-  // Focus follows the open/collapse *transition*, never the mount: a landing
-  // page that mounts with the panel already open (new tab, tab switch back)
-  // must leave focus with the composer. Opening also arms the launch-cwd
-  // intent that reconciliation consumes once the host's session list settles.
-  const prevPanelOpenRef = useRef(panelOpen);
-  useEffect(() => {
-    const wasOpen = prevPanelOpenRef.current;
-    prevPanelOpenRef.current = panelOpen;
-    if (wasOpen === panelOpen) return;
-    if (panelOpen) {
-      if (!pending) capture();
-      // The inline directory chooser owns focus while a create request is
-      // pending. Focusing the previously active terminal here would steal the
-      // keyboard after the chooser input mounts.
-      if (directoryRequestRef.current !== null) return;
-      const openActiveInstanceId =
-        useLandingTerminalStore.getState().activeInstanceId;
-      if (openActiveInstanceId !== null) {
-        focusTerminalInstance(openActiveInstanceId);
-      }
-      return;
-    }
-    // Every collapse path converges on this store transition: the chord, the
-    // header button, closing the last tab, close-all, and a shell exiting.
-    // Clear any in-flight chooser and hand the keyboard back to the composer.
-    directoryRequestRef.current = null;
-    const clearDirectoryTimer = window.setTimeout(
-      () => setDirectoryRequest(null),
-      0,
-    );
-    clearPendingTerminalFocus();
-    focusActiveComposer();
-    return () => window.clearTimeout(clearDirectoryTimer);
-  }, [capture, panelOpen, pending]);
   useEffect(
     () => () => {
       clearPendingTerminalFocus();
@@ -431,6 +415,11 @@ export function LandingTerminalPanel(): ReactNode {
   const handleReconciliationSettled = useCallback(
     (generation: number, context: LandingTerminalHostContext) => {
       const state = useLandingTerminalStore.getState();
+      if (!state.panelOpen) {
+        directoryRequestRef.current = null;
+        if (pending) clearPending();
+        return;
+      }
       if (
         settleDirectoryRequest({
           request: directoryRequestRef.current,
@@ -453,10 +442,6 @@ export function LandingTerminalPanel(): ReactNode {
       const clearIfPending = (): void => {
         if (pending) clearPending();
       };
-      if (!state.panelOpen) {
-        clearIfPending();
-        return;
-      }
       // Host may have switched after this generation began; never spawn with
       // a home path whose hostId no longer matches the routing target.
       if (target.hostId === null || context.hostId !== target.hostId) {
@@ -544,6 +529,9 @@ export function LandingTerminalPanel(): ReactNode {
       const state = useLandingTerminalStore.getState();
       if (state.panelOpen && state.activeInstanceId !== null) {
         focusTerminalInstance(state.activeInstanceId);
+      } else {
+        clearPendingTerminalFocus();
+        focusActiveComposer();
       }
     },
     [clearPending, closeTab, killTerminal, replaceDirectoryRequest],
@@ -557,32 +545,29 @@ export function LandingTerminalPanel(): ReactNode {
     closeAllTabs().forEach((closed) => {
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
     });
+    clearPendingTerminalFocus();
+    focusActiveComposer();
   }, [clearPending, closeAllTabs, killTerminal, replaceDirectoryRequest]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
       setMaximized(false);
-      if (directoryRequestRef.current !== null) {
-        cancelDirectoryRequest();
-      } else {
-        clearPending();
-      }
+      replaceDirectoryRequest(null);
+      clearPending();
       setPanelOpen(false);
+      clearPendingTerminalFocus();
+      focusActiveComposer();
       return;
     }
     const captured = capture();
-    replaceDirectoryRequest(
-      directoryRequestFor(captured, "reuse-or-create", true),
-    );
+    const request = directoryRequestFor(captured, "reuse-or-create", true);
+    replaceDirectoryRequest(request);
     setPanelOpen(true);
-  }, [
-    cancelDirectoryRequest,
-    capture,
-    clearPending,
-    panelOpen,
-    replaceDirectoryRequest,
-    setPanelOpen,
-  ]);
+    if (request === null) {
+      const instanceId = useLandingTerminalStore.getState().activeInstanceId;
+      if (instanceId !== null) focusTerminalInstance(instanceId);
+    }
+  }, [capture, clearPending, panelOpen, replaceDirectoryRequest, setPanelOpen]);
 
   const openPanel = useCallback(() => {
     if (panelOpen) return;
@@ -613,7 +598,7 @@ export function LandingTerminalPanel(): ReactNode {
   }
 
   const visibleDirectoryRequest =
-    directoryRequest === null
+    !panelOpen || directoryRequest === null
       ? null
       : {
           ...directoryRequest,
@@ -737,6 +722,10 @@ function LandingTerminalPanelContents(
       );
     };
   }, [handlePanelTransitionCancel]);
+
+  useLayoutEffect(() => {
+    if (props.panelOpen) reconcilePrimaryFocus();
+  }, [props.activeInstanceId, props.directoryPicker, props.panelOpen]);
 
   return (
     <>
@@ -1138,7 +1127,6 @@ function LandingTerminalPanelBody(props: {
           workspacePaths={props.directoryPicker.workspacePaths}
           primaryWorkspacePath={props.directoryPicker.primaryWorkspacePath}
           error={props.directoryPicker.error}
-          restoreTriggerFocus={!props.directoryPicker.closePanelOnCancel}
           onSelect={props.onSelectDirectory}
           onCancel={props.onCancelDirectoryPicker}
         />

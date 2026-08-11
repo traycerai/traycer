@@ -17,6 +17,11 @@ import type {
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import {
+  clearPendingTerminalFocus,
+  focusTerminalInstance,
+} from "@/lib/terminals/terminal-focus-registry";
 import {
   useLandingTerminalStore,
   type LandingTerminalTabRef,
@@ -58,6 +63,22 @@ function LandingTerminalTileBootstrap(
   const removeExitedTab = useLandingTerminalStore(
     (state) => state.removeExitedTab,
   );
+  const handleExitedTab = useCallback(
+    (instanceId: string): void => {
+      const wasActive =
+        useLandingTerminalStore.getState().activeInstanceId === instanceId;
+      removeExitedTab(instanceId);
+      if (!wasActive) return;
+      const state = useLandingTerminalStore.getState();
+      if (state.panelOpen && state.activeInstanceId !== null) {
+        focusTerminalInstance(state.activeInstanceId);
+        return;
+      }
+      clearPendingTerminalFocus();
+      focusActiveComposer();
+    },
+    [removeExitedTab],
+  );
   const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
   const hostEntry = useHostDirectoryEntry(props.tab.hostId);
   const preparePayload = useCallback(
@@ -83,8 +104,8 @@ function LandingTerminalTileBootstrap(
 
   useEffect(() => {
     if (!bootstrap.hostSessionExited) return;
-    removeExitedTab(props.tab.instanceId);
-  }, [bootstrap.hostSessionExited, props.tab.instanceId, removeExitedTab]);
+    handleExitedTab(props.tab.instanceId);
+  }, [bootstrap.hostSessionExited, handleExitedTab, props.tab.instanceId]);
 
   useEffect(() => {
     if (bootstrap.createError?.code !== "TERMINAL_ID_TAKEN") return;
@@ -136,7 +157,7 @@ function LandingTerminalTileBootstrap(
     <LandingTerminalTileLive
       handle={bootstrap.handle}
       tab={props.tab}
-      onExited={removeExitedTab}
+      onExited={handleExitedTab}
     />
   );
 }

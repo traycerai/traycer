@@ -1,9 +1,20 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   InterviewAnswer,
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import {
+  focusActiveComposer,
+  registerComposerFocus,
+} from "@/lib/composer/composer-focus-registry";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import {
   readInterviewDraftSnapshot,
@@ -83,6 +94,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const { chatId, blockId, questions, isActive, isBusy, onSubmit, onSkip } =
     args;
   const total = questions.length;
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
   // The persisted row for THIS (chat, block) is the canonical draft state.
   // Subscribing (rather than reading it once) keeps duplicate live views of the
@@ -437,32 +449,29 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // interview in a background pane never steals focus; refocuses when the tab
   // becomes active (isActive is a dependency). Free-text and Other inputs focus
   // themselves via their callback ref, so the card yields to them.
-  //
-  // The focus is deferred one frame because activating a pane fires on the
-  // pane's pointerdown (TabGroupView's onPointerDownCapture). React flushes this
-  // effect right before the trailing mousedown, whose native focus would
-  // otherwise land on the clicked transcript/pane element and steal focus away
-  // from the card. rAF runs after that native focus, so the card keeps it.
-  // Keyboard activation (⌘L) has no trailing pointer focus and is unaffected.
   const wantsFieldFocus = freeTextQuestion || draft.otherSelected;
   useEffect(() => {
     if (!isActive || wantsFieldFocus) return;
-    const frame = window.requestAnimationFrame(() => {
-      containerRef.current?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [safeIndex, isActive, wantsFieldFocus]);
+    if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+    focusActiveComposer();
+  }, [safeIndex, isActive, paneActivationFocusIntent, wantsFieldFocus]);
 
   // Join the composer focus registry so the active-pane focus flow and the
   // "focus editor" shortcut reach this card - it stands in for the Tiptap
   // composer it replaced. Prefer the open text field, else the card itself.
-  useEffect(() => {
-    return registerComposerFocus(() => {
-      const node = containerRef.current;
-      if (node === null) return;
-      const field = node.querySelector<HTMLElement>("textarea, input");
-      (field ?? node).focus({ preventScroll: true });
-    }, isActive);
+  useLayoutEffect(() => {
+    return registerComposerFocus(
+      () => {
+        const node = containerRef.current;
+        if (node === null) return;
+        const field = node.querySelector<HTMLElement>("textarea, input");
+        (field ?? node).focus({ preventScroll: true });
+      },
+      isActive,
+      (activeElement) =>
+        activeElement !== null &&
+        containerRef.current?.contains(activeElement) === true,
+    );
   }, [isActive]);
 
   return {
