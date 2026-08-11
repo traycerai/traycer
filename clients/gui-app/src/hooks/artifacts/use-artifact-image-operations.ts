@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type {
   FinishArtifactImageRequest,
+  FinishArtifactImageResponse,
   PrepareArtifactImageRequest,
   PrepareArtifactImageResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -18,6 +19,7 @@ export type ArtifactImagePreparation = Extract<
   PrepareArtifactImageResponse,
   { readonly ok: true }
 >;
+export type ArtifactImageFinishStatus = FinishArtifactImageResponse["status"];
 
 export interface ArtifactImageOperations {
   readonly supported: boolean;
@@ -29,7 +31,7 @@ export interface ArtifactImageOperations {
     artifactId: string,
     operationId: string,
     commit: boolean,
-  ) => Promise<boolean>;
+  ) => Promise<ArtifactImageFinishStatus>;
 }
 
 export function useArtifactImageOperations(
@@ -81,14 +83,14 @@ export function useArtifactImageOperations(
       artifactId: string,
       operationId: string,
       commit: boolean,
-    ): Promise<boolean> => {
+    ): Promise<ArtifactImageFinishStatus> => {
       const response = await finishMutation.mutateAsync({
         epicId,
         artifactId,
         operationId,
         commit,
       });
-      return response.finished;
+      return response.status;
     },
     [epicId, finishMutation],
   );

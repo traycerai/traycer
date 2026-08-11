@@ -62,7 +62,7 @@ export function AttachmentImage(props: {
   );
   if (status === "error") {
     return (
-      <span className="relative inline-block max-w-full">
+      <span className="group inline-flex max-w-full items-center gap-2">
         <AttachmentImageFailure
           alt={props.alt}
           source={props.src}
@@ -72,14 +72,14 @@ export function AttachmentImage(props: {
           <AddImageToArtifactButton
             source={props.addToArtifactSource}
             alt={props.alt}
-            className="absolute right-2 top-2"
+            className="shrink-0"
           />
         )}
       </span>
     );
   }
   return (
-    <div className="relative my-3 w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
+    <div className="group relative my-3 w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
       {props.addToArtifactSource === null ? null : (
         <AddImageToArtifactButton
           source={props.addToArtifactSource}

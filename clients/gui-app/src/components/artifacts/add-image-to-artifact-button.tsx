@@ -69,14 +69,15 @@ export function AddImageToArtifactButton(props: {
           src: prepared.src,
           alt: props.alt,
           attachmentHash: prepared.attachmentHash,
+          mediaType: prepared.mediaType,
         });
-        const committed = await operations.finish(
+        const status = await operations.finish(
           artifactId,
           prepared.operationId,
           true,
         );
         operationId = null;
-        if (!committed) {
+        if (status === "aborted") {
           rollback();
           rollback = null;
           throw new Error("The image could not be committed to the artifact.");
@@ -105,7 +106,10 @@ export function AddImageToArtifactButton(props: {
           type="button"
           variant="secondary"
           size="icon-sm"
-          className={cn("shadow-sm", props.className)}
+          className={cn(
+            "opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100",
+            props.className,
+          )}
           aria-label="Add image to artifact"
           onClick={stopImageClick}
         >
@@ -174,6 +178,7 @@ function appendArtifactImage(
     readonly src: string;
     readonly alt: string;
     readonly attachmentHash: string;
+    readonly mediaType: string;
   },
 ): () => void {
   const templateDoc = new Y.Doc();

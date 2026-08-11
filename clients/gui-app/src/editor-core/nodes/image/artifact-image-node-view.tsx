@@ -11,9 +11,10 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
   const src = readStringAttr(props.node.attrs, "src");
   const alt = readStringAttr(props.node.attrs, "alt");
   const attachmentHash = readStringAttr(props.node.attrs, "attachmentHash");
+  const mediaType = readStringAttr(props.node.attrs, "mediaType");
   const image = useAttachmentBlobSrc(
     attachmentHash.length > 0 ? attachmentHash : null,
-    mediaTypeFromSrc(src),
+    mediaType,
     null,
   );
   let body: ReactNode;
@@ -32,7 +33,7 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
       <AttachmentImage
         src={image.src}
         alt={alt}
-        mediaType={mediaTypeFromSrc(src)}
+        mediaType={mediaType}
         suggestedName={src.split("/").at(-1) ?? null}
         addToArtifactSource={null}
       />
@@ -48,13 +49,4 @@ function readStringAttr(
 ): string {
   const value = attrs[key];
   return typeof value === "string" ? value : "";
-}
-
-function mediaTypeFromSrc(src: string): string {
-  const extension = src.split(/[?#]/, 1)[0]?.split(".").at(-1)?.toLowerCase();
-  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
-  if (extension === "gif") return "image/gif";
-  if (extension === "webp") return "image/webp";
-  if (extension === "svg") return "image/svg+xml";
-  return "image/png";
 }

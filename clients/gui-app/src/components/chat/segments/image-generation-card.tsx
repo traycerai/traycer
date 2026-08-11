@@ -234,7 +234,10 @@ function GeneratedImage(props: {
   }
 
   return (
-    <figure className="relative w-full bg-muted/30" style={{ aspectRatio }}>
+    <figure
+      className="group relative w-full bg-muted/30"
+      style={{ aspectRatio }}
+    >
       <AddImageToArtifactButton
         source={{ kind: "client", url: image.src }}
         alt={alt.length > 0 ? alt : "Generated image"}

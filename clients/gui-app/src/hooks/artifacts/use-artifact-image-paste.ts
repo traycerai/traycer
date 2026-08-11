@@ -5,10 +5,8 @@ import { useComposerPasteEvents } from "@/hooks/composer/use-composer-paste";
 import type {
   ComposerImageConversionResult,
   ComposerImageIngest,
-  PathInsertionCommit,
   UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
-import { insertPathSpansCommand } from "@/hooks/composer/use-composer-paste";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useArtifactImageOperations } from "./use-artifact-image-operations";
@@ -18,6 +16,8 @@ export interface PreparedArtifactImage {
   readonly src: string;
   readonly alt: string;
   readonly attachmentHash: string;
+  readonly mediaType: string;
+  abortPending: boolean;
 }
 
 export interface ArtifactImagePasteResult {
@@ -55,7 +55,7 @@ export function useArtifactImagePaste(
   const operations = useArtifactImageOperations(epicId);
 
   const finishOperation = useCallback(
-    async (operationId: string, commit: boolean): Promise<boolean> => {
+    async (operationId: string, commit: boolean) => {
       return operations.finish(artifactId, operationId, commit);
     },
     [artifactId, operations],
@@ -85,20 +85,31 @@ export function useArtifactImagePaste(
               src: response.src,
               alt: file.name || "Image",
               attachmentHash: response.attachmentHash,
+              mediaType: response.mediaType,
+              abortPending: true,
             });
             signal.throwIfAborted();
           }
           return {
             attrs: prepared,
             release: () => {
-              prepared.forEach((image) => {
-                void finishOperation(image.operationId, false).catch(() => {});
-              });
+              prepared
+                .filter((image) => image.abortPending)
+                .forEach((image) => {
+                  void finishOperation(image.operationId, false)
+                    .then(() => {
+                      image.abortPending = false;
+                    })
+                    .catch(() => {});
+                });
             },
           };
         } catch (error) {
           await Promise.allSettled(
-            prepared.map((image) => finishOperation(image.operationId, false)),
+            prepared.map(async (image) => {
+              await finishOperation(image.operationId, false);
+              image.abortPending = false;
+            }),
           );
           throw error;
         }
@@ -108,23 +119,38 @@ export function useArtifactImagePaste(
         await Promise.allSettled(
           converted
             .filter((image) => !acceptedIds.has(image.operationId))
-            .map((image) => finishOperation(image.operationId, false)),
+            .map(async (image) => {
+              await finishOperation(image.operationId, false);
+              image.abortPending = false;
+            }),
         );
-        for (const image of accepted) {
-          try {
-            const committed = await finishOperation(image.operationId, true);
-            if (committed) continue;
-          } catch (error) {
-            if (editor !== null && !editor.isDestroyed) {
-              removeArtifactImage(editor, image);
+        const results = await Promise.allSettled(
+          accepted.map(async (image) => {
+            const status = await finishOperation(image.operationId, true);
+            image.abortPending = false;
+            if (
+              status === "committed" ||
+              status === "not-yet-converged" ||
+              status === "unknown-operation"
+            ) {
+              return;
             }
-            throw error;
-          }
+            throw new Error("The artifact image could not be committed.");
+          }),
+        );
+        let failure: Error | null = null;
+        for (const [index, result] of results.entries()) {
+          if (result.status === "fulfilled") continue;
+          failure ??=
+            result.reason instanceof Error
+              ? result.reason
+              : new Error("The artifact image could not be committed.");
+          const image = accepted[index];
           if (editor !== null && !editor.isDestroyed) {
             removeArtifactImage(editor, image);
           }
-          throw new Error("The artifact image could not be committed.");
         }
+        if (failure !== null) throw failure;
       },
       onRejected: (error, aborted) => {
         if (aborted) return;
@@ -159,6 +185,7 @@ export function useArtifactImagePaste(
               src: image.src,
               alt: image.alt,
               attachmentHash: image.attachmentHash,
+              mediaType: image.mediaType,
             },
           })),
         )
@@ -167,16 +194,7 @@ export function useArtifactImagePaste(
     },
     [editor],
   );
-  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
-    if (editor === null || editor.isDestroyed || !editor.isEditable)
-      return null;
-    const position = editor.state.selection.from;
-    return (paths) => {
-      if (editor.isDestroyed) return false;
-      insertPathSpansCommand(editor, { paths, position });
-      return true;
-    };
-  }, [editor]);
+  const beginPathInsertion = useCallback((): null => null, []);
   const filePaths = useMemo(
     () => ({
       fileDrops: runnerHost.fileDrops,
