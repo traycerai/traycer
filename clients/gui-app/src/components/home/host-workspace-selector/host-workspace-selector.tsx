@@ -43,6 +43,7 @@ import {
 import { useWorktreeSetEntryModeForClient } from "@/hooks/worktree/use-worktree-set-entry-mode-mutation";
 import { useWorktreeImportForClient } from "@/hooks/worktree/use-worktree-import-mutation";
 import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
+import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
 import {
   useWorkspaceBindingRemoveEntryForClient,
   usePendingRemoveBindingEntryPaths,
@@ -1829,7 +1830,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         epicId: surface.epicId,
         ownerId: surface.ownerId,
         ownerKind,
-        entries: [...stagedEntries],
+        entries: worktreeCreateEntries(stagedEntries),
       },
       {
         onSuccess: (result) => {

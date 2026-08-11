@@ -39,6 +39,7 @@ import {
   type UnifiedPickerSourceOption,
 } from "@/components/home/worktree/worktree-unified-picker-model";
 import { promotePickerRow } from "./promote-picker-row";
+import { createWorktreeRetryIdentity } from "@/lib/worktree/worktree-retry-identity";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type RepoIdentifier = WorktreeFolderIntent["repoIdentifier"];
@@ -111,19 +112,34 @@ export function NewWorktreeForm(props: NewWorktreeFormProps) {
     () =>
       selectedSource === null
         ? null
-        : newWorktreeIntent({
-            workspacePath: props.workspacePath,
-            repoIdentifier: props.repoIdentifier,
-            isPrimary: props.isPrimary,
-            source: selectedSource,
-            branchName: trimmed,
-          }),
+        : newWorktreeIntent(
+            form.branchCollision === "random"
+              ? {
+                  workspacePath: props.workspacePath,
+                  repoIdentifier: props.repoIdentifier,
+                  isPrimary: props.isPrimary,
+                  source: selectedSource,
+                  branchName: trimmed,
+                  collision: "random",
+                  retryIdentity: form.branchRetryIdentity,
+                }
+              : {
+                  workspacePath: props.workspacePath,
+                  repoIdentifier: props.repoIdentifier,
+                  isPrimary: props.isPrimary,
+                  source: selectedSource,
+                  branchName: trimmed,
+                  collision: "fail",
+                },
+          ),
     [
       props.isPrimary,
       props.repoIdentifier,
       props.workspacePath,
       selectedSource,
       trimmed,
+      form.branchCollision,
+      form.branchRetryIdentity,
     ],
   );
   const preservesExistingBranchCheckout =
@@ -134,11 +150,12 @@ export function NewWorktreeForm(props: NewWorktreeFormProps) {
     preservesExistingBranchCheckout ||
     (draftIntent?.kind === "worktree" &&
       props.currentIntent?.kind === "worktree" &&
-      matchesStagedBranch(
-        props.currentIntent.branch,
-        draftIntent.branch.name,
-        selectedSource,
-      ));
+      matchesStagedBranch(props.currentIntent.branch, {
+        trimmedName: draftIntent.branch.name,
+        source: selectedSource,
+        collision: form.branchCollision,
+        retryIdentity: form.branchRetryIdentity,
+      }));
   const { flush } = useNewWorktreeAutosave({
     draftIntent,
     isSaved,
@@ -618,10 +635,89 @@ function sourceBranchRowKey(
 interface NewWorktreeFormState {
   readonly selectedSource: UnifiedPickerSourceOption | null;
   readonly branchName: string;
+  readonly branchCollision: "fail" | "random";
+  readonly branchRetryIdentity: string;
   readonly hasUserEdited: boolean;
   readonly hasUnresolvedExplicitSource: boolean;
   readonly setBranchName: (next: string) => void;
   readonly selectSource: (next: string) => void;
+}
+
+type NewWorktreeBranch = Extract<
+  Extract<WorktreeFolderIntent, { readonly kind: "worktree" }>["branch"],
+  { readonly type: "new" }
+>;
+
+interface NewBranchNameState {
+  readonly value: string;
+  readonly forSource: string | null;
+  readonly edited: boolean;
+  readonly collision: "fail" | "random";
+  readonly retryIdentity: string;
+  readonly stagedIntentKey: string | null;
+}
+
+function stagedNewBranch(
+  intent: WorktreeFolderIntent | null,
+): NewWorktreeBranch | null {
+  if (intent?.kind !== "worktree" || intent.branch.type !== "new") return null;
+  return intent.branch;
+}
+
+function newBranchCollisionState(
+  branch: NewWorktreeBranch | null,
+): Pick<NewBranchNameState, "collision" | "retryIdentity"> {
+  if (!branch) {
+    return {
+      collision: "random",
+      retryIdentity: createWorktreeRetryIdentity(),
+    };
+  }
+  if (branch.collision === "random") {
+    return {
+      collision: "random",
+      retryIdentity: branch.retryIdentity,
+    };
+  }
+  return {
+    collision: branch.collision ?? "fail",
+    retryIdentity: createWorktreeRetryIdentity(),
+  };
+}
+
+function newBranchNameState(input: {
+  readonly currentIntent: WorktreeFolderIntent | null;
+  readonly fallbackName: string;
+  readonly forSource: string | null;
+  readonly edited: boolean;
+  readonly stagedIntentKey: string | null;
+}): NewBranchNameState {
+  const branch = stagedNewBranch(input.currentIntent);
+  return {
+    value: branch?.name ?? input.fallbackName,
+    forSource: input.forSource,
+    edited: input.edited,
+    ...newBranchCollisionState(branch),
+    stagedIntentKey: input.stagedIntentKey,
+  };
+}
+
+function selectedSourceNameState(input: {
+  readonly previous: NewBranchNameState;
+  readonly source: UnifiedPickerSourceOption | undefined;
+  readonly defaultNewBranchName: string;
+}): NewBranchNameState {
+  if (input.previous.edited || input.previous.forSource === input.source?.id) {
+    return input.previous;
+  }
+  return {
+    value: input.source?.defaultNewBranchName ?? input.defaultNewBranchName,
+    forSource: input.source?.id ?? null,
+    edited: false,
+    collision: "random",
+    retryIdentity: createWorktreeRetryIdentity(),
+    stagedIntentKey: input.previous.stagedIntentKey,
+  };
 }
 
 /**
@@ -649,49 +745,72 @@ function useNewWorktreeFormState(
   const selectedSourceId = selectedSource?.id ?? null;
   const hasUnresolvedExplicitSource =
     sourceId !== null && selectedSource === null;
+  const stagedIntentKey = newBranchIntentKey(currentIntent);
 
-  const [nameState, setNameState] = useState(() => ({
-    value: initialNewBranchName(
+  const [nameState, setNameState] = useState(() =>
+    newBranchNameState({
       currentIntent,
-      selectedSource,
-      defaultNewBranchName,
-    ),
-    forSource: selectedSourceId,
-    edited: false,
-  }));
-  if (
-    !hasUnresolvedExplicitSource &&
-    !nameState.edited &&
-    nameState.forSource !== selectedSourceId
-  ) {
-    setNameState({
-      value: initialNewBranchName(
+      fallbackName: initialNewBranchName(
         currentIntent,
         selectedSource,
         defaultNewBranchName,
       ),
       forSource: selectedSourceId,
       edited: false,
-    });
+      stagedIntentKey,
+    }),
+  );
+  if (nameState.stagedIntentKey !== stagedIntentKey) {
+    setNameState(
+      newBranchNameState({
+        currentIntent,
+        fallbackName: nameState.value,
+        forSource: selectedSourceId,
+        edited: nameState.edited,
+        stagedIntentKey,
+      }),
+    );
+  } else if (
+    !hasUnresolvedExplicitSource &&
+    !nameState.edited &&
+    nameState.forSource !== selectedSourceId
+  ) {
+    setNameState(
+      newBranchNameState({
+        currentIntent,
+        fallbackName: initialNewBranchName(
+          currentIntent,
+          selectedSource,
+          defaultNewBranchName,
+        ),
+        forSource: selectedSourceId,
+        edited: false,
+        stagedIntentKey,
+      }),
+    );
   }
 
   const setBranchName = useCallback(
     (next: string) =>
-      setNameState((prev) => ({ ...prev, value: next, edited: true })),
+      setNameState((prev) => ({
+        ...prev,
+        value: next,
+        edited: true,
+        collision: "fail",
+      })),
     [],
   );
   const selectSource = useCallback(
     (next: string) => {
       setSourceId(next);
       const nextSource = sourceOptions.find((option) => option.id === next);
-      setNameState((prev) => {
-        if (prev.edited || prev.forSource === nextSource?.id) return prev;
-        return {
-          value: nextSource?.defaultNewBranchName ?? defaultNewBranchName,
-          forSource: nextSource?.id ?? null,
-          edited: false,
-        };
-      });
+      setNameState((previous) =>
+        selectedSourceNameState({
+          previous,
+          source: nextSource,
+          defaultNewBranchName,
+        }),
+      );
     },
     [defaultNewBranchName, sourceOptions],
   );
@@ -699,6 +818,8 @@ function useNewWorktreeFormState(
   return {
     selectedSource,
     branchName: nameState.value,
+    branchCollision: nameState.collision,
+    branchRetryIdentity: nameState.retryIdentity,
     hasUserEdited:
       nameState.edited ||
       (sourceId !== null && sourceId !== model.newBranchSourceId),
@@ -706,6 +827,19 @@ function useNewWorktreeFormState(
     setBranchName,
     selectSource,
   };
+}
+
+function newBranchIntentKey(
+  intent: WorktreeFolderIntent | null,
+): string | null {
+  if (intent?.kind !== "worktree" || intent.branch.type !== "new") return null;
+  return JSON.stringify([
+    intent.branch.name,
+    intent.branch.source,
+    intent.branch.carryUncommittedChanges,
+    intent.branch.collision ?? "fail",
+    intent.branch.collision === "random" ? intent.branch.retryIdentity : null,
+  ]);
 }
 
 /** The Source dropdown rows, mapped 1:1 from the model's ordered source list
@@ -771,17 +905,25 @@ function initialNewBranchName(
 
 function matchesStagedBranch(
   branch: Extract<WorktreeFolderIntent, { kind: "worktree" }>["branch"],
-  trimmedName: string,
-  source: UnifiedPickerSourceOption | null,
+  input: {
+    readonly trimmedName: string;
+    readonly source: UnifiedPickerSourceOption | null;
+    readonly collision: "fail" | "random";
+    readonly retryIdentity: string;
+  },
 ): boolean {
   if (branch.type === "new") {
     // Carry vs clean share a source name, so the carry flag is part of identity:
     // switching between them must register as a change (Select re-enables).
     return (
-      source !== null &&
-      branch.name === trimmedName &&
-      branch.source === source.name &&
-      branch.carryUncommittedChanges === source.carryUncommittedChanges
+      input.source !== null &&
+      branch.name === input.trimmedName &&
+      branch.source === input.source.name &&
+      branch.carryUncommittedChanges === input.source.carryUncommittedChanges &&
+      (branch.collision ?? "fail") === input.collision &&
+      (input.collision !== "random" ||
+        (branch.collision === "random" &&
+          branch.retryIdentity === input.retryIdentity))
     );
   }
   return false;

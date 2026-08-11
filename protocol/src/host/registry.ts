@@ -402,8 +402,10 @@ import {
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
+  worktreeCreateRequestSchemaV10,
   worktreeCreateResponseSchema,
   worktreeCreatePathsRequestSchema,
+  worktreeCreatePathsRequestSchemaV10,
   worktreeCreatePathsResponseSchema,
   worktreeDeleteRequestSchema,
   worktreeDeleteResponseSchema,
@@ -755,15 +757,83 @@ export const worktreeListBranchesV10 = defineRpcContract({
 export const worktreeCreateV10 = defineRpcContract({
   method: "worktree.create",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeCreateRequestSchemaV10,
+  responseSchema: worktreeCreateResponseSchema,
+});
+
+export const worktreeCreateV11 = defineRpcContract({
+  method: "worktree.create",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: worktreeCreateRequestSchema,
   responseSchema: worktreeCreateResponseSchema,
+});
+
+export const worktreeCreateUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeCreateV10,
+  typeof worktreeCreateV11
+>({
+  from: worktreeCreateV10.schemaVersion,
+  to: worktreeCreateV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    entries: request.entries.map((entry) => {
+      if (entry.kind !== "worktree") return entry;
+      if (entry.branch.type === "existing") {
+        return { ...entry, branch: { ...entry.branch } };
+      }
+      return {
+        ...entry,
+        branch: {
+          type: "new" as const,
+          name: entry.branch.name,
+          source: entry.branch.source,
+          carryUncommittedChanges: entry.branch.carryUncommittedChanges,
+          collision: "fail" as const,
+        },
+      };
+    }),
+  }),
+  upgradeResponse: (response) => response,
 });
 
 export const worktreeCreatePathsV10 = defineRpcContract({
   method: "worktree.createPaths",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeCreatePathsRequestSchemaV10,
+  responseSchema: worktreeCreatePathsResponseSchema,
+});
+
+export const worktreeCreatePathsV11 = defineRpcContract({
+  method: "worktree.createPaths",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: worktreeCreatePathsRequestSchema,
   responseSchema: worktreeCreatePathsResponseSchema,
+});
+
+export const worktreeCreatePathsUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeCreatePathsV10,
+  typeof worktreeCreatePathsV11
+>({
+  from: worktreeCreatePathsV10.schemaVersion,
+  to: worktreeCreatePathsV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    entries: request.entries.map((entry) => {
+      if (entry.branch.type === "existing") {
+        return { ...entry, branch: { ...entry.branch } };
+      }
+      return {
+        ...entry,
+        branch: {
+          type: "new" as const,
+          name: entry.branch.name,
+          source: entry.branch.source,
+          carryUncommittedChanges: entry.branch.carryUncommittedChanges,
+          collision: "fail" as const,
+        },
+      };
+    }),
+  }),
+  upgradeResponse: (response) => response,
 });
 
 export const worktreeImportV10 = defineRpcContract({
@@ -5123,11 +5193,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.create": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeCreateV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeCreateV11,
+          upgradeFromPreviousVersion: worktreeCreateUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -5135,11 +5209,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.createPaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeCreatePathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeCreatePathsV11,
+          upgradeFromPreviousVersion: worktreeCreatePathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

@@ -330,6 +330,9 @@ function flushAutosave(): void {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(
+    "00000000-0000-4000-8000-000000000000",
+  );
   mockVirtuosoState.captureConfiguration.mockClear();
   mockVirtuosoState.scrollIntoView.mockClear();
   mockVirtuosoState.transientUndefinedIndexes.clear();
@@ -557,9 +560,106 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "traycer/swift-otter",
           source: "development",
           carryUncommittedChanges: false,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
+  });
+
+  it("switches an edited generated branch name to exact collision handling", () => {
+    branchesData = {
+      branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    renderForm(onEmit, null);
+
+    fireEvent.change(screen.getByTestId("new-worktree-branch-name"), {
+      target: { value: "my-explicit-branch" },
+    });
+    flushAutosave();
+
+    const lastCall = onEmit.mock.lastCall;
+    if (lastCall === undefined) throw new Error("expected an emitted intent");
+    const [emitted] = lastCall;
+    if (emitted.kind !== "worktree")
+      throw new Error("expected worktree intent");
+    expect(emitted.branch).toMatchObject({
+      name: "my-explicit-branch",
+      collision: "fail",
+    });
+  });
+
+  it("keeps a pre-policy staged branch on exact collision handling", () => {
+    branchesData = {
+      branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    renderForm(onEmit, STAGED_DEVELOPMENT_INTENT);
+
+    flushAutosave();
+
+    expect(onEmit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
+      "Saved",
+    );
+  });
+
+  it("adopts an externally regenerated name and retry identity", () => {
+    branchesData = {
+      branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    let currentIntent: WorktreeFolderIntent = {
+      ...STAGED_DEVELOPMENT_INTENT,
+      branch: {
+        type: "new",
+        name: "my-explicit-branch",
+        source: "development",
+        carryUncommittedChanges: false,
+        collision: "fail",
+      },
+    };
+    const subject = () => (
+      <TooltipProvider>
+        <NewWorktreeForm
+          hostClient={null}
+          workspacePath="/repo"
+          repoIdentifier={{ owner: "acme", repo: "app" }}
+          isPrimary
+          summary={SUMMARY}
+          currentIntent={currentIntent}
+          defaultNewBranchName="traycer/swift-otter"
+          onEmit={onEmit}
+        />
+      </TooltipProvider>
+    );
+    const view = render(subject());
+
+    currentIntent = {
+      ...currentIntent,
+      branch: {
+        type: "new",
+        name: "traycer/fresh-otter",
+        source: "development",
+        carryUncommittedChanges: false,
+        collision: "random",
+        retryIdentity: "external-retry-identity",
+      },
+    };
+    view.rerender(subject());
+
+    expect(
+      screen.getByTestId<HTMLInputElement>("new-worktree-branch-name").value,
+    ).toBe("traycer/fresh-otter");
+    expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
+      "Saved",
+    );
+    flushAutosave();
+    expect(onEmit).not.toHaveBeenCalled();
   });
 
   it("working tree source: clearing the name pauses autosave and Enter is inert", () => {
@@ -602,6 +702,8 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "traycer/swift-otter",
           source: "development",
           carryUncommittedChanges: true,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
@@ -628,6 +730,8 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "traycer/swift-otter",
           source: "development",
           carryUncommittedChanges: false,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
@@ -661,6 +765,8 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "release-9",
           source: "origin/release-9",
           carryUncommittedChanges: false,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
@@ -700,6 +806,8 @@ describe("NewWorktreeForm — new-branch name", () => {
         name: "release-9",
         source: "origin/release-9",
         carryUncommittedChanges: false,
+        collision: "random",
+        retryIdentity: "00000000-0000-4000-8000-000000000000",
       },
     });
   });
@@ -792,6 +900,8 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "traycer/swift-otter",
           source: "chore/cleanup",
           carryUncommittedChanges: false,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
@@ -845,6 +955,7 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "feat/forked",
           source: "chore/cleanup",
           carryUncommittedChanges: false,
+          collision: "fail",
         },
       },
     ]);
@@ -887,6 +998,8 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "traycer/swift-otter",
           source: "existing_branch_1",
           carryUncommittedChanges: false,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
@@ -920,6 +1033,8 @@ describe("NewWorktreeForm — new-branch name", () => {
           name: "traycer/swift-otter",
           source: "chore/cleanup",
           carryUncommittedChanges: false,
+          collision: "random",
+          retryIdentity: "00000000-0000-4000-8000-000000000000",
         },
       },
     ]);
@@ -1548,9 +1663,12 @@ describe("NewWorktreeForm — autosave lifecycle", () => {
     expect(onEmit).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the same focused input when the saved intent echoes back", () => {
+  it("keeps a manually edited branch name when the saved intent echoes back", async () => {
     branchesData = {
-      branches: [{ name: "development", isCurrent: true, isRemoteOnly: false }],
+      branches: [
+        { name: "development", isCurrent: true, isRemoteOnly: false },
+        { name: "chore/cleanup", isCurrent: false, isRemoteOnly: false },
+      ],
       uncommittedFileCount: 0,
     };
     const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
@@ -1582,6 +1700,9 @@ describe("NewWorktreeForm — autosave lifecycle", () => {
     expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
       "Saved",
     );
+
+    await selectSource("chore/cleanup");
+    expect((name as HTMLInputElement).value).toBe("feat/changed");
   });
 
   it("cancels a pending save when typing returns to the staged value", () => {
@@ -1650,6 +1771,7 @@ describe("NewWorktreeForm — autosave lifecycle", () => {
       name: "feat/only-this",
       source: "development",
       carryUncommittedChanges: false,
+      collision: "fail",
     });
   });
 

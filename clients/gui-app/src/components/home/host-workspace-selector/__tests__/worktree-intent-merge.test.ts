@@ -175,6 +175,11 @@ describe("worktree intent merge", () => {
         : null,
     ).toBe("main");
     expect(updated?.kind === "worktree" ? updated.scripts : null).toBeNull();
+    expect(
+      updated?.kind === "worktree" && updated.branch.type === "new"
+        ? updated.branch.collision
+        : null,
+    ).toBe("random");
     // Sibling folders are untouched.
     expect(other?.kind === "worktree" ? other.branch.name : null).toBe(
       "traycer/second",
