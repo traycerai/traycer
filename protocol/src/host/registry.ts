@@ -315,6 +315,8 @@ import {
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
+import { workspaceStreamAssetV10 } from "@traycer/protocol/host/workspace/asset-stream";
+import { gitStreamFileAssetV10 } from "@traycer/protocol/host/git-asset-stream";
 import {
   terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
@@ -6563,6 +6565,34 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: workspaceSubscribeFileListV10,
+        },
+      },
+    },
+  },
+  // Additive stream for the workspace file tile's image preview
+  // (image-preview decision log). Streams carry no registry-level `degrade`
+  // field, so a client whose open is rejected as an unknown method falls
+  // back to today's text-only placeholder - see `asset-stream.ts`'s
+  // file-level doc.
+  "workspace.streamAsset": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceStreamAssetV10,
+        },
+      },
+    },
+  },
+  // Sibling of `workspace.streamAsset` for the git diff tile's old/new image
+  // sides. Same degrade story: an old host simply lacks the method and the
+  // diff tile keeps today's `BinaryPlaceholder`.
+  "git.streamFileAsset": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: gitStreamFileAssetV10,
         },
       },
     },
