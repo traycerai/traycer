@@ -2,17 +2,13 @@ import { useMemo, type ReactNode } from "react";
 import { LineChart } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import {
-  HostScopeConnecting,
-  HostScopeGate,
-} from "@/components/settings/host-scope/host-scope-gate";
-import {
-  useHostScope,
-  type HostScope,
-} from "@/components/settings/host-scope/use-host-scope";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
 /**
  * The route / modal entry point. `host.usage.summary` is an OPTIONAL RPC
@@ -34,13 +30,42 @@ import type { HostRpcRegistry } from "@/lib/host";
  * have put two competing host scopes on one screen, with the outer one
  * unable to describe the number the inner one produced.
  *
- * It still reads through a host CLIENT - every RPC does - so it keeps
- * `useHostScope` for the client and the capability check. That is a
- * transport fact, not a scope one, the same distinction `requiresLocalHost`
- * already draws for Shell and Diagnostics.
+ * It still reads through a host CLIENT - every RPC does - but that transport
+ * comes from the APP-WIDE active host, not from the sidebar's host-group
+ * picker. The two are different questions, and conflating them was a real
+ * defect: the picker's pick is remembered across sections, so choosing an
+ * unreachable or since-removed host under the Host group left
+ * `HostScopeGate` hiding this account-level dashboard behind that host's
+ * notice - even though the active host was perfectly able to serve the
+ * account-wide request, and even though the page's own default is "All
+ * hosts". `group: "account"` in `settings-sections.ts` is the statement that
+ * this section is not host-scoped; the gate is for the sections that are.
+ *
+ * `useHostScope` stays, but only as the NAME DIRECTORY: `scope.hosts` is the
+ * merged directory-plus-registry host model, which is what turns the host
+ * ids in the summary into names for the filter and the by-host breakdown. No
+ * client, no gating, no status - none of which this section's scope depends
+ * on.
  */
 export function UsageSettingsPanel(): ReactNode {
+  const activeHostId = useReactiveActiveHostId();
+  const client = useHostClient();
   const scope = useHostScope();
+  // Names come from the scope's merged host model - the union of the runtime
+  // directory and the account's registry (see SETTINGS.md's "One host
+  // model"), so a host the account owns but this client cannot dial is still
+  // named rather than falling back to its id. The summary itself carries no
+  // host name: a name is directory state that changes without the fact
+  // changing, so it is joined here, at read time.
+  const hostNames = useMemo(
+    () => new Map(scope.hosts.map((host) => [host.hostId, host.name])),
+    [scope.hosts],
+  );
+  // `useHostMethodSupport`, not the boolean `useUsageSummarySupported`: this
+  // distinguishes "the host answered and does not have it" from "no
+  // handshake has completed yet", so a cold start shows a spinner instead of
+  // claiming the active host is too old to report usage.
+  const support = useHostMethodSupport(activeHostId, "host.usage.summary");
   return (
     <SettingsPanelShell
       title="Usage"
@@ -60,13 +85,49 @@ export function UsageSettingsPanel(): ReactNode {
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
       headerAction={undefined}
     >
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
-        <UsageSettingsPanelBody scope={scope} />
-      </HostScopeGate>
+      <UsageSettingsPanelBody
+        support={support}
+        client={client}
+        hostNames={hostNames}
+        activeHostId={activeHostId}
+        activeHostLabel={scope.activeHost?.name ?? activeHostId ?? "this host"}
+      />
     </SettingsPanelShell>
+  );
+}
+
+function UsageSettingsPanelBody(props: {
+  /** `null` = no handshake yet, so neither "supported" nor "too old" is known. */
+  readonly support: boolean | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostNames: ReadonlyMap<string, string>;
+  readonly activeHostId: string | null;
+  readonly activeHostLabel: string;
+}): ReactNode {
+  if (props.support === null) {
+    return (
+      <div
+        className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
+        data-testid="usage-support-pending"
+      >
+        <AgentSpinningDots
+          testId={undefined}
+          variant="orbit"
+          className="text-muted-foreground"
+        />
+        Loading usage…
+      </div>
+    );
+  }
+  if (!props.support) {
+    return <UsageUnsupportedNotice hostLabel={props.activeHostLabel} />;
+  }
+  return (
+    <UsageSummaryPanel
+      client={props.client}
+      hostNames={props.hostNames}
+      currentHostId={props.activeHostId}
+    />
   );
 }
 
@@ -97,36 +158,11 @@ export function UsageSettingsPanelForClient(props: {
 /** Stable identity so the panel's `hostOptions` memo is not invalidated every render. */
 const EMPTY_HOST_NAMES: ReadonlyMap<string, string> = new Map();
 
-function UsageSettingsPanelBody(props: {
-  readonly scope: HostScope;
-}): ReactNode {
-  const { scope } = props;
-  const supported = useUsageSummarySupported(scope.hostId);
-  // Names come from the scope's merged host model - the union of the runtime
-  // directory and the account's registry (see SETTINGS.md's "One host
-  // model"), so a host the account owns but this client cannot dial is still
-  // named rather than falling back to its id. The summary itself carries no
-  // host name: a name is directory state that changes without the fact
-  // changing, so it is joined here, at read time.
-  const hostNames = useMemo(
-    () => new Map(scope.hosts.map((host) => [host.hostId, host.name])),
-    [scope.hosts],
-  );
-  if (!supported) return <UsageUnsupportedNotice hostLabel={scope.hostLabel} />;
-  return (
-    <UsageSummaryPanel
-      client={scope.client}
-      hostNames={hostNames}
-      currentHostId={scope.hostId}
-    />
-  );
-}
-
 /**
  * Same anatomy as `HostScopeGate`'s internal `HostScopeNotice` (icon chip +
  * title + detail, `role="status"` since this is an idle capability gap, not
- * an error) so it reads as one honest-state vocabulary across the Host
- * section group rather than a bespoke banner.
+ * an error) so it reads as one honest-state vocabulary across Settings
+ * rather than a bespoke banner.
  */
 function UsageUnsupportedNotice(props: {
   readonly hostLabel: string;
