@@ -126,16 +126,8 @@ export function useArtifactImagePaste(
         );
         const results = await Promise.allSettled(
           accepted.map(async (image) => {
-            const status = await finishOperation(image.operationId, true);
+            await finishOperation(image.operationId, true);
             image.abortPending = false;
-            if (
-              status === "committed" ||
-              status === "not-yet-converged" ||
-              status === "unknown-operation"
-            ) {
-              return;
-            }
-            throw new Error("The artifact image could not be committed.");
           }),
         );
         let failure: Error | null = null;

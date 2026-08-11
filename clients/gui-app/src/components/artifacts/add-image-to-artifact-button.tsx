@@ -71,17 +71,8 @@ export function AddImageToArtifactButton(props: {
           attachmentHash: prepared.attachmentHash,
           mediaType: prepared.mediaType,
         });
-        const status = await operations.finish(
-          artifactId,
-          prepared.operationId,
-          true,
-        );
+        await operations.finish(artifactId, prepared.operationId, true);
         operationId = null;
-        if (status === "aborted") {
-          rollback();
-          rollback = null;
-          throw new Error("The image could not be committed to the artifact.");
-        }
       } finally {
         releaseBody();
       }
