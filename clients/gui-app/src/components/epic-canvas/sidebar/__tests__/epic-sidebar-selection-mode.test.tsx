@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { domMax, LazyMotion } from "motion/react";
 import type { ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
@@ -3703,6 +3704,30 @@ describe("chat row archive", () => {
     const row = screen.getByTestId("epic-sidebar-item-chat-root");
     expect(within(row).getByTestId("chat-row-archived-label")).toBeTruthy();
     expect(leadingStatusKinds("chat-root")).toEqual(["done"]);
+  });
+
+  it("keeps the final archived row mounted while its tree branch exits", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.indicatorChats = {
+      "chat-root": indicator({ unreadDone: true }),
+    };
+    const panel = () => (
+      <LazyMotion features={domMax}>
+        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+      </LazyMotion>
+    );
+    const view = render(panel());
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+
+    testState.indicatorChats = {};
+    view.rerender(panel());
+
+    // The archived-empty branch waits until Motion finishes the tree branch's
+    // exit, so the final row cannot disappear in the same render.
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+    expect(screen.queryByTestId("epic-chat-sidebar-archived-empty")).toBeNull();
   });
 
   it("clears archived row styling when the unarchive projection arrives", () => {
