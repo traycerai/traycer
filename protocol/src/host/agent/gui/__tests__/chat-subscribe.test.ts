@@ -1893,7 +1893,7 @@ describe("chat.subscribe@1.7 (image generation)", () => {
         source,
         canonicalSource,
         state,
-        attachmentHash: (index + 1).toString(16).repeat(64),
+        attachmentHash: resolutionHash,
         mediaType: "image/png",
         width: 100,
         height: 80,

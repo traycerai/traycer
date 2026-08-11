@@ -48,11 +48,13 @@ export function UntrustedSvgLightbox(
   }
   if (state.status === "error") {
     return (
-      <img
-        src={props.src}
-        alt={props.alt}
-        className="size-full rounded-lg object-contain"
-      />
+      <div
+        className="flex size-full items-center justify-center rounded-lg bg-muted/60 px-4 text-center text-ui-sm text-muted-foreground"
+        role="status"
+        aria-label={props.alt.length > 0 ? props.alt : "SVG image unavailable"}
+      >
+        Couldn&apos;t display this SVG.
+      </div>
     );
   }
   return (

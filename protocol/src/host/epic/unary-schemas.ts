@@ -1175,7 +1175,7 @@ export type SetChatArchivedResponse = z.infer<
 // recoverable bytes; finish commits the artifact reference index or aborts.
 export const MAX_ARTIFACT_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_ARTIFACT_IMAGE_BASE64_LENGTH =
-  Math.ceil((MAX_ARTIFACT_IMAGE_BYTES * 4) / 3) + 4;
+  4 * Math.ceil(MAX_ARTIFACT_IMAGE_BYTES / 3);
 const artifactImageBase64Schema = z
   .string()
   .max(MAX_ARTIFACT_IMAGE_BASE64_LENGTH)

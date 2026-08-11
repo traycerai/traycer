@@ -1,4 +1,5 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { FilePlus2 } from "lucide-react";
 import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
@@ -20,6 +21,7 @@ import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { useEpicArtifactRecords, useOpenEpicId } from "@/lib/epic-selectors";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
+import { epicMutationKeys } from "@/lib/query-keys";
 
 export type AddToArtifactImageSource =
   | { readonly kind: "client"; readonly url: string }
@@ -39,60 +41,58 @@ export function AddImageToArtifactButton(props: {
     [records],
   );
   const [open, setOpen] = useState(false);
-  const [pendingArtifactId, setPendingArtifactId] = useState<string | null>(
-    null,
-  );
-  const [error, setError] = useState<string | null>(null);
+
+  const addMutation = useMutation<void, Error, string>({
+    mutationKey: epicMutationKeys.addImageToArtifact(),
+    mutationFn: async (artifactId) => {
+      let operationId: string | null = null;
+      let rollback: (() => void) | null = null;
+      try {
+        const prepared =
+          props.source.kind === "remote"
+            ? await operations.prepareRemote(props.source.url)
+            : await prepareClientImage(
+                props.source.url,
+                operations.prepareBytes,
+              );
+        operationId = prepared.operationId;
+        const releaseBody = handle.store
+          .getState()
+          .acquireArtifactBodyLease(artifactId);
+        try {
+          const fragment = handle.store
+            .getState()
+            .getArtifactFragment(artifactId);
+          if (fragment === null) {
+            throw new Error("This artifact is not available for editing.");
+          }
+          rollback = appendArtifactImage(fragment, {
+            src: prepared.src,
+            alt: props.alt,
+            attachmentHash: prepared.attachmentHash,
+            mediaType: prepared.mediaType,
+          });
+          await commitArtifactImageWithRetry(
+            operations.commit,
+            artifactId,
+            prepared.operationId,
+          );
+          operationId = null;
+        } finally {
+          releaseBody();
+        }
+      } catch (reason) {
+        rollback?.();
+        if (operationId !== null) {
+          await operations.abort(artifactId, operationId).catch(() => {});
+        }
+        throw reason instanceof Error ? reason : new Error("Please try again.");
+      }
+    },
+    onSuccess: () => setOpen(false),
+  });
 
   if (!operations.supported) return null;
-
-  const add = async (artifactId: string): Promise<void> => {
-    setPendingArtifactId(artifactId);
-    setError(null);
-    let operationId: string | null = null;
-    let rollback: (() => void) | null = null;
-    try {
-      const prepared =
-        props.source.kind === "remote"
-          ? await operations.prepareRemote(props.source.url)
-          : await prepareClientImage(props.source.url, operations.prepareBytes);
-      operationId = prepared.operationId;
-      const releaseBody = handle.store
-        .getState()
-        .acquireArtifactBodyLease(artifactId);
-      try {
-        const fragment = handle.store
-          .getState()
-          .getArtifactFragment(artifactId);
-        if (fragment === null) {
-          throw new Error("This artifact is not available for editing.");
-        }
-        rollback = appendArtifactImage(fragment, {
-          src: prepared.src,
-          alt: props.alt,
-          attachmentHash: prepared.attachmentHash,
-          mediaType: prepared.mediaType,
-        });
-        await commitArtifactImageWithRetry(
-          operations.commit,
-          artifactId,
-          prepared.operationId,
-        );
-        operationId = null;
-      } finally {
-        releaseBody();
-      }
-      setOpen(false);
-    } catch (reason) {
-      rollback?.();
-      if (operationId !== null) {
-        await operations.abort(artifactId, operationId).catch(() => {});
-      }
-      setError(reason instanceof Error ? reason.message : "Please try again.");
-    } finally {
-      setPendingArtifactId(null);
-    }
-  };
 
   const stopImageClick = (event: MouseEvent): void => event.stopPropagation();
 
@@ -130,11 +130,12 @@ export function AddImageToArtifactButton(props: {
                 key={artifact.id}
                 type="button"
                 className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-ui-sm hover:bg-accent disabled:opacity-60"
-                disabled={pendingArtifactId !== null}
-                onClick={() => void add(artifact.id)}
+                disabled={addMutation.isPending}
+                onClick={() => addMutation.mutate(artifact.id)}
               >
                 <span className="truncate">{artifact.name}</span>
-                {pendingArtifactId === artifact.id ? (
+                {addMutation.isPending &&
+                addMutation.variables === artifact.id ? (
                   <AgentSpinningDots
                     className="ml-auto text-muted-foreground"
                     testId={undefined}
@@ -145,12 +146,12 @@ export function AddImageToArtifactButton(props: {
             ))
           )}
         </div>
-        {error === null ? null : (
+        {addMutation.error === null ? null : (
           <p
             className="mt-2 border-t border-border px-2 pt-2 text-ui-xs text-destructive"
             role="alert"
           >
-            {error}
+            {addMutation.error.message}
           </p>
         )}
       </PopoverContent>

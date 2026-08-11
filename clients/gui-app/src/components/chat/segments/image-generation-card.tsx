@@ -35,8 +35,6 @@ export function ImageGenerationCard(
     props.inputSummary,
     props.inputDetail,
   );
-  const result = props.imageResults.at(0) ?? null;
-  const caption = result?.revisedPrompt ?? presentation.prompt;
   const status = generationStatus({
     error: props.error,
     isStreaming: props.isStreaming,
@@ -44,6 +42,7 @@ export function ImageGenerationCard(
     endState: props.endState,
     stopped: props.stopped,
   });
+  const resultKeyCounts = new Map<string, number>();
 
   return (
     <section
@@ -52,12 +51,22 @@ export function ImageGenerationCard(
       className="w-full max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="Image generation"
     >
-      <GenerationCell
-        result={result}
-        status={status}
-        prompt={caption}
-        fallbackAspectRatio={presentation.aspectRatio}
-      />
+      {(props.imageResults.length === 0 ? [null] : props.imageResults).map(
+        (result) => {
+          const baseKey = `${props.id}-${result?.attachmentHash ?? "pending"}`;
+          const occurrence = resultKeyCounts.get(baseKey) ?? 0;
+          resultKeyCounts.set(baseKey, occurrence + 1);
+          return (
+            <GenerationCell
+              key={`${baseKey}-${occurrence}`}
+              result={result}
+              status={status}
+              prompt={result?.revisedPrompt ?? presentation.prompt}
+              fallbackAspectRatio={presentation.aspectRatio}
+            />
+          );
+        },
+      )}
     </section>
   );
 }

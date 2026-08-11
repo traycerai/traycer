@@ -826,7 +826,7 @@ function AssistantSegment({
           backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
-          imageResults={segment.imageResults ?? []}
+          imageResults={segment.imageResults}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null

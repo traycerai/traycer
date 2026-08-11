@@ -14,10 +14,12 @@ import {
 } from "@testing-library/react";
 import { Editor } from "@tiptap/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { artifactImageFinishResponseFixtures } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  artifactImageFinishResponseFixtures,
+  MAX_ARTIFACT_IMAGE_BYTES,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
-import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
 

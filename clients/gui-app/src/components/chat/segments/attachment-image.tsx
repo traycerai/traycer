@@ -20,13 +20,15 @@ export function AttachmentImageLoading(props: {
 
 export function AttachmentImageFailure(props: {
   readonly alt: string;
-  readonly source: string;
   readonly reason: string;
 }): ReactNode {
   return (
     <span
       className="my-2 inline-block max-w-full text-ui-sm leading-relaxed text-muted-foreground"
       role="status"
+      aria-label={
+        props.alt.length > 0 ? `${props.alt}: ${props.reason}` : props.reason
+      }
       data-assistant-image-failure
     >
       {props.reason}
@@ -49,7 +51,6 @@ export function AttachmentImage(props: {
       <span className="inline-flex max-w-full items-center gap-2">
         <AttachmentImageFailure
           alt={props.alt}
-          source={props.src}
           reason={
             props.mediaType === "image/svg+xml"
               ? "Couldn't display this SVG."
@@ -60,9 +61,9 @@ export function AttachmentImage(props: {
     );
   }
   return (
-    <div
+    <span
       className={cn(
-        "group relative my-3 overflow-hidden rounded-lg border border-border/70 bg-muted/30",
+        "group relative my-3 block overflow-hidden rounded-lg border border-border/70 bg-muted/30",
         props.fullWidth ? "w-full" : "w-fit",
       )}
       style={
@@ -107,6 +108,6 @@ export function AttachmentImage(props: {
           onError={() => setStatus("error")}
         />
       </ImageLightbox>
-    </div>
+    </span>
   );
 }

@@ -604,6 +604,7 @@ describe("AssistantMarkdownImage markdown pipeline", () => {
             className={null}
             proseSize="normal"
             components={ASSISTANT_IMAGE_COMPONENTS}
+            imageRendering="assistant"
             remarkPlugins={null}
             rehypePlugins={null}
             quotable={false}

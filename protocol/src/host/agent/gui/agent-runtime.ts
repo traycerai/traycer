@@ -1204,8 +1204,9 @@ export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 // Wire-freeze copy of the live runtime-event union from before image support
 // existed (`chat.subscribe@1.4-1.6`): every live member EXCEPT
 // `image_resolution.updated` (which cannot exist on these lines at all), with
-// `tool_call.completed`/`tool_call.progress` swapped for their pre-image
-// freezes. Bound to `chat.subscribe@1.4-1.6`'s `blockDelta` frame - those
+// `tool_call.completed` swapped for its pre-image freeze
+// (`tool_call.progress` needs no freeze - it carries no image field).
+// Bound to `chat.subscribe@1.4-1.6`'s `blockDelta` frame - those
 // minors shipped after `inReplyTo` (so they keep the live sender-bearing
 // `steerSubmittedEventSchema`, unlike `runtimeEventSchemaPreInReplyTo`) but
 // before image support. Explicitly listed (not derived from the live union)

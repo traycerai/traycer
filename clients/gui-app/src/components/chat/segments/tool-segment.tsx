@@ -76,7 +76,7 @@ interface ToolSegmentProps {
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
   durationMs: number | null;
-  imageResults?: ReadonlyArray<ImageGenerationResult>;
+  imageResults: ReadonlyArray<ImageGenerationResult>;
   variant: "card" | "row";
   headerFindUnitId: string | null;
 }
@@ -266,7 +266,7 @@ export function ToolSegment(props: ToolSegmentProps) {
         isStreaming={props.isStreaming}
         endState={props.endState}
         stopped={props.stopped}
-        imageResults={props.imageResults ?? []}
+        imageResults={props.imageResults}
       />
     );
   }

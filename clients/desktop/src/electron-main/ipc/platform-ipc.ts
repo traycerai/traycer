@@ -551,6 +551,7 @@ function parseFileSaveInput(input: unknown): FileSaveInput {
 }
 
 interface ClipboardImageInput {
+  // Advisory caller metadata; Electron validates the actual bytes below.
   readonly type: ClipboardImageMediaType;
   readonly bytes: ArrayBuffer;
 }

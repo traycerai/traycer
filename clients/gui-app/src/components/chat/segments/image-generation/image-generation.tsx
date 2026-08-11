@@ -13,6 +13,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { EASE_OUT } from "./ease";
 import { useHoverCapable } from "./use-hover-capable";
 
@@ -88,6 +89,7 @@ function DitherField(props: {
     if (canvas === null || context === null || context === undefined) return;
 
     let frame = 0;
+    let visible = true;
     let width = 0;
     let height = 0;
     let dotColor = "currentColor";
@@ -161,7 +163,7 @@ function DitherField(props: {
       }
 
       context.globalAlpha = 1;
-      if (!props.reduce) frame = window.requestAnimationFrame(draw);
+      if (!props.reduce && visible) frame = window.requestAnimationFrame(draw);
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
@@ -176,9 +178,24 @@ function DitherField(props: {
     };
     const resizeObserver =
       typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    const visibilityObserver =
+      typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver((entries) => {
+            const nextVisible = entries.some((entry) => entry.isIntersecting);
+            if (nextVisible === visible) return;
+            visible = nextVisible;
+            if (!visible) {
+              if (frame !== 0) window.cancelAnimationFrame(frame);
+              frame = 0;
+            } else if (!props.reduce && frame === 0) {
+              frame = window.requestAnimationFrame(draw);
+            }
+          });
 
     resize();
     resizeObserver?.observe(canvas);
+    visibilityObserver?.observe(canvas);
     canvas.addEventListener("pointermove", handlePointerMove, {
       passive: true,
     });
@@ -188,6 +205,7 @@ function DitherField(props: {
     return () => {
       if (frame !== 0) window.cancelAnimationFrame(frame);
       resizeObserver?.disconnect();
+      visibilityObserver?.disconnect();
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerleave", handlePointerLeave);
     };
@@ -245,10 +263,12 @@ function ImageGenerationMedia(props: {
   readonly label: string;
 }): ReactNode {
   const mediaState = MEDIA_STATE[props.props.status];
+  const hasImage = props.props.children !== null;
   return (
     <div
-      role="img"
-      aria-label={props.label}
+      data-image-generation-media
+      role={hasImage ? "group" : "img"}
+      aria-label={hasImage ? undefined : props.label}
       style={{
         ...props.props.mediaStyle,
         aspectRatio: props.props.aspectRatio,
@@ -256,7 +276,7 @@ function ImageGenerationMedia(props: {
       className="relative isolate max-w-full overflow-hidden rounded-xl bg-muted @container"
     >
       <motion.div
-        aria-hidden={props.props.children ? undefined : true}
+        aria-hidden={hasImage ? undefined : true}
         initial={false}
         animate={
           props.reduce
@@ -317,11 +337,10 @@ function ImageGenerationDetails(props: {
       ) : (
         <div
           aria-live="polite"
-          className={
-            props.status === "error"
-              ? "mb-2 flex min-h-5 items-center gap-2 text-sm font-medium text-destructive"
-              : "mb-2 flex min-h-5 items-center gap-2 text-sm font-medium text-foreground"
-          }
+          className={cn(
+            "mb-2 flex min-h-5 items-center gap-2 text-sm font-medium",
+            props.status === "error" ? "text-destructive" : "text-foreground",
+          )}
         >
           <DitherMark status={props.status} reduce={props.reduce} />
           <span>{props.statusText}</span>

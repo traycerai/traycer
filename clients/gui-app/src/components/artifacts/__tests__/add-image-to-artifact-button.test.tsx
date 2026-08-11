@@ -10,6 +10,8 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { artifactImageFinishResponseFixtures } from "@traycer/protocol/host/epic/unary-schemas";
 import * as Y from "yjs";
@@ -101,6 +103,20 @@ function clearFragment(): void {
   }
 }
 
+function renderWithQuery(ui: ReactNode): void {
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({
+          defaultOptions: { mutations: { retry: false } },
+        })
+      }
+    >
+      {ui}
+    </QueryClientProvider>,
+  );
+}
+
 afterEach(() => {
   cleanup();
   clearFragment();
@@ -157,7 +173,7 @@ beforeEach(() => {
 
 describe("AddImageToArtifactButton", () => {
   it("runs prepare → insert → finish(commit) for a client-backed image", async () => {
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{ kind: "client", url: "blob:http://localhost/img" }}
         alt="from chat"
@@ -182,7 +198,7 @@ describe("AddImageToArtifactButton", () => {
     commit.mockRejectedValueOnce(
       new Error("The artifact image could not be committed."),
     );
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{ kind: "client", url: "blob:http://localhost/img" }}
         alt="from chat"
@@ -204,7 +220,7 @@ describe("AddImageToArtifactButton", () => {
     commit.mockResolvedValueOnce(
       artifactImageFinishResponseFixtures.commit.notYetConverged,
     );
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{ kind: "client", url: "blob:http://localhost/img" }}
         alt="from chat"
@@ -228,7 +244,7 @@ describe("AddImageToArtifactButton", () => {
     commit.mockResolvedValueOnce(
       artifactImageFinishResponseFixtures.commit.unknownOperation,
     );
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{ kind: "client", url: "blob:http://localhost/img" }}
         alt="from chat"
@@ -251,7 +267,7 @@ describe("AddImageToArtifactButton", () => {
     commit.mockResolvedValue(
       artifactImageFinishResponseFixtures.commit.notYetConverged,
     );
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{ kind: "client", url: "blob:http://localhost/img" }}
         alt="from chat"
@@ -273,7 +289,7 @@ describe("AddImageToArtifactButton", () => {
     prepareRemote.mockRejectedValueOnce(
       new Error("Remote image could not be fetched."),
     );
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{
           kind: "remote",
@@ -299,7 +315,7 @@ describe("AddImageToArtifactButton", () => {
 
   it("aborts a prepared remote op when body lease insert fails after prepare", async () => {
     getArtifactFragment.mockReturnValueOnce(null);
-    render(
+    renderWithQuery(
       <AddImageToArtifactButton
         source={{
           kind: "remote",

@@ -1842,7 +1842,11 @@ function addAssistantImageProjection(
       acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
       continue;
     }
-    if (block.type !== "tool_call" || block.toolName !== "image_generation") {
+    if (
+      block.type !== "tool_call" ||
+      block.toolName !== "image_generation" ||
+      block.parentBlockId !== null
+    ) {
       continue;
     }
     for (const result of block.imageResults) {
@@ -2753,6 +2757,9 @@ function assistantSliceRowId(
   return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
 }
 
+const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
+  [];
+
 function queueSteerRowId(queueItemId: string): string {
   return `steer:${queueItemId}`;
 }
@@ -2773,11 +2780,29 @@ function buildAssistantSegments(
   },
 ): ReadonlyArray<MessageSegment> {
   const flat: MessageSegment[] = [];
+  const targetsByResolutions = new Map<
+    ReadonlyArray<AssistantMarkdownImageResolution>,
+    ReadonlyMap<string, AssistantMarkdownImageTarget>
+  >();
+  const targetsFor = (
+    resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+  ): ReadonlyMap<string, AssistantMarkdownImageTarget> => {
+    const cached = targetsByResolutions.get(resolutions);
+    if (cached !== undefined) return cached;
+    const computed = deduplicatedAssistantImageTargets(
+      imageProjection.generatedImageBlockIdByHash,
+      imageProjection.rowIdByBlockId,
+      resolutions,
+    );
+    targetsByResolutions.set(resolutions, computed);
+    return computed;
+  };
   for (const block of blocks) {
     const segment = blockToSegment(block);
     if (segment !== null) {
       const resolutions =
-        imageProjection.resolutionsByBlockId.get(block.blockId) ?? [];
+        imageProjection.resolutionsByBlockId.get(block.blockId) ??
+        NO_IMAGE_RESOLUTIONS;
       flat.push(
         segment.kind === "text"
           ? {
@@ -2786,11 +2811,7 @@ function buildAssistantSegments(
                 epicId: imageProjection.epicId,
                 chatId: imageProjection.chatId,
                 resolutions,
-                deduplicatedTargetsBySource: deduplicatedAssistantImageTargets(
-                  imageProjection.generatedImageBlockIdByHash,
-                  imageProjection.rowIdByBlockId,
-                  resolutions,
-                ),
+                deduplicatedTargetsBySource: targetsFor(resolutions),
               },
             }
           : segment,

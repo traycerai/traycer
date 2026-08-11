@@ -813,9 +813,12 @@ function serializeChildren(
 function serializeImage(node: JsonContent): string {
   const src = readStringAttr(node.attrs, "src");
   const alt = readStringAttr(node.attrs, "alt");
-  return src.length === 0
-    ? ""
-    : `![${alt.replace(/[\\[\]]/g, "\\$&")}](${src})`;
+  if (src.length === 0) return "";
+  const escapedAlt = alt.replace(/[\\[\]]/g, "\\$&");
+  const destination = /[\s()<>]/.test(src)
+    ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
+    : src;
+  return `![${escapedAlt}](${destination})`;
 }
 
 function serializeNode(node: JsonContent, ctx: SerializerContext): string {

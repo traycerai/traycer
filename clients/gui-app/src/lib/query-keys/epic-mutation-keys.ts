@@ -12,5 +12,6 @@ export const epicMutationKeys = {
   setChatArchived: () => ["epic.setChatArchived"] as const,
   prepareArtifactImage: () => ["epic.prepareArtifactImage"] as const,
   finishArtifactImage: () => ["epic.finishArtifactImage"] as const,
+  addImageToArtifact: () => ["epic.addImageToArtifact"] as const,
   archiveChats: () => ["epic.archiveChats"] as const,
 };

@@ -1,4 +1,5 @@
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Copy, Download, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
@@ -12,8 +13,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
-import { appLogger } from "@/lib/logger";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { imageMutationKeys } from "@/lib/query-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
 
 interface ImageLightboxProps {
@@ -34,7 +35,6 @@ const UntrustedSvgLightbox = lazy(() =>
 );
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
-  const [pendingAction, setPendingAction] = useState<ImageAction | null>(null);
   const openExternalLink = useRunnerOpenExternalLink();
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
@@ -43,30 +43,22 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const canCopy =
     remoteUrl === null && isClipboardImageMediaType(props.mediaType);
 
-  const runAction = (action: ImageAction): void => {
-    if (pendingAction !== null) return;
-    setPendingAction(action);
-    void performImageAction(action, props.src, props.mediaType, suggestedName)
-      .catch((error: unknown) => {
-        appLogger.errorSummary(`[image] ${action} failed`, {}, error);
-        reportableErrorToast(`Failed to ${action} image`, undefined, {
-          title: `Could not ${action} image`,
-          message: null,
-          code: null,
-          source: "Image viewer",
-        });
-      })
-      .finally(() => setPendingAction(null));
-  };
+  const imageAction = useMutation<void, Error, ImageAction>({
+    mutationKey: imageMutationKeys.perform(),
+    mutationFn: (action) =>
+      performImageAction(action, props.src, props.mediaType, suggestedName),
+    onError: (error, action) =>
+      toastFromRunnerError(error, `Failed to ${action} image`),
+  });
 
   const actions = (
     <ImageActions
-      pendingAction={pendingAction}
+      pendingAction={imageAction.isPending ? imageAction.variables : null}
       canCopy={canCopy}
       remoteUrl={remoteUrl}
       openExternalPending={openExternalLink.isPending}
-      onCopy={() => runAction("copy")}
-      onDownload={() => runAction("download")}
+      onCopy={() => imageAction.mutate("copy")}
+      onDownload={() => imageAction.mutate("download")}
       onOpenExternal={() => {
         if (remoteUrl !== null) openExternalLink.mutate(remoteUrl);
       }}
@@ -199,7 +191,7 @@ async function fetchImageBlob(
   if (!response.ok) throw new Error(`Image fetch failed (${response.status})`);
   const blob = await response.blob();
   if (blob.type.length > 0 || mediaType === null) return blob;
-  return new Blob([await blob.arrayBuffer()], { type: mediaType });
+  return new Blob([blob], { type: mediaType });
 }
 
 async function performImageAction(

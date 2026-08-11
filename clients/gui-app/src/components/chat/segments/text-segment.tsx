@@ -66,6 +66,7 @@ export function TextSegment(props: TextSegmentProps) {
             nextStepActions={props.nextStepActions}
             onLockOption={lockOption}
             markdownComponents={markdownComponents}
+            imageRendering={imageContext === null ? "standard" : "assistant"}
           />
         ))}
       </div>
@@ -83,6 +84,7 @@ interface TextSegmentPartProps {
     string,
     ComponentType<Record<string, unknown>>
   > | null;
+  readonly imageRendering: "assistant" | "standard";
 }
 
 function TextSegmentPart(props: TextSegmentPartProps) {
@@ -95,6 +97,7 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         proseSize="normal"
         quotable
         components={props.markdownComponents}
+        imageRendering={props.imageRendering}
       />
     );
   }
@@ -121,6 +124,7 @@ function TextSegmentPart(props: TextSegmentPartProps) {
           proseSize="normal"
           quotable
           components={props.markdownComponents}
+          imageRendering={props.imageRendering}
         />
       )}
       <NextStepsActionGroup

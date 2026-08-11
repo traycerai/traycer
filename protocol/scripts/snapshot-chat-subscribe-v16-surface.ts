@@ -12,7 +12,9 @@
  * rebound from the live schemas to the frozen `chatSchemaPreImage` /
  * `runtimeEventSchemaPreImage`. Regenerating it from the current tree should
  * therefore reproduce the exact same bytes forever; a diff here means the
- * frozen line drifted and must be investigated, not silently re-pinned.
+ * frozen line drifted and must be investigated, not silently re-pinned. A
+ * fixture diff can also mean the Zod version changed; confirm the contract is
+ * unchanged before regenerating in that case.
  */
 import { z } from "zod";
 import { chatSubscribeV16 } from "@traycer/protocol/host/agent/gui/subscribe";

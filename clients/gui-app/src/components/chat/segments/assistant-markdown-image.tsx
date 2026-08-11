@@ -24,6 +24,7 @@ const RASTER_DATA_URL_PATTERN =
 const SVG_DATA_URL_PATTERN = /^data:image\/svg\+xml(?:[;,])/i;
 const URI_SCHEME_PATTERN = /^[a-z][a-z\d+.-]*:/i;
 const WINDOWS_PATH_PATTERN = /^(?:[a-z]:[\\/]|\\\\)/i;
+const MAX_ASSISTANT_IMAGE_PIXELS = 32 * 1024 * 1024;
 
 type AssistantImageSource =
   | { readonly kind: "https"; readonly src: string }
@@ -83,6 +84,9 @@ function classifyAssistantImageSource(src: string): AssistantImageSource {
     if (!hasRasterMagic(match[1], match[2])) {
       return { kind: "invalid-data", src: trimmed };
     }
+    if (rasterPixelCount(match[1], match[2]) > MAX_ASSISTANT_IMAGE_PIXELS) {
+      return { kind: "data-oversized", src: trimmed };
+    }
     return { kind: "data-raster", src: trimmed };
   }
   const decoded = decodeImageSource(trimmed);
@@ -111,6 +115,9 @@ function classifySvgDataUrl(src: string): AssistantImageSource {
       }
       svgSource = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } else {
+      if (!percentEncodedPayloadFits(payload, MAX_ARTIFACT_IMAGE_BYTES)) {
+        return { kind: "data-oversized", src };
+      }
       svgSource = decodeURIComponent(payload);
       if (
         new TextEncoder().encode(svgSource).byteLength >
@@ -151,6 +158,112 @@ function decodedBase64ByteLength(payload: string): number | null {
   else if (payload.endsWith("=")) padding = 1;
   const byteLength = (payload.length / 4) * 3 - padding;
   return byteLength;
+}
+
+function percentEncodedPayloadFits(payload: string, limit: number): boolean {
+  let byteLength = 0;
+  for (let index = 0; index < payload.length; index += 1) {
+    if (
+      payload[index] === "%" &&
+      /^[0-9a-f]{2}$/i.test(payload.slice(index + 1, index + 3))
+    ) {
+      byteLength += 1;
+      index += 2;
+    } else {
+      byteLength += new TextEncoder().encode(payload[index] ?? "").byteLength;
+    }
+    if (byteLength > limit) return false;
+  }
+  return true;
+}
+
+function rasterPixelCount(mediaType: string, payload: string): number {
+  const bytes = decodeBase64Prefix(payload, 64 * 1024);
+  if (bytes === null) return 0;
+  if (mediaType === "image/png" && bytes.length >= 24) {
+    return readUint32(bytes, 16) * readUint32(bytes, 20);
+  }
+  if (mediaType === "image/gif" && bytes.length >= 10) {
+    return readUint16(bytes, 6) * readUint16(bytes, 8);
+  }
+  if (mediaType === "image/webp" && bytes.length >= 30) {
+    if (ascii(bytes, 12, 4) === "VP8X") {
+      const width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16);
+      const height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16);
+      return width * height;
+    }
+    if (ascii(bytes, 12, 4) === "VP8L" && bytes.length >= 25) {
+      const width = 1 + ((bytes[21] | (bytes[22] << 8)) & 0x3fff);
+      const height =
+        1 +
+        (((bytes[22] >> 6) | (bytes[23] << 2) | (bytes[24] << 10)) & 0x3fff);
+      return width * height;
+    }
+    if (ascii(bytes, 12, 4) === "VP8 " && bytes.length >= 30) {
+      const width = (bytes[26] | (bytes[27] << 8)) & 0x3fff;
+      const height = (bytes[28] | (bytes[29] << 8)) & 0x3fff;
+      return width * height;
+    }
+  }
+  if (mediaType === "image/jpeg") return jpegPixelCount(bytes);
+  return 0;
+}
+
+function decodeBase64Prefix(
+  payload: string,
+  maxBytes: number,
+): Uint8Array | null {
+  try {
+    const binary = atob(payload.slice(0, Math.ceil(maxBytes / 3) * 4));
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+function readUint16(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] + (bytes[offset + 1] << 8);
+}
+
+function readUint32(bytes: Uint8Array, offset: number): number {
+  return (
+    bytes[offset] * 2 ** 24 +
+    bytes[offset + 1] * 2 ** 16 +
+    bytes[offset + 2] * 2 ** 8 +
+    bytes[offset + 3]
+  );
+}
+
+function ascii(bytes: Uint8Array, offset: number, length: number): string {
+  return String.fromCharCode(...bytes.slice(offset, offset + length));
+}
+
+function jpegPixelCount(bytes: Uint8Array): number {
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = bytes[offset + 1];
+    offset += 2;
+    if (
+      marker === 0xd8 ||
+      marker === 0xd9 ||
+      (marker >= 0xd0 && marker <= 0xd7)
+    ) {
+      continue;
+    }
+    const length = readUint16(bytes, offset);
+    if (length < 2 || offset + length > bytes.length) return 0;
+    const isSof =
+      marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
+    if (isSof && length >= 7) {
+      return readUint16(bytes, offset + 3) * readUint16(bytes, offset + 5);
+    }
+    offset += length;
+  }
+  return 0;
 }
 
 function hasRasterMagic(mediaType: string, payload: string): boolean {
@@ -227,7 +340,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     return (
       <AttachmentImageFailure
         alt={props.alt}
-        source={source.src}
         reason="Couldn't display this image."
       />
     );
@@ -236,7 +348,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     return (
       <AttachmentImageFailure
         alt={props.alt}
-        source={source.src}
         reason="This image is too large to show here."
       />
     );
@@ -245,7 +356,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     return (
       <AttachmentImageFailure
         alt={props.alt}
-        source={source.src}
         reason="Couldn't display this image."
       />
     );
@@ -256,7 +366,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     return (
       <AttachmentImageFailure
         alt={props.alt}
-        source={source.src}
         reason="Couldn't display this image."
       />
     );
@@ -273,7 +382,6 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   return (
     <AttachmentImageFailure
       alt={props.alt}
-      source={source.src}
       reason={resolutionFailureReason(resolution.entry.state)}
     />
   );

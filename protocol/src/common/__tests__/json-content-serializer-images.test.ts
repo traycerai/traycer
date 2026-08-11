@@ -92,4 +92,19 @@ describe("jsonContentToMarkdown image nodes", () => {
     // Hash may appear in the relative src path, never as a free-standing token.
     expect(markdown).not.toContain(`(${hash})`);
   });
+
+  it("wraps destinations containing spaces or parentheses", () => {
+    expect(
+      toMarkdown({
+        type: "image",
+        attrs: { src: "images/my file.png", alt: "shot" },
+      }),
+    ).toBe("![shot](<images/my file.png>)");
+    expect(
+      toMarkdown({
+        type: "image",
+        attrs: { src: "images/f(1).png", alt: "shot" },
+      }),
+    ).toBe("![shot](<images/f(1).png>)");
+  });
 });

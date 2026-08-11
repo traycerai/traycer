@@ -85,6 +85,8 @@ export interface TraycerMarkdownProps {
   className: string | null;
   proseSize: "compact" | "normal";
   components: Record<string, ComponentType<Record<string, unknown>>> | null;
+  /** Relaxed image sources are reserved for assistant-owned markdown. */
+  imageRendering?: "assistant" | "standard";
   remarkPlugins: PluggableList | null;
   rehypePlugins: PluggableList | null;
   quotable: boolean;
@@ -101,13 +103,12 @@ export function TraycerMarkdown({
   className,
   proseSize,
   components,
+  imageRendering = "standard",
   remarkPlugins,
   rehypePlugins,
   quotable,
   isStreaming,
 }: TraycerMarkdownProps) {
-  const hasImageOverride =
-    components !== null && Object.hasOwn(components, "img");
   const mergedComponents = useMemo((): Components => {
     if (!components) return DEFAULT_COMPONENTS;
     return {
@@ -143,12 +144,12 @@ export function TraycerMarkdown({
         isStreaming={isStreaming}
         highlighter={TRAYCER_STREAMING_HIGHLIGHTER}
         sanitizeSchema={
-          hasImageOverride
+          imageRendering === "assistant"
             ? extendAssistantImageSanitizeSchema
             : extendTraycerSanitizeSchema
         }
         urlTransform={
-          hasImageOverride
+          imageRendering === "assistant"
             ? assistantMarkdownUrlTransform
             : markdownUrlTransform
         }

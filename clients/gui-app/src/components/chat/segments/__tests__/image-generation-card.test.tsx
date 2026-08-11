@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -68,23 +69,28 @@ function renderCard(
     readonly id?: string;
   },
 ) {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
   return render(
-    <ImageGenerationCard
-      id={props.id ?? "tool-img-1"}
-      inputSummary={
-        props.inputSummary === undefined ? "a misty pier" : props.inputSummary
-      }
-      inputDetail={
-        props.inputDetail === undefined
-          ? fieldsDetail({ prompt: "a misty pier", aspect_ratio: "16:9" })
-          : props.inputDetail
-      }
-      error={props.error === undefined ? null : props.error}
-      isStreaming={props.isStreaming ?? false}
-      endState={props.endState ?? null}
-      stopped={props.stopped ?? false}
-      imageResults={props.imageResults ?? []}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <ImageGenerationCard
+        id={props.id ?? "tool-img-1"}
+        inputSummary={
+          props.inputSummary === undefined ? "a misty pier" : props.inputSummary
+        }
+        inputDetail={
+          props.inputDetail === undefined
+            ? fieldsDetail({ prompt: "a misty pier", aspect_ratio: "16:9" })
+            : props.inputDetail
+        }
+        error={props.error === undefined ? null : props.error}
+        isStreaming={props.isStreaming ?? false}
+        endState={props.endState ?? null}
+        stopped={props.stopped ?? false}
+        imageResults={props.imageResults ?? []}
+      />
+    </QueryClientProvider>,
   );
 }
 
@@ -139,7 +145,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
 
     const card = screen.getByRole("region", { name: "Image generation" });
     const generation = card.querySelector('[data-slot="image-generation"]');
-    const frame = card.querySelector('[role="img"]');
+    const frame = card.querySelector("[data-image-generation-media]");
     const img = screen.getByRole("img", { name: "a misty pier" });
     expect(generation?.getAttribute("data-state")).toBe("complete");
     expect(generation?.getAttribute("aria-busy")).toBe("false");
@@ -171,7 +177,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     });
 
     const card = screen.getByRole("region", { name: "Image generation" });
-    const frame = card.querySelector('[role="img"]');
+    const frame = card.querySelector("[data-image-generation-media]");
     const img = screen.getByRole("img", { name: "small orange square" });
     expect(frame?.getAttribute("style")).toContain("max-height: 22.5rem");
     expect(img.className).toContain("h-auto");
@@ -248,7 +254,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(screen.getByRole("img", { name: "provider alt text" })).toBeTruthy();
   });
 
-  it("renders only the first result until the live contract widens", () => {
+  it("renders every generated result", () => {
     blobSrcState.value = {
       status: "ready",
       src: "blob:http://localhost/multi",
@@ -271,13 +277,13 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     });
 
     expect(screen.getByRole("img", { name: "variant a" })).toBeTruthy();
-    expect(screen.queryByRole("img", { name: "variant b" })).toBeNull();
+    expect(screen.getByRole("img", { name: "variant b" })).toBeTruthy();
     const card = screen.getByRole("region", { name: "Image generation" });
     expect(
       card.querySelectorAll(
         '[data-slot="image-generation"][data-state="complete"]',
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   it("shows waiting-for-sync while the attachment blob is not ready, still ratio-reserved", () => {
@@ -299,7 +305,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     });
 
     const card = screen.getByRole("region", { name: "Image generation" });
-    const frame = card.querySelector('[role="img"]');
+    const frame = card.querySelector("[data-image-generation-media]");
     expect(screen.getByText("Waiting for image sync")).toBeTruthy();
     expect(screen.getByText("400 × 300")).toBeTruthy();
     expect(frame?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);

@@ -821,7 +821,10 @@ export function accumulateEvent(
           // Stamped explicitly in both completion branches (see the
           // no-existing-block branch below) so a persisted block always
           // carries the same shape the live broadcast did.
-          imageResults: event.imageResults,
+          imageResults:
+            event.imageResults.length > 0
+              ? event.imageResults
+              : existing.imageResults,
         };
         return replaceBlock(blocks, event.blockId, updated);
       }

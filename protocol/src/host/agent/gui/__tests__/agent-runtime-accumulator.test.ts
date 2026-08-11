@@ -3524,6 +3524,18 @@ describe("accumulateEvent - provider_notice.upsert", () => {
         filePath: null,
       },
     ]);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc-img",
+      timestamp: 3,
+      toolName: "image_gen",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+    expect((blocks[0] as ToolCallBlock).imageResults).toEqual([
+      expect.objectContaining({ attachmentHash: "sha256-a" }),
+    ]);
   });
 
   it("tool_call.completed creates a completed block with imageResults when no prior started event exists", () => {

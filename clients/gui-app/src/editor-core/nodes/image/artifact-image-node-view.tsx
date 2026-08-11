@@ -21,13 +21,7 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
   if (image.status === "loading") {
     body = <AttachmentImageLoading label="Waiting for image sync" fullWidth />;
   } else if (image.status === "unavailable") {
-    body = (
-      <AttachmentImageFailure
-        alt={alt}
-        source={src}
-        reason="Image is unavailable"
-      />
-    );
+    body = <AttachmentImageFailure alt={alt} reason="Image is unavailable" />;
   } else {
     body = (
       <AttachmentImage

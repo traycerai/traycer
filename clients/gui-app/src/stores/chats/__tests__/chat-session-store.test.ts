@@ -4995,6 +4995,9 @@ describe("blockDelta coalescing", () => {
     harness.manual.runAll();
     live = harness.handle.store.getState().liveAssistantMessage;
     expect(live?.blocks).toHaveLength(1);
+    expect(live?.imageResolutions).toHaveLength(1);
+    expect(live?.imageResolutions[0]?.entry.attachmentHash).toBe("hash-1");
+    expect(live?.imageResolutionsVersion).toBe(1);
 
     emitResolution("hash-2", 13);
     harness.manual.runAll();
