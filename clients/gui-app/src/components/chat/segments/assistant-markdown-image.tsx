@@ -431,11 +431,19 @@ function ResolvedImage(props: {
   readonly mediaType: string;
 }): ReactNode {
   const image = useAttachmentBlobSrc(props.hash, props.mediaType, null);
-  if (image.status !== "ready") {
+  if (image.status === "loading") {
     return (
       <AttachmentImageLoading
         label="Waiting for image sync"
         fullWidth={false}
+      />
+    );
+  }
+  if (image.status === "unavailable") {
+    return (
+      <AttachmentImageFailure
+        alt={props.alt}
+        reason="This image is no longer available."
       />
     );
   }

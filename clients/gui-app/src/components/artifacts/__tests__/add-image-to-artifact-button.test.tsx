@@ -280,8 +280,14 @@ describe("AddImageToArtifactButton", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: /spec a/i }));
 
-    expect(await screen.findByText(/could not be committed/i)).toBeTruthy();
-    expect(commit).toHaveBeenCalledTimes(3);
+    expect(
+      await screen.findByText(
+        /could not be committed/i,
+        {},
+        { timeout: 3_000 },
+      ),
+    ).toBeTruthy();
+    expect(commit).toHaveBeenCalledTimes(7);
     expect(imageNodeCount()).toBe(0);
   });
 

@@ -295,6 +295,30 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
   });
 
+  it("shows a terminal failure when a resolved attachment is unavailable", () => {
+    blobSrcState.value = { status: "unavailable", src: null };
+    renderImage({
+      src: "/workspace/shots/missing.png",
+      alt: "missing image",
+      context: {
+        ...BASE_CONTEXT,
+        resolutions: [
+          resolution(
+            resolvedEntry("/workspace/shots/missing.png", {}),
+            "msg-1",
+          ),
+        ],
+      },
+    });
+
+    expect(screen.queryByText("Waiting for image sync")).toBeNull();
+    expect(
+      screen.getByRole("status", {
+        name: "missing image: This image is no longer available.",
+      }),
+    ).toBeTruthy();
+  });
+
   it("renders terminal failure text for legacy consent-required sources", () => {
     renderImage({
       src: "./local.png",

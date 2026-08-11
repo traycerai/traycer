@@ -1,7 +1,6 @@
 import type { CommitArtifactImageResponse } from "@traycer/protocol/host/epic/unary-schemas";
 
-const FINISH_RETRY_DELAY_MS = 25;
-const FINISH_ATTEMPTS = 3;
+const FINISH_RETRY_DELAYS_MS = [25, 50, 100, 200, 400, 800] as const;
 
 export async function commitArtifactImageWithRetry(
   commit: (
@@ -11,15 +10,19 @@ export async function commitArtifactImageWithRetry(
   artifactId: string,
   operationId: string,
 ): Promise<void> {
-  for (let attempt = 0; attempt < FINISH_ATTEMPTS; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt <= FINISH_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
     const response = await commit(artifactId, operationId);
     if ("committed" in response) return;
     if (response.status === "unknown-operation") {
       throw new Error("The artifact image operation is no longer available.");
     }
-    if (attempt < FINISH_ATTEMPTS - 1) {
+    if (attempt < FINISH_RETRY_DELAYS_MS.length) {
       await new Promise<void>((resolve) =>
-        setTimeout(resolve, FINISH_RETRY_DELAY_MS),
+        setTimeout(resolve, FINISH_RETRY_DELAYS_MS[attempt]),
       );
     }
   }

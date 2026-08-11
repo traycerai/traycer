@@ -325,6 +325,25 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(screen.getByText("Waiting for image sync")).toBeTruthy();
     expect(screen.queryByText(/^\d+ × \d+$/)).toBeNull();
   });
+
+  it("shows a terminal failure when the generated image is unavailable", () => {
+    blobSrcState.value = { status: "unavailable", src: null };
+    renderCard({
+      imageResults: [
+        imageResult({
+          attachmentHash: "hash-unavailable",
+          alt: "missing generated image",
+        }),
+      ],
+    });
+
+    expect(screen.queryByText("Waiting for image sync")).toBeNull();
+    expect(
+      screen.getByRole("status", {
+        name: "missing generated image: This image is no longer available.",
+      }),
+    ).toBeTruthy();
+  });
 });
 
 describe("<ToolSegment /> image_generation promotion routing", () => {

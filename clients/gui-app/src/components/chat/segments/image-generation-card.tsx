@@ -6,6 +6,7 @@ import type {
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
+import { AttachmentImageFailure } from "./attachment-image";
 import {
   ImageGeneration,
   type ImageGenerationStatus,
@@ -132,11 +133,19 @@ function GeneratedImageContent(props: {
   const alt =
     props.result.alt ?? props.result.revisedPrompt ?? props.fallbackAlt;
 
-  if (image.status !== "ready") {
+  if (image.status === "loading") {
     return (
       <div className="flex items-center justify-center text-ui-sm text-muted-foreground">
         Waiting for image sync
       </div>
+    );
+  }
+  if (image.status === "unavailable") {
+    return (
+      <AttachmentImageFailure
+        alt={alt}
+        reason="This image is no longer available."
+      />
     );
   }
 
