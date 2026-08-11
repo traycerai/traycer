@@ -97,6 +97,48 @@ interface ColdPrRefetchState {
   readonly timer: number | null;
 }
 
+interface ViewportRetryStore {
+  readonly scopeToken: object;
+  readonly getSnapshot: () => ReadonlyMap<string, ColdPrRefetchState>;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly set: (path: string, state: ColdPrRefetchState) => void;
+  readonly delete: (path: string) => void;
+  readonly reset: () => void;
+}
+
+function createViewportRetryStore(scopeToken: object): ViewportRetryStore {
+  let snapshot: ReadonlyMap<string, ColdPrRefetchState> = new Map();
+  const listeners = new Set<() => void>();
+  const publish = (next: ReadonlyMap<string, ColdPrRefetchState>): void => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  return {
+    scopeToken,
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set: (path, state) => {
+      const prior = snapshot.get(path);
+      if (prior?.attempts === state.attempts && prior.timer === state.timer)
+        return;
+      publish(new Map(snapshot).set(path, state));
+    },
+    delete: (path) => {
+      if (!snapshot.has(path)) return;
+      const next = new Map(snapshot);
+      next.delete(path);
+      publish(next);
+    },
+    reset: () => {
+      if (snapshot.size === 0) return;
+      publish(new Map());
+    },
+  };
+}
+
 interface SweepRetryState {
   readonly attempts: number;
   readonly nextEligibleAt: number;
@@ -217,6 +259,35 @@ function equalPathSets(
   return left.size === right.size && [...left].every((path) => right.has(path));
 }
 
+function isTerminalEnrichmentError(args: {
+  readonly state:
+    | {
+        readonly fetchStatus: "fetching" | "paused" | "idle";
+        readonly status: "pending" | "error" | "success";
+      }
+    | undefined;
+  readonly viewportOwned: boolean;
+  readonly viewportExhausted: boolean;
+  readonly sweepExhausted: boolean;
+  readonly hasColdData: boolean;
+}): boolean {
+  const {
+    state,
+    viewportOwned,
+    viewportExhausted,
+    sweepExhausted,
+    hasColdData,
+  } = args;
+  if (state?.fetchStatus === "fetching") return false;
+  const missingOrUnresolved =
+    state === undefined || state.status === "error" || hasColdData;
+  if (viewportOwned) {
+    if (viewportExhausted) return missingOrUnresolved;
+    return state?.status === "error" && !hasColdData;
+  }
+  return sweepExhausted && missingOrUnresolved;
+}
+
 /**
  * Selects the next chunk of paths the background sweep should probe, walking
  * `worktreePaths` in listing order. A path needs a probe when its per-path
@@ -286,16 +357,37 @@ function foldEnrichedWorktrees(
   queryClient: QueryClient,
   methodScope: readonly unknown[],
 ): ReadonlyMap<string, WorktreeHostEntryV14> {
-  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV14>(
-    {
-      queryKey: methodScope,
-      predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
-    },
-  );
+  const queries = queryClient.getQueryCache().findAll({
+    queryKey: methodScope,
+    predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
+  });
   const map = new Map<string, WorktreeHostEntryV14>();
-  for (const [, data] of entries) {
+  const freshness = new Map<
+    string,
+    { readonly resolvedAt: number | null; readonly dataUpdatedAt: number }
+  >();
+  for (const query of queries) {
+    const data = query.state.data as
+      WorktreeListAllForHostResponseV14 | undefined;
     if (data === undefined) continue;
-    for (const entry of data.worktrees) map.set(entry.worktreePath, entry);
+    for (const entry of data.worktrees) {
+      const prior = freshness.get(entry.worktreePath);
+      const newerResolution =
+        prior === undefined ||
+        (entry.resolvedAt !== null &&
+          (prior.resolvedAt === null || entry.resolvedAt > prior.resolvedAt));
+      const equalResolution = entry.resolvedAt === prior?.resolvedAt;
+      if (
+        newerResolution ||
+        (equalResolution && query.state.dataUpdatedAt > prior.dataUpdatedAt)
+      ) {
+        map.set(entry.worktreePath, entry);
+        freshness.set(entry.worktreePath, {
+          resolvedAt: entry.resolvedAt,
+          dataUpdatedAt: query.state.dataUpdatedAt,
+        });
+      }
+    }
   }
   return map;
 }
@@ -463,35 +555,52 @@ export function useWorktreeActivityEnrichment(
   // until a live probe replaces the seed.
   readonly seededPaths: ReadonlySet<string>;
   readonly reportVisiblePaths: (paths: readonly string[]) => void;
-  readonly rearmMissingSweepPaths: () => void;
+  readonly prepareEnrichmentRefresh: () => () => void;
   readonly enriching: boolean;
 } {
   const queryClient = useQueryClient();
-  const [requestedPaths, setRequestedPaths] =
-    useState<readonly string[]>(EMPTY_PATHS);
+  const scopeToken = useMemo(
+    () => ({ client, hostId, reachable }),
+    [client, hostId, reachable],
+  );
+  const [requestedPathsState, setRequestedPathsState] = useState<{
+    readonly scopeToken: typeof scopeToken | null;
+    readonly paths: readonly string[];
+  }>({ scopeToken: null, paths: EMPTY_PATHS });
+  const requestedPaths =
+    requestedPathsState.scopeToken === scopeToken
+      ? requestedPathsState.paths
+      : EMPTY_PATHS;
   // The debounce coalesces every on-screen report inside one settle window into a
   // single committed `requestedPaths` update (trailing edge), so a fast scroll
   // fires one batch of per-path queries, not one per frame.
-  const latestVisibleRef = useRef<readonly string[]>(EMPTY_PATHS);
+  const latestVisibleRef = useRef<{
+    readonly scopeToken: typeof scopeToken;
+    readonly paths: readonly string[];
+  }>({ scopeToken, paths: EMPTY_PATHS });
   const debounceRef = useRef<number | null>(null);
-  const reportVisiblePaths = useCallback((paths: readonly string[]) => {
-    latestVisibleRef.current = paths;
-    // Clear-and-re-arm on EVERY report (true trailing debounce), never gate on
-    // "a timer is already pending". The gate variant wedged permanently when
-    // React StrictMode's mount setup→cleanup→setup cycle ran the unmount
-    // cleanup between two reports on the SAME (surviving) hook instance: the
-    // cleanup killed the pending timer, the ref still held its id, and every
-    // later report early-returned - no commit ever happened again, so a warm
-    // second open never enriched anything (cold first opens escaped only
-    // because the list mounts seconds after the body there). Re-arming makes
-    // that state unreachable: the worst a stale id can do is clear a dead
-    // timer.
-    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
-      debounceRef.current = null;
-      setRequestedPaths(latestVisibleRef.current);
-    }, WORKTREE_ENRICH_DEBOUNCE_MS);
-  }, []);
+  const reportVisiblePaths = useCallback(
+    (paths: readonly string[]) => {
+      latestVisibleRef.current = { scopeToken, paths };
+      // Clear-and-re-arm on EVERY report (true trailing debounce), never gate on
+      // "a timer is already pending". The gate variant wedged permanently when
+      // React StrictMode's mount setup→cleanup→setup cycle ran the unmount
+      // cleanup between two reports on the SAME (surviving) hook instance: the
+      // cleanup killed the pending timer, the ref still held its id, and every
+      // later report early-returned - no commit ever happened again, so a warm
+      // second open never enriched anything (cold first opens escaped only
+      // because the list mounts seconds after the body there). Re-arming makes
+      // that state unreachable: the worst a stale id can do is clear a dead
+      // timer.
+      if (debounceRef.current !== null)
+        window.clearTimeout(debounceRef.current);
+      debounceRef.current = window.setTimeout(() => {
+        debounceRef.current = null;
+        setRequestedPathsState(latestVisibleRef.current);
+      }, WORKTREE_ENRICH_DEBOUNCE_MS);
+    },
+    [scopeToken],
+  );
   useEffect(
     () => () => {
       if (debounceRef.current !== null) {
@@ -502,7 +611,7 @@ export function useWorktreeActivityEnrichment(
         debounceRef.current = null;
       }
     },
-    [],
+    [scopeToken],
   );
 
   // The shared wire transport for BOTH enrichment legs: per-path fetches
@@ -536,8 +645,14 @@ export function useWorktreeActivityEnrichment(
     batcher,
     enabled: reachable && client !== null && readiness.isReady,
   });
-  const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(
-    new Map(),
+  const viewportRetryStore = useMemo(
+    () => createViewportRetryStore(scopeToken),
+    [scopeToken],
+  );
+  const viewportRetrySnapshot = useSyncExternalStore(
+    viewportRetryStore.subscribe,
+    viewportRetryStore.getSnapshot,
+    viewportRetryStore.getSnapshot,
   );
   // Cold-PR retry bookkeeping is scoped to the live host connection, so a
   // client/host swap or a reachability drop must RESET it, not just wipe it on
@@ -548,24 +663,23 @@ export function useWorktreeActivityEnrichment(
   // host starts from a clean retry ledger.
   useEffect(
     () => () => {
-      for (const state of coldPrRefetchStateRef.current.values()) {
+      for (const state of viewportRetryStore.getSnapshot().values()) {
         if (state.timer !== null) window.clearTimeout(state.timer);
       }
-      coldPrRefetchStateRef.current.clear();
     },
-    [client, hostId, reachable],
+    [viewportRetryStore],
   );
   useEffect(() => {
     const activePaths = new Set(requestedPaths);
-    for (const [path, state] of coldPrRefetchStateRef.current.entries()) {
+    for (const [path, state] of viewportRetryStore.getSnapshot()) {
       if (activePaths.has(path)) continue;
       if (state.timer !== null) window.clearTimeout(state.timer);
-      coldPrRefetchStateRef.current.delete(path);
+      viewportRetryStore.delete(path);
     }
 
     results.forEach((result, index) => {
       const path = requestedPaths[index];
-      const state = coldPrRefetchStateRef.current.get(path) ?? {
+      const state = viewportRetryStore.getSnapshot().get(path) ?? {
         attempts: 0,
         timer: null,
       };
@@ -576,7 +690,7 @@ export function useWorktreeActivityEnrichment(
         result.data !== undefined && responseHasColdPrState(result.data);
       if (!hasColdPrState) {
         if (state.timer !== null) window.clearTimeout(state.timer);
-        coldPrRefetchStateRef.current.delete(path);
+        viewportRetryStore.delete(path);
         return;
       }
       if (
@@ -584,27 +698,27 @@ export function useWorktreeActivityEnrichment(
         state.timer !== null ||
         state.attempts >= WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS
       ) {
-        coldPrRefetchStateRef.current.set(path, state);
+        viewportRetryStore.set(path, state);
         return;
       }
 
       const nextAttempts = state.attempts + 1;
       const timer = window.setTimeout(() => {
-        const latest = coldPrRefetchStateRef.current.get(path);
+        const latest = viewportRetryStore.getSnapshot().get(path);
         if (latest !== undefined) {
-          coldPrRefetchStateRef.current.set(path, {
+          viewportRetryStore.set(path, {
             attempts: latest.attempts,
             timer: null,
           });
         }
         void result.refetch();
       }, coldRetryDelayMs(nextAttempts));
-      coldPrRefetchStateRef.current.set(path, {
+      viewportRetryStore.set(path, {
         attempts: nextAttempts,
         timer,
       });
     });
-  }, [requestedPaths, results]);
+  }, [requestedPaths, results, viewportRetryStore]);
 
   // Overlay from the cache (monotonic, remount-warm) - NOT from `results`.
   const enrichedByPath = useCachedWorktreeEnrichment(queryClient, hostId);
@@ -664,6 +778,7 @@ export function useWorktreeActivityEnrichment(
       restoredCount: seededPaths.size,
     });
   }, [queryClient, hostId]);
+  const sweepInFlightRef = useRef<object | null>(null);
 
   // Debounced snapshot writes off the fold: a quiet window after the last
   // cache event serializes the warm entries of the CURRENT listing (deleted
@@ -739,27 +854,32 @@ export function useWorktreeActivityEnrichment(
       }
     });
   }, [queryClient, hostId]);
-  // Refresh invalidation cannot emit a cache event for an observer-less path
-  // whose query was already garbage-collected. The listing refresh calls this
-  // explicit signal after it succeeds, granting missing exhausted paths one
-  // fresh sweep budget without treating ordinary GC as a retry signal.
-  const rearmMissingSweepPaths = useCallback(() => {
-    if (hostId === null) return;
-    for (const path of sweepLedgerRef.current.keys()) {
-      const state = queryClient.getQueryState(
-        perPathEnrichmentQueryKey(hostId, path),
-      );
-      if (state === undefined) sweepLedgerRef.current.delete(path);
-    }
-    setSweepExhaustion((prior) => {
-      const paths = exhaustedSweepPaths(sweepLedgerRef.current);
-      return prior.hostId === hostId && equalPathSets(prior.paths, paths)
-        ? prior
-        : { hostId, paths };
-    });
-    bumpSweepTick();
-  }, [hostId, queryClient]);
-  const sweepInFlightRef = useRef(false);
+  // One explicit refresh grants one new retry generation. Capture the ledger
+  // BEFORE awaiting the listing RPC: a host/client switch replaces that map,
+  // so a late completion can prove it belongs to an obsolete scope and no-op.
+  // Replace the WHOLE ledger, not only exhausted tombstones: every successful
+  // user refresh starts a full retry generation, and map identity makes any
+  // pre-refresh in-flight outcomes detect that they are stale and drop their
+  // bookkeeping. A rejected query also remains invalidated, so another cache
+  // invalidation action alone is not a reliable generation boundary.
+  const prepareEnrichmentRefresh = useCallback((): (() => void) => {
+    const refreshHostId = hostId;
+    const refreshLedger = sweepLedgerRef.current;
+    const refreshViewportStore = viewportRetryStore;
+    return () => {
+      if (refreshHostId === null || sweepLedgerRef.current !== refreshLedger) {
+        return;
+      }
+      for (const state of refreshViewportStore.getSnapshot().values()) {
+        if (state.timer !== null) window.clearTimeout(state.timer);
+      }
+      sweepLedgerRef.current = new Map();
+      refreshViewportStore.reset();
+      sweepInFlightRef.current = null;
+      setSweepExhaustion({ hostId: refreshHostId, paths: EMPTY_ERRORED });
+      bumpSweepTick();
+    };
+  }, [hostId, viewportRetryStore]);
   const sweepWakeTimerRef = useRef<number | null>(null);
   const sweepStatsRef = useRef({ fetchedCount: 0, drainLogged: true });
   // Same scope-reset rule as the cold-retry ledger above: a client/host swap
@@ -770,6 +890,7 @@ export function useWorktreeActivityEnrichment(
   useEffect(
     () => () => {
       sweepLedgerRef.current = new Map();
+      sweepInFlightRef.current = null;
       sweepStatsRef.current = { fetchedCount: 0, drainLogged: true };
       if (sweepWakeTimerRef.current !== null) {
         window.clearTimeout(sweepWakeTimerRef.current);
@@ -792,7 +913,7 @@ export function useWorktreeActivityEnrichment(
     const sweepHostId = readiness.hostId;
     if (sweepHostId === null) return;
     // One chunk in flight at a time; its settle handler bumps `sweepTick`.
-    if (sweepInFlightRef.current) return;
+    if (sweepInFlightRef.current !== null) return;
     // Visible rows first: while the viewport batch is fetching, hold the sweep
     // so the on-screen rows always win the host's attention.
     if (results.some((result) => result.isFetching)) return;
@@ -837,7 +958,8 @@ export function useWorktreeActivityEnrichment(
       }
       return;
     }
-    sweepInFlightRef.current = true;
+    const flight = {};
+    sweepInFlightRef.current = flight;
     sweepStatsRef.current = {
       fetchedCount: sweepStatsRef.current.fetchedCount + candidates.length,
       drainLogged: false,
@@ -849,7 +971,11 @@ export function useWorktreeActivityEnrichment(
         ),
       ),
     ).then((outcomes) => {
-      sweepInFlightRef.current = false;
+      // A host switch or refresh generation may already have started another
+      // flight. An old completion must never clear that newer scope's guard.
+      if (sweepInFlightRef.current === flight) {
+        sweepInFlightRef.current = null;
+      }
       // Record outcomes only if the scope was NOT reset (host swap /
       // reachability drop) while this chunk was in flight - stale outcomes
       // belong to the old scope's ledger, not the fresh one.
@@ -919,21 +1045,29 @@ export function useWorktreeActivityEnrichment(
     if (hostId === null) return EMPTY_ERRORED;
     const errored = new Set<string>();
     const viewportPaths = new Set(requestedPaths);
-    for (const path of worktreePaths) {
+    const candidatePaths = new Set([...worktreePaths, ...requestedPaths]);
+    for (const path of candidatePaths) {
       const state =
         queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
           perPathEnrichmentQueryKey(hostId, path),
         );
-      if (state?.status === "error" && state.fetchStatus !== "fetching") {
-        // Viewport queries have already consumed TanStack's observer retry
-        // policy. Observer-less sweep failures remain pending while their own
-        // retry ledger still has budget, and settle only after exhaustion.
-        if (
-          viewportPaths.has(path) ||
-          (sweepExhaustion.hostId === hostId && sweepExhaustion.paths.has(path))
-        ) {
-          errored.add(path);
-        }
+      const sweepExhausted =
+        sweepExhaustion.hostId === hostId && sweepExhaustion.paths.has(path);
+      const viewportExhausted =
+        (viewportRetrySnapshot.get(path)?.attempts ?? 0) >=
+        WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS;
+      const hasColdData =
+        state?.data !== undefined && responseHasColdPrState(state.data);
+      if (
+        isTerminalEnrichmentError({
+          state,
+          viewportOwned: viewportPaths.has(path),
+          viewportExhausted,
+          sweepExhausted,
+          hasColdData,
+        })
+      ) {
+        errored.add(path);
       }
     }
     // The stable constant in the (overwhelmingly common) empty case, so this
@@ -946,6 +1080,7 @@ export function useWorktreeActivityEnrichment(
     results,
     sweepExhaustion,
     sweepTick,
+    viewportRetrySnapshot,
     worktreePaths,
   ]);
 
@@ -998,7 +1133,7 @@ export function useWorktreeActivityEnrichment(
     erroredPaths,
     seededPaths,
     reportVisiblePaths,
-    rearmMissingSweepPaths,
+    prepareEnrichmentRefresh,
     enriching,
   };
 }

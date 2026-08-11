@@ -2499,7 +2499,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(
       screen.queryByRole("button", { name: "Delete worktree feat-review" }),
     ).toBeNull();
-    screen.getByText("No worktrees match your search.");
+    screen.getByText("No worktrees match the selected tier filters.");
     screen.getByRole("button", { name: "Filter: Landed" });
   });
 
@@ -4205,6 +4205,116 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   });
 
+  it("uses a reliable branch mismatch even while the refreshed base is unresolved", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/reused",
+      branch: "old-branch",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const unresolvedNewBranch = entry({
+      ...oldActivity,
+      branch: "new-branch",
+      branchStatus: null,
+      resolvedAt: null,
+    });
+    render(
+      listElement({
+        worktrees: [unresolvedNewBranch],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getByText("new-branch")).not.toBeNull();
+    expect(screen.getByText("Checking…")).not.toBeNull();
+    expect(screen.queryByText("Landed")).toBeNull();
+  });
+
+  it("discards retained activity for a recreated directory at the same path", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/recreated",
+      branch: "same-branch",
+      createdAt: 10,
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const recreated = entry({
+      ...oldActivity,
+      branch: "same-branch",
+      createdAt: 20,
+      branchStatus: null,
+      resolvedAt: null,
+    });
+    render(
+      listElement({
+        worktrees: [recreated],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getByText("same-branch")).not.toBeNull();
+    expect(screen.getByText("Checking…")).not.toBeNull();
+    expect(screen.queryByText("Landed")).toBeNull();
+  });
+
+  it("requires an exact nullable branch identity once the base is resolved", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/detached",
+      branch: "old-branch",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const detached: WorktreeHostEntryV14 = {
+      ...oldActivity,
+      branch: null,
+      branchStatus: null,
+      resolvedAt: 20,
+    };
+    render(
+      listElement({
+        worktrees: [detached],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getAllByText("detached HEAD").length).toBeGreaterThan(0);
+    expect(screen.getByText("Checking…")).not.toBeNull();
+  });
+
+  it("requires an exact nullable repository identity once the base is resolved", () => {
+    const oldActivity = entry({
+      worktreePath: "/wt/unidentified",
+      branch: "same-branch",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      resolvedAt: 10,
+    });
+    const unidentified = entry({
+      ...oldActivity,
+      branch: "same-branch",
+      repoIdentifier: null,
+      branchStatus: null,
+      resolvedAt: 20,
+    });
+    render(
+      listElement({
+        worktrees: [unidentified],
+        enrichedByPath: new Map([[oldActivity.worktreePath, oldActivity]]),
+        erroredPaths: new Set(),
+        onVisiblePathsChange: undefined,
+      }),
+    );
+
+    expect(screen.getByText("same-branch")).not.toBeNull();
+    expect(screen.getByText("Checking…")).not.toBeNull();
+  });
+
   it("upgrades an errored row in place once a later refetch succeeds", () => {
     const merged = entry({
       worktreePath: "/wt/errored",
@@ -4748,6 +4858,29 @@ describe("WorktreesList PR-number search", () => {
 
     expect(visibleBranches()).toEqual([]);
     screen.getByText("No worktrees match your search.");
+  });
+
+  it("names the active tier filters when a settled strict filter has no matches", () => {
+    const landed = entry({
+      worktreePath: "/wt/landed",
+      branch: "feat-landed",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    useWorktreesSettingsViewStore.setState({ tierFilters: ["review"] });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [landed],
+      enrichedByPath: new Map([[landed.worktreePath, landed]]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match the selected tier filters.");
+    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
   });
 
   it("does not hold the 'still checking' notice open for an errored row", () => {

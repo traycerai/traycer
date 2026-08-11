@@ -559,10 +559,12 @@ function WorktreesBody(props: {
   // still-unresolved ids through epic.getTaskContexts on this host.
   const taskTitlesByEpicId = useWorktreeTaskTitles(client, listing.worktrees);
   const canRefresh = reachable && client !== null;
+  const { prepareEnrichmentRefresh } = enrichment;
   const onRefresh = useCallback(async () => {
+    const completeEnrichmentRefresh = prepareEnrichmentRefresh();
     await listing.refresh();
-    enrichment.rearmMissingSweepPaths();
-  }, [listing, enrichment]);
+    completeEnrichmentRefresh();
+  }, [listing, prepareEnrichmentRefresh]);
   const toolbarProps = {
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
@@ -1623,7 +1625,10 @@ export function WorktreesList(props: {
               >
                 {searchStillCheckingCount > 0
                   ? worktreeSearchCheckingNoticeText(searchStillCheckingCount)
-                  : "No worktrees match your search."}
+                  : worktreeEmptyStateText(
+                      deferredSearchText,
+                      tierFilters.size > 0,
+                    )}
               </WorktreesStateMessage>
             ) : (
               <div
@@ -1955,6 +1960,15 @@ function worktreeSearchCheckingNoticeText(checkingCount: number): string {
   return `No matches yet - still checking ${checkingCount} ${plural}.`;
 }
 
+function worktreeEmptyStateText(
+  searchText: string,
+  hasTierFilters: boolean,
+): string {
+  if (searchText.trim().length > 0) return "No worktrees match your search.";
+  if (hasTierFilters) return "No worktrees match the selected tier filters.";
+  return "No worktrees found.";
+}
+
 function mergeStaleActivityOntoBase(
   base: WorktreeHostEntryV14,
   enriched: WorktreeHostEntryV14,
@@ -1990,18 +2004,41 @@ function hasMatchingActivityIdentity(
   base: WorktreeHostEntryV14,
   enriched: WorktreeHostEntryV14,
 ): boolean {
-  // An unresolved base is only a schema sentinel, so it carries no identity
-  // capable of disproving the last-known entry. Once the base resolves, stale
-  // activity is valid only for the same branch and repository.
-  if (base.resolvedAt === null) return true;
-  if (base.branch !== enriched.branch) return false;
-  if (base.repoIdentifier !== null || enriched.repoIdentifier !== null) {
+  // Even an unresolved row can carry reliable cheap identity facts. Use every
+  // fact it actually knows to reject stale evidence from a branch switch or a
+  // deleted/recreated directory at the same deterministic path; ignore only
+  // sentinel-null facts that cannot prove a mismatch.
+  if (
+    base.createdAt !== null &&
+    enriched.createdAt !== null &&
+    base.createdAt !== enriched.createdAt
+  ) {
+    return false;
+  }
+  if (base.resolvedAt !== null) {
+    if (base.branch !== enriched.branch) return false;
+    if (base.repoIdentifier === null || enriched.repoIdentifier === null) {
+      return (
+        base.repoIdentifier === enriched.repoIdentifier &&
+        base.repoLabel === enriched.repoLabel
+      );
+    }
     return (
-      base.repoIdentifier?.owner === enriched.repoIdentifier?.owner &&
-      base.repoIdentifier?.repo === enriched.repoIdentifier?.repo
+      base.repoIdentifier.owner === enriched.repoIdentifier.owner &&
+      base.repoIdentifier.repo === enriched.repoIdentifier.repo
     );
   }
-  return base.repoLabel === enriched.repoLabel;
+  if (base.branch !== null && base.branch !== enriched.branch) return false;
+  if (base.repoIdentifier !== null) {
+    const enrichedRepoIdentifier = enriched.repoIdentifier;
+    return (
+      enrichedRepoIdentifier !== null &&
+      base.repoIdentifier.owner === enrichedRepoIdentifier.owner &&
+      base.repoIdentifier.repo === enrichedRepoIdentifier.repo
+    );
+  }
+  if (base.repoLabel !== enriched.repoLabel) return false;
+  return true;
 }
 
 function worktreeFilterResolutionStatusText(
