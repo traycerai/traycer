@@ -3,6 +3,7 @@
  * with expansion, rename, delete, and drag-drop behaviors.
  */
 import { useDraggable } from "@dnd-kit/core";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -738,23 +739,28 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   } else {
     panelContent = (
       <ul role="tree" aria-label="Epic agents tree" className="space-y-0.5">
-        {rootIds.map((nodeId) => (
-          <ChatNode
-            key={nodeId}
-            epicId={epicId}
-            tabId={tabId}
-            nodeId={nodeId}
-            depth={0}
-            expansion={expansion}
-            canEdit={canEdit}
-            canMutate={canMutate}
-            isDisconnected={isDisconnected}
-            treeFilter={CHATS_TREE_FILTER}
-            selectionMode={selectionMode}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-          />
-        ))}
+        {/* Clearing an archived row's last notification indicator removes its
+        visibility exception. Keep that product behavior, but make the exit
+        legible instead of dropping the row in the same frame as the popover. */}
+        <AnimatePresence initial={false}>
+          {rootIds.map((nodeId) => (
+            <ChatNode
+              key={nodeId}
+              epicId={epicId}
+              tabId={tabId}
+              nodeId={nodeId}
+              depth={0}
+              expansion={expansion}
+              canEdit={canEdit}
+              canMutate={canMutate}
+              isDisconnected={isDisconnected}
+              treeFilter={CHATS_TREE_FILTER}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+            />
+          ))}
+        </AnimatePresence>
         {renderedLocalRootPending !== null && (
           <PendingCreateRow depth={0} name={renderedLocalRootPending.name} />
         )}
@@ -1271,6 +1277,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
 function ChatNodeShellBody(
   props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
 ) {
+  const shouldReduceMotion = useReducedMotion() === true;
   const {
     epicId,
     tabId,
@@ -1345,7 +1352,10 @@ function ChatNodeShellBody(
   });
 
   return (
-    <li
+    <m.li
+      layout={shouldReduceMotion ? false : "position"}
+      exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
+      transition={{ duration: 0.16, ease: "easeOut" }}
       role="treeitem"
       aria-selected={isActive}
       aria-expanded={hasChildren ? expanded : undefined}
@@ -1445,7 +1455,7 @@ function ChatNodeShellBody(
         isPending={deletePending}
         onConfirm={onConfirmDelete}
       />
-    </li>
+    </m.li>
   );
 }
 
@@ -1482,23 +1492,25 @@ function ChatNodeChildren(props: ChatNodeChildrenProps) {
   return (
     <ul role="group" className="relative space-y-0.5">
       <TreeGroupGuide parentDepth={props.depth} />
-      {props.childIds.map((childId) => (
-        <ChatNode
-          key={childId}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          nodeId={childId}
-          depth={props.depth + 1}
-          expansion={props.expansion}
-          canEdit={props.canEdit}
-          canMutate={props.canMutate}
-          isDisconnected={props.isDisconnected}
-          treeFilter={props.treeFilter}
-          selectionMode={props.selectionMode}
-          selectedIds={props.selectedIds}
-          onToggleSelection={props.onToggleSelection}
-        />
-      ))}
+      <AnimatePresence initial={false}>
+        {props.childIds.map((childId) => (
+          <ChatNode
+            key={childId}
+            epicId={props.epicId}
+            tabId={props.tabId}
+            nodeId={childId}
+            depth={props.depth + 1}
+            expansion={props.expansion}
+            canEdit={props.canEdit}
+            canMutate={props.canMutate}
+            isDisconnected={props.isDisconnected}
+            treeFilter={props.treeFilter}
+            selectionMode={props.selectionMode}
+            selectedIds={props.selectedIds}
+            onToggleSelection={props.onToggleSelection}
+          />
+        ))}
+      </AnimatePresence>
     </ul>
   );
 }

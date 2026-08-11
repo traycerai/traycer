@@ -178,6 +178,27 @@ function rowKey(row: Pick<HostNotificationsCloudFeedRow, "entryId">): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
+function isUnreadFailure(row: HostNotificationsCloudFeedRow): boolean {
+  return row.entry.severity === "failure" && row.entry.readAt === null;
+}
+
+function loadedBlockingAttentionCount(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRow>>>,
+): number {
+  let count = 0;
+  for (const row of Object.values(rows)) {
+    if (
+      row !== undefined &&
+      row.entry.severity === "needs_action" &&
+      "resolvedAt" in row.entry &&
+      row.entry.resolvedAt === null
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export const useCloudNotificationsStore = create<CloudNotificationsState>()(
   (set) => ({
     rows: {},
@@ -221,6 +242,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         const key = cloudNotificationFeedId(entryId);
         const row = state.rows[key];
         if (row === undefined || row.entry.readAt !== null) return state;
+        const attentionDelta = isUnreadFailure(row) ? 1 : 0;
         return {
           rows: {
             ...state.rows,
@@ -232,6 +254,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
               : {
                   ...state.summary,
                   unreadCount: Math.max(0, state.summary.unreadCount - 1),
+                  attentionCount: Math.max(
+                    0,
+                    state.summary.attentionCount - attentionDelta,
+                  ),
                 },
         };
       }),
@@ -247,7 +273,16 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           summary:
             state.summary === null
               ? null
-              : { ...state.summary, unreadCount: 0 },
+              : {
+                  ...state.summary,
+                  unreadCount: 0,
+                  // Mark-all-read removes every failure contribution,
+                  // including raw-feed rows this client cannot render. An
+                  // unresolved prompt remains blocking even after it is read;
+                  // loaded rows provide the residual until the next
+                  // authoritative summary reconciles this approximation.
+                  attentionCount: loadedBlockingAttentionCount(rows),
+                },
         };
       }),
     beginEntityRead: (entryIds, readAt) =>
@@ -255,6 +290,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         const retries = { ...state.entityReadRetries };
         const rows = { ...state.rows };
         let flipped = 0;
+        let attentionFlipped = 0;
         for (const entryId of entryIds) {
           retries[entryId] = {
             attempts: retries[entryId]?.attempts ?? 0,
@@ -263,6 +299,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           const key = cloudNotificationFeedId(entryId);
           const row = rows[key];
           if (row === undefined || row.entry.readAt !== null) continue;
+          if (isUnreadFailure(row)) attentionFlipped += 1;
           rows[key] = { ...row, entry: { ...row.entry, readAt } };
           flipped += 1;
         }
@@ -275,6 +312,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
               : {
                   ...state.summary,
                   unreadCount: Math.max(0, state.summary.unreadCount - flipped),
+                  attentionCount: Math.max(
+                    0,
+                    state.summary.attentionCount - attentionFlipped,
+                  ),
                 },
         };
       }),
