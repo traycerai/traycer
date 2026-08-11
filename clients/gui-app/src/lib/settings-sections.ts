@@ -174,7 +174,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // bindings. Read via the local CLI bridge (~/.traycer/orchestrations/).
   {
     id: "orchestrations",
-    label: "Orchestrations",
+    label: "Agent teams",
     icon: Network,
     group: "host",
     requiresLocalHost: false,

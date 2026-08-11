@@ -127,7 +127,7 @@ describe("OrchestrationBindingChip", () => {
     });
   });
 
-  it("disabled global + no override shows Orchestration off; toggle enables override", async () => {
+  it("disabled global + no override shows Team off; toggle enables override", async () => {
     const user = userEvent.setup();
     useOrchestrationBindingStore.getState().setBinding({
       ...GLOBAL,
@@ -137,7 +137,7 @@ describe("OrchestrationBindingChip", () => {
     render(<OrchestrationBindingChip epicId="epic-1" />);
     await waitFor(() => {
       expect(screen.getByTestId("orchestration-binding-chip").textContent).toContain(
-        "Orchestration off",
+        "Team: off",
       );
     });
 

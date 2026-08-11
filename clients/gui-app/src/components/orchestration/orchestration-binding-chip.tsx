@@ -7,6 +7,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
+import { packDisplayName } from "@/lib/orchestration/pack-display";
 import { useOrchestrationEpicOverridesStore } from "@/stores/orchestration/orchestration-epic-overrides-store";
 import { OrchestrationBindingPopover } from "./orchestration-binding-popover";
 
@@ -41,8 +42,8 @@ export function OrchestrationBindingChip(
   void globalBinding;
 
   const label = binding.enabled
-    ? `🎭 ${binding.orchestrationName} · ${binding.roleId} · ${binding.modelGroup ?? "default"}`
-    : "Orchestration off";
+    ? `Team: ${binding.orchestrationName} · opens as ${binding.roleId} · ${binding.modelGroup === null ? "Default" : packDisplayName(binding.modelGroup)}`
+    : "Team: off — chats start blank";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -59,8 +60,8 @@ export function OrchestrationBindingChip(
           aria-label="Orchestration binding"
           title={
             binding.enabled
-              ? "New chat starts as this role — click to change or turn off"
-              : "Orchestration off — new chats start blank"
+              ? "New chats open with this team — click to change the default"
+              : "No default team — new chats start blank"
           }
         >
           <span className="truncate">{label}</span>

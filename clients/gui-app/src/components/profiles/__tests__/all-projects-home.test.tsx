@@ -248,7 +248,7 @@ describe("AllProjectsHome", () => {
     });
     expect(
       screen.getByText(
-        /Create a project profile to keep workspaces, tabs and chats separate/,
+        /Create a project to keep workspaces, tabs and chats separate/,
       ),
     ).toBeTruthy();
   });

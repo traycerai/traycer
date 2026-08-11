@@ -74,7 +74,7 @@ export function AllProjectsHome(): ReactNode {
         <div className="flex flex-col gap-1.5">
           <h1 className="text-lg font-medium text-foreground">All projects</h1>
           <p className="text-ui-sm text-muted-foreground">
-            Create a project profile to keep workspaces, tabs and chats
+            Create a project to keep workspaces, tabs and chats
             separate
           </p>
         </div>

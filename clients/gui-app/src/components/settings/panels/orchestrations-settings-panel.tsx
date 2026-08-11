@@ -47,6 +47,7 @@ import {
   useRunnerOrchestrationRoleDeleteMutation,
 } from "@/hooks/runner/use-runner-orchestration-queries";
 import { useOrchestrationBindingStore } from "@/stores/orchestration/orchestration-binding-store";
+import { packDisplayName } from "@/lib/orchestration/pack-display";
 import { ModelGroupEditor } from "@/components/settings/panels/model-group-editor";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
@@ -54,23 +55,23 @@ import type {
   TraycerOrchestrationRole,
 } from "@traycer-clients/shared/platform/runner-host";
 
-const PRIMARY_PACK = "roster-full";
+const PRIMARY_PACK = "default";
 
 /** tier id → layman label (model quality shelf inside a pack). */
 const QUALITY_OPTIONS = [
   {
     tier: "premium",
-    label: "Best",
+    label: "Max",
     hint: "Planning, review, final decisions — does not implement",
   },
   {
     tier: "executor",
-    label: "Balanced",
+    label: "Standard",
     hint: "Everyday building work",
   },
   {
     tier: "economic",
-    label: "Cheap",
+    label: "Economy",
     hint: "Small, quick tasks",
   },
 ] as const;
@@ -103,8 +104,8 @@ export function OrchestrationsSettingsPanel() {
 
   return (
     <SettingsPanelShell
-      title="Orchestrations"
-      description="Teams define who your agents are. Turn one on so every new chat starts with the team lead’s brief — once, at creation."
+      title="Agent teams"
+      description="Agent teams define who answers when you start a chat. Pick a default team and new chats start with the team lead’s instructions. Existing chats never change."
       fillHeight
     >
       <div className="flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-5">
@@ -223,10 +224,10 @@ function ActiveForNewChatsCard(props: {
     >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-ui-base font-medium">Active for new chats</h2>
+          <h2 className="text-ui-base font-medium">Default team for new chats</h2>
           <p className="mt-0.5 text-ui-xs text-muted-foreground">
-            When on, every new chat starts as the chosen member of this team —
-            applied once at creation, never repeated mid-chat.
+            When on, new chats start with the team lead’s instructions.
+            Existing chats never change.
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-2 text-ui-sm">
@@ -236,12 +237,12 @@ function ActiveForNewChatsCard(props: {
             onChange={(e) => setEnabled(e.target.checked)}
             data-testid="active-binding-enabled"
           />
-          Use a team when I start a new chat
+          Use a team by default
         </label>
       </div>
 
       {binding.enabled ? (
-        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-ui-xs">
             <span className="text-muted-foreground">Team</span>
             <select
@@ -265,6 +266,32 @@ function ActiveForNewChatsCard(props: {
           </label>
 
           <label className="flex flex-col gap-1 text-ui-xs">
+            <span className="text-muted-foreground">AI preset</span>
+            <select
+              value={binding.modelGroup ?? ""}
+              onChange={(e) =>
+                setModelGroup(e.target.value === "" ? null : e.target.value)
+              }
+              className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              data-testid="active-binding-pack"
+            >
+              <option value="">Use team’s preset</option>
+              {props.packNames.map((g) => (
+                <option key={g} value={g}>
+                  {packDisplayName(g)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+
+      {binding.enabled ? (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-ui-xs text-muted-foreground">
+            Advanced: choose who starts the chat (default is the team lead)
+          </summary>
+          <label className="mt-2 flex max-w-sm flex-col gap-1 text-ui-xs">
             <span className="text-muted-foreground">Who starts the chat</span>
             <select
               value={binding.roleId}
@@ -288,26 +315,7 @@ function ActiveForNewChatsCard(props: {
               ))}
             </select>
           </label>
-
-          <label className="flex flex-col gap-1 text-ui-xs">
-            <span className="text-muted-foreground">Model pack</span>
-            <select
-              value={binding.modelGroup ?? ""}
-              onChange={(e) =>
-                setModelGroup(e.target.value === "" ? null : e.target.value)
-              }
-              className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
-              data-testid="active-binding-pack"
-            >
-              <option value="">Use team’s pack</option>
-              {props.packNames.map((g) => (
-                <option key={g} value={g}>
-                  {g}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        </details>
       ) : null}
 
       <p
@@ -321,7 +329,7 @@ function ActiveForNewChatsCard(props: {
         data-testid="active-binding-preview"
       >
         {status === "ready" && starter !== null
-          ? `Next new chat opens as ${starter.label}${starter.isRoot ? " ★ (team lead)" : ""} · ${binding.orchestrationName}. The brief is applied once when the chat is created — not on every message.`
+          ? `Next new chat opens as ${starter.label}${starter.isRoot ? " ★ (team lead)" : ""} · ${binding.orchestrationName}. New chats start with these instructions; existing chats never change.`
           : status === "off"
             ? "New chats start blank — no team brief is applied."
             : status === "no-lead"
@@ -508,7 +516,7 @@ function TeamDetail(props: {
             {data.description.length > 0 ? data.description : "No description."}
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Badge variant="outline">Model pack: {data.defaultModelGroup}</Badge>
+            <Badge variant="outline">AI preset: {packDisplayName(data.defaultModelGroup)}</Badge>
             {lead !== null ? (
               <Badge variant="outline">★ Lead: {lead.label}</Badge>
             ) : (
@@ -536,11 +544,11 @@ function TeamDetail(props: {
           title={
             lead === null
               ? "Add a team lead first"
-              : "Use this team for new chats"
+              : "Use as the default team for new chats"
           }
           data-testid="use-team-for-new-chats"
         >
-          Use for new chats
+          Use as default for new chats
         </Button>
       </div>
 
@@ -1116,14 +1124,17 @@ function ModelPacksSection(props: {
     selectedPack !== PRIMARY_PACK && !deletePack.isPending;
 
   return (
-    <section
+    <details
       className="rounded-xl border border-border/60 bg-card p-4"
       data-testid="model-packs"
     >
-      <h2 className="text-ui-base font-medium">Model packs</h2>
+      <summary className="cursor-pointer text-ui-base font-medium">
+        AI presets (advanced)
+      </summary>
       <p className="mt-0.5 text-ui-xs text-muted-foreground">
-        Which concrete models fill each quality shelf (Best / Balanced /
-        Cheap). {PRIMARY_PACK} is protected.
+        Which models fill each shelf (Max / Standard / Economy). If the first
+        is unavailable, the next one is tried.{" "}
+        {packDisplayName(PRIMARY_PACK)} is protected.
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -1139,7 +1150,7 @@ function ModelPacksSection(props: {
             }`}
             data-testid={`pack-chip-${name}`}
           >
-            {name}
+            {packDisplayName(name)}
           </button>
         ))}
         <button
@@ -1188,7 +1199,7 @@ function ModelPacksSection(props: {
           title={
             canDelete
               ? "Delete selected pack"
-              : `${PRIMARY_PACK} is protected`
+              : `${packDisplayName(PRIMARY_PACK)} is protected`
           }
           data-testid="delete-pack"
         >
@@ -1213,7 +1224,7 @@ function ModelPacksSection(props: {
           />
         </div>
       ) : null}
-    </section>
+    </details>
   );
 }
 
@@ -1232,7 +1243,7 @@ function CreateTeamWizard(props: {
   readonly onClose: () => void;
   readonly onCreated: (name: string) => void;
 }) {
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [pack, setPack] = useState<string>(PRIMARY_PACK);
@@ -1289,10 +1300,11 @@ function CreateTeamWizard(props: {
       });
       if (created === null) throw new Error("create failed");
 
+      const leadId = slugify(leadLabel) || "orchestrator";
       const lead = await saveRole.mutateAsync({
         name: slug,
         role: {
-          id: "orchestrator",
+          id: leadId,
           label: leadLabel.trim(),
           description: "Team lead — runs the chat",
           tier: leadTier,
@@ -1321,7 +1333,7 @@ function CreateTeamWizard(props: {
       if (useForNewChats) {
         setEnabled(true);
         setOrchestrationName(slug);
-        setRoleId("orchestrator");
+        setRoleId(leadId);
         setModelGroup(null);
       }
 
@@ -1345,16 +1357,14 @@ function CreateTeamWizard(props: {
       <DialogContent className="sm:max-w-lg" data-testid="create-team-wizard">
         <DialogHeader>
           <DialogTitle>
-            Create team — step {step} of 4
+            Create team — step {step} of 3
           </DialogTitle>
           <DialogDescription>
             {step === 1
-              ? "Name your team"
+              ? "What is this team for?"
               : step === 2
-                ? "Add the team lead"
-                : step === 3
-                  ? "Add more members (optional)"
-                  : "Use this team for new chats?"}
+                ? "Choose the team lead"
+                : "Review and create"}
           </DialogDescription>
         </DialogHeader>
 
@@ -1388,20 +1398,6 @@ function CreateTeamWizard(props: {
                 placeholder="Ships Acme features with review and deploy gates"
                 className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
               />
-            </label>
-            <label className="flex flex-col gap-1 text-ui-xs">
-              <span className="text-muted-foreground">Model pack</span>
-              <select
-                value={pack}
-                onChange={(e) => setPack(e.target.value)}
-                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
-              >
-                {props.packNames.map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </select>
             </label>
           </div>
         ) : null}
@@ -1453,11 +1449,58 @@ function CreateTeamWizard(props: {
         ) : null}
 
         {step === 3 ? (
-          <WizardExtraMembers members={members} onChange={setMembers} />
-        ) : null}
-
-        {step === 4 ? (
           <div className="flex flex-col gap-3">
+            <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-ui-sm">
+              <div className="font-medium">Review</div>
+              <div className="mt-1.5 flex flex-col gap-1 text-ui-xs text-muted-foreground">
+                <div>
+                  Team: <span className="text-foreground">{slug}</span>
+                  {description.trim() !== "" ? ` — ${description.trim()}` : ""}
+                </div>
+                <div>
+                  Lead:{" "}
+                  <span className="text-foreground">
+                    {leadLabel.trim()} ★
+                  </span>{" "}
+                  · {QUALITY_OPTIONS.find((q) => q.tier === leadTier)?.label}
+                </div>
+                {members.length > 0 ? (
+                  <div>
+                    Specialists:{" "}
+                    <span className="text-foreground">
+                      {members.map((m) => m.label).join(", ")}
+                    </span>
+                  </div>
+                ) : (
+                  <div>Specialists: none (you can add members later)</div>
+                )}
+              </div>
+            </div>
+
+            <label className="flex flex-col gap-1 text-ui-xs">
+              <span className="text-muted-foreground">AI preset</span>
+              <select
+                value={pack}
+                onChange={(e) => setPack(e.target.value)}
+                className="rounded-md border border-border/40 bg-background px-2 py-1.5 text-ui-sm"
+              >
+                {props.packNames.map((g) => (
+                  <option key={g} value={g}>
+                    {packDisplayName(g)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <details>
+              <summary className="cursor-pointer text-ui-xs text-muted-foreground">
+                Add specialists (optional)
+              </summary>
+              <div className="mt-2">
+                <WizardExtraMembers members={members} onChange={setMembers} />
+              </div>
+            </details>
+
             <label className="flex items-center gap-2 text-ui-sm">
               <input
                 type="checkbox"
@@ -1465,12 +1508,11 @@ function CreateTeamWizard(props: {
                 onChange={(e) => setUseForNewChats(e.target.checked)}
                 data-testid="wizard-use-for-new-chats"
               />
-              Use {slug || "this team"} for new chats (starts as{" "}
-              {leadLabel || "the lead"} ★)
+              Use {slug || "this team"} as the default for new chats
             </label>
             <p className="text-ui-xs text-muted-foreground">
-              You can change this anytime in “Active for new chats” or on the
-              chip next to the composer.
+              You can change this anytime in “Default team for new chats” or on
+              the chip next to the composer.
             </p>
           </div>
         ) : null}
@@ -1485,13 +1527,13 @@ function CreateTeamWizard(props: {
             variant="ghost"
             onClick={() => {
               if (step === 1) close();
-              else setStep((step - 1) as 1 | 2 | 3 | 4);
+              else setStep((step - 1) as 1 | 2 | 3);
             }}
             disabled={busy}
           >
             {step === 1 ? "Cancel" : "Back"}
           </Button>
-          {step < 4 ? (
+          {step < 3 ? (
             <Button
               size="sm"
               disabled={
@@ -1499,10 +1541,10 @@ function CreateTeamWizard(props: {
                 (step === 1 && !nameValid) ||
                 (step === 2 && !leadValid)
               }
-              onClick={() => setStep((step + 1) as 1 | 2 | 3 | 4)}
+              onClick={() => setStep((step + 1) as 1 | 2 | 3)}
               data-testid="wizard-next"
             >
-              {step === 3 ? "Skip / Continue" : "Next"}
+              Next
             </Button>
           ) : (
             <Button
@@ -1709,7 +1751,7 @@ function CreateModelGroupForm(props: {
         >
           {groupNames.map((g) => (
             <option key={g} value={g}>
-              {g}
+              {packDisplayName(g)}
             </option>
           ))}
         </select>
