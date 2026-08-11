@@ -552,6 +552,57 @@ describe("composer rich clipboard paste", () => {
     });
   });
 
+  it("keeps every line of a multi-line plain text paste inside a code block", () => {
+    const editor = makeCodeBlockEditor("existing\n");
+
+    pastePlainText(editor, "line one\nline two\nline three");
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { language: null },
+          content: [
+            { type: "text", text: "existing\nline one\nline two\nline three" },
+          ],
+        },
+        { type: "paragraph" },
+      ],
+    });
+  });
+
+  it("keeps markdown-looking text literal inside a code block, with CRLF normalized", () => {
+    const editor = makeCodeBlockEditor("");
+
+    pastePlainText(editor, "# Title\r\n- first\r\n**bold**");
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe(
+      "# Title\n- first\n**bold**",
+    );
+  });
+
+  it("degrades an HTML-flavored paste inside a code block to its plain text sibling", () => {
+    const editor = makeCodeBlockEditor("");
+
+    fireEvent.paste(editor.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html", "text/plain"],
+        getData: (type: string) => {
+          if (type === "text/html") return "<p>one</p><p>two</p>";
+          if (type === "text/plain") return "one\ntwo";
+          return "";
+        },
+      },
+    });
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe("one\ntwo");
+  });
+
   it("converts a leading slash command paste into a chip with literal args", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 
@@ -725,6 +776,25 @@ describe("composer rich clipboard paste", () => {
     expect(editor.state.doc.textContent).toBe("/plan review the diff");
   });
 });
+
+// A composer opening with a code block, caret at the end of its text — the
+// state right after typing ``` and some content. The caret is positioned
+// explicitly inside the code block because the schema keeps a trailing
+// paragraph after it.
+function makeCodeBlockEditor(text: string): Editor {
+  const editor = makeEditor(KNOWN_SLASH_NAMES);
+  editor.commands.setContent({
+    type: "doc",
+    content: [
+      {
+        type: "codeBlock",
+        content: text.length > 0 ? [{ type: "text", text }] : [],
+      },
+    ],
+  });
+  editor.commands.setTextSelection(1 + text.length);
+  return editor;
+}
 
 function pastePlainText(editor: Editor, text: string): void {
   fireEvent.paste(editor.view.dom, {

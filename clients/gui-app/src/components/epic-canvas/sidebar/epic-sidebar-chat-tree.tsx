@@ -3,6 +3,7 @@
  * with expansion, rename, delete, and drag-drop behaviors.
  */
 import { useDraggable } from "@dnd-kit/core";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -497,6 +498,7 @@ function useChatVisibleIds(epicId: string): ReadonlySet<string> | null {
 // eslint-disable-next-line complexity
 export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const { epicId, tabId } = props;
+  const shouldReduceMotion = useReducedMotion() === true;
   const panelId: RootCreatePanelId = "chats";
   const sort = useChatSort(epicId);
   const comparator = useMemo<NodeComparator | null>(
@@ -726,55 +728,92 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         testId="epic-chat-sidebar-filter-empty"
       />
     );
-  } else if (archiveHidEverything) {
-    panelContent = (
-      <SidebarPanelEmptyState
-        icon={Archive}
-        title={archiveEmptyState.title}
-        description={archiveEmptyState.description}
-        testId="epic-chat-sidebar-archived-empty"
-      />
-    );
   } else {
     panelContent = (
-      <ul role="tree" aria-label="Epic agents tree" className="space-y-0.5">
-        {rootIds.map((nodeId) => (
-          <ChatNode
-            key={nodeId}
-            epicId={epicId}
-            tabId={tabId}
-            nodeId={nodeId}
-            depth={0}
-            expansion={expansion}
-            canEdit={canEdit}
-            canMutate={canMutate}
-            isDisconnected={isDisconnected}
-            treeFilter={CHATS_TREE_FILTER}
-            selectionMode={selectionMode}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-          />
-        ))}
-        {renderedLocalRootPending !== null && (
-          <PendingCreateRow depth={0} name={renderedLocalRootPending.name} />
+      <AnimatePresence initial={false} mode="wait">
+        {archiveHidEverything ? (
+          <m.div
+            key="archived-empty"
+            className="flex min-h-0 flex-1 flex-col"
+            initial={shouldReduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.16 }}
+          >
+            <SidebarPanelEmptyState
+              icon={Archive}
+              title={archiveEmptyState.title}
+              description={archiveEmptyState.description}
+              testId="epic-chat-sidebar-archived-empty"
+            />
+          </m.div>
+        ) : (
+          <m.div
+            key="tree"
+            className="flex min-h-0 flex-1 flex-col"
+            exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.16 }}
+          >
+            <ul
+              role="tree"
+              aria-label="Epic agents tree"
+              className="space-y-0.5"
+            >
+              {/* Clearing an archived row's last notification indicator removes
+              its visibility exception. Keep the tree branch mounted through
+              that final-row exit before revealing the archived empty state. */}
+              <AnimatePresence initial={false}>
+                {rootIds.map((nodeId) => (
+                  <ChatNode
+                    key={nodeId}
+                    epicId={epicId}
+                    tabId={tabId}
+                    nodeId={nodeId}
+                    depth={0}
+                    expansion={expansion}
+                    canEdit={canEdit}
+                    canMutate={canMutate}
+                    isDisconnected={isDisconnected}
+                    treeFilter={CHATS_TREE_FILTER}
+                    selectionMode={selectionMode}
+                    selectedIds={selectedIds}
+                    onToggleSelection={toggleSelection}
+                  />
+                ))}
+              </AnimatePresence>
+              {renderedLocalRootPending !== null && (
+                <PendingCreateRow
+                  depth={0}
+                  name={renderedLocalRootPending.name}
+                />
+              )}
+              {renderedAcknowledgedRootPending !== null && (
+                <PendingCreateRow
+                  depth={0}
+                  name={renderedAcknowledgedRootPending.name}
+                />
+              )}
+              {renderedPreAckRootCreates.map(
+                (entry: { tempId: string; name: string }) => (
+                  <PendingCreateRow
+                    key={entry.tempId}
+                    depth={0}
+                    name={entry.name}
+                  />
+                ),
+              )}
+              {renderedPendingRootCreates.map(
+                (entry: { id: string; name: string }) => (
+                  <PendingCreateRow
+                    key={entry.id}
+                    depth={0}
+                    name={entry.name}
+                  />
+                ),
+              )}
+            </ul>
+          </m.div>
         )}
-        {renderedAcknowledgedRootPending !== null && (
-          <PendingCreateRow
-            depth={0}
-            name={renderedAcknowledgedRootPending.name}
-          />
-        )}
-        {renderedPreAckRootCreates.map(
-          (entry: { tempId: string; name: string }) => (
-            <PendingCreateRow key={entry.tempId} depth={0} name={entry.name} />
-          ),
-        )}
-        {renderedPendingRootCreates.map(
-          (entry: { id: string; name: string }) => (
-            <PendingCreateRow key={entry.id} depth={0} name={entry.name} />
-          ),
-        )}
-      </ul>
+      </AnimatePresence>
     );
   }
 
@@ -1271,6 +1310,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
 function ChatNodeShellBody(
   props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
 ) {
+  const shouldReduceMotion = useReducedMotion() === true;
   const {
     epicId,
     tabId,
@@ -1345,7 +1385,10 @@ function ChatNodeShellBody(
   });
 
   return (
-    <li
+    <m.li
+      layout={shouldReduceMotion ? false : "position"}
+      exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
+      transition={{ duration: 0.16, ease: "easeOut" }}
       role="treeitem"
       aria-selected={isActive}
       aria-expanded={hasChildren ? expanded : undefined}
@@ -1445,7 +1488,7 @@ function ChatNodeShellBody(
         isPending={deletePending}
         onConfirm={onConfirmDelete}
       />
-    </li>
+    </m.li>
   );
 }
 
@@ -1482,23 +1525,25 @@ function ChatNodeChildren(props: ChatNodeChildrenProps) {
   return (
     <ul role="group" className="relative space-y-0.5">
       <TreeGroupGuide parentDepth={props.depth} />
-      {props.childIds.map((childId) => (
-        <ChatNode
-          key={childId}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          nodeId={childId}
-          depth={props.depth + 1}
-          expansion={props.expansion}
-          canEdit={props.canEdit}
-          canMutate={props.canMutate}
-          isDisconnected={props.isDisconnected}
-          treeFilter={props.treeFilter}
-          selectionMode={props.selectionMode}
-          selectedIds={props.selectedIds}
-          onToggleSelection={props.onToggleSelection}
-        />
-      ))}
+      <AnimatePresence initial={false}>
+        {props.childIds.map((childId) => (
+          <ChatNode
+            key={childId}
+            epicId={props.epicId}
+            tabId={props.tabId}
+            nodeId={childId}
+            depth={props.depth + 1}
+            expansion={props.expansion}
+            canEdit={props.canEdit}
+            canMutate={props.canMutate}
+            isDisconnected={props.isDisconnected}
+            treeFilter={props.treeFilter}
+            selectionMode={props.selectionMode}
+            selectedIds={props.selectedIds}
+            onToggleSelection={props.onToggleSelection}
+          />
+        ))}
+      </AnimatePresence>
     </ul>
   );
 }
