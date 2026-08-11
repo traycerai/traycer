@@ -50,6 +50,14 @@ export interface ImagePreviewProps {
   readonly scrollContainerRef:
     ((element: HTMLDivElement | null) => void) | null;
   readonly onScroll: ((event: UIEvent<HTMLDivElement>) => void) | null;
+  /**
+   * Fired from the underlying `<img>`'s `onError` - magic-valid, header-
+   * parseable bytes can still fail to decode in the browser (pre-landing
+   * review, P1), and this viewer never renders its own fallback (that stays
+   * the caller's job, per the `ImagePreviewStatus` doc comment above), so
+   * the caller must react and switch to its own settled placeholder.
+   */
+  readonly onDecodeError: (() => void) | null;
 }
 
 export type ImagePreviewFit = "fit" | "actual";
@@ -61,7 +69,8 @@ export function ImagePreview(props: ImagePreviewProps) {
   // the JSX below) so the ref-safety linter can see these are plain values,
   // not a live ref read during render - same reasoning as
   // `diff-content-primitive.tsx`'s `scrollContainerRef` destructure.
-  const { scrollContainerRef, onScroll, onFitOverrideChange } = props;
+  const { scrollContainerRef, onScroll, onFitOverrideChange, onDecodeError } =
+    props;
   const [internalFit, setInternalFit] = useState<ImagePreviewFit>("fit");
   const fit = props.fitOverride ?? internalFit;
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">(
@@ -86,6 +95,10 @@ export function ImagePreview(props: ImagePreviewProps) {
   const handleImageClick = useCallback(() => {
     if (props.status === "ready") toggleFit();
   }, [props.status, toggleFit]);
+
+  const handleDecodeError = useCallback(() => {
+    onDecodeError?.();
+  }, [onDecodeError]);
 
   const handleCopy = useCallback(() => {
     const image = imgRef.current;
@@ -177,6 +190,7 @@ export function ImagePreview(props: ImagePreviewProps) {
           aspectRatio,
           imgRef,
           onImageClick: handleImageClick,
+          onDecodeError: handleDecodeError,
         })}
       </div>
       {caption !== null ? (
@@ -208,6 +222,7 @@ function renderImagePreviewStage(args: {
   readonly aspectRatio: number | null;
   readonly imgRef: RefObject<HTMLImageElement | null>;
   readonly onImageClick: () => void;
+  readonly onDecodeError: () => void;
 }): ReactNode {
   if (args.status === "ready" && args.url !== null) {
     return (
@@ -226,6 +241,7 @@ function renderImagePreviewStage(args: {
           src={args.url}
           alt={args.fileName}
           draggable={false}
+          onError={args.onDecodeError}
           className={cn(
             "block",
             args.fit === "fit" && "max-h-full max-w-full object-contain",

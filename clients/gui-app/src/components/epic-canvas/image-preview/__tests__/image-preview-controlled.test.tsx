@@ -28,6 +28,7 @@ function preview(props: {
       onFitOverrideChange={props.onFitOverrideChange}
       scrollContainerRef={props.scrollContainerRef ?? null}
       onScroll={props.onScroll ?? null}
+      onDecodeError={null}
     />,
   );
 }

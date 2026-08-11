@@ -6,16 +6,12 @@ import {
   type ReactNode,
   type UIEvent,
 } from "react";
-import {
-  FileMinus,
-  FilePlus,
-  FileQuestionMarkIcon,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+import { FileMinus, FilePlus, ZoomIn, ZoomOut } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
+import { isImageAssetPath } from "@/lib/assets/image-extension-allowlist";
 import {
   useImageAsset,
   type ImageAssetRequest,
@@ -39,6 +35,9 @@ export interface ImageDiffViewProps {
   readonly conflicted: boolean;
   /** Drops the shared toolbar (zoom toggle, Conflicted badge) for bundle use (image-preview decision log, decision #18). */
   readonly compact: boolean;
+  /** `null` when there is no single unambiguous file on disk to open for a per-side failure (e.g. a bundle row). */
+  readonly onOpenExternally: (() => void) | null;
+  readonly openExternallyOpening: boolean;
 }
 
 /**
@@ -53,8 +52,21 @@ export interface ImageDiffViewProps {
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const [sharedFit, setSharedFit] = useState<ImagePreviewFit>("fit");
 
+  // A rename's two sides can straddle the extension allowlist (pre-landing
+  // review, P0: `old.png -> new.txt` / `old.txt -> new.png`) - each side is
+  // gated against its OWN effective path, never `props.filePath` alone. The
+  // old side reads from `previousPath` when the file was renamed (mirrors
+  // the host's `previousPath ?? filePath` resolution); the new side is
+  // always the current path.
+  const oldEffectivePath = props.previousPath ?? props.filePath;
+  const newEffectivePath = props.filePath;
+  const oldSideExists = props.oldStage !== null;
+  const newSideExists = props.newStage !== null;
+  const oldIsImageSide = oldSideExists && isImageAssetPath(oldEffectivePath);
+  const newIsImageSide = newSideExists && isImageAssetPath(newEffectivePath);
+
   const oldRequest = useMemo<ImageAssetRequest | null>(() => {
-    if (props.oldStage === null) return null;
+    if (props.oldStage === null || !oldIsImageSide) return null;
     return {
       method: "git",
       runningDir: props.runningDir,
@@ -63,10 +75,16 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       side: "old",
       stage: props.oldStage,
     };
-  }, [props.oldStage, props.runningDir, props.filePath, props.previousPath]);
+  }, [
+    props.oldStage,
+    oldIsImageSide,
+    props.runningDir,
+    props.filePath,
+    props.previousPath,
+  ]);
 
   const newRequest = useMemo<ImageAssetRequest | null>(() => {
-    if (props.newStage === null) return null;
+    if (props.newStage === null || !newIsImageSide) return null;
     return {
       method: "git",
       runningDir: props.runningDir,
@@ -75,7 +93,13 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       side: "new",
       stage: props.newStage,
     };
-  }, [props.newStage, props.runningDir, props.filePath, props.previousPath]);
+  }, [
+    props.newStage,
+    newIsImageSide,
+    props.runningDir,
+    props.filePath,
+    props.previousPath,
+  ]);
 
   const oldAsset = useImageAsset(oldRequest);
   const newAsset = useImageAsset(newRequest);
@@ -156,28 +180,34 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col border-r border-canvas-border/70">
           <ImageDiffSide
-            request={oldRequest}
+            sideExists={oldSideExists}
+            isImageSide={oldIsImageSide}
+            effectivePath={oldEffectivePath}
             asset={oldAsset}
             emptyLabel="Added"
-            fileName={props.fileName}
             compact={props.compact}
             fit={sharedFit}
             onFitChange={setSharedFit}
             scrollContainerRef={oldScrollContainerRef}
             onScroll={handleOldScroll}
+            onOpenExternally={props.onOpenExternally}
+            openExternallyOpening={props.openExternallyOpening}
           />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
           <ImageDiffSide
-            request={newRequest}
+            sideExists={newSideExists}
+            isImageSide={newIsImageSide}
+            effectivePath={newEffectivePath}
             asset={newAsset}
             emptyLabel="Deleted"
-            fileName={props.fileName}
             compact={props.compact}
             fit={sharedFit}
             onFitChange={setSharedFit}
             scrollContainerRef={newScrollContainerRef}
             onScroll={handleNewScroll}
+            onOpenExternally={props.onOpenExternally}
+            openExternallyOpening={props.openExternallyOpening}
           />
         </div>
       </div>
@@ -198,22 +228,63 @@ function mirrorScroll(
 }
 
 function ImageDiffSide(props: {
-  readonly request: ImageAssetRequest | null;
+  /** Whether this side has a fetchable identity at all (its `stage` is non-null) - `false` renders the Added/Deleted empty state, never a fetch. */
+  readonly sideExists: boolean;
+  /** Whether THIS side's own effective path (pre-landing review, P0: a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
+  readonly isImageSide: boolean;
+  readonly effectivePath: string;
   readonly asset: ImageAssetState;
   readonly emptyLabel: "Added" | "Deleted";
-  readonly fileName: string;
   readonly compact: boolean;
   readonly fit: ImagePreviewFit;
   readonly onFitChange: (fit: ImagePreviewFit) => void;
   readonly scrollContainerRef: (element: HTMLDivElement | null) => void;
   readonly onScroll: (event: UIEvent<HTMLDivElement>) => void;
+  readonly onOpenExternally: (() => void) | null;
+  readonly openExternallyOpening: boolean;
 }): ReactNode {
-  if (props.request === null) {
+  const asset = props.asset;
+  // Magic-valid, header-parseable bytes can still fail to DECODE in the
+  // browser (pre-landing review, P1) - `<img onError>` has no other signal
+  // path, so this side tracks it locally and falls onto the same settled
+  // placeholder a stream failure uses. Reset ADJUSTED DURING RENDER (not an
+  // effect - react.dev's "adjusting state when a prop changes" pattern) on
+  // every new URL, so a decode failure from a superseded fetch never sticks
+  // to the next one.
+  const [decodeFailed, setDecodeFailed] = useState(false);
+  const [trackedUrl, setTrackedUrl] = useState(asset.url);
+  if (asset.url !== trackedUrl) {
+    setTrackedUrl(asset.url);
+    setDecodeFailed(false);
+  }
+  const handleDecodeError = useCallback(() => setDecodeFailed(true), []);
+
+  if (!props.sideExists) {
     return <ImageDiffEmptyState label={props.emptyLabel} />;
   }
-  const asset = props.asset;
-  if (asset.status === "fallback") {
-    return <ImageDiffSideFallback reason={asset.reason} />;
+  if (!props.isImageSide) {
+    return (
+      <BinaryPlaceholder
+        fileName={props.effectivePath}
+        sizeBytes={null}
+        reason="This file is not one of the supported image formats."
+        onOpenExternally={props.onOpenExternally}
+        openExternallyOpening={props.openExternallyOpening}
+        compact
+      />
+    );
+  }
+  if (asset.status === "fallback" || decodeFailed) {
+    return (
+      <BinaryPlaceholder
+        fileName={props.effectivePath}
+        sizeBytes={asset.totalBytes}
+        reason={decodeFailed ? "Preview could not be decoded." : asset.reason}
+        onOpenExternally={props.onOpenExternally}
+        openExternallyOpening={props.openExternallyOpening}
+        compact
+      />
+    );
   }
   const status: ImagePreviewStatus = asset.status;
   return (
@@ -221,12 +292,13 @@ function ImageDiffSide(props: {
       status={status}
       url={asset.url}
       meta={asset.meta}
-      fileName={props.fileName}
+      fileName={props.effectivePath}
       compact
       fitOverride={props.compact ? "fit" : props.fit}
       onFitOverrideChange={props.compact ? null : props.onFitChange}
       scrollContainerRef={props.scrollContainerRef}
       onScroll={props.onScroll}
+      onDecodeError={handleDecodeError}
     />
   );
 }
@@ -239,17 +311,6 @@ function ImageDiffEmptyState(props: {
     <div className="flex size-full flex-col items-center justify-center gap-2 p-4 text-ui-xs text-muted-foreground">
       <Icon className="size-8" />
       <span>{props.label}</span>
-    </div>
-  );
-}
-
-function ImageDiffSideFallback(props: {
-  readonly reason: string | null;
-}): ReactNode {
-  return (
-    <div className="flex size-full flex-col items-center justify-center gap-2 p-4 text-center text-ui-xs text-muted-foreground">
-      <FileQuestionMarkIcon className="size-8" />
-      {props.reason !== null ? <p>{props.reason}</p> : null}
     </div>
   );
 }

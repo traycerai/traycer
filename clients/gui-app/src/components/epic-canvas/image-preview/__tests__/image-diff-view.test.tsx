@@ -41,6 +41,8 @@ const DEFAULT_PROPS: ImageDiffViewProps = {
   fileName: "current.png",
   conflicted: false,
   compact: false,
+  onOpenExternally: vi.fn(),
+  openExternallyOpening: false,
 };
 
 function renderDiff(overrides: Partial<ImageDiffViewProps>): void {
@@ -131,7 +133,7 @@ describe("<ImageDiffView />", () => {
     ).toHaveLength(1);
   });
 
-  it("renders a side fallback reason without an Open Externally action", () => {
+  it("renders a side fallback reason with the settled BinaryPlaceholder treatment (pre-landing review, P1: reuse BinaryPlaceholder, keep Open Externally when the caller offers it)", () => {
     state.old = {
       status: "fallback",
       url: null,
@@ -144,6 +146,23 @@ describe("<ImageDiffView />", () => {
     renderDiff({});
 
     expect(screen.getByText("This image could not be loaded.")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open Externally" }),
+    ).toBeTruthy();
+  });
+
+  it("hides Open Externally per-side when the caller has no unambiguous target (e.g. a bundle row)", () => {
+    state.old = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be loaded.",
+      receivedBytes: 0,
+      totalBytes: null,
+    };
+
+    renderDiff({ onOpenExternally: null });
+
     expect(
       screen.queryByRole("button", { name: "Open Externally" }),
     ).toBeNull();

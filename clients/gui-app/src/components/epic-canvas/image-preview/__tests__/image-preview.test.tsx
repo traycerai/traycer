@@ -35,6 +35,7 @@ function renderPreview(
       onFitOverrideChange={null}
       scrollContainerRef={null}
       onScroll={null}
+      onDecodeError={null}
     />,
   );
 }

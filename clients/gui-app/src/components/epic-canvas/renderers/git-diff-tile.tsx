@@ -564,6 +564,8 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           fileName={props.file.path}
           conflicted={sides.conflicted}
           compact={false}
+          onOpenExternally={handleOpenExternally}
+          openExternallyOpening={openExternallyOpening}
         />
       </>
     );
@@ -579,6 +581,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           reason={null}
           onOpenExternally={handleOpenExternally}
           openExternallyOpening={openExternallyOpening}
+          compact={false}
         />
       </>
     );
@@ -616,6 +619,7 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           reason={null}
           onOpenExternally={handleOpenExternally}
           openExternallyOpening={openExternallyOpening}
+          compact={false}
         />
       </>
     );
@@ -658,15 +662,26 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
  * git - decision #5), routes to `ImageDiffView` by default. SVG keeps a
  * per-tile, non-persisted toggle back to the existing text-diff path,
  * portaled into the tile's shared header (mirrors `editStatus` below).
+ *
+ * A rename's CURRENT path alone is not enough to decide routing (pre-landing
+ * review, P0): `old.png -> new.txt` must still route to image mode for its
+ * old side even though `file.path` is `.txt`. Route when EITHER the current
+ * or previous path is allowlisted; each side then validates against its own
+ * effective path inside `ImageDiffView`.
  */
 function useGitImageDiffRouting(file: GitChangedFile): {
   readonly showImageDiff: boolean;
   readonly svgToggle: ReactNode;
 } {
   const isImage = useMemo(() => isImageAssetPath(file.path), [file.path]);
+  const isPreviousImage = useMemo(
+    () => file.previousPath !== null && isImageAssetPath(file.previousPath),
+    [file.previousPath],
+  );
   const isSvg = useMemo(() => isSvgAssetPath(file.path), [file.path]);
   const [viewAsSource, setViewAsSource] = useState(false);
-  const routeToImageDiff = isImage && (file.isBinary || isSvg);
+  const routeToImageDiff =
+    (isImage || isPreviousImage) && (file.isBinary || isSvg);
   const showImageDiff = routeToImageDiff && !(isSvg && viewAsSource);
   const svgToggle = isSvg ? (
     <DiffTabHeaderPortal>

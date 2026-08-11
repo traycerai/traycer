@@ -152,9 +152,15 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // `.svg` is never `isBinary` to git (image-preview decision log, decision
   // #5) but still has no searchable diff text once it routes to the image
   // view, so it shares the same "binary" find-coverage state as a true
-  // binary image.
+  // binary image. A rename's current path alone can miss the old side
+  // (pre-landing review, P0: `old.png -> new.txt` must still route) - route
+  // when either the current or previous path is allowlisted; each side
+  // validates against its own effective path inside `ImageDiffView`.
+  const isPreviousImage =
+    props.file.previousPath !== null &&
+    isImageAssetPath(props.file.previousPath);
   const routeToImageDiff =
-    isImageAssetPath(props.file.path) &&
+    (isImageAssetPath(props.file.path) || isPreviousImage) &&
     (props.file.isBinary || isSvgAssetPath(props.file.path));
   useEffect(() => {
     if (!props.file.isBinary && !routeToImageDiff) return;
@@ -181,6 +187,8 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
         fileName={props.file.path}
         conflicted={sides.conflicted}
         compact
+        onOpenExternally={null}
+        openExternallyOpening={false}
       />
     );
   }
