@@ -91,11 +91,16 @@ function resolvedEntry(
   };
 }
 
+type NonResolvedImageResolutionEntry = Exclude<
+  ImageResolutionEntry,
+  { state: "resolved" }
+>;
+
 function nonResolvedEntry(
   source: string,
-  state: "blocked" | "consent-required" | "oversized" | "not-found",
-  overrides: Partial<Extract<ImageResolutionEntry, { state: typeof state }>>,
-): Extract<ImageResolutionEntry, { state: typeof state }> {
+  state: NonResolvedImageResolutionEntry["state"],
+  overrides: Partial<NonResolvedImageResolutionEntry>,
+): NonResolvedImageResolutionEntry {
   return {
     source,
     canonicalSource: source,

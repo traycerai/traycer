@@ -353,10 +353,16 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
 }
 
 function SanitizedSvgMarkup(props: { readonly svg: string }) {
-  const setHost = (host: HTMLDivElement | null): void => {
-    if (host === null) return;
-    const parsed = new DOMParser().parseFromString(props.svg, "image/svg+xml");
-    host.replaceChildren(document.importNode(parsed.documentElement, true));
-  };
+  const setHost = useCallback(
+    (host: HTMLDivElement | null): void => {
+      if (host === null) return;
+      const parsed = new DOMParser().parseFromString(
+        props.svg,
+        "image/svg+xml",
+      );
+      host.replaceChildren(document.importNode(parsed.documentElement, true));
+    },
+    [props.svg],
+  );
   return <div ref={setHost} className="size-full [&>svg]:size-full" />;
 }
