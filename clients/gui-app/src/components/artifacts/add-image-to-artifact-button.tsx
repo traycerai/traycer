@@ -71,8 +71,15 @@ export function AddImageToArtifactButton(props: {
           attachmentHash: prepared.attachmentHash,
           mediaType: prepared.mediaType,
         });
-        await operations.finish(artifactId, prepared.operationId, true);
+        const outcome = await operations.commit(
+          artifactId,
+          prepared.operationId,
+        );
         operationId = null;
+        if ("status" in outcome) {
+          setOpen(false);
+          return;
+        }
       } finally {
         releaseBody();
       }
@@ -80,7 +87,7 @@ export function AddImageToArtifactButton(props: {
     } catch (reason) {
       rollback?.();
       if (operationId !== null) {
-        await operations.finish(artifactId, operationId, false).catch(() => {});
+        await operations.abort(artifactId, operationId).catch(() => {});
       }
       setError(reason instanceof Error ? reason.message : "Please try again.");
     } finally {

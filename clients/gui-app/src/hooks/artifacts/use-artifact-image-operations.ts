@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 import type {
+  AbortArtifactImageResponse,
+  CommitArtifactImageResponse,
   FinishArtifactImageRequest,
-  FinishArtifactImageResponse,
   PrepareArtifactImageRequest,
   PrepareArtifactImageResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -19,7 +20,6 @@ export type ArtifactImagePreparation = Extract<
   PrepareArtifactImageResponse,
   { readonly ok: true }
 >;
-export type ArtifactImageFinishStatus = FinishArtifactImageResponse["status"];
 
 export interface ArtifactImageOperations {
   readonly supported: boolean;
@@ -27,11 +27,14 @@ export interface ArtifactImageOperations {
     bytes: Uint8Array,
   ) => Promise<ArtifactImagePreparation>;
   readonly prepareRemote: (url: string) => Promise<ArtifactImagePreparation>;
-  readonly finish: (
+  readonly commit: (
     artifactId: string,
     operationId: string,
-    commit: boolean,
-  ) => Promise<ArtifactImageFinishStatus>;
+  ) => Promise<CommitArtifactImageResponse>;
+  readonly abort: (
+    artifactId: string,
+    operationId: string,
+  ) => Promise<AbortArtifactImageResponse>;
 }
 
 export function useArtifactImageOperations(
@@ -78,19 +81,39 @@ export function useArtifactImageOperations(
     (url: string) => prepare({ kind: "remote", url }),
     [prepare],
   );
-  const finish = useCallback(
+  const commit = useCallback(
     async (
       artifactId: string,
       operationId: string,
-      commit: boolean,
-    ): Promise<ArtifactImageFinishStatus> => {
+    ): Promise<CommitArtifactImageResponse> => {
       const response = await finishMutation.mutateAsync({
         epicId,
         artifactId,
         operationId,
-        commit,
+        commit: true,
       });
-      return response.status;
+      if ("status" in response && response.status === "aborted") {
+        throw new Error("The host returned an abort response for a commit.");
+      }
+      return response;
+    },
+    [epicId, finishMutation],
+  );
+  const abort = useCallback(
+    async (
+      artifactId: string,
+      operationId: string,
+    ): Promise<AbortArtifactImageResponse> => {
+      const response = await finishMutation.mutateAsync({
+        epicId,
+        artifactId,
+        operationId,
+        commit: false,
+      });
+      if (!("status" in response) || response.status !== "aborted") {
+        throw new Error("The host returned a commit response for an abort.");
+      }
+      return response;
     },
     [epicId, finishMutation],
   );
@@ -98,6 +121,7 @@ export function useArtifactImageOperations(
     supported: prepareSupported && finishSupported,
     prepareBytes,
     prepareRemote,
-    finish,
+    commit,
+    abort,
   };
 }

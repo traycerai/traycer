@@ -14,9 +14,9 @@ import {
 } from "@testing-library/react";
 import { Editor } from "@tiptap/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { artifactImageFinishResponseFixtures } from "@traycer/protocol/host/epic/unary-schemas";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
-import type { ArtifactImageFinishStatus } from "@/hooks/artifacts/use-artifact-image-operations";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
@@ -32,15 +32,8 @@ const prepareBytes = vi.hoisted(() =>
     }),
   ),
 );
-const finish = vi.hoisted(() =>
-  vi.fn(
-    (
-      _artifactId: string,
-      _operationId: string,
-      _commit: boolean,
-    ): Promise<ArtifactImageFinishStatus> => Promise.resolve("committed"),
-  ),
-);
+const commit = vi.hoisted(() => vi.fn());
+const abort = vi.hoisted(() => vi.fn());
 const reportableErrorToast = vi.hoisted(() => vi.fn());
 const resolveDroppedFilePaths = vi.hoisted(() =>
   vi.fn((_files: ReadonlyArray<File>) => Promise.resolve([] as string[])),
@@ -51,7 +44,8 @@ vi.mock("@/hooks/artifacts/use-artifact-image-operations", () => ({
     supported: true,
     prepareBytes,
     prepareRemote: vi.fn(),
-    finish,
+    commit,
+    abort,
   }),
 }));
 
@@ -172,8 +166,8 @@ afterEach(() => {
       src: "images/hash-1.png",
     }),
   );
-  finish.mockReset();
-  finish.mockResolvedValue("committed");
+  commit.mockReset();
+  abort.mockReset();
   reportableErrorToast.mockReset();
   resolveDroppedFilePaths.mockReset();
   resolveDroppedFilePaths.mockResolvedValue([]);
@@ -181,7 +175,10 @@ afterEach(() => {
 
 beforeEach(() => {
   prepareBytes.mockClear();
-  finish.mockClear();
+  commit.mockResolvedValue(
+    artifactImageFinishResponseFixtures.commit.committed,
+  );
+  abort.mockResolvedValue(artifactImageFinishResponseFixtures.abort.aborted);
   reportableErrorToast.mockClear();
   resolveDroppedFilePaths.mockClear();
 });
@@ -200,7 +197,7 @@ describe("useArtifactImagePaste", () => {
       expect(countImages(editor)).toBe(1);
     });
     await waitFor(() => {
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
     });
     expect(prepareBytes).toHaveBeenCalledTimes(1);
     const image = editor.state.doc.firstChild;
@@ -225,15 +222,17 @@ describe("useArtifactImagePaste", () => {
     });
 
     await waitFor(() => {
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", false);
+      expect(abort).toHaveBeenCalledWith("artifact-1", "op-1");
     });
     expect(countImages(editor)).toBe(0);
-    expect(finish).not.toHaveBeenCalledWith("artifact-1", "op-1", true);
+    expect(commit).not.toHaveBeenCalled();
     editor.destroy();
   });
 
-  it("removes the inserted node and surfaces when finish commit returns aborted", async () => {
-    finish.mockResolvedValueOnce("aborted");
+  it("removes the inserted node and surfaces when finish commit rejects", async () => {
+    commit.mockRejectedValueOnce(
+      new Error("The artifact image could not be committed."),
+    );
     const editor = makeEditor();
     const { result } = renderHook(() =>
       useArtifactImagePaste(editor, "epic-1", "artifact-1"),
@@ -249,12 +248,14 @@ describe("useArtifactImagePaste", () => {
     await waitFor(() => {
       expect(countImages(editor)).toBe(0);
     });
-    expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+    expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
     editor.destroy();
   });
 
   it("keeps the inserted node when finish returns not-yet-converged", async () => {
-    finish.mockResolvedValueOnce("not-yet-converged");
+    commit.mockResolvedValueOnce(
+      artifactImageFinishResponseFixtures.commit.notYetConverged,
+    );
     const editor = makeEditor();
     const { result } = renderHook(() =>
       useArtifactImagePaste(editor, "epic-1", "artifact-1"),
@@ -265,7 +266,7 @@ describe("useArtifactImagePaste", () => {
     });
 
     await waitFor(() => {
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
     });
     await act(async () => {
       await Promise.resolve();
@@ -277,7 +278,9 @@ describe("useArtifactImagePaste", () => {
   });
 
   it("keeps the inserted node when finish returns unknown-operation", async () => {
-    finish.mockResolvedValueOnce("unknown-operation");
+    commit.mockResolvedValueOnce(
+      artifactImageFinishResponseFixtures.commit.unknownOperation,
+    );
     const editor = makeEditor();
     const { result } = renderHook(() =>
       useArtifactImagePaste(editor, "epic-1", "artifact-1"),
@@ -288,7 +291,7 @@ describe("useArtifactImagePaste", () => {
     });
 
     await waitFor(() => {
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
     });
     await act(async () => {
       await Promise.resolve();
@@ -312,17 +315,16 @@ describe("useArtifactImagePaste", () => {
         src: `images/hash-${n}.png`,
       });
     });
-    finish.mockImplementation(
-      (
-        _artifactId: string,
-        operationId: string,
-        commit: boolean,
-      ): Promise<ArtifactImageFinishStatus> => {
-        if (!commit) return Promise.resolve("aborted");
-        if (operationId === "op-1") return Promise.resolve("aborted");
-        return Promise.resolve("committed");
-      },
-    );
+    commit.mockImplementation((_artifactId: string, operationId: string) => {
+      if (operationId === "op-1") {
+        return Promise.reject(
+          new Error("The artifact image could not be committed."),
+        );
+      }
+      return Promise.resolve(
+        artifactImageFinishResponseFixtures.commit.committed,
+      );
+    });
 
     const editor = makeEditor();
     const { result } = renderHook(() =>
@@ -338,9 +340,9 @@ describe("useArtifactImagePaste", () => {
     });
 
     await waitFor(() => {
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-1", true);
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-2", true);
-      expect(finish).toHaveBeenCalledWith("artifact-1", "op-3", true);
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-2");
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-3");
     });
     await waitFor(() => {
       expect(reportableErrorToast).toHaveBeenCalled();
@@ -349,8 +351,8 @@ describe("useArtifactImagePaste", () => {
       expect(countImages(editor)).toBe(2);
     });
     expect(imageAlts(editor).sort()).toEqual(["three.png", "two.png"]);
-    expect(finish).not.toHaveBeenCalledWith("artifact-1", "op-2", false);
-    expect(finish).not.toHaveBeenCalledWith("artifact-1", "op-3", false);
+    expect(abort).not.toHaveBeenCalledWith("artifact-1", "op-2");
+    expect(abort).not.toHaveBeenCalledWith("artifact-1", "op-3");
     editor.destroy();
   });
 

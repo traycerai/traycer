@@ -54,10 +54,12 @@ export function useArtifactImagePaste(
   const runnerHost = useRunnerHost();
   const operations = useArtifactImageOperations(epicId);
 
-  const finishOperation = useCallback(
-    async (operationId: string, commit: boolean) => {
-      return operations.finish(artifactId, operationId, commit);
-    },
+  const commitOperation = useCallback(
+    (operationId: string) => operations.commit(artifactId, operationId),
+    [artifactId, operations],
+  );
+  const abortOperation = useCallback(
+    (operationId: string) => operations.abort(artifactId, operationId),
     [artifactId, operations],
   );
 
@@ -96,7 +98,7 @@ export function useArtifactImagePaste(
               prepared
                 .filter((image) => image.abortPending)
                 .forEach((image) => {
-                  void finishOperation(image.operationId, false)
+                  void abortOperation(image.operationId)
                     .then(() => {
                       image.abortPending = false;
                     })
@@ -107,7 +109,7 @@ export function useArtifactImagePaste(
         } catch (error) {
           await Promise.allSettled(
             prepared.map(async (image) => {
-              await finishOperation(image.operationId, false);
+              await abortOperation(image.operationId);
               image.abortPending = false;
             }),
           );
@@ -120,24 +122,25 @@ export function useArtifactImagePaste(
           converted
             .filter((image) => !acceptedIds.has(image.operationId))
             .map(async (image) => {
-              await finishOperation(image.operationId, false);
+              await abortOperation(image.operationId);
               image.abortPending = false;
             }),
         );
         const results = await Promise.allSettled(
-          accepted.map(async (image) => {
-            await finishOperation(image.operationId, true);
-            image.abortPending = false;
-          }),
+          accepted.map((image) => commitOperation(image.operationId)),
         );
         let failure: Error | null = null;
         for (const [index, result] of results.entries()) {
-          if (result.status === "fulfilled") continue;
+          const image = accepted[index];
+          if (result.status === "fulfilled") {
+            image.abortPending = false;
+            continue;
+          }
+          image.abortPending = false;
           failure ??=
             result.reason instanceof Error
               ? result.reason
               : new Error("The artifact image could not be committed.");
-          const image = accepted[index];
           if (editor !== null && !editor.isDestroyed) {
             removeArtifactImage(editor, image);
           }
@@ -161,7 +164,7 @@ export function useArtifactImagePaste(
         );
       },
     }),
-    [editor, finishOperation, operations],
+    [abortOperation, commitOperation, editor, operations],
   );
 
   const insertAttrs = useCallback(
