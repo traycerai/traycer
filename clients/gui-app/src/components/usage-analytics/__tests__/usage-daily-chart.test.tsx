@@ -1,15 +1,44 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { LineSeriesOption } from "echarts/charts";
+import {
+  clearEChartsMockInstances,
+  getEChartsMockInstances,
+} from "../../../../__tests__/test-browser-apis";
 import { UsageDailyChart } from "@/components/usage-analytics/usage-daily-chart";
 import {
   buildUsageChartColumns,
   type UsageBucket,
 } from "@/lib/usage-analytics/usage-chart-data";
+import type { UsageChartOption } from "@/lib/usage-analytics/usage-chart-option";
 import { buildUsageSeriesScale } from "@/lib/usage-analytics/usage-series-scale";
+
+beforeEach(() => {
+  clearEChartsMockInstances();
+});
 
 afterEach(() => {
   cleanup();
 });
+
+/** The option the mocked chart instance most recently received. */
+function latestChartOption(): UsageChartOption {
+  const instance = getEChartsMockInstances().at(-1);
+  const option = instance?.options.at(-1);
+  if (option === undefined) throw new Error("no ECharts option captured");
+  return option as UsageChartOption;
+}
+
+function seriesByName(
+  option: UsageChartOption,
+  name: string,
+): LineSeriesOption {
+  const raw = option.series ?? [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  const found = list.find((entry) => entry.name === name);
+  if (found === undefined) throw new Error(`series ${name} not in option`);
+  return found;
+}
 
 function bucket(overrides: Partial<UsageBucket>): UsageBucket {
   return {
@@ -61,6 +90,12 @@ describe("<UsageDailyChart /> legend filter", () => {
         .getByRole("button", { name: "claude" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
+    // The chip updating is not enough - the chart must actually receive an
+    // option with the hidden series zeroed (still PRESENT, so the slot and
+    // color never shift) and the other series untouched.
+    const option = latestChartOption();
+    expect(seriesByName(option, "codex").data).toEqual([0]);
+    expect(seriesByName(option, "claude").data).toEqual([3]);
   });
 
   it("keeps the legend reachable when a refetch narrows the window to the hidden series", () => {
