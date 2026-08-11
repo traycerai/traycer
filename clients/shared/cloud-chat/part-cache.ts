@@ -29,9 +29,10 @@
  *    buys none of the property above across sessions.
  *
  * Deliberately NOT guaranteed: that `get` returns bytes matching the key. The
- * reader re-hashes what it reads back (see `stageCachedPart`), so a corrupted or
- * substituted entry is caught rather than trusted. An adapter is a store, not a
- * trust boundary.
+ * reader re-hashes what it reads back (see `stagePart`) and treats a mismatch as
+ * a MISS, so a corrupted or substituted entry costs a refetch rather than being
+ * trusted or being reported as a corrupt publication. An adapter is a store, not
+ * a trust boundary.
  */
 export interface ChatPartCache {
   /** Cached bytes for this digest, or `null` when absent. Never throws. */

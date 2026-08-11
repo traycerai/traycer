@@ -176,7 +176,7 @@ describe("the incremental read", () => {
     expect(secondPort.partCalls).toHaveLength(second.parts.length);
   });
 
-  it("a cache hit is re-hashed, so a poisoned entry is caught not trusted", async () => {
+  it("a cache hit is re-hashed, so a poisoned entry is refetched not trusted", async () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const cache = new InMemoryChatPartCache();
     // A SAME-LENGTH mutation, which is the only shape that tests what this
@@ -191,13 +191,19 @@ describe("the incremental read", () => {
     const port = recordingPort(servingBehaviour(published));
     const result = await read(port, cache);
 
-    expect(result.outcome.kind).toBe("corrupt");
-    if (result.outcome.kind !== "corrupt") return;
+    // Not trusted, and not fatal either: a store that answers with the wrong
+    // bytes is a MISS, so the read falls through to the authority that has the
+    // right ones. Refusing here instead would make one bad 64 KiB on disk an
+    // unreadable chat forever - nothing evicts the entry, so every reopen would
+    // re-read it and reach the same verdict.
+    expect(result.outcome.kind).toBe("ok");
     // The DIGEST is what caught it: the length matched exactly.
-    expect(result.outcome.reason).toBe("digest-mismatch");
-    // And it was never asked for on the wire - the cache answered, and the
-    // reader refused what it answered with.
-    expect(port.partCalls).not.toContain(published.parts[0].address.sha256);
+    expect(port.partCalls).toContain(published.parts[0].address.sha256);
+    // And the correct bytes are filed under the key now, so the NEXT read is
+    // incremental again rather than paying for the same repair.
+    expect(await cache.get(published.parts[0].address.sha256)).toEqual(
+      published.parts[0].bytes,
+    );
   });
 
   it("does not cache bytes that fail their own content address", async () => {
@@ -481,6 +487,57 @@ describe("the states that are not failures", () => {
     if (result.outcome.kind !== "ambiguous-identity") return;
     expect(result.outcome.resolvedOwnerUserId).toBe("someone-else");
     expect(port.partCalls).toEqual([]);
+  });
+
+  it("a head describing ANOTHER chat is refused before any part is fetched", async () => {
+    // The row resolved for the identity that was asked for, and its head is
+    // internally perfect - correct digest, correct envelope, shards that
+    // cross-check against it. Only the identity INSIDE it disagrees, which no
+    // other check on this path can see: the shard cross-check compares parts
+    // with the head, never the head with the request.
+    const published = await publishCloudChat(DEFAULT_PUBLISH);
+    const port = recordingPort(servingBehaviour(published));
+
+    const result = await readCloudChat({
+      identity: { ...IDENTITY, chatId: "chat-somewhere-else" },
+      port,
+      cache: new InMemoryChatPartCache(),
+      sha256Hex: webCryptoSha256Hex,
+    });
+
+    expect(result.outcome.kind).toBe("ambiguous-identity");
+    // Refused on the head, so the foreign transcript costs no part egress.
+    expect(port.partCalls).toEqual([]);
+  });
+
+  it("a part answered with more base64 than its length allows is refused UNREAD", async () => {
+    const published = await publishCloudChat(DEFAULT_PUBLISH);
+    const serving = servingBehaviour(published);
+    const oversized = published.parts[0].address.sha256;
+    const port = recordingPort({
+      resolve: serving.resolve,
+      part: (sha256) =>
+        sha256 === oversized
+          ? {
+              outcome: {
+                status: "ok",
+                // Declared honestly; the BODY is what lies. `atob` would expand
+                // all of it before any check could run, which is the allocation
+                // this refusal exists to avoid.
+                byteLength: published.parts[0].bytes.byteLength,
+                bytesBase64: "A".repeat(
+                  published.parts[0].bytes.byteLength * 8,
+                ),
+              },
+            }
+          : serving.part(sha256),
+    });
+
+    const result = await read(port, new InMemoryChatPartCache());
+
+    expect(result.outcome.kind).toBe("corrupt");
+    if (result.outcome.kind !== "corrupt") return;
+    expect(result.outcome.reason).toBe("byte-length-mismatch");
   });
 
   it("a transport failure PROPAGATES rather than becoming a corrupt chat", async () => {

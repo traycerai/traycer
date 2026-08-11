@@ -1,5 +1,6 @@
 import {
   assembleChat,
+  CHAT_ASSEMBLY_CORRUPTION_MESSAGES,
   type ChatAssemblyIntegrityReason,
   type ChatPartRequest,
   type StagedChatPart,
@@ -36,8 +37,9 @@ import type { ChatPartCache } from "@traycer-clients/shared/cloud-chat/part-cach
  *                        │  (refused: zero part requests, by construction)
  *                        ▼
  *   for each part the head names, CONCURRENTLY:
- *        cache hit? ──yes──> re-hash the cached bytes ──┐
- *              │ no                                     │
+ *        cache hit? ──yes──> re-hash ──matches?──yes──────┐
+ *              │ no                    │ no              │
+ *              └────────────────<──────┘                 │
  *              └──> readCloudChatPart ──> verify ──> cache ──> stage
  *                                                              │
  *                            assemble IN HEAD ORDER  <─────────┘
@@ -246,6 +248,28 @@ export async function readCloudChat(
     };
   }
 
+  // The head is verified against the ROW above; this is the other end of the
+  // same chain - the row against the REQUEST. A row can only be reached through
+  // its identity, but nothing in the bytes forces the document filed under it
+  // to describe that chat: the digest proves the head is the one the row
+  // promises, and the shard checks prove the parts belong to that head, so an
+  // identity substituted at publication time would be internally consistent all
+  // the way down and render another transcript under this row. Decided before
+  // any part is fetched, like every other refusal on this path.
+  const core = decoded.record.core;
+  if (
+    core.chatId !== identity.chatId ||
+    core.ownerUserId !== identity.ownerUserId
+  ) {
+    return {
+      chat,
+      outcome: {
+        kind: "ambiguous-identity",
+        resolvedOwnerUserId: core.ownerUserId,
+      },
+    };
+  }
+
   // `assembleChat` gates BEFORE it builds the request list and invokes the fetch
   // port, so a refusal here reaches `fetchPart` zero times. That is structural
   // rather than a discipline this module keeps, which is what makes "no part
@@ -256,9 +280,21 @@ export async function readCloudChat(
     fetch: (request) => stagePart(request, options),
   }).catch((error: unknown) => {
     if (error instanceof PartUnavailableError) return error;
+    if (error instanceof PartOversizedError) return error;
     throw error;
   });
 
+  if (assembly instanceof PartOversizedError) {
+    return {
+      chat,
+      outcome: {
+        kind: "corrupt",
+        reason: "byte-length-mismatch",
+        message: CHAT_ASSEMBLY_CORRUPTION_MESSAGES["byte-length-mismatch"],
+        diagnostic: assembly.message,
+      },
+    };
+  }
   if (assembly instanceof PartUnavailableError) {
     return assembly.ambiguousIdentity
       ? {
@@ -314,6 +350,22 @@ class PartUnavailableError extends Error {
 }
 
 /**
+ * A part answered with a body too large to be the part the head named.
+ *
+ * Its own class rather than an arm of the one above, because the outcomes
+ * differ where it matters: those bytes are not ABSENT, they are wrong, which is
+ * the corrupt-publication verdict `assembleChat` would have reached had the
+ * response been decoded - `byte-length-mismatch`, reported without paying for
+ * the decode that would have proved it.
+ */
+class PartOversizedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PartOversizedError";
+  }
+}
+
+/**
  * One part into staging: the cache first, the wire only on a miss.
  *
  * Returns a `StagedChatPart` whose `sha256` is computed from the bytes in hand,
@@ -322,13 +374,27 @@ class PartUnavailableError extends Error {
  * written by something else under the same key, is caught by the same check that
  * catches a substituted download. It costs one hash of ~64 KiB per cached part,
  * which is nothing next to the round trip it saved.
+ *
+ * A hit that fails that check is treated as a MISS rather than as a verdict: the
+ * bytes the cloud holds are still the authority, and a store fault is not a
+ * corrupt publication.
  */
 async function stagePart(
   request: ChatPartRequest,
   options: ReadCloudChatOptions,
 ): Promise<StagedChatPart> {
   const cached = await options.cache.get(request.part.sha256);
-  if (cached !== null) return stageBytes(cached, options.sha256Hex);
+  if (cached !== null) {
+    const staged = await stageBytes(cached, options.sha256Hex);
+    // A cache entry that does not answer to the key it was filed under is a
+    // STORE fault, and a store fault must not read as a corrupt publication.
+    // Accepting it would hand `assembleChat` bytes it can only reject, and
+    // since nothing evicts the entry every reopen would reject them again -
+    // one bad 64 KiB on disk making a healthy chat permanently unreadable.
+    // Falling through to the port costs one request and re-files the correct
+    // bytes under the same key, so the miss is self-healing.
+    if (matchesRequestedPart(staged, request)) return staged;
+  }
 
   const response = await options.port.readPart({
     identity: options.identity,
@@ -350,6 +416,22 @@ async function stagePart(
     );
   }
 
+  // Bounded BEFORE `atob`, which expands the whole string in one allocation
+  // before any length or digest check can run. The head already promised this
+  // part's byte length and base64 is exactly `ceil(n / 3) * 4` characters for
+  // `n` bytes, so a longer body cannot be the named part whatever it decodes
+  // to - and refusing it unread is the difference between one rejected
+  // response and an unbounded allocation from a single bad answer. The payload
+  // path takes the same pre-decode ceiling (`MAX_ENCODED_PAYLOAD_CHARS`).
+  if (
+    response.outcome.bytesBase64.length >
+    encodedCharsFor(request.part.byteLength)
+  ) {
+    throw new PartOversizedError(
+      `Chat ${request.section} part ${request.index} answered with more base64 than ${request.part.byteLength} bytes can encode`,
+    );
+  }
+
   const bytes = decodeBase64(response.outcome.bytesBase64);
   const staged = await stageBytes(bytes, options.sha256Hex);
 
@@ -362,17 +444,38 @@ async function stagePart(
   // would poison the cache with exactly the bytes that failed, and every
   // subsequent read would serve them from disk instead of asking again.
   //
-  // Deliberately not awaited into the read's critical path beyond its own
-  // completion: a `put` that fails is a no-op by the cache contract, so there is
-  // nothing here to handle and nothing a reader should be delayed by.
-  if (
-    staged.sha256 === request.part.sha256 &&
-    staged.byteLength === request.part.byteLength
-  ) {
+  // Awaited, but nothing is BRANCHED on it: a `put` that fails is a no-op by
+  // the cache contract, so there is nothing here to handle. Awaiting keeps the
+  // store ordered before the part is staged, which is what makes a concurrent
+  // second read of the same digest find it.
+  if (matchesRequestedPart(staged, request)) {
     await options.cache.put(request.part.sha256, bytes);
   }
 
   return staged;
+}
+
+/**
+ * Whether these bytes are the part the head asked for.
+ *
+ * The same two comparisons `assembleChat` makes, and deliberately not a third
+ * opinion: this decides cache ADMISSION and cache TRUST, both of which happen
+ * before assembly can run. What assembly does with a part that fails is still
+ * assembly's call - nothing here reports a verdict.
+ */
+function matchesRequestedPart(
+  staged: StagedChatPart,
+  request: ChatPartRequest,
+): boolean {
+  return (
+    staged.sha256 === request.part.sha256 &&
+    staged.byteLength === request.part.byteLength
+  );
+}
+
+/** Base64 characters `byteLength` bytes encode to, padding included. */
+function encodedCharsFor(byteLength: number): number {
+  return Math.ceil(byteLength / 3) * 4;
 }
 
 function stageBytes(
