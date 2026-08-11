@@ -365,7 +365,14 @@ export function createAppLocalNotificationsStore(initialName: string) {
         ...appLocalInitialState(),
 
         activateIdentity: (userId) => {
-          set({ activeUserId: userId });
+          set((state) =>
+            state.activeUserId === userId
+              ? { activeUserId: userId }
+              : {
+                  activeUserId: userId,
+                  observedCompletionsByHost: {},
+                },
+          );
         },
 
         deactivateIdentity: () => {

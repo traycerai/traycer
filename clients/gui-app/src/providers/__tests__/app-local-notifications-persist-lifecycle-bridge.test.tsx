@@ -16,6 +16,7 @@ import {
 function entry(id: string): AppLocalNotificationEntry {
   return {
     id,
+    originHostId: "host-a",
     updatedAt: 1,
     readAt: null,
     kind: "stream.transport.error",
@@ -114,6 +115,62 @@ describe("<AppLocalNotificationsPersistLifecycleBridge />", () => {
         useAppLocalNotificationsStore.getState().byId.alice,
       ).toBeUndefined();
     });
+  });
+
+  it("resets renderer completion observations on a direct user switch", async () => {
+    persistSnapshot("user-a", []);
+    persistSnapshot("user-b", [entry("shared-chat")]);
+
+    render(
+      <AppLocalNotificationsPersistLifecycleBridge>
+        <div />
+      </AppLocalNotificationsPersistLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuthSignedIn("user-a", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().activeUserId).toBe(
+        "user-a",
+      );
+    });
+    act(() => {
+      useAppLocalNotificationsStore
+        .getState()
+        .seedCompletion("host-a", { id: "done", occurrenceKey: "done@1" }, 1);
+    });
+    expect(
+      useAppLocalNotificationsStore.getState().observedCompletionsByHost[
+        "host-a"
+      ],
+    ).toHaveLength(1);
+
+    act(() => {
+      resetAuthSignedIn("user-b", "bob@example.com");
+    });
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState()).toMatchObject({
+        activeUserId: "user-b",
+        orderedIds: ["shared-chat"],
+        observedCompletionsByHost: {},
+      });
+    });
+
+    act(() => {
+      useAppLocalNotificationsStore
+        .getState()
+        .observeCompletion(
+          "host-a",
+          { id: "done", occurrenceKey: "done@1" },
+          { epicId: "epic-1", chatId: "shared-chat" },
+          2,
+        );
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId["shared-chat"].readAt,
+    ).toBe(2);
   });
 
   it("clears the current user bucket on sign-out and deactivates writes", async () => {
