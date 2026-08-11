@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   dataUpdatedAt: 1,
   primaryWorkspacePath: null as string | null,
   workspacePaths: [] as ReadonlyArray<string>,
+  mutableWorkspacePaths: [] as string[],
   kill: vi.fn(),
   killAsync: vi.fn(() => Promise.resolve({ killed: true })),
   reconcileXtermHostAfterLayoutTransition: vi.fn(),
@@ -328,6 +329,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.dataUpdatedAt = 1;
     mocks.primaryWorkspacePath = null;
     mocks.workspacePaths = [];
+    mocks.mutableWorkspacePaths = [];
     mocks.kill.mockReset();
     mocks.killAsync.mockClear();
     // Reset (not just clear): a test may override the return with a fail-closed
@@ -1942,7 +1944,8 @@ describe("<LandingTerminalPanel />", () => {
   it("keeps the chooser open when a directory is detached before selection", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
-    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.mutableWorkspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.workspacePaths = mocks.mutableWorkspacePaths;
     mocks.probeData = emptyList("/Users/dev");
     mocks.freshProbeData = mocks.probeData;
     render(panelUi());
@@ -1953,7 +1956,7 @@ describe("<LandingTerminalPanel />", () => {
     const pickerInput = await screen.findByRole("combobox", {
       name: "Create terminal in workspace",
     });
-    mocks.workspacePaths = ["/workspace/project"];
+    mocks.mutableWorkspacePaths.splice(1, 1);
     fireEvent.click(screen.getByText("/workspace/other"));
 
     expect(
