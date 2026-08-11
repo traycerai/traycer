@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ImageIcon, ImageOff } from "lucide-react";
+import { type ReactNode } from "react";
 import type {
   ImageGenerationResult,
   ToolInputDetail,
@@ -7,6 +6,10 @@ import type {
 import { AddImageToArtifactButton } from "@/components/artifacts/add-image-to-artifact-button";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { cn } from "@/lib/utils";
+import {
+  ImageGeneration,
+  type ImageGenerationStatus,
+} from "./image-generation/image-generation";
 import { ImageLightbox } from "./image-lightbox";
 
 interface ImageGenerationCardProps {
@@ -35,96 +38,95 @@ export function ImageGenerationCard(
     props.inputSummary,
     props.inputDetail,
   );
-  const failureMessage = generationFailureMessage(
+  const caption =
+    props.imageResults.find((result) => result.revisedPrompt !== null)
+      ?.revisedPrompt ?? presentation.prompt;
+  const status = generationStatus(
     props.error,
     props.isStreaming,
     props.imageResults.length,
   );
-  const hasError = failureMessage !== null;
-  const caption =
-    props.imageResults.find((result) => result.revisedPrompt !== null)
-      ?.revisedPrompt ?? presentation.prompt;
-  let body: ReactNode;
-  if (failureMessage !== null) {
-    body = (
-      <GenerationError
-        message={failureMessage}
-        aspectRatio={presentation.aspectRatio}
-      />
-    );
-  } else if (props.imageResults.length > 0) {
-    body = keyedImageResults(props.imageResults).map(({ key, result }) => (
-      <GeneratedImage
-        key={key}
-        result={result}
-        fallbackAlt={caption}
-        fallbackAspectRatio={presentation.aspectRatio}
-      />
-    ));
-  } else {
-    body = <GenerationPending aspectRatio={presentation.aspectRatio} active />;
-  }
+  const results = keyedImageResults(props.imageResults);
 
   return (
     <section
       tabIndex={-1}
       data-image-generation-card={props.id}
-      className={cn(
-        "w-full max-w-3xl overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-        hasError && "border-destructive/35 saturate-50",
-      )}
+      className="w-full max-w-3xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="Image generation"
     >
-      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-ui-sm">
-        <ImageIcon className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="font-medium">
-          {generationTitle(hasError, props.imageResults.length)}
-        </span>
-        {props.imageResults.length > 1 ? (
-          <span className="text-muted-foreground">
-            {props.imageResults.length} results
-          </span>
-        ) : null}
-        {props.isStreaming && !hasError ? (
-          <span className="ml-auto text-ui-xs text-muted-foreground">
-            In progress
-          </span>
-        ) : null}
-      </header>
-
       <div
         className={cn(
-          "grid w-full gap-px bg-border/50",
-          props.imageResults.length > 1 && "sm:grid-cols-2",
+          "grid w-full gap-4",
+          results.length > 1 && "sm:grid-cols-2",
         )}
       >
-        {body}
+        {results.length > 0 ? (
+          results.map(({ key, result }) => (
+            <GenerationCell
+              key={key}
+              result={result}
+              status={status}
+              prompt={caption}
+              fallbackAspectRatio={presentation.aspectRatio}
+            />
+          ))
+        ) : (
+          <GenerationCell
+            result={null}
+            status={status}
+            prompt={caption}
+            fallbackAspectRatio={presentation.aspectRatio}
+          />
+        )}
       </div>
-
-      {caption.length > 0 ? (
-        <p className="border-t border-border/60 px-3 py-2 text-ui-sm leading-relaxed text-muted-foreground">
-          {caption}
-        </p>
-      ) : null}
     </section>
   );
 }
 
-function generationFailureMessage(
+function GenerationCell(props: {
+  readonly result: ImageGenerationResult | null;
+  readonly status: ImageGenerationStatus;
+  readonly prompt: string;
+  readonly fallbackAspectRatio: number;
+}): ReactNode {
+  const aspectRatio =
+    props.result === null
+      ? props.fallbackAspectRatio
+      : resultAspectRatio(props.result, props.fallbackAspectRatio);
+  const resolution =
+    props.result !== null &&
+    props.result.width !== null &&
+    props.result.height !== null
+      ? `${props.result.width} × ${props.result.height}`
+      : "";
+
+  return (
+    <ImageGeneration
+      status={props.status}
+      prompt={props.prompt}
+      resolution={resolution}
+      aspectRatio={aspectRatio}
+      size="fluid"
+    >
+      {props.result === null ? null : (
+        <GeneratedImageContent
+          result={props.result}
+          fallbackAlt={props.prompt}
+        />
+      )}
+    </ImageGeneration>
+  );
+}
+
+function generationStatus(
   error: string | null,
   isStreaming: boolean,
   resultCount: number,
-): string | null {
-  if (error !== null && error.length > 0) return error;
-  if (!isStreaming && resultCount === 0) {
-    return "The provider returned no images.";
-  }
-  return null;
-}
-
-function generationTitle(hasError: boolean, resultCount: number): string {
-  if (hasError) return "Image generation failed";
-  return resultCount > 0 ? "Generated image" : "Generating image";
+): ImageGenerationStatus {
+  if (resultCount > 0) return "complete";
+  if (error !== null || !isStreaming) return "error";
+  return "generating";
 }
 
 function keyedImageResults(
@@ -141,103 +143,28 @@ function keyedImageResults(
   });
 }
 
-function GenerationPending(props: {
-  readonly aspectRatio: number;
-  readonly active: boolean;
-}): ReactNode {
-  return (
-    <div
-      className="relative w-full overflow-hidden bg-muted/50"
-      style={{ aspectRatio: props.aspectRatio }}
-      role={props.active ? "status" : undefined}
-      aria-label={props.active ? "Generating image" : undefined}
-      aria-hidden={props.active ? undefined : true}
-    >
-      <div className="absolute inset-0 scale-110 bg-[radial-gradient(circle_at_25%_25%,color-mix(in_oklab,var(--primary)_22%,transparent),transparent_42%),radial-gradient(circle_at_75%_70%,color-mix(in_oklab,var(--muted-foreground)_18%,transparent),transparent_45%)] blur-2xl motion-reduce:blur-xl" />
-      <div className="absolute inset-[12%] rounded-[30%] bg-primary/10 blur-xl" />
-      <DitherCanvas />
-    </div>
-  );
-}
-
-function DitherCanvas(): ReactNode {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    const canvas = ref.current;
-    if (canvas === null) return;
-    const draw = (): void => drawDither(canvas);
-    draw();
-    const observer = new MutationObserver(draw);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"],
-    });
-    return () => observer.disconnect();
-  }, []);
-
-  return (
-    <canvas
-      ref={ref}
-      width={96}
-      height={96}
-      className="absolute inset-0 size-full animate-pulse opacity-55 mix-blend-soft-light [image-rendering:pixelated] motion-reduce:animate-none"
-      aria-hidden
-    />
-  );
-}
-
-function drawDither(canvas: HTMLCanvasElement): void {
-  const context = canvas.getContext("2d");
-  if (context === null) return;
-  const styles = getComputedStyle(canvas);
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = styles.color;
-  for (let y = 0; y < canvas.height; y += 4) {
-    for (let x = 0; x < canvas.width; x += 4) {
-      const wave = Math.sin(x * 0.13) + Math.cos(y * 0.17);
-      if (wave + ((x * 17 + y * 29) % 7) / 4 > 0.8) {
-        context.fillRect(x, y, 2, 2);
-      }
-    }
-  }
-}
-
-function GeneratedImage(props: {
+function GeneratedImageContent(props: {
   readonly result: ImageGenerationResult;
   readonly fallbackAlt: string;
-  readonly fallbackAspectRatio: number;
 }): ReactNode {
   const image = useAttachmentBlobSrc(
     props.result.attachmentHash,
     props.result.mediaType,
     null,
   );
-  const [loaded, setLoaded] = useState(false);
-  const aspectRatio = resultAspectRatio(
-    props.result,
-    props.fallbackAspectRatio,
-  );
   const alt =
     props.result.alt ?? props.result.revisedPrompt ?? props.fallbackAlt;
 
   if (image.status !== "ready") {
     return (
-      <div
-        className="flex w-full items-center justify-center bg-muted/50 text-ui-sm text-muted-foreground"
-        style={{ aspectRatio }}
-        role="status"
-      >
+      <div className="flex items-center justify-center text-ui-sm text-muted-foreground">
         Waiting for image sync
       </div>
     );
   }
 
   return (
-    <figure
-      className="group relative w-full bg-muted/30"
-      style={{ aspectRatio }}
-    >
+    <div className="group relative size-full">
       <AddImageToArtifactButton
         source={{ kind: "client", url: image.src }}
         alt={alt.length > 0 ? alt : "Generated image"}
@@ -250,26 +177,14 @@ function GeneratedImage(props: {
         suggestedName={generatedImageName(props.result)}
         className="size-full overflow-hidden"
       >
-        {loaded ? null : (
-          <GenerationPending aspectRatio={aspectRatio} active={false} />
-        )}
         <img
           src={image.src}
           alt={alt.length > 0 ? alt : "Generated image"}
-          className={cn(
-            "absolute inset-0 size-full object-contain transition-opacity duration-500 motion-reduce:transition-none",
-            loaded ? "opacity-100" : "opacity-0",
-          )}
+          className="size-full object-contain"
           draggable={false}
-          onLoad={() => setLoaded(true)}
         />
       </ImageLightbox>
-      {props.result.width !== null && props.result.height !== null ? (
-        <span className="absolute bottom-2 right-2 rounded-md border border-white/20 bg-black/65 px-1.5 py-0.5 text-[0.6875rem] font-medium tabular-nums text-white shadow-sm backdrop-blur-sm">
-          {props.result.width} × {props.result.height}
-        </span>
-      ) : null}
-    </figure>
+    </div>
   );
 }
 
@@ -277,23 +192,6 @@ function generatedImageName(result: ImageGenerationResult): string | null {
   if (result.filePath === null) return null;
   const name = result.filePath.split(/[\\/]/).at(-1);
   return name === undefined || name.length === 0 ? null : name;
-}
-
-function GenerationError(props: {
-  readonly message: string;
-  readonly aspectRatio: number;
-}): ReactNode {
-  return (
-    <div
-      className="flex w-full flex-col items-center justify-center gap-2 bg-muted/50 px-6 py-10 text-center text-muted-foreground"
-      style={{ aspectRatio: props.aspectRatio }}
-      role="status"
-    >
-      <ImageOff className="size-7 text-destructive/70" aria-hidden />
-      <p className="max-w-prose text-ui-sm">{props.message}</p>
-      <p className="text-ui-xs">Ask the agent to try again.</p>
-    </div>
-  );
 }
 
 function generationPresentation(
