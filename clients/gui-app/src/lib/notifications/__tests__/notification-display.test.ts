@@ -3,6 +3,7 @@ import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import {
+  displayAppLocalNotification,
   displayForwardedForegroundNotification,
   displayHostChannelEmission,
   displayNotificationRows,
@@ -21,6 +22,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
+import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 
 interface CapturedToast {
   readonly title: ReactNode;
@@ -112,6 +114,45 @@ describe("notification display", () => {
     expect(toastCalls[0]?.options.id).toBe("host:chat:chat-1");
     expect(toastCalls[0]?.options.description).toBeUndefined();
     expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("carries the app-local origin host through native display", async () => {
+    const showNotification = vi.fn(() =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    );
+    const entry: AppLocalNotificationEntry = {
+      id: "stream.transport.error:host-b:chat-1:lost",
+      originHostId: "host-b",
+      updatedAt: 10,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-1",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      message: "Agent stream closed unexpectedly",
+      detail: "Connection lost",
+      displayedUpdatedAt: null,
+    };
+
+    await displayAppLocalNotification(
+      entry,
+      {
+        showNotification,
+        playChime: vi.fn(),
+        onToastClick: vi.fn(),
+      },
+      "delivery-1",
+      "user-1",
+    );
+
+    expect(showNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: buildNotificationActivationEnvelope({
+          route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+          feed: { source: "app-local", id: entry.id },
+          originHostId: "host-b",
+        }),
+      }),
+    );
   });
 
   it("derives replacement keys from notification entities", () => {

@@ -34,8 +34,9 @@ import {
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
 import { resetCloudEntityReadDriver } from "@/lib/notifications/cloud-entity-read-driver";
 import {
-  readFocusedHostNotificationPresenceEntity,
+  readFocusedHostNotificationPresence,
   subscribeHostNotificationPresence,
+  type FocusedHostNotificationPresence,
   type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
@@ -70,7 +71,6 @@ import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-
 import type {
   HostNotificationEntryV21,
   HostNotificationsEntityRef,
-  HostNotificationsPresenceEntity,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   useMergedNotificationsActions,
@@ -83,6 +83,11 @@ export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
   /** The live per-window router owns this provider's toast navigation. */
   readonly navigate: NotificationNavigate;
+}
+
+interface FocusedNotificationScope {
+  readonly originHostId: string | null;
+  readonly entity: HostNotificationsEntityRef;
 }
 
 /**
@@ -141,37 +146,44 @@ export function NotificationsSessionProvider(
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
   const markEntityReadMutation = useNotificationMarkEntityRead();
   const markEntityRead = markEntityReadMutation.mutate;
-  const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
+  const activeEntityRef = useRef<FocusedNotificationScope | null>(null);
   // Producer timestamps come from different host clocks, while app-local
   // failures use this renderer's clock. First observation of a completion is
   // therefore the only causal boundary shared by both sources. The app-local
   // store remembers it durably so reconnect snapshots and provider/renderer
   // remounts cannot replay an old completion over a later failure.
-  const recordCompletion = useCallback(
+  const recordCompletions = useCallback(
     (
-      entry: HostNotificationEntryV21,
-      originHostId: string,
-      semanticId: string,
-      mode: "observe" | "seed",
+      inputs: ReadonlyArray<{
+        readonly entry: HostNotificationEntryV21;
+        readonly originHostId: string;
+        readonly semanticId: string;
+        readonly mode: "observe" | "seed";
+      }>,
     ): void => {
-      if (entry.severity !== "done") return;
-      const entity = notificationEntityFromHostEntry(entry);
-      if (entity === null) return;
-      const completion = {
-        id: semanticId,
-        occurrenceKey: occurrenceKeyForNotification({
-          feedId: semanticId,
-          createdAt: entry.updatedAt,
-          sourceRef: entry.sourceRef,
-        }),
-      };
-      const store = useAppLocalNotificationsStore.getState();
       const observedAt = Date.now();
-      if (mode === "seed") {
-        store.seedCompletion(originHostId, completion, observedAt);
-        return;
-      }
-      store.observeCompletion(originHostId, completion, entity, observedAt);
+      useAppLocalNotificationsStore.getState().recordCompletions(
+        inputs.flatMap(({ entry, originHostId, semanticId, mode }) => {
+          if (entry.severity !== "done") return [];
+          const entity = notificationEntityFromHostEntry(entry);
+          if (entity === null) return [];
+          return [
+            {
+              originHostId,
+              completion: {
+                id: semanticId,
+                occurrenceKey: occurrenceKeyForNotification({
+                  feedId: semanticId,
+                  createdAt: entry.updatedAt,
+                  sourceRef: entry.sourceRef,
+                }),
+              },
+              entity: mode === "seed" ? null : entity,
+              observedAt,
+            },
+          ];
+        }),
+      );
     },
     [],
   );
@@ -216,39 +228,45 @@ export function NotificationsSessionProvider(
     markCloudEntityReadRef.current = mergedActions.markEntityAsRead;
   }, [mergedActions]);
   const markCloudEntityRead = useCallback(
-    (entity: HostNotificationsEntityRef): void => {
-      markCloudEntityReadRef.current(entity);
+    (scope: FocusedNotificationScope): void => {
+      markCloudEntityReadRef.current(scope.originHostId, scope.entity);
     },
     [],
   );
   const consumeEntity = useCallback(
-    (entity: HostNotificationsEntityRef): void => {
+    (scope: FocusedNotificationScope): void => {
       // App-local rows are client-side state owned by neither feed, so this
       // half runs identically in both modes.
       useAppLocalNotificationsStore
         .getState()
-        .markEntityAsRead(entity, Date.now());
+        .markEntityAsRead(scope.originHostId, scope.entity, Date.now());
       if (notificationFeedMode === "cloud") {
         // The v1 entity RPC consumes ONE host's SQLite; in cloud mode the
         // rows in view can belong to any host, so consumption has to address
         // the entries themselves.
-        markCloudEntityRead(entity);
+        markCloudEntityRead(scope);
         return;
       }
-      markEntityRead(entity);
+      // The local notification RPC addresses the connected local host. A tile
+      // bound to another host must not acknowledge the same entity there.
+      if (scope.originHostId === null || scope.originHostId === localHostId) {
+        markEntityRead(scope.entity);
+      }
     },
-    [markEntityRead, markCloudEntityRead, notificationFeedMode],
+    [localHostId, markEntityRead, markCloudEntityRead, notificationFeedMode],
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
       if (localHostId !== hostId) return;
-      const nextEntity = entityFromFocusedPresence(frame);
+      const nextEntity = frame.focused
+        ? scopeFromFocusedPresence(readFocusedHostNotificationPresence())
+        : null;
       const previousEntity = activeEntityRef.current;
       if (
         (nextEntity === null && previousEntity === null) ||
         (nextEntity !== null &&
           previousEntity !== null &&
-          notificationEntitiesMatch(nextEntity, previousEntity))
+          focusedNotificationScopesMatch(nextEntity, previousEntity))
       )
         return;
       activeEntityRef.current = nextEntity;
@@ -264,12 +282,16 @@ export function NotificationsSessionProvider(
         const mode = localSnapshotHostsRef.current.has(hostId)
           ? "observe"
           : "seed";
-        for (const entry of [
-          ...frame.attention.entries,
-          ...frame.recent.entries,
-        ]) {
-          recordCompletion(entry, hostId, entry.id, mode);
-        }
+        recordCompletions(
+          [...frame.attention.entries, ...frame.recent.entries].map(
+            (entry) => ({
+              entry,
+              originHostId: hostId,
+              semanticId: entry.id,
+              mode,
+            }),
+          ),
+        );
         localSnapshotHostsRef.current.add(hostId);
         return;
       }
@@ -310,22 +332,30 @@ export function NotificationsSessionProvider(
         );
       }
       if (entity === null) return;
-      recordCompletion(frame.entry, hostId, frame.entry.id, "observe");
+      recordCompletions([
+        {
+          entry: frame.entry,
+          originHostId: hostId,
+          semanticId: frame.entry.id,
+          mode: "observe",
+        },
+      ]);
       const activeEntity = activeEntityRef.current;
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
       if (
         activeEntity === null ||
-        !notificationEntitiesMatch(activeEntity, entity)
+        activeEntity.originHostId !== hostId ||
+        !notificationEntitiesMatch(activeEntity.entity, entity)
       )
         return;
       if (!isTerminalSeverity) return;
-      consumeEntity(entity);
+      consumeEntity({ originHostId: hostId, entity });
     },
     [
       localHostId,
       consumeEntity,
-      recordCompletion,
+      recordCompletions,
       removeObservedCompletions,
       hostClient,
       queryClient,
@@ -428,7 +458,11 @@ export function NotificationsSessionProvider(
           const isNewUnreadOccurrence = prior === null || prior.readAt !== null;
           return (
             isNewUnreadOccurrence &&
-            notificationPayloadBelongsToEntity(entry.payload, activeEntity)
+            (entry.originHostId ?? null) === activeEntity.originHostId &&
+            notificationPayloadBelongsToEntity(
+              entry.payload,
+              activeEntity.entity,
+            )
           );
         },
       );
@@ -443,7 +477,7 @@ export function NotificationsSessionProvider(
   // Local mode learns "the user is looking at X" from host presence frames,
   // and neither local stream is opened in cloud mode. But those frames are
   // built from state this renderer already owns: the canvas store plus
-  // document focus. `readFocusedHostNotificationPresenceEntity` is literally
+  // document focus. `readFocusedHostNotificationPresence` is literally
   // the function the outgoing frame is composed from, and
   // `subscribeHostNotificationPresence` already watches exactly the inputs
   // that can change it. Reading it directly is the same signal one hop
@@ -451,15 +485,15 @@ export function NotificationsSessionProvider(
   useEffect(() => {
     if (notificationFeedMode !== "cloud") return;
     const evaluate = (): void => {
-      const nextEntity = entityFromFocusedPresenceEntity(
-        readFocusedHostNotificationPresenceEntity(),
+      const nextEntity = scopeFromFocusedPresence(
+        readFocusedHostNotificationPresence(),
       );
       const previousEntity = activeEntityRef.current;
       if (
         (nextEntity === null && previousEntity === null) ||
         (nextEntity !== null &&
           previousEntity !== null &&
-          notificationEntitiesMatch(nextEntity, previousEntity))
+          focusedNotificationScopesMatch(nextEntity, previousEntity))
       )
         return;
       activeEntityRef.current = nextEntity;
@@ -548,14 +582,14 @@ export function NotificationsSessionProvider(
         onEntitlementDenied,
         ({ rows, arrivals }) => {
           const arrivalIds = new Set(arrivals.map((row) => row.entryId));
-          for (const row of rows) {
-            recordCompletion(
-              row.entry,
-              row.originHostId,
-              row.entryId,
-              arrivalIds.has(row.entryId) ? "observe" : "seed",
-            );
-          }
+          recordCompletions(
+            rows.map((row) => ({
+              entry: row.entry,
+              originHostId: row.originHostId,
+              semanticId: row.entryId,
+              mode: arrivalIds.has(row.entryId) ? "observe" : "seed",
+            })),
+          );
           displayCloudSnapshotArrivals(arrivals, {
             showNotification,
             playChime: playNotificationChime,
@@ -609,7 +643,7 @@ export function NotificationsSessionProvider(
   }, [
     localStreamClient,
     authService,
-    recordCompletion,
+    recordCompletions,
     localHostId,
     windowId,
     showNotification,
@@ -780,23 +814,30 @@ function anyStreamOpen(
   return refs.some((ref) => ref.current !== null);
 }
 
-function entityFromFocusedPresence(
-  frame: HostNotificationPresenceFrame,
-): HostNotificationsEntityRef | null {
-  if (!frame.focused) return null;
-  return entityFromFocusedPresenceEntity(frame.entity);
+function scopeFromFocusedPresence(
+  focused: FocusedHostNotificationPresence | null,
+): FocusedNotificationScope | null {
+  if (focused === null || focused.entity.epicId === undefined) return null;
+  return {
+    originHostId: focused.originHostId,
+    entity:
+      focused.entity.chatId === undefined
+        ? { epicId: focused.entity.epicId }
+        : {
+            epicId: focused.entity.epicId,
+            chatId: focused.entity.chatId,
+          },
+  };
 }
 
-/** The presence entity normalized to an addressable entity ref. Shared so the
- * cloud path, which reads the focused entity locally, and the local path,
- * which receives it back as a host frame, cannot drift apart. */
-function entityFromFocusedPresenceEntity(
-  entity: HostNotificationsPresenceEntity | null,
-): HostNotificationsEntityRef | null {
-  if (entity === null || entity.epicId === undefined) return null;
-  return entity.chatId === undefined
-    ? { epicId: entity.epicId }
-    : { epicId: entity.epicId, chatId: entity.chatId };
+function focusedNotificationScopesMatch(
+  left: FocusedNotificationScope,
+  right: FocusedNotificationScope,
+): boolean {
+  return (
+    left.originHostId === right.originHostId &&
+    notificationEntitiesMatch(left.entity, right.entity)
+  );
 }
 
 function createFallbackNotificationsWindowId(): string {

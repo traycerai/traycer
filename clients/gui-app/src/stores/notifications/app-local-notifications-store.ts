@@ -17,7 +17,7 @@ import {
   APP_LOCAL_COMPLETION_RECEIPT_CAP_PER_HOST,
   APP_LOCAL_COMPLETION_RECEIPT_GLOBAL_CAP,
   hasAppLocalCompletionReceipt,
-  recordAppLocalCompletionReceipt,
+  recordAppLocalCompletionReceipts,
   removeAppLocalCompletionReceipts,
 } from "@/lib/notifications/app-local-completion-receipts";
 
@@ -94,6 +94,14 @@ interface ObservedCompletion {
 
 type CompletionOccurrence = Omit<ObservedCompletion, "observedAt">;
 
+export interface CompletionObservation {
+  readonly originHostId: string;
+  readonly completion: CompletionOccurrence;
+  /** `null` seeds replay protection without consuming an app-local failure. */
+  readonly entity: HostNotificationsEntityRef | null;
+  readonly observedAt: number;
+}
+
 export interface AppLocalNotificationsState {
   readonly activeUserId: string | null;
   readonly byId: Readonly<Record<string, AppLocalNotificationEntry>>;
@@ -116,6 +124,7 @@ export interface AppLocalNotificationsState {
   ) => void;
   markAsRead: (id: string, readAt: number) => void;
   markEntityAsRead: (
+    originHostId: string | null,
     entity: HostNotificationsEntityRef,
     readAt: number,
   ) => void;
@@ -129,6 +138,9 @@ export interface AppLocalNotificationsState {
     originHostId: string,
     completion: CompletionOccurrence,
     observedAt: number,
+  ) => void;
+  recordCompletions: (
+    observations: ReadonlyArray<CompletionObservation>,
   ) => void;
   removeObservedCompletions: (
     originHostId: string,
@@ -231,16 +243,27 @@ export function migrateAppLocalNotificationsPersistedState(
   };
 }
 
-function appendObservedCompletion(
+function appendObservedCompletions(
   observedByHost: AppLocalNotificationsState["observedCompletionsByHost"],
-  originHostId: string,
-  completion: ObservedCompletion,
+  observations: ReadonlyArray<CompletionObservation>,
 ): AppLocalNotificationsState["observedCompletionsByHost"] {
-  const nextForHost = [
-    ...(observedByHost[originHostId] ?? []),
-    completion,
-  ].slice(-APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST);
-  const next = { ...observedByHost, [originHostId]: nextForHost };
+  const next = { ...observedByHost };
+  const affectedHosts = new Set<string>();
+  for (const observation of observations) {
+    affectedHosts.add(observation.originHostId);
+    next[observation.originHostId] = [
+      ...(next[observation.originHostId] ?? []),
+      {
+        ...observation.completion,
+        observedAt: observation.observedAt,
+      },
+    ];
+  }
+  for (const hostId of affectedHosts) {
+    next[hostId] = (next[hostId] ?? []).slice(
+      -APP_LOCAL_OBSERVED_COMPLETION_CAP_PER_HOST,
+    );
+  }
   const flattened = Object.entries(next)
     .flatMap(([hostId, completions]) =>
       (completions ?? []).map((observed) => ({ hostId, observed })),
@@ -260,16 +283,6 @@ function appendObservedCompletion(
           return left.occurrenceKey.localeCompare(right.occurrenceKey);
         }),
     ]),
-  );
-}
-
-function hasObservedCompletion(
-  observedByHost: AppLocalNotificationsState["observedCompletionsByHost"],
-  originHostId: string,
-  occurrenceKey: string,
-): boolean {
-  return (observedByHost[originHostId] ?? []).some(
-    (completion) => completion.occurrenceKey === occurrenceKey,
   );
 }
 
@@ -531,12 +544,14 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        markEntityAsRead: (entity, readAt) => {
+        markEntityAsRead: (originHostId, entity, readAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
             const unreadEntries = Object.values(state.byId).filter(
               (entry) =>
                 entry.readAt === null &&
+                (originHostId === null ||
+                  (entry.originHostId ?? null) === originHostId) &&
                 notificationPayloadBelongsToEntity(entry.payload, entity),
             );
             if (unreadEntries.length === 0) return state;
@@ -555,113 +570,95 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        observeCompletion: (originHostId, completion, entity, observedAt) => {
+        recordCompletions: (observations) => {
           const activeUserId = get().activeUserId;
-          if (activeUserId === null) return;
-          if (
-            hasObservedCompletion(
-              get().observedCompletionsByHost,
-              originHostId,
-              completion.occurrenceKey,
-            )
-          ) {
-            return;
-          }
-          if (
-            !hasAppLocalCompletionReceipt({
+          if (activeUserId === null || observations.length === 0) return;
+          const knownByHost = new Map<string, Set<string>>();
+          const accepted = observations.filter((observation) => {
+            let known = knownByHost.get(observation.originHostId);
+            if (known === undefined) {
+              known = new Set(
+                (
+                  get().observedCompletionsByHost[observation.originHostId] ??
+                  []
+                ).map((completion) => completion.occurrenceKey),
+              );
+              knownByHost.set(observation.originHostId, known);
+            }
+            if (known.has(observation.completion.occurrenceKey)) return false;
+            known.add(observation.completion.occurrenceKey);
+            return true;
+          });
+          if (accepted.length === 0) return;
+          const missingReceipts = accepted.flatMap((observation) =>
+            hasAppLocalCompletionReceipt({
               userId: activeUserId,
-              originHostId,
-              occurrenceKey: completion.occurrenceKey,
+              originHostId: observation.originHostId,
+              occurrenceKey: observation.completion.occurrenceKey,
             })
-          ) {
-            recordAppLocalCompletionReceipt({
-              userId: activeUserId,
-              originHostId,
-              ...completion,
-              observedAt,
-            });
+              ? []
+              : [
+                  {
+                    userId: activeUserId,
+                    originHostId: observation.originHostId,
+                    ...observation.completion,
+                    observedAt: observation.observedAt,
+                  },
+                ],
+          );
+          if (missingReceipts.length > 0) {
+            recordAppLocalCompletionReceipts(missingReceipts);
           }
           set((state) => {
-            const observedCompletionsByHost = appendObservedCompletion(
+            const observedCompletionsByHost = appendObservedCompletions(
               state.observedCompletionsByHost,
-              originHostId,
-              { ...completion, observedAt },
+              accepted,
             );
-            const supersededEntries = Object.values(state.byId).filter(
-              (entry) => {
-                if (entry.readAt !== null) return false;
-                if (entry.originHostId !== originHostId) return false;
+            const consumedReadAt = new Map<string, number>();
+            for (const observation of accepted) {
+              if (observation.entity === null) continue;
+              for (const entry of Object.values(state.byId)) {
+                if (entry.readAt !== null || consumedReadAt.has(entry.id)) {
+                  continue;
+                }
+                if (entry.originHostId !== observation.originHostId) continue;
                 const entryEntity = notificationEntityFromPayload(
                   entry.payload,
                 );
-                return (
+                if (
                   entryEntity !== null &&
-                  notificationEntitiesMatch(entryEntity, entity)
-                );
-              },
-            );
-            if (supersededEntries.length === 0) {
-              return {
-                observedCompletionsByHost: {
-                  ...observedCompletionsByHost,
-                },
-              };
+                  notificationEntitiesMatch(entryEntity, observation.entity)
+                ) {
+                  consumedReadAt.set(entry.id, observation.observedAt);
+                }
+              }
             }
-            const byId = {
-              ...state.byId,
-              ...Object.fromEntries(
-                supersededEntries.map((entry) => [
-                  entry.id,
-                  { ...entry, readAt: observedAt },
-                ]),
-              ),
-            };
+            if (consumedReadAt.size === 0) {
+              return { observedCompletionsByHost };
+            }
+            const byId = { ...state.byId };
+            for (const [id, readAt] of consumedReadAt) {
+              byId[id] = { ...byId[id], readAt };
+            }
             const projection = projectAppLocalNotifications(byId);
             return {
               byId,
               orderedIds: projection.orderedIds,
               unreadCount: projection.unreadCount,
-              observedCompletionsByHost: {
-                ...observedCompletionsByHost,
-              },
+              observedCompletionsByHost,
             };
           });
         },
 
-        seedCompletion: (originHostId, completion, observedAt) => {
-          const activeUserId = get().activeUserId;
-          if (activeUserId === null) return;
-          if (
-            hasObservedCompletion(
-              get().observedCompletionsByHost,
-              originHostId,
-              completion.occurrenceKey,
-            )
-          ) {
-            return;
-          }
-          if (
-            !hasAppLocalCompletionReceipt({
-              userId: activeUserId,
-              originHostId,
-              occurrenceKey: completion.occurrenceKey,
-            })
-          ) {
-            recordAppLocalCompletionReceipt({
-              userId: activeUserId,
-              originHostId,
-              ...completion,
-              observedAt,
-            });
-          }
-          set((state) => ({
-            observedCompletionsByHost: appendObservedCompletion(
-              state.observedCompletionsByHost,
-              originHostId,
-              { ...completion, observedAt },
-            ),
-          }));
-        },
+        observeCompletion: (originHostId, completion, entity, observedAt) =>
+          get().recordCompletions([
+            { originHostId, completion, entity, observedAt },
+          ]),
+
+        seedCompletion: (originHostId, completion, observedAt) =>
+          get().recordCompletions([
+            { originHostId, completion, entity: null, observedAt },
+          ]),
 
         removeObservedCompletions: (originHostId, completionIds) => {
           if (completionIds.length === 0) return;
@@ -791,12 +788,14 @@ export const useAppLocalNotificationsStore = createAppLocalNotificationsStore(
 
 export function emitTerminalClosedNotification(input: {
   readonly instanceId: string;
+  readonly hostId: string;
   readonly hostLabel: string;
   readonly target: TerminalNotificationTarget;
 }): void {
   const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
   useAppLocalNotificationsStore.getState().upsertReplacingPreservingReadState({
     id: `terminal.closed:${input.instanceId}`,
+    originHostId: input.hostId,
     updatedAt: Date.now(),
     readAt: null,
     kind: "terminal.closed",
@@ -809,6 +808,7 @@ export function emitTerminalClosedNotification(input: {
 
 export function emitTerminalCrashedNotification(input: {
   readonly instanceId: string;
+  readonly hostId: string;
   readonly target: TerminalNotificationTarget;
   readonly cause: "exit" | "recovery-exhausted";
 }): void {
@@ -819,6 +819,7 @@ export function emitTerminalCrashedNotification(input: {
     // lifetime. UUIDs make two independent death observations distinct even if
     // they occur in the same millisecond.
     id: `terminal.crashed:${input.instanceId}:${uuidv4()}`,
+    originHostId: input.hostId,
     updatedAt: Date.now(),
     readAt: null,
     kind: "terminal.crashed",

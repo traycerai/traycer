@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { appLocalNotificationsKey } from "@/lib/persist";
-import { appLocalNotificationCompletionReceiptPrefix } from "@/lib/persist";
+import {
+  appLocalNotificationCompletionReceiptKey,
+  appLocalNotificationCompletionReceiptPrefix,
+  appLocalNotificationsKey,
+} from "@/lib/persist";
+import {
+  hasAppLocalCompletionReceipt,
+  recordAppLocalCompletionReceipt,
+} from "@/lib/notifications/app-local-completion-receipts";
 import {
   hasAppLocalDisplayReceipt,
   recordAppLocalDisplayReceipt,
@@ -77,6 +84,26 @@ describe("app-local notifications store", () => {
     expect(second.getState().orderedIds).toEqual(["persisted"]);
     expect(second.getState().byId.persisted.message).toBe("Message persisted");
     expect(second.getState().unreadCount).toBe(1);
+  });
+
+  it("discards malformed completion receipts instead of trusting them", () => {
+    const receipt = {
+      userId: "user-a",
+      originHostId: "host-a",
+      occurrenceKey: "done@1",
+    };
+    const key = appLocalNotificationCompletionReceiptKey(receipt);
+    window.localStorage.setItem(key, "{truncated");
+
+    expect(hasAppLocalCompletionReceipt(receipt)).toBe(false);
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    recordAppLocalCompletionReceipt({
+      ...receipt,
+      id: "done",
+      observedAt: 10,
+    });
+    expect(hasAppLocalCompletionReceipt(receipt)).toBe(true);
   });
 
   it("persists display receipts independently from read state", () => {
@@ -220,10 +247,29 @@ describe("app-local notifications store", () => {
 
     store
       .getState()
-      .markEntityAsRead({ epicId: "epic-1", chatId: "chat-1" }, 20);
+      .markEntityAsRead("host-a", { epicId: "epic-1", chatId: "chat-1" }, 20);
 
     expect(store.getState().byId.match.readAt).toBe(20);
     expect(store.getState().byId.other.readAt).toBeNull();
+  });
+
+  it("keeps a same-entity failure from another host unread", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("host-a-failure", 10, null));
+    store.getState().upsert({
+      ...entry("host-b-failure", 11, null),
+      originHostId: "host-b",
+    });
+
+    store
+      .getState()
+      .markEntityAsRead("host-a", { epicId: "epic-1", chatId: "chat-1" }, 20);
+
+    expect(store.getState().byId["host-a-failure"].readAt).toBe(20);
+    expect(store.getState().byId["host-b-failure"].readAt).toBeNull();
   });
 
   it("consumes failures already observed for the exact completed entity", () => {
@@ -600,7 +646,7 @@ describe("app-local notifications store", () => {
     });
     store.getState().upsert(entry("chat", 11, null));
 
-    store.getState().markEntityAsRead({ epicId: "epic-1" }, 20);
+    store.getState().markEntityAsRead("host-a", { epicId: "epic-1" }, 20);
 
     expect(store.getState().byId.epic.readAt).toBe(20);
     expect(store.getState().byId.chat.readAt).toBeNull();
@@ -628,6 +674,7 @@ describe("app-local notifications store", () => {
 
     emitTerminalClosedNotification({
       instanceId: "terminal-instance",
+      hostId: "host-a",
       hostLabel: "MacBook",
       target: {
         kind: "terminal",
@@ -658,6 +705,7 @@ describe("app-local notifications store", () => {
 
     emitTerminalClosedNotification({
       instanceId: "terminal-instance",
+      hostId: "host-a",
       hostLabel: "MacBook",
       target: {
         kind: "terminal",
@@ -682,6 +730,7 @@ describe("app-local notifications store", () => {
 
     emitTerminalClosedNotification({
       instanceId: "terminal-instance",
+      hostId: "host-a",
       hostLabel: "MacBook",
       target: {
         kind: "terminal",
@@ -715,6 +764,7 @@ describe("app-local notifications store", () => {
 
     emitTerminalCrashedNotification({
       instanceId: "terminal-instance",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -727,6 +777,7 @@ describe("app-local notifications store", () => {
     });
     emitTerminalCrashedNotification({
       instanceId: "terminal-instance",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-1",

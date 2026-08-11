@@ -139,6 +139,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
+      hostId,
       target: {
         kind: "terminal",
         epicId,
@@ -151,6 +152,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     });
   }, [
     epicId,
+    hostId,
     props.node.id,
     props.node.instanceId,
     props.tileId,
@@ -162,6 +164,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
+      hostId,
       target: {
         kind: "terminal",
         epicId,
@@ -174,6 +177,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     });
   }, [
     epicId,
+    hostId,
     props.node.id,
     props.node.instanceId,
     props.tileId,
@@ -204,6 +208,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     if (reachability.status !== "unreachable") return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
+      hostId,
       hostLabel: reachability.hostLabel,
       target: {
         kind: "terminal",
@@ -218,6 +223,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     reachability.status,
     reachability.hostLabel,
     epicId,
+    hostId,
     props.node.id,
     props.node.instanceId,
     props.tileId,

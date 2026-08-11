@@ -535,7 +535,7 @@ function setFocusedChat(epicId: string, chatId: string): void {
       instanceId: `${chatId}-instance`,
       type: "chat",
       name: "Chat",
-      hostId: "host-a",
+      hostId: mockLocalHostEntry.hostId,
     }),
   );
 }
@@ -548,7 +548,7 @@ function setFocusedTerminal(epicId: string, terminalId: string): void {
     type: "terminal",
     name: "Terminal",
     titleSource: "default",
-    hostId: "host-a",
+    hostId: mockLocalHostEntry.hostId,
     cwd: "/repo",
   });
 }
@@ -673,6 +673,7 @@ describe("<NotificationsSessionProvider />", () => {
       .activateIdentity("alice@example.com");
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-cloud",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -1011,6 +1012,44 @@ describe("<NotificationsSessionProvider />", () => {
         .readAt,
     ).toBeNull();
 
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "stale-frame-failure",
+      originHostId: baseline.originHostId,
+      updatedAt: 30,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+      },
+      message: "Failure after the accepted cloud snapshot",
+      detail: null,
+    });
+    const staleCompletion = cloudRow("cloud-entry-stale", 5);
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 1,
+        rows: [baseline, staleCompletion],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    expect(
+      useAppLocalNotificationsStore
+        .getState()
+        .observedCompletionsByHost[baseline.originHostId]?.some(
+          (completion) => completion.id === staleCompletion.entryId,
+        ),
+    ).toBe(false);
+    expect(
+      useAppLocalNotificationsStore.getState().byId["stale-frame-failure"]
+        .readAt,
+    ).toBeNull();
+
     const arrived = {
       ...cloudRow("cloud-entry-arrived", baseline.entry.updatedAt),
       coalesceKey: baseline.coalesceKey,
@@ -1034,6 +1073,10 @@ describe("<NotificationsSessionProvider />", () => {
         useAppLocalNotificationsStore.getState().byId[
           "cross-plane-later-failure"
         ].readAt,
+      ).not.toBeNull();
+      expect(
+        useAppLocalNotificationsStore.getState().byId["stale-frame-failure"]
+          .readAt,
       ).not.toBeNull();
     });
   });
@@ -1342,6 +1385,7 @@ describe("<NotificationsSessionProvider />", () => {
     );
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-user-switch",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -1427,6 +1471,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     emitTerminalCrashedNotification({
       instanceId: "terminal-user-a",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -1515,6 +1560,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-host-switch",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -1840,6 +1886,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
     emitTerminalCrashedNotification({
       instanceId: "disconnect-system",
+      hostId: "host-a",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -2064,6 +2111,7 @@ describe("<NotificationsSessionProvider />", () => {
       await renderHostNotificationsProvider();
     useAppLocalNotificationsStore.getState().upsert({
       id: "local-error",
+      originHostId: mockLocalHostEntry.hostId,
       updatedAt: 1,
       readAt: null,
       kind: "host.error",
@@ -2216,7 +2264,7 @@ describe("<NotificationsSessionProvider />", () => {
           instanceId: "chat-a-instance",
           type: "chat",
           name: "Chat",
-          hostId: "host-a",
+          hostId: mockLocalHostEntry.hostId,
         }),
       );
     });
@@ -2316,7 +2364,8 @@ describe("<NotificationsSessionProvider />", () => {
     markReadCalls.splice(0);
 
     const recurringFailure = {
-      id: "stream.transport.error:chat-a:UNAVAILABLE",
+      id: `stream.transport.error:${mockLocalHostEntry.hostId}:chat-a:UNAVAILABLE`,
+      originHostId: mockLocalHostEntry.hostId,
       updatedAt: 10,
       readAt: null,
       kind: "stream.transport.error" as const,
@@ -2457,6 +2506,7 @@ describe("<NotificationsSessionProvider />", () => {
     act(() => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-a-instance",
+        hostId: mockLocalHostEntry.hostId,
         target: {
           kind: "terminal",
           epicId: "epic-a",
@@ -2480,6 +2530,43 @@ describe("<NotificationsSessionProvider />", () => {
     ]);
   });
 
+  it("keeps a same-terminal crash from another host unread", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { markReadCalls } = await renderHostNotificationsProvider();
+
+    act(() => {
+      setFocusedTerminal("epic-a", "terminal-a");
+      hasFocus.mockReturnValue(true);
+      sendPresence();
+    });
+    await waitFor(() => expect(markReadCalls).toHaveLength(1));
+    markReadCalls.splice(0);
+
+    act(() => {
+      emitTerminalCrashedNotification({
+        instanceId: "terminal-a-on-host-b",
+        hostId: "host-b",
+        target: {
+          kind: "terminal",
+          epicId: "epic-a",
+          terminalId: "terminal-a",
+          tabId: "view-tab-host-b",
+          paneId: "pane-host-b",
+          tileInstanceId: "terminal-a-on-host-b",
+        },
+        cause: "exit",
+      });
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const crash = Object.values(
+      useAppLocalNotificationsStore.getState().byId,
+    )[0];
+    expect(crash.originHostId).toBe("host-b");
+    expect(crash.readAt).toBeNull();
+    expect(markReadCalls).toEqual([]);
+  });
+
   it("leaves crashes for a background terminal unread", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls } = await renderHostNotificationsProvider();
@@ -2495,6 +2582,7 @@ describe("<NotificationsSessionProvider />", () => {
     act(() => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-b-instance",
+        hostId: "host-b",
         target: {
           kind: "terminal",
           epicId: "epic-a",

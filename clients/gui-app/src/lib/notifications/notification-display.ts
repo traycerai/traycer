@@ -451,7 +451,7 @@ export function displayAppLocalNotification(
     target,
     {
       deliveryKey,
-      originHostId: null,
+      originHostId: entry.originHostId ?? null,
       foregroundAppLocal: { userId, entry },
     },
   );

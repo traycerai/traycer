@@ -22,24 +22,48 @@ interface StoredCompletionReceipt extends AppLocalCompletionReceipt {
 export function hasAppLocalCompletionReceipt(
   receipt: Omit<AppLocalCompletionReceipt, "id" | "observedAt">,
 ): boolean {
-  return (
-    window.localStorage.getItem(
-      appLocalNotificationCompletionReceiptKey(receipt),
-    ) !== null
-  );
+  const key = appLocalNotificationCompletionReceiptKey(receipt);
+  const value = window.localStorage.getItem(key);
+  if (value === null) return false;
+  if (parseStoredCompletionReceiptValue(value) !== null) return true;
+  window.localStorage.removeItem(key);
+  return false;
 }
 
 export function recordAppLocalCompletionReceipt(
   receipt: AppLocalCompletionReceipt,
 ): void {
-  window.localStorage.setItem(
-    appLocalNotificationCompletionReceiptKey(receipt),
-    JSON.stringify({
-      id: receipt.id,
-      observedAt: receipt.observedAt,
-    }),
-  );
-  compactCompletionReceipts(receipt.userId, receipt.originHostId);
+  recordAppLocalCompletionReceipts([receipt]);
+}
+
+export function recordAppLocalCompletionReceipts(
+  receipts: ReadonlyArray<AppLocalCompletionReceipt>,
+): void {
+  for (const receipt of receipts) {
+    window.localStorage.setItem(
+      appLocalNotificationCompletionReceiptKey(receipt),
+      JSON.stringify({
+        id: receipt.id,
+        observedAt: receipt.observedAt,
+      }),
+    );
+  }
+  const hosts = new Map<string, { userId: string; originHostId: string }>();
+  for (const receipt of receipts) {
+    hosts.set(`${receipt.userId}\u0000${receipt.originHostId}`, receipt);
+  }
+  for (const { userId, originHostId } of hosts.values()) {
+    removeOldestReceipts(
+      storedCompletionReceiptsForHost(userId, originHostId),
+      APP_LOCAL_COMPLETION_RECEIPT_CAP_PER_HOST,
+    );
+  }
+  for (const userId of new Set(receipts.map((receipt) => receipt.userId))) {
+    removeOldestReceipts(
+      storedCompletionReceiptsForUser(userId),
+      APP_LOCAL_COMPLETION_RECEIPT_GLOBAL_CAP,
+    );
+  }
 }
 
 export function removeAppLocalCompletionReceipts(
@@ -52,15 +76,6 @@ export function removeAppLocalCompletionReceipts(
   storedCompletionReceiptsForHost(userId, originHostId)
     .filter((receipt) => removed.has(receipt.id))
     .forEach((receipt) => window.localStorage.removeItem(receipt.key));
-}
-
-function compactCompletionReceipts(userId: string, originHostId: string): void {
-  const hostReceipts = storedCompletionReceiptsForHost(userId, originHostId);
-  removeOldestReceipts(hostReceipts, APP_LOCAL_COMPLETION_RECEIPT_CAP_PER_HOST);
-  removeOldestReceipts(
-    storedCompletionReceiptsForUser(userId),
-    APP_LOCAL_COMPLETION_RECEIPT_GLOBAL_CAP,
-  );
 }
 
 function removeOldestReceipts(
@@ -103,19 +118,9 @@ function storedCompletionReceiptsForPrefix(
     if (!key.startsWith(prefix)) return [];
     const value = window.localStorage.getItem(key);
     if (value === null) return [];
+    const parsed = parseStoredCompletionReceiptValue(value);
+    if (parsed === null) return [];
     try {
-      const parsed: unknown = JSON.parse(value);
-      if (
-        parsed === null ||
-        typeof parsed !== "object" ||
-        !("id" in parsed) ||
-        typeof parsed.id !== "string" ||
-        !("observedAt" in parsed) ||
-        typeof parsed.observedAt !== "number" ||
-        !Number.isFinite(parsed.observedAt)
-      ) {
-        return [];
-      }
       const suffix = key.slice(prefix.length);
       const separatorIndex = suffix.indexOf(":");
       if (requestedOriginHostId === null && separatorIndex <= 0) return [];
@@ -143,6 +148,28 @@ function storedCompletionReceiptsForPrefix(
       return [];
     }
   });
+}
+
+function parseStoredCompletionReceiptValue(
+  value: string,
+): Pick<AppLocalCompletionReceipt, "id" | "observedAt"> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      !("id" in parsed) ||
+      typeof parsed.id !== "string" ||
+      !("observedAt" in parsed) ||
+      typeof parsed.observedAt !== "number" ||
+      !Number.isFinite(parsed.observedAt)
+    ) {
+      return null;
+    }
+    return { id: parsed.id, observedAt: parsed.observedAt };
+  } catch {
+    return null;
+  }
 }
 
 function storageKeys(): ReadonlyArray<string> {
