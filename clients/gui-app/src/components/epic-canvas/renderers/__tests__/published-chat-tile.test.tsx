@@ -51,7 +51,7 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
 vi.mock("@/components/epic-canvas/renderers/published-chat-notice", () => ({
   PublishedChatNotice: () => <div data-testid="published-chat-notice" />,
 }));
-vi.mock("@/lib/chats/published-chat-source", () => ({
+vi.mock("@/lib/chats/published-chat-source-provider", () => ({
   PublishedChatSourceProvider: (props: { readonly children: ReactNode }) => (
     <>{props.children}</>
   ),

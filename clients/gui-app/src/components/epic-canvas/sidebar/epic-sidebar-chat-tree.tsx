@@ -1096,11 +1096,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       }),
     );
   }, [
+    // No `nodeId` / `nodeName`: the tile ref is built inside `openRef`, which
+    // closes over both and is itself a dependency.
     openRef,
     epicId,
     isRenaming,
     navigateNested,
-    nodeId,
     openableType,
     prepareOpenTilePreviewInTabFocusTarget,
     tabId,
@@ -1127,12 +1128,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       );
     }
   }, [
+    // `nodeId` stays - `findOpenArtifactInTab` reads it directly. `nodeName`
+    // does not: it reaches the tile ref only through `openRef`.
     openRef,
     epicId,
     isRenaming,
     navigateNested,
     nodeId,
-    nodeName,
     openableType,
     prepareOpenTileInTabFocusTarget,
     promotePreviewInTab,
@@ -2118,6 +2120,38 @@ function AgentRoleBadgesForOwner(props: {
   return <AgentRoleBadges claims={props.claims} />;
 }
 
+/**
+ * The row's own class list, lifted out of {@link ChatRowButton} so its five
+ * state modifiers stop counting against that component's complexity ceiling.
+ * Pure and unchanged - same operands, same order.
+ *
+ * `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
+ * leading icon, then the text column - and `items-center` centers the short
+ * children against whatever height the column takes. Kept as a floor rather
+ * than a fixed height so a row whose title wraps, or which regains a second
+ * line, grows instead of clipping.
+ */
+function chatRowClassName(state: {
+  readonly isDragging: boolean;
+  readonly showRowControls: boolean;
+  readonly reserveArchiveSlot: boolean;
+  readonly selectionMode: boolean;
+  readonly isArchived: boolean;
+  readonly isActive: boolean;
+}): string {
+  return cn(
+    "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
+    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+    state.isDragging && "cursor-grabbing opacity-60",
+    nodePadRightClass(state.showRowControls, state.reserveArchiveSlot),
+    state.selectionMode && "cursor-pointer",
+    state.isArchived && ARCHIVED_ROW_CLASS,
+    state.isActive
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+  );
+}
+
 function ChatRowButton(props: ChatRowButtonProps) {
   const {
     epicId,
@@ -2196,22 +2230,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // that menu as "New child agent"), so the single-control pad-right reserve is
   // claimed whenever the row is editable and not bulk-selecting.
   const showRowControls = selectionMode ? false : canEdit;
-  // `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
-  // leading icon, then the text column - and `items-center` centers the short
-  // children against whatever height the column takes. Kept as a floor rather
-  // than a fixed height so a row whose title wraps, or which regains a second
-  // line, grows instead of clipping.
-  const rowClassName = cn(
-    "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
-    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
-    isDragging && "cursor-grabbing opacity-60",
-    nodePadRightClass(showRowControls, reserveArchiveSlot),
-    selectionMode && "cursor-pointer",
-    isArchived && ARCHIVED_ROW_CLASS,
-    isActive
-      ? "bg-accent text-accent-foreground"
-      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
-  );
+  const rowClassName = chatRowClassName({
+    isDragging,
+    showRowControls,
+    reserveArchiveSlot,
+    selectionMode,
+    isArchived,
+    isActive,
+  });
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
   if (selectionMode) {
     const selectionRow = (

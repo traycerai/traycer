@@ -6,10 +6,10 @@ import { FileChangeSegment } from "@/components/chat/segments/file-change-segmen
 import { ThemeProvider } from "@/providers/theme-provider";
 import {
   payloadTruncationNotice,
-  PublishedChatSourceProvider,
   usePublishedPlanContent,
   usePublishedSnapshotDiff,
 } from "@/lib/chats/published-chat-source";
+import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 
 /**
  * The seam's load-bearing property, pinned the deliberately-green way.

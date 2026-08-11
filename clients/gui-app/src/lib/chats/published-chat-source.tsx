@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext } from "react";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { FileEditReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -49,20 +49,13 @@ export interface PublishedChatSource {
   readonly client: HostClient<HostRpcRegistry> | null;
 }
 
-const PublishedChatSourceContext = createContext<PublishedChatSource | null>(
-  null,
-);
-
-export function PublishedChatSourceProvider(props: {
-  readonly source: PublishedChatSource;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <PublishedChatSourceContext.Provider value={props.source}>
-      {props.children}
-    </PublishedChatSourceContext.Provider>
-  );
-}
+/**
+ * Exported so {@link PublishedChatSourceProvider} can live in its own module:
+ * this file holds hooks and helpers, and a file that exports BOTH components
+ * and non-components breaks fast refresh for every consumer of it.
+ */
+export const PublishedChatSourceContext =
+  createContext<PublishedChatSource | null>(null);
 
 /** The published source for this subtree, or `null` on every live surface. */
 export function usePublishedChatSource(): PublishedChatSource | null {
@@ -83,12 +76,7 @@ export function usePublishedChatSource(): PublishedChatSource | null {
  * already draws - so a published diff whose blob was never uploaded renders the
  * same banner a local one does, rather than a new vocabulary for the same fact.
  */
-export function usePublishedSnapshotDiff(args: {
-  readonly source: PublishedChatSource | null;
-  readonly beforeHash: string | null;
-  readonly afterHash: string | null;
-  readonly enabled: boolean;
-}): {
+export interface PublishedSnapshotDiff {
   readonly data:
     | {
         readonly beforeContent: string | null;
@@ -99,7 +87,68 @@ export function usePublishedSnapshotDiff(args: {
   readonly isLoading: boolean;
   /** Set when either side was served as a prefix. See {@link PayloadExtent}. */
   readonly truncation: PayloadExtent | null;
-} {
+}
+
+/** One side's answer, as much of a payload query as the derivation reads. */
+interface SnapshotSideAnswer {
+  readonly data: { readonly kind: string } | undefined;
+  readonly isError: boolean;
+}
+
+/**
+ * The two payload answers turned into the segment's shape - the whole tail of
+ * {@link usePublishedSnapshotDiff}, lifted out because that hook's branching
+ * (two queries, a pending rule, a missing rule and a truncation rule) was over
+ * this repo's complexity ceiling. Pure, and the checks are in their original
+ * order.
+ */
+function snapshotDiffResult(input: {
+  readonly enabled: boolean;
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
+  readonly before: SnapshotSideAnswer;
+  readonly after: SnapshotSideAnswer;
+}): PublishedSnapshotDiff {
+  if (!input.enabled) {
+    return { data: undefined, isLoading: false, truncation: null };
+  }
+  const beforePending =
+    input.beforeHash !== null && input.before.data === undefined;
+  const afterPending =
+    input.afterHash !== null && input.after.data === undefined;
+  if (
+    (beforePending && !input.before.isError) ||
+    (afterPending && !input.after.isError)
+  ) {
+    return { data: undefined, isLoading: true, truncation: null };
+  }
+  const beforeText = payloadText(input.before.data);
+  const afterText = payloadText(input.after.data);
+  // A hash the block names but the cloud cannot serve is the same fact the
+  // local store reports as a missing blob, and the segment already draws it.
+  const missing =
+    (input.beforeHash !== null && beforeText === null) ||
+    (input.afterHash !== null && afterText === null);
+  return {
+    data: {
+      beforeContent: beforeText,
+      afterContent: afterText,
+      reason: missing ? "blob_missing" : "snapshot",
+    },
+    isLoading: false,
+    // Either side being a prefix makes the DIFF partial - a complete "after"
+    // against a truncated "before" invents changes at the cut.
+    truncation:
+      payloadExtent(input.after.data) ?? payloadExtent(input.before.data),
+  };
+}
+
+export function usePublishedSnapshotDiff(args: {
+  readonly source: PublishedChatSource | null;
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
+  readonly enabled: boolean;
+}): PublishedSnapshotDiff {
   const identity = args.source?.identity ?? null;
   const client = args.source?.client ?? null;
   const before = useCloudChatPayload({
@@ -120,32 +169,13 @@ export function usePublishedSnapshotDiff(args: {
         : { kind: "file-snapshot", sha256: args.afterHash },
     enabled: args.enabled && args.afterHash !== null,
   });
-  if (!args.enabled) {
-    return { data: undefined, isLoading: false, truncation: null };
-  }
-  const beforePending = args.beforeHash !== null && before.data === undefined;
-  const afterPending = args.afterHash !== null && after.data === undefined;
-  if ((beforePending && !before.isError) || (afterPending && !after.isError)) {
-    return { data: undefined, isLoading: true, truncation: null };
-  }
-  const beforeText = payloadText(before.data);
-  const afterText = payloadText(after.data);
-  // A hash the block names but the cloud cannot serve is the same fact the
-  // local store reports as a missing blob, and the segment already draws it.
-  const missing =
-    (args.beforeHash !== null && beforeText === null) ||
-    (args.afterHash !== null && afterText === null);
-  return {
-    data: {
-      beforeContent: beforeText,
-      afterContent: afterText,
-      reason: missing ? "blob_missing" : "snapshot",
-    },
-    isLoading: false,
-    // Either side being a prefix makes the DIFF partial - a complete "after"
-    // against a truncated "before" invents changes at the cut.
-    truncation: payloadExtent(after.data) ?? payloadExtent(before.data),
-  };
+  return snapshotDiffResult({
+    enabled: args.enabled,
+    beforeHash: args.beforeHash,
+    afterHash: args.afterHash,
+    before,
+    after,
+  });
 }
 
 /** A published plan's full markdown, or `null` when the cloud cannot serve it. */
