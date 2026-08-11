@@ -1,0 +1,388 @@
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type {
+  GitChangedFile,
+  GitGetFileDiffResponse,
+} from "@traycer/protocol/host";
+import type { ImageDiffViewProps } from "@/components/epic-canvas/image-preview/image-diff-view";
+import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
+import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
+
+const PREFERENCES: DiffViewerPreferences = {
+  mode: "split",
+  wordWrap: false,
+  ignoreWhitespace: false,
+  backgrounds: true,
+  lineNumbers: true,
+  indicatorStyle: "bars",
+};
+
+const DIFF: GitGetFileDiffResponse = {
+  filePath: "src/app.ts",
+  headSha: "head-1",
+  patch: "@@ -1 +1 @@",
+  isTruncated: false,
+  truncatedAfterBytes: null,
+  isBinary: false,
+  stagedOid: null,
+  worktreeOid: "worktree-1",
+};
+
+const state = vi.hoisted(() => ({
+  file: null as GitChangedFile | null,
+  diff: null as GitGetFileDiffResponse | null,
+  editableCalls: [] as Array<{
+    readonly queryEnabled: boolean;
+    readonly file: GitChangedFile;
+  }>,
+  subscribe: vi.fn(),
+  open: vi.fn(),
+  openFeedback: vi.fn(),
+  refresh: vi.fn(),
+  updateView: vi.fn(),
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "host-A",
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => "host-A",
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable", hostLabel: "Host A" }),
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
+  useGitListChangedFilesSubscription: state.subscribe,
+}));
+
+vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
+  useGitRefreshWorktreeStatus: () => ({ mutateAsync: state.refresh }),
+}));
+
+vi.mock("@/hooks/use-refresh-spinner", () => ({
+  useRefreshSpinner: () => ({ refreshing: false, trigger: vi.fn() }),
+}));
+
+vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
+  useEditorOpen: () => ({ mutate: state.open, isPending: false }),
+}));
+
+vi.mock("@/hooks/editor/use-editor-open-feedback", () => ({
+  useEditorOpenFeedback: () => ({
+    active: false,
+    trigger: state.openFeedback,
+  }),
+}));
+
+vi.mock("@/stores/settings/settings-store", () => ({
+  useSettingsStore: <T,>(
+    selector: (settings: {
+      readonly defaultEditor: string;
+      readonly diffViewerPreferences: DiffViewerPreferences;
+      readonly patchDiffViewerPreferences: (patch: unknown) => void;
+    }) => T,
+  ): T =>
+    selector({
+      defaultEditor: "vscode",
+      diffViewerPreferences: PREFERENCES,
+      patchDiffViewerPreferences: vi.fn(),
+    }),
+}));
+
+vi.mock("@/stores/epics/canvas/store", () => ({
+  useEpicCanvasStore: <T,>(
+    selector: (store: {
+      readonly updateGitDiffTileViewInTab: typeof state.updateView;
+    }) => T,
+  ): T => selector({ updateGitDiffTileViewInTab: state.updateView }),
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/diff-tab-shell", () => ({
+  DiffTabShell: (props: {
+    readonly toolbar: ReactNode;
+    readonly children: ReactNode;
+  }) => (
+    <div data-testid="diff-tab-shell">
+      {props.toolbar}
+      {props.children}
+    </div>
+  ),
+  DiffTabHeaderPortal: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/diff-tab-toolbar", () => ({
+  DiffTabToolbar: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/file-diff-content", () => ({
+  FileDiffContent: () => <div data-testid="file-diff-content" />,
+}));
+
+vi.mock("@/components/epic-canvas/image-preview/image-diff-view", () => ({
+  ImageDiffView: (props: ImageDiffViewProps) => (
+    <div
+      data-testid="image-diff-view"
+      data-old-stage={props.oldStage ?? "none"}
+      data-new-stage={props.newStage ?? "none"}
+      data-conflicted={String(props.conflicted)}
+      data-previous-path={props.previousPath ?? "none"}
+    />
+  ),
+}));
+
+vi.mock("@/components/epic-canvas/binary-placeholder", () => ({
+  BinaryPlaceholder: () => <div data-testid="binary-placeholder" />,
+}));
+
+vi.mock(
+  "@/components/epic-canvas/git-diff/diff-content-loading-skeleton",
+  () => ({
+    DiffContentLoadingSkeleton: () => <div data-testid="diff-loading" />,
+  }),
+);
+
+vi.mock("@/components/epic-canvas/git-diff/git-error-block", () => ({
+  GitErrorBlock: () => <div data-testid="git-error" />,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-watcher-status-notice", () => ({
+  GitWatcherStatusNotice: () => null,
+}));
+
+vi.mock(
+  "@/components/epic-canvas/git-diff/placeholders/no-longer-changed",
+  () => ({
+    NoLongerChanged: () => <div data-testid="no-longer-changed" />,
+  }),
+);
+
+vi.mock(
+  "@/components/epic-canvas/git-diff/empty-states/subscription-error-state",
+  () => ({
+    SubscriptionErrorState: () => <div data-testid="subscription-error" />,
+  }),
+);
+
+vi.mock(
+  "@/components/epic-canvas/git-diff/empty-states/no-changes-in-worktree",
+  () => ({
+    NoChangesInWorktree: () => <div data-testid="no-changes" />,
+  }),
+);
+
+vi.mock("@/components/epic-canvas/renderers/dead-tile-banner", () => ({
+  GitDiffDeadTileBanner: () => <div data-testid="dead-tile" />,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-bundle-file-section", () => ({
+  BundleFileSection: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-diff-edit-status", () => ({
+  GitDiffEditStatusContent: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-diff-editing", () => ({
+  useEditableGitDiffSurface: (args: {
+    readonly queryEnabled: boolean;
+    readonly file: GitChangedFile;
+  }) => {
+    state.editableCalls.push({
+      queryEnabled: args.queryEnabled,
+      file: args.file,
+    });
+    return {
+      displayedDiff: state.diff ?? undefined,
+      displayedDiffError: null,
+      displayedDiffPending: false,
+      editing: {
+        canOfferEdit: false,
+        editAdapter: undefined,
+        editSession: undefined,
+      },
+      loadFull: vi.fn(),
+    };
+  },
+}));
+
+vi.mock("@/hooks/scroll/use-native-div-scroll-restoration", () => ({
+  useNativeDivScrollRestoration: () => ({
+    scrollContainerRef: vi.fn(),
+    onScroll: vi.fn(),
+  }),
+}));
+
+vi.mock("@/components/diff/diff-find-navigation", () => ({
+  useDiffFindNavigation: () => ({ setScrollContainer: vi.fn() }),
+}));
+
+vi.mock("@/components/diff/use-register-diff-tile-find-adapter", () => ({
+  useRegisterDiffTileFindAdapter: () => undefined,
+}));
+
+vi.mock("@/components/diff/bundle-diff-find-registration", () => ({
+  BundleDiffFindRegistrationProvider: (props: {
+    readonly children: ReactNode;
+  }) => props.children,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-bundle-diff-find", () => ({
+  gitBundleDiffFindFileId: (file: GitChangedFile) => `bundle:${file.path}`,
+  useGitBundleDiffFind: () => null,
+}));
+
+vi.mock("@/stores/tile-find", () => ({
+  createLoadedDiffTileFindSource: vi.fn(),
+  createLoadingDiffTileFindSource: vi.fn(),
+  createMetadataOnlyDiffTileFindSource: vi.fn(),
+  createMissingDiffTileFindSource: vi.fn(),
+}));
+
+vi.mock("@/components/ui/tooltip-wrapper", () => ({
+  TooltipWrapper: (props: { readonly children: ReactNode }) => props.children,
+}));
+
+import { GitDiffTile } from "../git-diff-tile";
+
+function changedFile(args: {
+  readonly path: string;
+  readonly status?: GitChangedFile["status"];
+  readonly stage?: GitChangedFile["stage"];
+  readonly isBinary?: boolean;
+  readonly previousPath?: string | null;
+}): GitChangedFile {
+  return {
+    path: args.path,
+    previousPath: args.previousPath ?? null,
+    status: args.status ?? "modified",
+    stage: args.stage ?? "unstaged",
+    insertions: 1,
+    deletions: 1,
+    isBinary: args.isBinary ?? false,
+    sizeBytes: 12,
+    stagedOid: null,
+    worktreeOid: "worktree-1",
+  };
+}
+
+function tileFor(filePath: string, stage: GitChangedFile["stage"]) {
+  return makeGitFileDiffTile({
+    hostId: "host-A",
+    runningDir: "/work/repo",
+    filePath,
+    stage,
+    repositoryContext: null,
+  });
+}
+
+function renderTile(file: GitChangedFile): void {
+  state.file = file;
+  state.subscribe.mockReturnValue({
+    data: {
+      branch: "main",
+      headSha: "head-1",
+      files: [file],
+    },
+    error: null,
+    isPending: false,
+    repoState: null,
+    repoMode: "normal",
+    pollStartedAtMs: 1,
+    watcherStatus: null,
+  });
+
+  const node = tileFor(file.path, file.stage);
+  render(
+    <GitDiffTile node={node} viewTabId="view-1" tileId={node.id} isActive />,
+  );
+}
+
+beforeEach(() => {
+  state.file = null;
+  state.diff = DIFF;
+  state.editableCalls.length = 0;
+  state.subscribe.mockReset();
+  state.open.mockReset();
+  state.openFeedback.mockReset();
+  state.refresh.mockReset();
+  state.refresh.mockResolvedValue(undefined);
+  state.updateView.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("<GitDiffTile /> image routing", () => {
+  it("routes binary image extensions to ImageDiffView and skips the text query", () => {
+    renderTile(changedFile({ path: "assets/photo.png", isBinary: true }));
+
+    expect(screen.getByTestId("image-diff-view")).toBeTruthy();
+    expect(screen.queryByTestId("binary-placeholder")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  it("keeps non-image binary files on BinaryPlaceholder", () => {
+    renderTile(changedFile({ path: "assets/archive.zip", isBinary: true }));
+
+    expect(screen.getByTestId("binary-placeholder")).toBeTruthy();
+    expect(screen.queryByTestId("image-diff-view")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+  });
+
+  it("defaults SVG to image mode and toggles to the existing source diff", () => {
+    renderTile(changedFile({ path: "assets/icon.svg" }));
+
+    expect(screen.getByTestId("image-diff-view")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "View source" })).toBeTruthy();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "View source" }));
+
+    expect(screen.getByTestId("file-diff-content")).toBeTruthy();
+    expect(screen.queryByTestId("image-diff-view")).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "View image" }));
+
+    expect(screen.getByTestId("image-diff-view")).toBeTruthy();
+    expect(screen.queryByTestId("file-diff-content")).toBeNull();
+  });
+
+  it("keeps ordinary text files on the existing diff path", () => {
+    renderTile(changedFile({ path: "src/app.ts" }));
+
+    expect(screen.getByTestId("file-diff-content")).toBeTruthy();
+    expect(screen.queryByTestId("image-diff-view")).toBeNull();
+    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+    expect(state.editableCalls.at(-1)?.queryEnabled).toBe(true);
+  });
+
+  it("passes renamed previousPath through the image diff surface", () => {
+    renderTile(
+      changedFile({
+        path: "assets/new-name.png",
+        previousPath: "assets/old-name.png",
+        status: "renamed",
+        isBinary: true,
+      }),
+    );
+
+    expect(
+      screen.getByTestId("image-diff-view").getAttribute("data-previous-path"),
+    ).toBe("assets/old-name.png");
+  });
+});
