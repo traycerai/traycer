@@ -80,9 +80,11 @@ export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResp
  * the entity columns, severity, kind and markers, so it can mirror the host's
  * derivation over rows from EVERY host rather than only the connected one.
  * Pending prompts are ORed normally. Terminal rows first resolve to the newest
- * outcome for each exact entity; only then are those winners rolled into epic
- * state. That lets a later success replace an earlier failure in one chat
- * without allowing a sibling chat's success to hide a real failure.
+ * outcome for each exact entity within one origin host, whose timestamps share
+ * a clock domain. Those per-host winners are then rolled into epic state. This
+ * lets a later success replace an earlier failure from one host without
+ * comparing clocks across hosts or allowing another host/entity's success to
+ * hide a real failure.
  * `pendingFork` is always false here: fork truth is host-local and is merged
  * from the host response after this feed-row derivation, never inferred from a
  * retained cloud row.
@@ -104,11 +106,8 @@ export function selectCloudNotificationIndicators(
   }
   const epics: Record<string, HostNotificationsIndicatorState> = {};
   const chats: Record<string, HostNotificationsIndicatorState> = {};
-  const epicTerminalWinners = new Map<
-    string,
-    Map<string, HostNotificationEntry>
-  >();
-  const chatTerminalWinners = new Map<string, HostNotificationEntry>();
+  const epicTerminalWinners = new Map<string, CloudTerminalWinners>();
+  const chatTerminalWinners: CloudTerminalWinners = new Map();
   const accumulator: CloudIndicatorAccumulator = {
     wantedEpicIds,
     wantedChatIds,
@@ -119,20 +118,24 @@ export function selectCloudNotificationIndicators(
   };
   for (const row of Object.values(rows)) {
     if (row === undefined) continue;
-    collectCloudIndicatorEntry(accumulator, row.entry);
+    collectCloudIndicatorEntry(accumulator, row);
   }
   for (const [epicId, terminalWinners] of epicTerminalWinners) {
-    for (const winner of terminalWinners.values()) {
-      const contribution = terminalIndicatorContribution(winner);
-      if (contribution !== null) {
-        epics[epicId] = mergeIndicatorFlags(epics[epicId], contribution);
+    for (const originWinners of terminalWinners.values()) {
+      for (const winner of originWinners.values()) {
+        const contribution = terminalIndicatorContribution(winner);
+        if (contribution !== null) {
+          epics[epicId] = mergeIndicatorFlags(epics[epicId], contribution);
+        }
       }
     }
   }
-  for (const [chatId, winner] of chatTerminalWinners) {
-    const contribution = terminalIndicatorContribution(winner);
-    if (contribution !== null) {
-      chats[chatId] = mergeIndicatorFlags(chats[chatId], contribution);
+  for (const [chatId, originWinners] of chatTerminalWinners) {
+    for (const winner of originWinners.values()) {
+      const contribution = terminalIndicatorContribution(winner);
+      if (contribution !== null) {
+        chats[chatId] = mergeIndicatorFlags(chats[chatId], contribution);
+      }
     }
   }
   return { epics, chats };
@@ -143,14 +146,18 @@ interface CloudIndicatorAccumulator {
   readonly wantedChatIds: ReadonlySet<string>;
   readonly epics: Record<string, HostNotificationsIndicatorState>;
   readonly chats: Record<string, HostNotificationsIndicatorState>;
-  readonly epicTerminalWinners: Map<string, Map<string, HostNotificationEntry>>;
-  readonly chatTerminalWinners: Map<string, HostNotificationEntry>;
+  readonly epicTerminalWinners: Map<string, CloudTerminalWinners>;
+  readonly chatTerminalWinners: CloudTerminalWinners;
 }
+
+/** Exact entity -> origin host -> latest terminal entry in that host's clock. */
+type CloudTerminalWinners = Map<string, Map<string, HostNotificationEntry>>;
 
 function collectCloudIndicatorEntry(
   accumulator: CloudIndicatorAccumulator,
-  entry: HostNotificationEntry,
+  row: HostNotificationsCloudFeedRow,
 ): void {
+  const { entry, originHostId } = row;
   const contribution = indicatorContribution(entry);
   const { epicId, chatId } = entry;
   if (epicId !== null && accumulator.wantedEpicIds.has(epicId)) {
@@ -163,6 +170,7 @@ function collectCloudIndicatorEntry(
     retainLatestTerminal(
       terminalWinnersForEpic(accumulator.epicTerminalWinners, epicId),
       chatId === null ? "epic" : `chat:${chatId}`,
+      originHostId,
       entry,
     );
   }
@@ -173,7 +181,12 @@ function collectCloudIndicatorEntry(
         contribution,
       );
     }
-    retainLatestTerminal(accumulator.chatTerminalWinners, chatId, entry);
+    retainLatestTerminal(
+      accumulator.chatTerminalWinners,
+      chatId,
+      originHostId,
+      entry,
+    );
   }
 }
 
@@ -199,26 +212,39 @@ function indicatorContribution(
 }
 
 function terminalWinnersForEpic(
-  winners: Map<string, Map<string, HostNotificationEntry>>,
+  winners: Map<string, CloudTerminalWinners>,
   epicId: string,
-): Map<string, HostNotificationEntry> {
+): CloudTerminalWinners {
   const existing = winners.get(epicId);
   if (existing !== undefined) return existing;
-  const created = new Map<string, HostNotificationEntry>();
+  const created: CloudTerminalWinners = new Map();
   winners.set(epicId, created);
   return created;
 }
 
 function retainLatestTerminal(
-  winners: Map<string, HostNotificationEntry>,
+  winners: CloudTerminalWinners,
   entityId: string,
+  originHostId: string,
   candidate: HostNotificationEntry,
 ): void {
   if (!isTerminalEntry(candidate)) return;
-  const current = winners.get(entityId);
+  const originWinners = terminalWinnersForEntity(winners, entityId);
+  const current = originWinners.get(originHostId);
   if (current === undefined || terminalEntryIsNewer(candidate, current)) {
-    winners.set(entityId, candidate);
+    originWinners.set(originHostId, candidate);
   }
+}
+
+function terminalWinnersForEntity(
+  winners: CloudTerminalWinners,
+  entityId: string,
+): Map<string, HostNotificationEntry> {
+  const existing = winners.get(entityId);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, HostNotificationEntry>();
+  winners.set(entityId, created);
+  return created;
 }
 
 function isTerminalEntry(entry: HostNotificationEntry): boolean {

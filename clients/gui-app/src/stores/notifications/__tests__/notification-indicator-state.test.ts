@@ -263,6 +263,39 @@ describe("cloud notification indicator derivation", () => {
     });
   });
 
+  it("does not compare terminal timestamps across origin hosts", () => {
+    const failure = stoppedAt({
+      entryId: "failure-unread",
+      severity: "failure",
+      readAt: null,
+      updatedAt: 100,
+      chatId: "chat-1",
+    });
+    const done = stoppedAt({
+      entryId: "done-unread",
+      severity: "done",
+      readAt: null,
+      updatedAt: 1_000,
+      chatId: "chat-1",
+    });
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        { ...failure, originHostId: "host-a" },
+        { ...done, originHostId: "host-b" },
+      ]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: true,
+      unreadDone: true,
+    });
+  });
+
   it("does not let one chat's completion hide a sibling failure", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([

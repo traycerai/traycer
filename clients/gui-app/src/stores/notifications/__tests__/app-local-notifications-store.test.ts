@@ -221,13 +221,12 @@ describe("app-local notifications store", () => {
     expect(store.getState().byId.other.readAt).toBeNull();
   });
 
-  it("consumes only older failures for the exact completed entity", () => {
+  it("consumes failures already observed for the exact completed entity", () => {
     const store = createAppLocalNotificationsStore(
       appLocalNotificationsKey("user-a"),
     );
     store.getState().activateIdentity("user-a");
     store.getState().upsert(entry("older-match", 10, null));
-    store.getState().upsert(entry("newer-match", 30, null));
     store.getState().upsert({
       ...entry("older-sibling", 5, null),
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-2" },
@@ -235,13 +234,14 @@ describe("app-local notifications store", () => {
 
     store
       .getState()
-      .markFailuresSupersededByCompletion(
+      .markFailuresObservedBeforeCompletion(
         { epicId: "epic-1", chatId: "chat-1" },
         20,
       );
+    store.getState().upsert(entry("later-match", 1, null));
 
     expect(store.getState().byId["older-match"].readAt).toBe(20);
-    expect(store.getState().byId["newer-match"].readAt).toBeNull();
+    expect(store.getState().byId["later-match"].readAt).toBeNull();
     expect(store.getState().byId["older-sibling"].readAt).toBeNull();
   });
 

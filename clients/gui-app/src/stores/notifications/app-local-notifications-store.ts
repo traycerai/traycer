@@ -83,9 +83,9 @@ export interface AppLocalNotificationsState {
     entity: HostNotificationsEntityRef,
     readAt: number,
   ) => void;
-  markFailuresSupersededByCompletion: (
+  markFailuresObservedBeforeCompletion: (
     entity: HostNotificationsEntityRef,
-    completedAt: number,
+    observedAt: number,
   ) => void;
   markAllAsRead: (readAt: number) => void;
   markAsDisplayed: (id: string, updatedAt: number) => void;
@@ -404,14 +404,12 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
-        markFailuresSupersededByCompletion: (entity, completedAt) => {
+        markFailuresObservedBeforeCompletion: (entity, observedAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
             const supersededEntries = Object.values(state.byId).filter(
               (entry) => {
-                if (entry.readAt !== null || entry.updatedAt >= completedAt) {
-                  return false;
-                }
+                if (entry.readAt !== null) return false;
                 const entryEntity = notificationEntityFromPayload(
                   entry.payload,
                 );
@@ -427,7 +425,7 @@ export function createAppLocalNotificationsStore(initialName: string) {
               ...Object.fromEntries(
                 supersededEntries.map((entry) => [
                   entry.id,
-                  { ...entry, readAt: completedAt },
+                  { ...entry, readAt: observedAt },
                 ]),
               ),
             };

@@ -1971,28 +1971,18 @@ describe("<NotificationsSessionProvider />", () => {
     ).not.toBeNull();
   });
 
-  it("consumes only an older local failure when the same chat later completes", async () => {
+  it("uses renderer observation order when the same chat completes", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls, streamClient } =
       await renderHostNotificationsProvider();
     useAppLocalNotificationsStore.getState().upsert({
-      id: "older-local-error",
-      updatedAt: 0,
-      readAt: null,
-      kind: "stream.transport.error",
-      sourceRef: "chat-a",
-      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-a" },
-      message: "Older local error",
-      detail: null,
-    });
-    useAppLocalNotificationsStore.getState().upsert({
-      id: "newer-local-error",
+      id: "observed-local-error",
       updatedAt: 2,
       readAt: null,
       kind: "stream.transport.error",
       sourceRef: "chat-a",
       payload: { kind: "chat", epicId: "epic-a", chatId: "chat-a" },
-      message: "Newer local error",
+      message: "Observed local error",
       detail: null,
     });
     useAppLocalNotificationsStore.getState().upsert({
@@ -2023,12 +2013,41 @@ describe("<NotificationsSessionProvider />", () => {
 
     await waitFor(() => {
       expect(
-        useAppLocalNotificationsStore.getState().byId["older-local-error"]
+        useAppLocalNotificationsStore.getState().byId["observed-local-error"]
           .readAt,
-      ).toBe(1);
+      ).not.toBeNull();
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "later-local-error",
+      updatedAt: 0,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-a",
+      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-a" },
+      message: "Later local error",
+      detail: null,
+    });
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        attention: { entries: [], nextCursor: null },
+        recent: {
+          entries: [
+            hostEntry({
+              id: "done-1",
+              epicId: "epic-a",
+              chatId: "chat-a",
+              severity: "done",
+            }),
+          ],
+          nextCursor: null,
+        },
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
     });
     expect(
-      useAppLocalNotificationsStore.getState().byId["newer-local-error"].readAt,
+      useAppLocalNotificationsStore.getState().byId["later-local-error"].readAt,
     ).toBeNull();
     expect(
       useAppLocalNotificationsStore.getState().byId["sibling-local-error"]

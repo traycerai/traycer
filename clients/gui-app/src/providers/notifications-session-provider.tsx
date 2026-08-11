@@ -84,17 +84,6 @@ export interface NotificationsSessionProviderProps {
   readonly navigate: NotificationNavigate;
 }
 
-function consumeSupersededAppLocalFailures(
-  entry: HostNotificationEntryV21,
-): void {
-  if (entry.severity !== "done") return;
-  const entity = notificationEntityFromHostEntry(entry);
-  if (entity === null) return;
-  useAppLocalNotificationsStore
-    .getState()
-    .markFailuresSupersededByCompletion(entity, entry.updatedAt);
-}
-
 /**
  * Mounted inside the app shell post-auth. Opens the notifications stream as
  * soon as the user is signed in and tears it down on sign-out / token
@@ -151,6 +140,30 @@ export function NotificationsSessionProvider(
   const markEntityReadMutation = useNotificationMarkEntityRead();
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
+  const observedCompletionIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  // Producer timestamps come from different host clocks, while app-local
+  // failures use this renderer's clock. First observation of a completion is
+  // therefore the only causal boundary shared by both sources. Remember it so
+  // reconnect snapshots cannot replay an old completion over a later failure.
+  const consumeObservedCompletion = useCallback(
+    (entry: HostNotificationEntryV21, originHostId: string): void => {
+      if (entry.severity !== "done") return;
+      const entity = notificationEntityFromHostEntry(entry);
+      if (entity === null) return;
+      const observedForHost =
+        observedCompletionIdsRef.current.get(originHostId);
+      if (observedForHost?.has(entry.id) === true) return;
+      if (observedForHost === undefined) {
+        observedCompletionIdsRef.current.set(originHostId, new Set([entry.id]));
+      } else {
+        observedForHost.add(entry.id);
+      }
+      useAppLocalNotificationsStore
+        .getState()
+        .markFailuresObservedBeforeCompletion(entity, Date.now());
+    },
+    [],
+  );
   const onToastClick = useCallback(
     (row: MergedNotificationRow): void => {
       if (row.payload === null) return;
@@ -233,7 +246,7 @@ export function NotificationsSessionProvider(
           ...frame.attention.entries,
           ...frame.recent.entries,
         ]) {
-          consumeSupersededAppLocalFailures(entry);
+          consumeObservedCompletion(entry, hostId);
         }
         return;
       }
@@ -271,7 +284,7 @@ export function NotificationsSessionProvider(
         );
       }
       if (entity === null) return;
-      consumeSupersededAppLocalFailures(frame.entry);
+      consumeObservedCompletion(frame.entry, hostId);
       const activeEntity = activeEntityRef.current;
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
@@ -283,7 +296,13 @@ export function NotificationsSessionProvider(
       if (!isTerminalSeverity) return;
       consumeEntity(entity);
     },
-    [localHostId, consumeEntity, hostClient, queryClient],
+    [
+      localHostId,
+      consumeEntity,
+      consumeObservedCompletion,
+      hostClient,
+      queryClient,
+    ],
   );
   const onHostStreamOpened = useCallback((): void => {
     activeEntityRef.current = null;
@@ -327,6 +346,7 @@ export function NotificationsSessionProvider(
   // user's entries.
   const resetIdentityReplica = useCallback((): void => {
     activeEntityRef.current = null;
+    observedCompletionIdsRef.current.clear();
     useNotificationsStore.getState().reset();
     useAgentActivityStore.getState().reset();
     useHostNotificationsStore.getState().reset();
@@ -495,7 +515,7 @@ export function NotificationsSessionProvider(
         onEntitlementDenied,
         (entries) => {
           for (const row of entries) {
-            consumeSupersededAppLocalFailures(row.entry);
+            consumeObservedCompletion(row.entry, row.originHostId);
           }
           displayCloudSnapshotArrivals(entries, {
             showNotification,
@@ -545,6 +565,7 @@ export function NotificationsSessionProvider(
   }, [
     localStreamClient,
     authService,
+    consumeObservedCompletion,
     localHostId,
     windowId,
     showNotification,
