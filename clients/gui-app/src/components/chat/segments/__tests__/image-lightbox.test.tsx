@@ -122,6 +122,10 @@ describe("<ImageLightbox /> actions", () => {
     await waitFor(() => {
       expect(saveBlobToDiskMock).toHaveBeenCalledTimes(1);
     });
+    expect(screen.getByRole("button", { name: "Copy image" })).toBeTruthy();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "blob:http://localhost/raster",
+    );
     const [blob, name] = saveBlobToDiskMock.mock.calls[0];
     expect(name).toBe("pier.png");
     // jsdom may not share Blob identity across realms; assert blob-shaped.
@@ -150,6 +154,45 @@ describe("<ImageLightbox /> actions", () => {
     const [blob] = copyImageMock.mock.calls[0];
     expect(blob.size).toBeGreaterThan(0);
     expect(typeof blob.arrayBuffer).toBe("function");
+  });
+
+  it("keeps CORS-less HTTPS download native and hides unreliable Copy", () => {
+    render(
+      <ImageLightbox
+        src="https://cdn.example.com/no-cors.png"
+        alt="remote"
+        mediaType={null}
+        suggestedName="remote.png"
+        className={undefined}
+      >
+        <img src="https://cdn.example.com/no-cors.png" alt="remote" />
+      </ImageLightbox>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
+    const download = screen.getByRole("link", { name: "Download image" });
+    expect(download.getAttribute("href")).toBe(
+      "https://cdn.example.com/no-cors.png",
+    );
+    expect(download.getAttribute("download")).toBe("remote.png");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("shows Copy for attachment-backed extended WebP media", () => {
+    render(
+      <ImageLightbox
+        src="blob:http://localhost/extended-webp"
+        alt="extended webp"
+        mediaType="image/webp"
+        suggestedName="extended.webp"
+        className={undefined}
+      >
+        <img src="blob:http://localhost/extended-webp" alt="extended webp" />
+      </ImageLightbox>,
+    );
+
+    expect(screen.getByRole("button", { name: "Copy image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download image" })).toBeTruthy();
   });
 
   it("opens a dialog with the raster image on trigger click", async () => {
@@ -188,6 +231,9 @@ describe("<ImageLightbox /> actions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open safe svg" }));
     const dialog = await screen.findByRole("dialog");
+
+    expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Download image" })).toBeTruthy();
 
     // mediaType === "image/svg+xml" mounts the lazy SVG viewer shell (not the
     // plain dialog <img> branch used for raster).

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
 import { Copy, Download } from "lucide-react";
 import { toast } from "sonner";
+import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +37,9 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
+  const directDownload = /^https:/i.test(props.src) ? props.src : null;
+  const canCopy =
+    directDownload === null && isClipboardImageMediaType(props.mediaType);
 
   const runAction = (action: ImageAction): void => {
     if (pendingAction !== null) return;
@@ -56,6 +60,9 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const actions = (
     <ImageActions
       pendingAction={pendingAction}
+      canCopy={canCopy}
+      directDownload={directDownload}
+      suggestedName={suggestedName}
       onCopy={() => runAction("copy")}
       onDownload={() => runAction("download")}
     />
@@ -110,23 +117,48 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
 
 function ImageActions(props: {
   readonly pendingAction: ImageAction | null;
+  readonly canCopy: boolean;
+  readonly directDownload: string | null;
+  readonly suggestedName: string;
   readonly onCopy: () => void;
   readonly onDownload: () => void;
 }): ReactNode {
   return (
     <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm backdrop-blur-sm">
-      <ImageActionButton
-        label="Copy image"
-        disabled={props.pendingAction !== null}
-        onClick={props.onCopy}
-        icon={<Copy className="size-3.5" aria-hidden />}
-      />
-      <ImageActionButton
-        label="Download image"
-        disabled={props.pendingAction !== null}
-        onClick={props.onDownload}
-        icon={<Download className="size-3.5" aria-hidden />}
-      />
+      {props.canCopy ? (
+        <ImageActionButton
+          label="Copy image"
+          disabled={props.pendingAction !== null}
+          onClick={props.onCopy}
+          icon={<Copy className="size-3.5" aria-hidden />}
+        />
+      ) : null}
+      {props.directDownload === null ? (
+        <ImageActionButton
+          label="Download image"
+          disabled={props.pendingAction !== null}
+          onClick={props.onDownload}
+          icon={<Download className="size-3.5" aria-hidden />}
+        />
+      ) : (
+        <TooltipWrapper
+          label="Download image"
+          side="top"
+          sideOffset={6}
+          align="center"
+        >
+          <a
+            href={props.directDownload}
+            download={props.suggestedName}
+            target="_blank"
+            rel="noreferrer"
+            className="flex size-7 items-center justify-center rounded-sm text-white/85 outline-none transition-colors hover:bg-white/15 hover:text-white focus-visible:ring-1 focus-visible:ring-white"
+            aria-label="Download image"
+          >
+            <Download className="size-3.5" aria-hidden />
+          </a>
+        </TooltipWrapper>
+      )}
     </div>
   );
 }
