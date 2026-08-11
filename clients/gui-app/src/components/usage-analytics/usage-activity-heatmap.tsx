@@ -158,8 +158,6 @@ function DayTile(props: {
   readonly metric: UsageMetric;
 }): ReactNode {
   const { cell, metric } = props;
-  const valueLabel =
-    cell.value > 0 ? formatMetricValue(cell.value, metric) : "No usage";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -175,7 +173,7 @@ function DayTile(props: {
         <p>
           <span className="font-medium">{cell.day}</span>
           {" · "}
-          {valueLabel}
+          {activityValueLabel(cell, metric)}
         </p>
       </TooltipContent>
     </Tooltip>
@@ -183,9 +181,27 @@ function DayTile(props: {
 }
 
 /**
+ * What a day reads as. A day can hold real turns whose cost was never
+ * available: under the Cost metric its value is 0, and calling that
+ * "No usage" would report work as inactivity. It says how many turns ran
+ * and that they are not counted - the same words the headline footnote
+ * uses, and never the banned vocabulary (see the pricing artifact's
+ * product framing).
+ */
+function activityValueLabel(
+  cell: UsageActivityCell,
+  metric: UsageMetric,
+): string {
+  if (cell.value > 0) return formatMetricValue(cell.value, metric);
+  if (cell.factCount === 0) return "No usage";
+  const turnWord = cell.factCount === 1 ? "turn" : "turns";
+  return `${String(cell.factCount)} ${turnWord} · not counted`;
+}
+
+/**
  * The calendar's values for anyone not using a pointer: one row per day
- * that had usage. Days with none are omitted - a year of "No usage" rows
- * is noise, and their absence is itself the information.
+ * that saw activity. Days with none are omitted - a year of "No usage"
+ * rows is noise, and their absence is itself the information.
  */
 function UsageActivityDataTable(props: {
   readonly calendar: UsageActivityCalendar;
@@ -194,7 +210,8 @@ function UsageActivityDataTable(props: {
   const active = props.calendar.weeks
     .flatMap((week) => week.cells)
     .filter((cell) => cell !== null)
-    .filter((cell) => cell.value > 0);
+    // Presence, not value: a day of unpriced work belongs here too.
+    .filter((cell) => cell.factCount > 0);
   return (
     <table className="sr-only" data-testid="usage-activity-data-table">
       <caption>Daily usage</caption>
@@ -208,7 +225,7 @@ function UsageActivityDataTable(props: {
         {active.map((cell) => (
           <tr key={cell.day}>
             <th scope="row">{cell.day}</th>
-            <td>{formatMetricValue(cell.value, props.metric)}</td>
+            <td>{activityValueLabel(cell, props.metric)}</td>
           </tr>
         ))}
       </tbody>

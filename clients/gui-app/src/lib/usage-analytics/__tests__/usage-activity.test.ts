@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { buildUsageActivityCalendar } from "@/lib/usage-analytics/usage-activity";
 import type { UsageBucket } from "@/lib/usage-analytics/usage-chart-data";
 
-function bucket(day: string, knownCostUsd: number): UsageBucket {
+function bucket(
+  day: string,
+  knownCostUsd: number,
+  overrides: Partial<UsageBucket>,
+): UsageBucket {
   return {
     day,
     harnessId: "claude",
@@ -18,7 +22,7 @@ function bucket(day: string, knownCostUsd: number): UsageBucket {
     knownCacheSavingsUsd: 0,
     knownReasoningTokens: 0,
     costProvenance: "providerReported",
-    ...{},
+    ...overrides,
   };
 }
 
@@ -40,7 +44,7 @@ describe("buildUsageActivityCalendar", () => {
     const days = dayRange("2026-08-02", "2026-08-08");
     const calendar = buildUsageActivityCalendar(
       days,
-      [bucket("2026-08-03", 5)],
+      [bucket("2026-08-03", 5, {})],
       "cost",
     );
     expect(calendar.weeks).toHaveLength(1);
@@ -65,12 +69,12 @@ describe("buildUsageActivityCalendar", () => {
     const calendar = buildUsageActivityCalendar(
       days,
       [
-        bucket("2026-08-02", 1),
-        bucket("2026-08-03", 2),
-        bucket("2026-08-04", 3),
+        bucket("2026-08-02", 1, {}),
+        bucket("2026-08-03", 2, {}),
+        bucket("2026-08-04", 3, {}),
         // The whale day: a linear-to-max scale would push every other day
         // into the faintest step.
-        bucket("2026-08-05", 1000),
+        bucket("2026-08-05", 1000, {}),
       ],
       "cost",
     );
@@ -88,7 +92,7 @@ describe("buildUsageActivityCalendar", () => {
     const days = dayRange("2026-08-02", "2026-08-04");
     const calendar = buildUsageActivityCalendar(
       days,
-      [bucket("2026-08-02", 2), bucket("2026-08-03", 2)],
+      [bucket("2026-08-02", 2, {}), bucket("2026-08-03", 2, {})],
       "cost",
     );
     const levels = (calendar.weeks[0]?.cells ?? [])
@@ -116,12 +120,12 @@ describe("buildUsageActivityCalendar", () => {
     const calendar = buildUsageActivityCalendar(
       days,
       [
-        bucket("2026-08-02", 1),
-        bucket("2026-08-03", 1),
-        bucket("2026-08-04", 1),
+        bucket("2026-08-02", 1, {}),
+        bucket("2026-08-03", 1, {}),
+        bucket("2026-08-04", 1, {}),
         // gap on 08-05
-        bucket("2026-08-06", 1),
-        bucket("2026-08-07", 1),
+        bucket("2026-08-06", 1, {}),
+        bucket("2026-08-07", 1, {}),
       ],
       "cost",
     );
@@ -130,11 +134,39 @@ describe("buildUsageActivityCalendar", () => {
     expect(calendar.stats.mostActiveMonth).toBe("Aug 2026");
   });
 
+  it("counts a day of unpriced work as activity, not as an empty day", () => {
+    // Cost is the selected metric and this day's usage was never priced, so
+    // its value is 0 - but the turns happened. Reporting that as inactivity
+    // would break the streak and drop the day from the accessible table.
+    const days = dayRange("2026-08-02", "2026-08-05");
+    const calendar = buildUsageActivityCalendar(
+      days,
+      [
+        bucket("2026-08-02", 4, {}),
+        bucket("2026-08-03", 0, { costProvenance: "unpriced", factCount: 2 }),
+        bucket("2026-08-04", 6, {}),
+      ],
+      "cost",
+    );
+    const byDay = new Map(
+      (calendar.weeks[0]?.cells ?? [])
+        .filter((cell) => cell !== null)
+        .map((cell) => [cell.day, cell]),
+    );
+    const unpriced = byDay.get("2026-08-03");
+    expect(unpriced?.value).toBe(0);
+    expect(unpriced?.factCount).toBe(2);
+    // Faintest visible step, never the empty one.
+    expect(unpriced?.level).toBe(1);
+    // And the streak runs straight through it.
+    expect(calendar.stats.longestStreakDays).toBe(3);
+  });
+
   it("names the most active day by value", () => {
     const days = dayRange("2026-08-02", "2026-08-04");
     const calendar = buildUsageActivityCalendar(
       days,
-      [bucket("2026-08-02", 1), bucket("2026-08-03", 9)],
+      [bucket("2026-08-02", 1, {}), bucket("2026-08-03", 9, {})],
       "cost",
     );
     expect(calendar.stats.mostActiveDay).toBe("Aug 3, 2026");

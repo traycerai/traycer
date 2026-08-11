@@ -4,10 +4,18 @@ import {
   type UsageMetric,
 } from "@/lib/usage-analytics/usage-chart-data";
 
-/** One calendar tile. `level` 0 = no usage, 1-4 = intensity quartile. */
+/** One calendar tile. `level` 0 = no activity, 1-4 = intensity quartile. */
 export interface UsageActivityCell {
   readonly day: string;
   readonly value: number;
+  /**
+   * Turns recorded that day, independent of `value`. A day can hold real
+   * work whose cost could not be priced: under the Cost metric its `value`
+   * is 0, and treating that as an empty day would report unpriced work as
+   * inactivity - breaking streaks and dropping it from the table. Presence
+   * is a fact about the data; `value` only sets the intensity.
+   */
+  readonly factCount: number;
   readonly level: 0 | 1 | 2 | 3 | 4;
 }
 
@@ -71,22 +79,28 @@ export function buildUsageActivityCalendar(
   metric: UsageMetric,
 ): UsageActivityCalendar {
   const valueByDay = new Map<string, number>();
+  const factsByDay = new Map<string, number>();
   for (const bucket of buckets) {
     valueByDay.set(
       bucket.day,
       (valueByDay.get(bucket.day) ?? 0) + bucketMetricValue(bucket, metric),
     );
+    factsByDay.set(
+      bucket.day,
+      (factsByDay.get(bucket.day) ?? 0) + bucket.factCount,
+    );
   }
-  const cells = days.map((day) => {
-    const value = valueByDay.get(day) ?? 0;
-    return { day, value };
-  });
+  const cells = days.map((day) => ({
+    day,
+    value: valueByDay.get(day) ?? 0,
+    factCount: factsByDay.get(day) ?? 0,
+  }));
   const thresholds = quartileThresholds(
     cells.map((cell) => cell.value).filter((value) => value > 0),
   );
   const leveled: UsageActivityCell[] = cells.map((cell) => ({
     ...cell,
-    level: levelFor(cell.value, thresholds),
+    level: levelFor(cell.value, cell.factCount, thresholds),
   }));
   return {
     weeks: intoWeeks(leveled),
@@ -117,13 +131,17 @@ function quartileThresholds(
 
 /**
  * Descending comparisons so a degenerate distribution (every active day
- * equal) reads as full intensity, not the faintest step.
+ * equal) reads as full intensity, not the faintest step. A day that has
+ * turns but no measurable value (unpriced work under the Cost metric)
+ * still gets the faintest STEP rather than the empty one - it happened.
  */
 function levelFor(
   value: number,
+  factCount: number,
   thresholds: readonly [number, number, number] | null,
 ): 0 | 1 | 2 | 3 | 4 {
-  if (value <= 0 || thresholds === null) return 0;
+  if (value <= 0) return factCount > 0 ? 1 : 0;
+  if (thresholds === null) return 0;
   const [q1, q2, q3] = thresholds;
   if (value >= q3) return 4;
   if (value >= q2) return 3;
@@ -196,7 +214,7 @@ function currentStreak(cells: readonly UsageActivityCell[]): number {
   let current = 0;
   for (let i = cells.length - 1; i >= 0; i--) {
     const cell = cells[i];
-    if (cell.value > 0) {
+    if (cell.factCount > 0) {
       current += 1;
     } else if (i === cells.length - 1) {
       continue;
@@ -213,7 +231,7 @@ function buildStats(cells: readonly UsageActivityCell[]): UsageActivityStats {
   let longest = 0;
   let run = 0;
   for (const cell of cells) {
-    if (cell.value > 0) {
+    if (cell.factCount > 0) {
       byMonth.set(
         cell.day.slice(0, 7),
         (byMonth.get(cell.day.slice(0, 7)) ?? 0) + cell.value,
