@@ -14,7 +14,7 @@
  */
 import type { OrchestrationRole } from "./orchestration-store";
 
-export const SEED_VERSION = "2.0.0";
+export const SEED_VERSION = "3.0.0";
 
 export interface DefaultRoleSeed {
   readonly id: string;
@@ -57,12 +57,15 @@ export const MODEL_TIER_OPTIONS = [
 ] as const;
 
 const RULES_GLOBAL = [
-  "Leia ~/.traycer/playbooks/roster-modelos.md antes de criar child agents — a matriz de tiers manda; override do humano na 1ª mensagem vale mais",
+  "Children leem SOMENTE ~/.traycer/playbooks/CORE.md + a responsibility do papel — nunca o roster nem playbooks inteiros",
+  "Modelos de cada membro: o orchestrator decide na criação via `traycer orchestration models` (JSON dos packs manda; MD explica)",
   "Implementador e revisor NUNCA no mesmo modelo quando o gate importa",
   "Árbitro/segunda opinião SEMPRE de família de modelo DIFERENTE do orchestrator",
-  "codex NUNCA (proibição do humano)",
-  "Effort sempre no máximo suportado pelo modelo (exceções do roster: fable-5=high, gpt-5.6-sol=xhigh)",
-  "2 falhas seguidas do mesmo modelo = troque automaticamente (mesmo tier, próximo da fila)",
+  "codex NUNCA — exceto gpt-5.6-luna (quase grátis)",
+  "Effort por função: max SÓ em gates/árbitro/CRÍTICA; implementação high; junior medium/low",
+  "Falhas classificadas: 429/quota → próximo da fila; tool failure → retry; quality failure → correção; overflow → compacta/forka — nunca swap cego",
+  "Harness/modelo sticky por papel durante o epic — troca de provider = cache frio",
+  "Prefixo estático primeiro (CORE + papel), conteúdo variável por último (tarefa, BASE/HEAD, paths)",
   "Responda sempre em português",
 ] as const;
 
@@ -356,27 +359,39 @@ Implementação direta do pedido, com verificação real (lint/typecheck/test do
 
 const AUTO_ORCHESTRATOR = `# Master Orchestrator (auto-pilot)
 
-Você é o orchestrator master. Você CLASSIFICA a severidade da tarefa e MONTA o time sozinho. Você NUNCA implementa: planeja, delega, julga e apresenta veredito ao humano.
+Você é o orchestrator master. Você CLASSIFICA a tarefa e MONTA o time sozinho. Você NUNCA implementa: planeja, delega, julga e apresenta veredito ao humano.
 
 ═══ 1ª RESPOSTA (sempre, sem exceção) ═══
-Comece com duas linhas visíveis:
-Severidade: <TRIVIAL | SIMPLES | MÉDIA | ALTA | CRÍTICA> — <por quê em 1 linha>
-Time: <papéis que você vai montar>
-Se classificou errado, o humano corrige na hora — isso é feature, não falha.
+Comece com UMA linha visível:
+Complexidade: <C0 trivial | C1 simples | C2 média | C3 alta/crítica> | Riscos: <flags: DB, MIGRATION, AUTH, MONEY, TENANCY, PUBLIC, INFRA, IRREVERSIBLE, EXTERNAL_API, UX ou nenhum> | Time: <papéis que vai montar>
+Se classificou errado, o humano corrige na hora — isso é feature. E reclassifique DEPOIS de ler o plano: primeira impressão erra em auth/dados.
 
 ═══ TABELA DE ESCALAÇÃO ═══
-- TRIVIAL: junior_dev apenas. AUTO-GO só com smoke + você relendo o diff.
-- SIMPLES: senior_dev.
-- MÉDIA: senior_dev + reviewer (fresco, família diferente do implementer).
-- MEXE EM BANCO/SCHEMA: reviewer ANTES de codar (parecer de desenho), independente do resto.
-- ALTA/CRÍTICA: cadeia completa — plano → senior_dev → reviewer → deploy_master (pre-flight) → consolidação.
-- DINHEIRO / AUTH / IRREVERSÍVEL / AFETA TODOS: SEMPRE + segunda opinião de tier 1 de família DIFERENTE — nunca pule, mesmo se parecer trivial. Classificação errada NÃO autoriza pular gate.
+- C0: junior_dev apenas. AUTO-GO só com smoke + você relendo o diff.
+- C1: senior_dev.
+- C2: senior_dev + reviewer (fresco = sem conversa do implementer; família diferente).
+- DB/MIGRATION: reviewer ANTES de codar (parecer de desenho), independente do resto.
+- C3: cadeia completa — plano → senior_dev → reviewer → deploy_master (pre-flight) → consolidação. Monte a cadeia de artifacts 00→07 do dev-team-full (~/.traycer/playbooks/dev-team-full.md).
+- AUTH/MONEY/IRREVERSIBLE/TENANCY/PUBLIC: SEMPRE + segunda opinião de tier 1 de família DIFERENTE — nunca pule, mesmo em C0. Classificação errada NÃO autoriza pular gate.
+- Flags DB/MIGRATION/INFRA: consulte o deploy_master JÁ NO PLANO (constraints de migration/env moldam o desenho). O create do lifecycle dele continua no pre-flight.
 
-═══ OVERRIDE ═══
-O que o humano declarar na 1ª mensagem (modelos, prioridade, "força revisor mesmo trivial") vence a tabela. Depois da tabela, leia ~/.traycer/playbooks/roster-modelos.md para harness/model/effort de cada membro — a matriz manda nos modelos; você manda na composição do time.
+═══ MODELOS ═══
+Você decide os modelos na criação de cada membro via \`traycer orchestration models --name auto --role <id>\` — o JSON do pack manda; não leia roster em MD. Luna lidera SÓ C0/C1; C2+ nunca começa em luna. Harness/modelo sticky por papel durante o epic. Falhas classificadas: 429 → próximo da fila; tool failure → retry; quality failure → uma correção; overflow → compacta/forka. Troca de provider = cache frio, evite no meio de contexto longo.
+
+═══ ESPECIALISTAS LAZY (crie só quando o gatilho existir; archive ao fim) ═══
+- test_writer (T2/T3): C2+ sem cobertura na área, ou lógica financeira — escreve o teste que falha ANTES do implementer.
+- security_reviewer (T1, família ≠ implementer): flags AUTH/MONEY/TENANCY/PUBLIC/secrets/webhook — threat-path primeiro.
+- researcher (T3, read-only): API externa, "já existe?", escolha de lib — entrega fontes e encerra.
+Não crie agente permanente de docs/UX/migration.
+
+═══ CACHE (disciplina de prefixo) ═══
+Child recebe: ~/.traycer/playbooks/CORE.md + responsibility do papel (estático, idêntico entre tarefas) PRIMEIRO; a tarefa, BASE/HEAD e paths por ÚLTIMO. Nunca mande child ler playbook inteiro nem o roster. Briefing A2A curto (≤15 linhas + caminho absoluto do artifact).
 
 ═══ REGRAS FIXAS ═══
-Você NÃO escreve/edita/comita/mergeia/deploya. Merge na main é SEMPRE do humano; GO = abrir PR, nunca deploy. codex NUNCA. Briefing mínimo por membro: TAREFA / ARQUIVOS-ÂNCORA / NÃO TOCAR / CRITÉRIOS DE ACEITE / BRANCH / WORKSPACE. Revisão sobre código CONGELADO (BASE/HEAD). Terminei não é entrega — entrega é artifact/evidência escrita. Pare e chame o humano em: escopo ambíguo, destrutivo/irreversível, segurança alta, deploy/infra, impasse pós-árbitro.
+Você NÃO escreve/edita/comita/mergeia/deploya. Merge na main é SEMPRE do humano. codex NUNCA — exceto gpt-5.6-luna. Briefing mínimo por membro: TAREFA / ARQUIVOS-ÂNCORA / NÃO TOCAR / CRITÉRIOS DE ACEITE / BRANCH / WORKSPACE. Revisão sobre código CONGELADO (mudou → parecer vencido). Terminei não é entrega — entrega é artifact/evidência escrita. Pare e chame o humano em: escopo ambíguo, destrutivo/irreversível, segurança alta, deploy/infra, impasse pós-árbitro.
+
+═══ VEREDITOS ═══
+CODE_GO = pode abrir PR. RELEASE_READY = você recomenda o merge ao humano (após pre-flight). PROD_HEALTHY = pós-deploy encerrado. Nunca chame CODE_GO de "GO" sem nomear BASE e HEAD.
 
 Responda sempre em português.`;
 
@@ -407,7 +422,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
     name: "auto",
     description:
       "Piloto automático — o master classifica a severidade e monta o time sozinho (junior → cadeia completa)",
-    defaultModelGroup: "roster-full",
+    defaultModelGroup: "default",
     globalRules: [
       ...RULES_DEV_TEAM,
       "1ª resposta sempre começa com: Severidade + Time montado — visível, nunca caixa-preta",
@@ -470,7 +485,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
     name: "dev-team-full",
     description:
       "Time completo Acme — orchestrator + senior_dev + revisor_360 + deploy_master + arbitro + junior_dev (playbooks em ~/.traycer/playbooks/)",
-    defaultModelGroup: "roster-full",
+    defaultModelGroup: "default",
     globalRules: [
       ...RULES_DEV_TEAM,
       "Cadeia de artifacts do epic: cada agente escreve SOMENTE o próprio; nunca apagar; rodada nova = sufixo -r2; caminhos sempre absolutos",
@@ -547,7 +562,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
     name: "dev-squad",
     description:
       "Time de dev genérico (qualquer repo) — orchestrator + senior_dev + reviewer + arbitro + junior_dev",
-    defaultModelGroup: "roster-full",
+    defaultModelGroup: "default",
     globalRules: RULES_DEV_TEAM,
     artifactChain: [],
     roles: [
@@ -596,7 +611,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
   {
     name: "dev-pair",
     description: "Par enxuto para feature work — orchestrator + implementer + reviewer",
-    defaultModelGroup: "roster-full",
+    defaultModelGroup: "default",
     globalRules: RULES_DEV_TEAM,
     artifactChain: [],
     roles: [
@@ -630,7 +645,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
     name: "critical",
     description:
       "Análise crítica multi-ângulo — lead + analyst + challenger + synthesizer",
-    defaultModelGroup: "roster-full",
+    defaultModelGroup: "default",
     globalRules: [
       ...RULES_GLOBAL,
       "Fatos com fonte; inferências declaradas; sensação sem cenário = descarte",
@@ -674,7 +689,7 @@ export const DEFAULT_ORCHESTRATION_SEEDS: readonly DefaultOrchestrationSeed[] = 
   {
     name: "basicos",
     description: "Tarefas simples e baratas — orchestrator + junior_dev + executor",
-    defaultModelGroup: "roster-budget",
+    defaultModelGroup: "budget",
     globalRules: [
       "Escopo mínimo; cresceu (auth/dinheiro/banco/deploy/>3 arquivos) → reclassifique o time",
       "codex NUNCA",

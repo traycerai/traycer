@@ -327,66 +327,52 @@ export async function buildOrchestrationPrelude(
   const responsibility = await readResponsibility(orchestrationName, roleId);
   if (responsibility === null) return null;
 
-  const modelInfo = await getModelsForRole(
-    orchestrationName,
-    roleId,
-    modelGroupName,
-  );
-  const groupName =
-    modelInfo?.modelGroup ?? modelGroupName ?? orch.defaultModelGroup;
+  const groupName = modelGroupName ?? orch.defaultModelGroup;
 
-  const roleLines = orch.roles.map((r) => {
-    const root = r.isRoot ? " ★ root" : "";
-    return `- ${r.id} (${r.label}) — tier=${r.tier}${root}: ${r.description}`;
-  });
+  // Cache rule (static-first): responsibility + rules lead; anything mutable
+  // (model ladders, pack edits) is NEVER baked into this brief — the agent
+  // asks the CLI on demand. Roster only for the root (children don't need it).
+  const rosterLines = role.isRoot
+    ? orch.roles.map((r) => {
+        const root = r.isRoot ? " ★ root" : "";
+        return `- ${r.id} (${r.label}) — tier=${r.tier}${root}: ${r.description}`;
+      })
+    : [];
 
-  const modelLines =
-    modelInfo === null
-      ? ["(no models resolved for this role/group)"]
-      : modelInfo.models.map((m, i) => {
-          const effort = m.effort !== null ? ` effort=${m.effort}` : "";
-          const note = m.note.length > 0 ? ` — ${m.note}` : "";
-          return `${i + 1}. ${m.harnessId}/${m.model}${effort} [${m.family}]${note}`;
-        });
-
-  const rules = [...orch.globalRules, ...(modelInfo?.rules ?? [])];
+  const rules = [...orch.globalRules];
 
   const text = [
     "<!-- traycer-orchestration-prelude -->",
-    "# Orchestration context (injected once at chat creation)",
+    "# Role brief (injected once at chat creation)",
     "",
     "You are bound to a fixed role in an agent team template. Treat the block",
     "below as standing instructions for this entire chat. Do not restate it",
     "verbatim to the user unless asked.",
     "",
-    `## Binding`,
+    "## Responsibility",
+    responsibility.trim(),
+    "",
+    "## Team rules (standing)",
+    ...rules.map((r) => `- ${r}`),
+    "",
+    "## Binding",
     `- Orchestration: \`${orchestrationName}\``,
     `- Role: \`${role.id}\` (${role.label})`,
     `- Tier: \`${role.tier}\``,
-    `- Model group: \`${groupName}\``,
+    `- Model pack: \`${groupName}\``,
     role.isRoot
       ? `- Root role: yes (orchestrator — assign work, do not implement)`
       : `- Root role: no`,
+    ...(rosterLines.length > 0
+      ? ["", "## Team roster (root only)", ...rosterLines]
+      : []),
     "",
-    "## How to discover teammates and models (CLI)",
-    "Use these when you need live roster data:",
+    "## Live data (ask the CLI when needed — never cached here)",
     "```",
     `traycer orchestration roles --name ${orchestrationName}`,
     `traycer orchestration models --name ${orchestrationName} --role <roleId> --group ${groupName}`,
     `traycer orchestration responsibility --name ${orchestrationName} --role <roleId>`,
     "```",
-    "",
-    "## Team roster",
-    ...roleLines,
-    "",
-    "## Preferred models for THIS role (rotation order)",
-    ...modelLines,
-    "",
-    "## Global rules",
-    ...rules.map((r) => `- ${r}`),
-    "",
-    "## Responsibility",
-    responsibility.trim(),
     "",
     "<!-- /traycer-orchestration-prelude -->",
     "",
