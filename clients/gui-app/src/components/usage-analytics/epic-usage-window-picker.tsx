@@ -30,7 +30,16 @@ export function EpicUsageWindowPicker(
         }
       }}
     >
-      <TabsList aria-label="Window">
+      {/* The primitive is `w-fit` with `whitespace-nowrap` triggers, and this
+          picker's four options are the widest set any of them carries. Its
+          dialog is `w-[min(92vw,32rem)] overflow-hidden`, so at increased
+          text scaling the row outgrows the box and clips "Entire epic" out of
+          reach entirely - a lost option, not just a cramped one. Wrapping
+          keeps every option clickable. */}
+      <TabsList
+        aria-label="Window"
+        className="h-auto max-w-full flex-wrap group-data-horizontal/tabs:h-auto"
+      >
         <TabsTrigger value="7" data-testid="epic-usage-window-7">
           7 days
         </TabsTrigger>
