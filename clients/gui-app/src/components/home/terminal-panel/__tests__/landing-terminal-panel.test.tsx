@@ -1386,6 +1386,63 @@ describe("<LandingTerminalPanel />", () => {
     );
   });
 
+  it("reconciles an exited terminal against the captured page after focus moves", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = emptyList(null);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "exited-tab",
+      sessionId: "exited-session",
+      hostId: "host-a",
+      cwd: "/workspace/draft-a",
+      name: "draft-a",
+      titleSource: "default",
+    });
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+      useLandingTerminalStore.getState().setPanelOpen("draft-b", true);
+    });
+    mocks.primaryWorkspacePath = "/workspace/draft-b";
+    view.rerender(panelUiForDraft("draft-b"));
+
+    await act(async () => {
+      for (let pass = 0; pass < 10; pass += 1) {
+        resolvers.splice(0).forEach((resolve) => {
+          resolve(
+            listWith(
+              [
+                {
+                  ...runningSession("exited-session"),
+                  status: "exited",
+                  exitCode: 0,
+                  exitReason: "process-exit",
+                },
+              ],
+              "/Users/dev",
+            ),
+          );
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    });
+    expect(layoutFor("draft-a").panelOpen).toBe(false);
+    expect(layoutFor("draft-b").panelOpen).toBe(true);
+  });
+
   it("preserves a folderless opening gesture when focus switches to a foldered draft", async () => {
     mocks.activeHostId = "host-a";
     mocks.primaryWorkspacePath = null;

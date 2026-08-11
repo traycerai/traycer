@@ -360,7 +360,7 @@ export function LandingTerminalPanel(): ReactNode {
   );
 
   useLandingTerminalReconciliation({
-    landingPageId,
+    landingPageId: targetLandingPageId,
     activeHostId: target.hostId,
     availability: target.availability,
     panelOpen: targetPanelOpen,
