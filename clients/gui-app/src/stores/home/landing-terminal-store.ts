@@ -38,8 +38,13 @@ export interface LandingTerminalStoreState {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly layoutsByLandingPageId: Readonly<
-    Record<string, LandingTerminalLayout>
+    Partial<Record<string, LandingTerminalLayout>>
   >;
+  /**
+   * Retains the v1 global layout only for pages that have not yet recorded
+   * their own layout. New layout writes always target one landing page.
+   */
+  readonly fallbackLayout: LandingTerminalLayout | null;
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
   readonly setPanelOpen: (landingPageId: string, open: boolean) => void;
   readonly setPanelWidthFraction: (
@@ -86,8 +91,9 @@ interface PersistedLandingTerminalState {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
   readonly layoutsByLandingPageId: Readonly<
-    Record<string, LandingTerminalLayout>
+    Partial<Record<string, LandingTerminalLayout>>
   >;
+  readonly fallbackLayout: LandingTerminalLayout | null;
   readonly pendingKills: ReadonlyArray<LandingTerminalPendingKill>;
 }
 
@@ -96,16 +102,21 @@ function initialLandingTerminalState(): PersistedLandingTerminalState {
     tabs: [],
     activeInstanceId: null,
     layoutsByLandingPageId: {},
+    fallbackLayout: null,
     pendingKills: [],
   };
 }
 
 export function landingTerminalLayoutFor(
-  state: Pick<LandingTerminalStoreState, "layoutsByLandingPageId">,
+  state: Pick<
+    LandingTerminalStoreState,
+    "layoutsByLandingPageId" | "fallbackLayout"
+  >,
   landingPageId: string,
 ): LandingTerminalLayout {
   return (
     state.layoutsByLandingPageId[landingPageId] ??
+    state.fallbackLayout ??
     DEFAULT_LANDING_TERMINAL_LAYOUT
   );
 }
@@ -156,6 +167,7 @@ export function parsePersistedLandingTerminalState(
     layoutsByLandingPageId: parseLandingTerminalLayouts(
       value.layoutsByLandingPageId,
     ),
+    fallbackLayout: parseFallbackLayout(value),
     pendingKills: parsePendingKills(value.pendingKills),
   };
 }
@@ -359,6 +371,7 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
         tabs: state.tabs,
         activeInstanceId: state.activeInstanceId,
         layoutsByLandingPageId: state.layoutsByLandingPageId,
+        fallbackLayout: state.fallbackLayout,
         pendingKills: state.pendingKills,
       }),
       merge: (persistedState, currentState) => ({
@@ -384,26 +397,44 @@ function updateLandingTerminalLayout(
 
 function parseLandingTerminalLayouts(
   value: unknown,
-): Readonly<Record<string, LandingTerminalLayout>> {
+): Readonly<Partial<Record<string, LandingTerminalLayout>>> {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
     Object.entries(value).flatMap(([landingPageId, raw]) => {
       if (landingPageId.trim().length === 0 || !isRecord(raw)) return [];
-      return [
-        [
-          landingPageId,
-          {
-            panelOpen: raw.panelOpen === true,
-            panelWidthFraction:
-              typeof raw.panelWidthFraction === "number"
-                ? clampLandingTerminalPanelWidthFraction(raw.panelWidthFraction)
-                : DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
-            maximized: raw.maximized === true,
-          },
-        ],
-      ];
+      return [[landingPageId, parseLandingTerminalLayout(raw)]];
     }),
   );
+}
+
+function parseFallbackLayout(
+  value: Record<string, unknown>,
+): LandingTerminalLayout | null {
+  if (isRecord(value.fallbackLayout)) {
+    return parseLandingTerminalLayout(value.fallbackLayout);
+  }
+  if (isRecord(value.layoutsByLandingPageId)) return null;
+  if (
+    typeof value.panelOpen !== "boolean" &&
+    typeof value.panelWidthFraction !== "number" &&
+    typeof value.maximized !== "boolean"
+  ) {
+    return null;
+  }
+  return parseLandingTerminalLayout(value);
+}
+
+function parseLandingTerminalLayout(
+  value: Record<string, unknown>,
+): LandingTerminalLayout {
+  return {
+    panelOpen: value.panelOpen === true,
+    panelWidthFraction:
+      typeof value.panelWidthFraction === "number"
+        ? clampLandingTerminalPanelWidthFraction(value.panelWidthFraction)
+        : DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
+    maximized: value.maximized === true,
+  };
 }
 
 function parseTabs(value: unknown): ReadonlyArray<LandingTerminalTabRef> {

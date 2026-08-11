@@ -155,6 +155,32 @@ describe("landing terminal lifecycle", () => {
     });
   });
 
+  it("preserves a v1 layout without coupling later page changes", () => {
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      pendingKills: [],
+    });
+    useLandingTerminalStore.setState(restored);
+
+    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      maximized: false,
+    });
+
+    useLandingTerminalStore.getState().setPanelOpen("draft-a", false);
+
+    expect(
+      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-a"),
+    ).toMatchObject({ panelOpen: false, panelWidthFraction: 0.48 });
+    expect(
+      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-b"),
+    ).toMatchObject({ panelOpen: true, panelWidthFraction: 0.48 });
+  });
+
   it("adopts a running host session before any auto-spawn decision", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
