@@ -60,8 +60,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   }),
 }));
 
+const activeHostIdHolder: { current: string | null } = {
+  current: ACTIVE_HOST_ID,
+};
+
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => ACTIVE_HOST_ID,
+  useReactiveActiveHostId: () => activeHostIdHolder.current,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
@@ -72,6 +76,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  activeHostIdHolder.current = ACTIVE_HOST_ID;
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -189,6 +194,19 @@ describe("<UsageSettingsPanel /> account-group scoping", () => {
     renderPanel();
 
     expect(await screen.findByTestId("usage-support-pending")).toBeTruthy();
+    expect(screen.queryByTestId("usage-cost-figure")).toBeNull();
+  });
+
+  it("gives a terminal answer with no active host, rather than spinning forever", async () => {
+    // With no active host there is nothing to hand shake with, so the support
+    // signal stays `null` permanently - the pending branch could never
+    // resolve. This section is `requiresLocalHost: false`, so a fresh install
+    // reaches exactly this state.
+    activeHostIdHolder.current = null;
+    renderPanel();
+
+    expect(await screen.findByTestId("usage-no-host-notice")).toBeTruthy();
+    expect(screen.queryByTestId("usage-support-pending")).toBeNull();
     expect(screen.queryByTestId("usage-cost-figure")).toBeNull();
   });
 

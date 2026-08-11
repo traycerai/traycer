@@ -91,6 +91,7 @@ export function UsageSettingsPanel(): ReactNode {
         hostNames={hostNames}
         activeHostId={activeHostId}
         activeHostLabel={scope.activeHost?.name ?? activeHostId ?? "this host"}
+        hostsResolving={scope.isLoading}
       />
     </SettingsPanelShell>
   );
@@ -103,7 +104,24 @@ function UsageSettingsPanelBody(props: {
   readonly hostNames: ReadonlyMap<string, string>;
   readonly activeHostId: string | null;
   readonly activeHostLabel: string;
+  /** The host lists are still in flight, so a null active host is not yet an answer. */
+  readonly hostsResolving: boolean;
 }): ReactNode {
+  // Checked BEFORE `support`, because with no active host `support` is
+  // permanently `null` - there is no host to hand shake with, so the pending
+  // branch below could never resolve and would spin forever. This section is
+  // `requiresLocalHost: false` and reachable on a fresh install, so that
+  // state is genuinely reachable and needs a terminal answer, which is what
+  // `HostScopeGate`'s own empty branch used to provide here.
+  if (props.activeHostId === null && !props.hostsResolving) {
+    return (
+      <UsageNotice
+        title="No host connected"
+        detail="Install the Traycer host on a computer and sign in — your usage appears here on its own."
+        testId="usage-no-host-notice"
+      />
+    );
+  }
   if (props.support === null) {
     return (
       <div
@@ -120,7 +138,13 @@ function UsageSettingsPanelBody(props: {
     );
   }
   if (!props.support) {
-    return <UsageUnsupportedNotice hostLabel={props.activeHostLabel} />;
+    return (
+      <UsageNotice
+        title={`Usage isn't available on ${props.activeHostLabel} yet`}
+        detail="This host predates usage analytics. Update it to see token and cost usage here."
+        testId="usage-unsupported-notice"
+      />
+    );
   }
   return (
     <UsageSummaryPanel
@@ -144,7 +168,13 @@ export function UsageSettingsPanelForClient(props: {
   const hostId = props.client?.getActiveHostId() ?? null;
   const supported = useUsageSummarySupported(hostId);
   if (!supported) {
-    return <UsageUnsupportedNotice hostLabel={hostId ?? "this host"} />;
+    return (
+      <UsageNotice
+        title={`Usage isn't available on ${hostId ?? "this host"} yet`}
+        detail="This host predates usage analytics. Update it to see token and cost usage here."
+        testId="usage-unsupported-notice"
+      />
+    );
   }
   return (
     <UsageSummaryPanel
@@ -164,26 +194,23 @@ const EMPTY_HOST_NAMES: ReadonlyMap<string, string> = new Map();
  * an error) so it reads as one honest-state vocabulary across Settings
  * rather than a bespoke banner.
  */
-function UsageUnsupportedNotice(props: {
-  readonly hostLabel: string;
+function UsageNotice(props: {
+  readonly title: string;
+  readonly detail: string;
+  readonly testId: string;
 }): ReactNode {
   return (
     <div
       role="status"
       className="flex flex-col items-start gap-2 rounded-lg border border-border/60 bg-card/40 px-5 py-6"
-      data-testid="usage-unsupported-notice"
+      data-testid={props.testId}
     >
       <span className="flex size-9 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
         <LineChart className="size-4.5" />
       </span>
       <div className="max-w-[60ch] space-y-1">
-        <p className="font-medium text-ui-sm text-foreground">
-          Usage isn't available on {props.hostLabel} yet
-        </p>
-        <p className="text-ui-sm text-muted-foreground">
-          This host predates usage analytics. Update it to see token and cost
-          usage here.
-        </p>
+        <p className="font-medium text-ui-sm text-foreground">{props.title}</p>
+        <p className="text-ui-sm text-muted-foreground">{props.detail}</p>
       </div>
     </div>
   );
