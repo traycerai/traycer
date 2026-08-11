@@ -200,7 +200,7 @@ describe("AddImageToArtifactButton", () => {
     expect(commit).toHaveBeenCalledWith("artifact-a", "op-client");
   });
 
-  it("keeps the Y node when finish returns not-yet-converged", async () => {
+  it("retries not-yet-converged and keeps the Y node after commit", async () => {
     commit.mockResolvedValueOnce(
       artifactImageFinishResponseFixtures.commit.notYetConverged,
     );
@@ -218,13 +218,13 @@ describe("AddImageToArtifactButton", () => {
     fireEvent.click(await screen.findByRole("button", { name: /spec a/i }));
 
     await waitFor(() => {
-      expect(commit).toHaveBeenCalledWith("artifact-a", "op-client");
+      expect(commit).toHaveBeenCalledTimes(2);
     });
     expect(imageNodeCount()).toBe(1);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("keeps the Y node when finish returns unknown-operation", async () => {
+  it("rolls back and surfaces unknown-operation", async () => {
     commit.mockResolvedValueOnce(
       artifactImageFinishResponseFixtures.commit.unknownOperation,
     );
@@ -241,11 +241,32 @@ describe("AddImageToArtifactButton", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: /spec a/i }));
 
-    await waitFor(() => {
-      expect(commit).toHaveBeenCalledWith("artifact-a", "op-client");
-    });
-    expect(imageNodeCount()).toBe(1);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(await screen.findByText(/no longer available/i)).toBeTruthy();
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(imageNodeCount()).toBe(0);
+    expect(abort).toHaveBeenCalledWith("artifact-a", "op-client");
+  });
+
+  it("rolls back after bounded not-yet-converged retries", async () => {
+    commit.mockResolvedValue(
+      artifactImageFinishResponseFixtures.commit.notYetConverged,
+    );
+    render(
+      <AddImageToArtifactButton
+        source={{ kind: "client", url: "blob:http://localhost/img" }}
+        alt="from chat"
+        className={undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /add image to artifact/i }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /spec a/i }));
+
+    expect(await screen.findByText(/could not be committed/i)).toBeTruthy();
+    expect(commit).toHaveBeenCalledTimes(3);
+    expect(imageNodeCount()).toBe(0);
   });
 
   it("surfaces remote HTTPS snapshot-on-add failure in the picker and leaves no broken node", async () => {

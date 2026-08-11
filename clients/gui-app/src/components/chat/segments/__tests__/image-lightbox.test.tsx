@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -5,10 +6,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ImageLightbox } from "@/components/chat/segments/image-lightbox";
 import { UntrustedSvgLightbox } from "@/components/chat/segments/untrusted-svg-lightbox";
 import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const saveBlobToDiskMock = vi.hoisted(() =>
   vi.fn<(blob: Blob, suggestedName: string) => Promise<string | null>>(() =>
@@ -65,12 +69,36 @@ const TINY_PNG_BYTES = Uint8Array.from(
 
 const SAFE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#0af"/></svg>`;
 
+let runnerHost: MockRunnerHost;
+
+function renderWithRunner(children: ReactNode): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostContext.Provider value={runnerHost}>
+        {children}
+      </RunnerHostContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   return input instanceof URL ? input.href : input.url;
 }
 
 beforeEach(() => {
+  runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.test/sign-in",
+    authnBaseUrl: "https://auth.traycer.test",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
   saveBlobToDiskMock.mockReset();
   saveBlobToDiskMock.mockResolvedValue("generated.png");
   copyImageMock.mockReset();
@@ -105,7 +133,7 @@ afterEach(() => {
 
 describe("<ImageLightbox /> actions", () => {
   it("downloads through saveBlobToDisk with the suggested file name", async () => {
-    render(
+    renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/raster"
         alt="a misty pier"
@@ -134,7 +162,7 @@ describe("<ImageLightbox /> actions", () => {
   });
 
   it("copies through copyImageBlobToClipboard (ClipboardItem path lives there)", async () => {
-    render(
+    renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/raster"
         alt="copy me"
@@ -156,8 +184,11 @@ describe("<ImageLightbox /> actions", () => {
     expect(typeof blob.arrayBuffer).toBe("function");
   });
 
-  it("keeps CORS-less HTTPS download native and hides unreliable Copy", () => {
-    render(
+  it("opens CORS-less HTTPS images through the runner host", async () => {
+    const openExternalLink = vi
+      .spyOn(runnerHost, "openExternalLink")
+      .mockResolvedValue(undefined);
+    renderWithRunner(
       <ImageLightbox
         src="https://cdn.example.com/no-cors.png"
         alt="remote"
@@ -170,16 +201,17 @@ describe("<ImageLightbox /> actions", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
-    const download = screen.getByRole("link", { name: "Download image" });
-    expect(download.getAttribute("href")).toBe(
-      "https://cdn.example.com/no-cors.png",
-    );
-    expect(download.getAttribute("download")).toBe("remote.png");
+    fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+    await waitFor(() => {
+      expect(openExternalLink).toHaveBeenCalledWith(
+        "https://cdn.example.com/no-cors.png",
+      );
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it("shows Copy for attachment-backed extended WebP media", () => {
-    render(
+    renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/extended-webp"
         alt="extended webp"
@@ -196,7 +228,7 @@ describe("<ImageLightbox /> actions", () => {
   });
 
   it("opens a dialog with the raster image on trigger click", async () => {
-    render(
+    renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/raster-open"
         alt="open me"
@@ -217,7 +249,7 @@ describe("<ImageLightbox /> actions", () => {
   });
 
   it("routes svg mediaType into the sanitized SVG lightbox path, not a raw dialog img", async () => {
-    render(
+    renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/safe.svg"
         alt="safe svg"

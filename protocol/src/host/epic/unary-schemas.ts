@@ -1160,7 +1160,10 @@ export const artifactImageFinishResponseFixtures = {
     notYetConverged: { status: "not-yet-converged" },
     unknownOperation: { status: "unknown-operation" },
   },
-  abort: { aborted: { status: "aborted" } },
+  abort: {
+    aborted: { status: "aborted" },
+    unknownOperation: { status: "unknown-operation" },
+  },
 } as const;
 
 export const commitArtifactImageResponseSchema = z.union([
@@ -1184,9 +1187,16 @@ export type CommitArtifactImageResponse = z.infer<
   typeof commitArtifactImageResponseSchema
 >;
 
-export const abortArtifactImageResponseSchema = z.object({
-  status: z.literal(artifactImageFinishResponseFixtures.abort.aborted.status),
-});
+export const abortArtifactImageResponseSchema = z.union([
+  z.object({
+    status: z.literal(artifactImageFinishResponseFixtures.abort.aborted.status),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.abort.unknownOperation.status,
+    ),
+  }),
+]);
 export type AbortArtifactImageResponse = z.infer<
   typeof abortArtifactImageResponseSchema
 >;

@@ -9,6 +9,7 @@ import type {
 } from "@/hooks/composer/use-composer-paste";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { commitArtifactImageWithRetry } from "./commit-artifact-image-with-retry";
 import { useArtifactImageOperations } from "./use-artifact-image-operations";
 
 export interface PreparedArtifactImage {
@@ -55,7 +56,8 @@ export function useArtifactImagePaste(
   const operations = useArtifactImageOperations(epicId);
 
   const commitOperation = useCallback(
-    (operationId: string) => operations.commit(artifactId, operationId),
+    (operationId: string) =>
+      commitArtifactImageWithRetry(operations.commit, artifactId, operationId),
     [artifactId, operations],
   );
   const abortOperation = useCallback(
@@ -136,6 +138,7 @@ export function useArtifactImagePaste(
             image.abortPending = false;
             continue;
           }
+          void abortOperation(image.operationId).catch(() => {});
           image.abortPending = false;
           failure ??=
             result.reason instanceof Error

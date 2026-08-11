@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, type ReactNode } from "react";
-import { Copy, Download } from "lucide-react";
+import { Copy, Download, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
 import {
@@ -11,6 +11,7 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { appLogger } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
@@ -34,12 +35,13 @@ const UntrustedSvgLightbox = lazy(() =>
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const [pendingAction, setPendingAction] = useState<ImageAction | null>(null);
+  const openExternalLink = useRunnerOpenExternalLink();
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
-  const directDownload = /^https:/i.test(props.src) ? props.src : null;
+  const remoteUrl = /^https:/i.test(props.src) ? props.src : null;
   const canCopy =
-    directDownload === null && isClipboardImageMediaType(props.mediaType);
+    remoteUrl === null && isClipboardImageMediaType(props.mediaType);
 
   const runAction = (action: ImageAction): void => {
     if (pendingAction !== null) return;
@@ -61,10 +63,13 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
     <ImageActions
       pendingAction={pendingAction}
       canCopy={canCopy}
-      directDownload={directDownload}
-      suggestedName={suggestedName}
+      remoteUrl={remoteUrl}
+      openExternalPending={openExternalLink.isPending}
       onCopy={() => runAction("copy")}
       onDownload={() => runAction("download")}
+      onOpenExternal={() => {
+        if (remoteUrl !== null) openExternalLink.mutate(remoteUrl);
+      }}
     />
   );
 
@@ -118,10 +123,11 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
 function ImageActions(props: {
   readonly pendingAction: ImageAction | null;
   readonly canCopy: boolean;
-  readonly directDownload: string | null;
-  readonly suggestedName: string;
+  readonly remoteUrl: string | null;
+  readonly openExternalPending: boolean;
   readonly onCopy: () => void;
   readonly onDownload: () => void;
+  readonly onOpenExternal: () => void;
 }): ReactNode {
   return (
     <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm backdrop-blur-sm">
@@ -133,7 +139,7 @@ function ImageActions(props: {
           icon={<Copy className="size-3.5" aria-hidden />}
         />
       ) : null}
-      {props.directDownload === null ? (
+      {props.remoteUrl === null ? (
         <ImageActionButton
           label="Download image"
           disabled={props.pendingAction !== null}
@@ -141,23 +147,12 @@ function ImageActions(props: {
           icon={<Download className="size-3.5" aria-hidden />}
         />
       ) : (
-        <TooltipWrapper
-          label="Download image"
-          side="top"
-          sideOffset={6}
-          align="center"
-        >
-          <a
-            href={props.directDownload}
-            download={props.suggestedName}
-            target="_blank"
-            rel="noreferrer"
-            className="flex size-7 items-center justify-center rounded-sm text-white/85 outline-none transition-colors hover:bg-white/15 hover:text-white focus-visible:ring-1 focus-visible:ring-white"
-            aria-label="Download image"
-          >
-            <Download className="size-3.5" aria-hidden />
-          </a>
-        </TooltipWrapper>
+        <ImageActionButton
+          label="Open in browser"
+          disabled={props.pendingAction !== null || props.openExternalPending}
+          onClick={props.onOpenExternal}
+          icon={<ExternalLink className="size-3.5" aria-hidden />}
+        />
       )}
     </div>
   );

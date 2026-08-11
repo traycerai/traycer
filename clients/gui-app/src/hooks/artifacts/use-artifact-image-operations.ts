@@ -110,7 +110,11 @@ export function useArtifactImageOperations(
         operationId,
         commit: false,
       });
-      if (!("status" in response) || response.status !== "aborted") {
+      if (
+        !("status" in response) ||
+        (response.status !== "aborted" &&
+          response.status !== "unknown-operation")
+      ) {
         throw new Error("The host returned a commit response for an abort.");
       }
       return response;

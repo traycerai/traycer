@@ -10,6 +10,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { artifactDocumentBundle } from "@/editor-core/artifact-document-bundle";
+import { commitArtifactImageWithRetry } from "@/hooks/artifacts/commit-artifact-image-with-retry";
 import {
   useArtifactImageOperations,
   type ArtifactImagePreparation,
@@ -71,15 +72,12 @@ export function AddImageToArtifactButton(props: {
           attachmentHash: prepared.attachmentHash,
           mediaType: prepared.mediaType,
         });
-        const outcome = await operations.commit(
+        await commitArtifactImageWithRetry(
+          operations.commit,
           artifactId,
           prepared.operationId,
         );
         operationId = null;
-        if ("status" in outcome) {
-          setOpen(false);
-          return;
-        }
       } finally {
         releaseBody();
       }
