@@ -1053,7 +1053,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     ownerReachability.status === "unreachable";
   const openRef = useCallback(
     () =>
-      opensPublishedCopy && ownerHostId !== null && ownerUserId !== null
+      // No re-checking `ownerHostId` / `ownerUserId` here: both null checks
+      // are already inside `opensPublishedCopy`, and TypeScript carries that
+      // narrowing through the aliased condition - so repeating them is not
+      // defence in depth, it is dead code that reads as though the flag alone
+      // were insufficient.
+      opensPublishedCopy
         ? makePublishedChatTileRef({
             taskId: epicId,
             chatId: nodeId,

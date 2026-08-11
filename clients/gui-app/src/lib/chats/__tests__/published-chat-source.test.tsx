@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { FileChangeSegment as FileChangeSegmentModel } from "@/stores/composer/chat-store";
 import { FileChangeSegment } from "@/components/chat/segments/file-change-segment";
@@ -31,7 +31,17 @@ import {
  * reaches production code.
  */
 
-const readPayload = vi.fn();
+/** The content address a payload read is issued against. */
+interface PayloadRef {
+  readonly kind: string;
+  readonly sha256: string;
+}
+
+/**
+ * Typed rather than a bare `vi.fn()`: the assertions below read `.kind` off
+ * recorded calls, and an untyped spy makes every one of those an `any` hop.
+ */
+const readPayload = vi.fn<(ref: PayloadRef | null) => void>();
 /** What the mocked reader answers; `undefined` models a query still in flight. */
 const payloadAnswer: {
   current:
@@ -47,7 +57,7 @@ const payloadAnswer: {
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatPayload: (args: {
     readonly enabled: boolean;
-    readonly ref: { readonly kind: string; readonly sha256: string } | null;
+    readonly ref: PayloadRef | null;
   }) => {
     // Records only what a real query would ACT on. A disabled TanStack query
     // issues nothing, so counting mounts would prove nothing either way.
@@ -117,7 +127,7 @@ function Diff(props: { readonly published: boolean }): ReactNode {
         segment={FILE_SEGMENT}
         variant="card"
         headerFindUnitId={null}
-        initiallyOpen={true}
+        initiallyOpen
       />
     </ThemeProvider>
   );
@@ -149,7 +159,7 @@ describe("published chat source", () => {
   });
 
   it("reads file-snapshot payloads for a published copy", () => {
-    render(<Diff published={true} />);
+    render(<Diff published />);
     const kinds = readPayload.mock.calls.map((call) => call[0]?.kind);
     expect(kinds).toEqual(["file-snapshot", "file-snapshot"]);
   });
@@ -159,7 +169,7 @@ describe("published chat source", () => {
       <PublishedChatSourceProvider
         source={{ identity: IDENTITY, client: null }}
       >
-        <Plan published={true} />
+        <Plan published />
       </PublishedChatSourceProvider>,
     );
     expect(readPayload).toHaveBeenCalledTimes(1);
@@ -172,19 +182,17 @@ describe("published chat source", () => {
     // A SETTLED unavailable answer, not an in-flight one - the distinction the
     // hook itself draws, and the reason the loading arm exists.
     payloadAnswer.current = { kind: "unavailable" };
-    let seen: string | null = null;
-    function Probe(): ReactNode {
-      const result = usePublishedSnapshotDiff({
+
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
         source: { identity: IDENTITY, client: null },
         beforeHash: "a".repeat(64),
         afterHash: null,
         enabled: true,
-      });
-      seen = result.data?.reason ?? null;
-      return null;
-    }
-    render(<Probe />);
-    expect(seen).toBe("blob_missing");
+      }),
+    );
+
+    expect(result.current.data?.reason).toBe("blob_missing");
   });
 
   it("reports a truncated payload as a prefix, with its real byte length", () => {
@@ -197,18 +205,19 @@ describe("published chat source", () => {
       isTruncated: true,
       byteLength: 65_547,
     };
-    let extent: { isTruncated: boolean; byteLength: number } | null = null;
-    function Probe(): ReactNode {
-      extent = usePublishedSnapshotDiff({
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
         source: { identity: IDENTITY, client: null },
         beforeHash: "a".repeat(64),
         afterHash: "b".repeat(64),
         enabled: true,
-      }).truncation;
-      return null;
-    }
-    render(<Probe />);
-    expect(extent).toEqual({ isTruncated: true, byteLength: 65_547 });
+      }),
+    );
+
+    expect(result.current.truncation).toEqual({
+      isTruncated: true,
+      byteLength: 65_547,
+    });
   });
 
   it("carries truncation on a published plan too", () => {
@@ -218,21 +227,19 @@ describe("published chat source", () => {
       isTruncated: true,
       byteLength: 65_547,
     };
-    let notice: string | null = null;
-    function Probe(): ReactNode {
-      const result = usePublishedPlanContent({
+    const { result } = renderHook(() =>
+      usePublishedPlanContent({
         source: { identity: IDENTITY, client: null },
         contentHash: "c".repeat(64),
         enabled: true,
-      });
-      notice =
-        result.truncation === null
-          ? null
-          : payloadTruncationNotice(result.truncation);
-      return null;
-    }
-    render(<Probe />);
-    expect(notice).toBe("Showing the first part of 65547 bytes.");
+      }),
+    );
+
+    const truncation = result.current.truncation;
+    expect(truncation).not.toBeNull();
+    expect(
+      truncation === null ? null : payloadTruncationNotice(truncation),
+    ).toBe("Showing the first part of 65547 bytes.");
   });
 
   it("reports no truncation for a complete payload", () => {
@@ -244,18 +251,16 @@ describe("published chat source", () => {
       isTruncated: false,
       byteLength: 12,
     };
-    let extent: unknown = "unset";
-    function Probe(): ReactNode {
-      extent = usePublishedSnapshotDiff({
+    const { result } = renderHook(() =>
+      usePublishedSnapshotDiff({
         source: { identity: IDENTITY, client: null },
         beforeHash: "a".repeat(64),
         afterHash: null,
         enabled: true,
-      }).truncation;
-      return null;
-    }
-    render(<Probe />);
-    expect(extent).toBeNull();
+      }),
+    );
+
+    expect(result.current.truncation).toBeNull();
   });
 
   it("renders the truncation notice on the real segment, not just in the hook", () => {
@@ -269,7 +274,7 @@ describe("published chat source", () => {
       isTruncated: true,
       byteLength: 65_547,
     };
-    render(<Diff published={true} />);
+    render(<Diff published />);
     const notice = screen.getByTestId("file-change-truncated-notice");
     expect(notice.textContent).toContain("65547");
   });
@@ -281,7 +286,7 @@ describe("published chat source", () => {
       isTruncated: false,
       byteLength: 12,
     };
-    render(<Diff published={true} />);
+    render(<Diff published />);
     expect(screen.queryByTestId("file-change-truncated-notice")).toBeNull();
   });
 });

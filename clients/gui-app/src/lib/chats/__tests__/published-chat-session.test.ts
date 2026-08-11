@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
-import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
+import type {
+  JsonObject,
+  JsonValue,
+} from "@traycer/protocol/persistence/chat-sync/json";
 import {
   convertPublishedChat,
   convertReplicaChat,
@@ -47,6 +50,20 @@ function futureBlock(blockId: string): JsonObject {
   };
 }
 
+/**
+ * A `JsonObject`'s values are `JsonValue`, so `String(...)` on one would
+ * happily render an object as "[object Object]" and the fixture would assert
+ * against that placeholder. Every block below really does carry string ids, so
+ * this states it by NARROWING instead of coercing - a fixture that stops
+ * carrying one fails here, loudly, rather than silently downstream.
+ */
+function jsonString(value: JsonValue | undefined, field: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`fixture block has no string '${field}'`);
+  }
+  return value;
+}
+
 function presentedChatWith(blocks: readonly JsonObject[]): PresentedChat {
   const raw = {
     role: "assistant",
@@ -77,8 +94,8 @@ function presentedChatWith(blocks: readonly JsonObject[]): PresentedChat {
         raw,
         timestamp: 1,
         blocks: blocks.map((block) => ({
-          blockId: String(block.blockId),
-          variant: String(block.type),
+          blockId: jsonString(block.blockId, "blockId"),
+          variant: jsonString(block.type, "type"),
           known: null,
           raw: block,
           payloadRefs: [],
