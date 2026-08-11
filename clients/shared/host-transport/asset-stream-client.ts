@@ -91,10 +91,14 @@ export interface AssetStreamClientOptions<Method extends AssetStreamMethod> {
  * arrival order, verifies the assembled length against the header's
  * `sizeBytes`, and settles exactly once via `onReady` or `onFailure`.
  *
- * The caller owns the session's lifetime - mirrors every other typed stream
- * wrapper in this directory (`TerminalStreamClient`,
- * `WorktreeDeleteStreamClient`, ...), none of which auto-close on their own
- * terminal frame. Call `close()` on unmount or refetch.
+ * Unlike the long-lived typed wrappers in this directory
+ * (`TerminalStreamClient`, `WorktreeDeleteStreamClient`, ...), this one is a
+ * single fetch: nothing more is ever expected once it settles, so it closes
+ * its own session on every terminal path (success or failure) instead of
+ * leaving an idle subscription - and the host resolver behind it - alive for
+ * as long as the caller happens to hold the instance. `close()` is still
+ * there and still idempotent, for the caller to cancel BEFORE the fetch
+ * settles (unmount, refetch, a superseded request).
  */
 export class AssetStreamClient<
   Method extends AssetStreamMethod = AssetStreamMethod,
@@ -242,11 +246,19 @@ export class AssetStreamClient<
   private succeed(header: AssetStreamHeader, bytes: Uint8Array): void {
     this.settled = true;
     this.callbacks.onReady(header, bytes);
+    // One-shot fetch: nothing more will ever arrive on this session, so hold
+    // it open no longer than the transfer itself. Routes through `close()`
+    // (not a bare `this.session.close()`) so a caller's own subsequent
+    // `close()` - the gui-app hook closes on unmount/refetch regardless of
+    // whether THIS settled it first - stays the idempotent no-op it already
+    // is via the `this.closed` guard.
+    this.close();
   }
 
   private fail(failure: AssetStreamFailure): void {
     this.settled = true;
     this.callbacks.onFailure(failure);
+    this.close();
   }
 }
 
