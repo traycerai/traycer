@@ -156,7 +156,9 @@ function createFixture(): {
     // assertion is about the HOOK's own `retry` predicate refusing
     // E_HOST_UNSUPPORTED, and a client that never retries anything would keep
     // that assertion green even with the predicate deleted.
-    defaultOptions: { queries: { retry: 3, retryDelay: 0, staleTime: 0, gcTime: 0 } },
+    defaultOptions: {
+      queries: { retry: 3, retryDelay: 0, staleTime: 0, gcTime: 0 },
+    },
   });
   const requestCount = { value: 0 };
   const client = new HostClient<HostRpcRegistry>({

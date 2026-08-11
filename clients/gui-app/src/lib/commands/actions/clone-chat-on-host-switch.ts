@@ -147,7 +147,9 @@ export function cloneChatOnHostSwitch(
     // time. A selection that moved since this flow started would land the
     // clone on a host the open intent does not name, so the flow ends as a
     // failure instead of creating on the wrong machine.
-    if ((args.directory.getSelected()?.hostId ?? null) !== selectedHostIdAtStart) {
+    if (
+      (args.directory.getSelected()?.hostId ?? null) !== selectedHostIdAtStart
+    ) {
       args.onCloneFailed();
       return;
     }
@@ -200,28 +202,30 @@ export function cloneChatOnHostSwitch(
     });
   };
 
-  void resolveSettingsForClone(args).then((settings) => {
-    openWithForkSource(settings, {
-      boundary: "latest",
-      sourceChatId: args.sourceChatId,
-      // Ticket 37: whatever owner this surface was ACTUALLY rendering, so the
-      // host's cloud tier has an expectation to check when it holds no local
-      // registry facts of its own (a post-restart swept chat, a fresh
-      // identity) - without it the clone silently degrades to settings-only
-      // and loses the history. Passed straight through from the caller and
-      // `null` when that caller genuinely does not know: a fabricated guess
-      // is worse than none, because the host would trust it.
-      sourceOwnerUserId: args.sourceOwnerUserId,
+  void resolveSettingsForClone(args)
+    .then((settings) => {
+      openWithForkSource(settings, {
+        boundary: "latest",
+        sourceChatId: args.sourceChatId,
+        // Ticket 37: whatever owner this surface was ACTUALLY rendering, so the
+        // host's cloud tier has an expectation to check when it holds no local
+        // registry facts of its own (a post-restart swept chat, a fresh
+        // identity) - without it the clone silently degrades to settings-only
+        // and loses the history. Passed straight through from the caller and
+        // `null` when that caller genuinely does not know: a fabricated guess
+        // is worse than none, because the host would trust it.
+        sourceOwnerUserId: args.sourceOwnerUserId,
+      });
+    })
+    .catch(() => {
+      // A settings resolution that REJECTED (a profile lookup's transport
+      // failure, not a mapping miss - those resolve to ambient) has produced
+      // neither settings nor a clone. Without this arm the flow just stops,
+      // which leaves the caller's "cloning…" state pending forever with no
+      // clone and no terminal signal.
+      if (cancelled) return;
+      args.onCloneFailed();
     });
-  }).catch(() => {
-    // A settings resolution that REJECTED (a profile lookup's transport
-    // failure, not a mapping miss - those resolve to ambient) has produced
-    // neither settings nor a clone. Without this arm the flow just stops,
-    // which leaves the caller's "cloning…" state pending forever with no
-    // clone and no terminal signal.
-    if (cancelled) return;
-    args.onCloneFailed();
-  });
 
   return () => {
     if (cancelled) return;

@@ -447,7 +447,8 @@ export function useEpicRouteSynchronization(
   // must not authorize closing tabs. `E_HOST_UNSUPPORTED` and a DISABLED
   // query DO authorize - nothing will ever answer through either, and record
   // policing on local records alone is the correct degraded behavior.
-  const cloudChatsAuthorizeSweep = cloudChatListAuthorizesRecordSweep(cloudChats);
+  const cloudChatsAuthorizeSweep =
+    cloudChatListAuthorizesRecordSweep(cloudChats);
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (!cloudChatsAuthorizeSweep) return;

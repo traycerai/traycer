@@ -181,7 +181,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
 // consumer starts reading fails `compile` here rather than silently reading
 // `undefined`.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
-  const cloudRow = (chatId: string, isOwnedByViewer: boolean): CloudChatSummary => ({
+  const cloudRow = (
+    chatId: string,
+    isOwnedByViewer: boolean,
+  ): CloudChatSummary => ({
     identity: {
       taskId: EPIC_ID,
       chatId,
@@ -205,7 +208,9 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
     useCloudChatList: () => ({
       data: {
         chats: [
-          ...[...testState.cloudChatIds].map((chatId) => cloudRow(chatId, true)),
+          ...[...testState.cloudChatIds].map((chatId) =>
+            cloudRow(chatId, true),
+          ),
           ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
             cloudRow(chatId, false),
           ),
