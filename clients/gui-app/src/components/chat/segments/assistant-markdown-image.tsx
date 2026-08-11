@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
-import { ImageOff, Link, ShieldQuestion } from "lucide-react";
+import { createContext, useContext, type ReactNode } from "react";
+import { Link, ShieldQuestion } from "lucide-react";
 import type { RequestImageIngestRequest } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -8,12 +8,15 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { epicMutationKeys } from "@/lib/query-keys";
-import { cn } from "@/lib/utils";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
 } from "@/stores/composer/chat-store";
-import { ImageLightbox } from "./image-lightbox";
+import {
+  AttachmentImage,
+  AttachmentImageFailure,
+  AttachmentImageLoading,
+} from "./attachment-image";
 
 const MAX_INLINE_IMAGE_BYTES = 30 * 1024 * 1024;
 const RASTER_DATA_URL_PATTERN =
@@ -141,29 +144,31 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   }
   if (source.kind === "https" || source.kind === "data-raster") {
     return (
-      <LoadableImage
+      <AttachmentImage
         key={source.src}
         src={source.src}
         alt={props.alt}
         mediaType={
           source.kind === "data-raster" ? dataMediaType(source.src) : null
         }
+        suggestedName={null}
       />
     );
   }
   if (source.kind === "data-svg") {
     return (
-      <LoadableImage
+      <AttachmentImage
         key={source.src}
         src={source.src}
         alt={props.alt}
         mediaType="image/svg+xml"
+        suggestedName={null}
       />
     );
   }
   if (source.kind === "invalid-data") {
     return (
-      <ImageFailureChip
+      <AttachmentImageFailure
         alt={props.alt}
         source={source.src}
         reason="Inline image is invalid or exceeds the 30 MB limit"
@@ -172,7 +177,7 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
   }
   if (source.kind === "unsupported") {
     return (
-      <ImageFailureChip
+      <AttachmentImageFailure
         alt={props.alt}
         source={source.src}
         reason="Unsupported image source"
@@ -210,7 +215,7 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
     );
   }
   return (
-    <ImageFailureChip
+    <AttachmentImageFailure
       alt={props.alt}
       source={source.src}
       reason={resolutionFailureReason(resolution.entry.state)}
@@ -254,78 +259,22 @@ function ResolvedImage(props: {
 }): ReactNode {
   const image = useAttachmentBlobSrc(props.hash, props.mediaType, null);
   if (image.status !== "ready") {
-    return <ImageLoadingSkeleton label="Waiting for image sync" />;
+    return <AttachmentImageLoading label="Waiting for image sync" />;
   }
   return (
-    <LoadableImage
+    <AttachmentImage
       key={image.src}
       src={image.src}
       alt={props.alt}
       mediaType={props.mediaType}
+      suggestedName={null}
     />
-  );
-}
-
-function LoadableImage(props: {
-  readonly alt: string;
-  readonly src: string;
-  readonly mediaType: string | null;
-}): ReactNode {
-  const [status, setStatus] = useState<"loading" | "ready" | "error">(
-    "loading",
-  );
-  if (status === "error") {
-    return (
-      <ImageFailureChip
-        alt={props.alt}
-        source={props.src}
-        reason="Image could not be loaded"
-      />
-    );
-  }
-  return (
-    <div className="relative my-3 w-full max-w-3xl overflow-hidden rounded-lg border border-border/70 bg-muted/30">
-      {status === "loading" ? (
-        <ImageLoadingSkeleton label="Loading image" />
-      ) : null}
-      <ImageLightbox
-        src={props.src}
-        alt={props.alt}
-        mediaType={props.mediaType}
-        suggestedName={null}
-        className={status === "loading" ? "absolute inset-0" : undefined}
-      >
-        <img
-          src={props.src}
-          alt={props.alt}
-          className={cn(
-            status === "loading"
-              ? "size-full object-contain opacity-0"
-              : "block max-h-[70vh] max-w-full object-contain",
-          )}
-          draggable={false}
-          onLoad={() => setStatus("ready")}
-          onError={() => setStatus("error")}
-        />
-      </ImageLightbox>
-    </div>
   );
 }
 
 function dataMediaType(src: string): string | null {
   const match = /^data:([^;,]+)/i.exec(src);
   return match?.[1] ?? null;
-}
-
-function ImageLoadingSkeleton(props: { readonly label: string }): ReactNode {
-  return (
-    <span
-      className="flex aspect-video w-full animate-pulse items-center justify-center bg-muted/60 text-ui-sm text-muted-foreground"
-      role="status"
-    >
-      {props.label}
-    </span>
-  );
 }
 
 function ConsentImageChip(props: {
@@ -349,7 +298,7 @@ function ConsentImageChip(props: {
   });
   if (mutation.error !== null) {
     return (
-      <ImageFailureChip
+      <AttachmentImageFailure
         alt={props.alt}
         source={props.source}
         reason="Image load request failed"
@@ -388,35 +337,6 @@ function ConsentImageChip(props: {
       align={undefined}
     >
       {button}
-    </TooltipWrapper>
-  );
-}
-
-function ImageFailureChip(props: {
-  readonly alt: string;
-  readonly source: string;
-  readonly reason: string;
-}): ReactNode {
-  const chip = (
-    <span
-      className="my-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-ui-sm text-muted-foreground"
-      role="status"
-      data-assistant-image-failure
-    >
-      <ImageOff className="size-3.5 shrink-0 text-destructive" aria-hidden />
-      <span className="truncate">
-        {props.alt.length > 0 ? props.alt : "Image"}: {props.reason}
-      </span>
-    </span>
-  );
-  return (
-    <TooltipWrapper
-      label={`${props.reason}: ${props.source}`}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      {chip}
     </TooltipWrapper>
   );
 }
