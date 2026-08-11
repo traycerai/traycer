@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { keepPreviousData, type UseQueryResult } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -10,7 +10,9 @@ import type {
   WorkspaceSearchSource,
   WorkspaceSearchTextOptions,
 } from "@traycer/protocol/host/workspace/unary-schemas";
+import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-same-host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 
 const WORKSPACE_SEARCH_TEXT_LIMIT = 200;
 
@@ -41,8 +43,10 @@ export interface UseWorkspaceSearchTextArgs {
  * discarded rather than applied. The response also echoes `epicId` and its
  * source (`root` for a code root, `source` for artifacts) so the caller can
  * defensively drop a stale payload that crosses a source/target change.
- * `keepPreviousData` keeps the last results visible while the next keystroke's
- * request is in flight, so the list does not blank between strokes.
+ * Same-host `keepPreviousData` keeps the last results visible while the next
+ * keystroke's request is in flight (no blank between strokes), but drops the
+ * prior payload across a host switch so another host's matches never render
+ * as this one's results.
  *
  * `workspace.searchText` is an optional (non-floor) capability: an old host
  * rejects with `E_HOST_UNSUPPORTED`, surfaced here as `query.error.code` for the
@@ -56,6 +60,7 @@ export function useWorkspaceSearchText(
 > {
   const trimmedQuery = args.query.trim();
   const { options, reference } = args;
+  const { hostId } = useReactiveHostReadiness(args.client);
   // A source is usable when it is the artifact mirror, or an attached root with
   // a non-empty path. Everything else disables the query.
   const hasSource =
@@ -96,7 +101,7 @@ export function useWorkspaceSearchText(
     options: {
       enabled: args.enabled && hasSource && trimmedQuery.length > 0,
       staleTime: 5_000,
-      placeholderData: keepPreviousData,
+      placeholderData: keepPreviousDataForSameHost(hostId),
     },
   });
 }

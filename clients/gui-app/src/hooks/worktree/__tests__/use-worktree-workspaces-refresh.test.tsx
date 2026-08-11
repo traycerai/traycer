@@ -162,11 +162,11 @@ describe("useWorktreeWorkspacesRefresh", () => {
     expect(rendered.result.current.branch).toBe("main");
   });
 
-  it("completes only once the branch list has caught up, not just been marked", async () => {
-    // `NewWorktreeForm` builds its selectable rows from `branchesQuery.data`
-    // and passes only `isLoading` to the list, so a refresh that resolves while
-    // the branch refetch is still `fetching` leaves the just-deleted branch
-    // selectable behind a spinner that has already stopped.
+  it("settles without awaiting the branch-list fan-out (D3 reversal)", async () => {
+    // Deliberate reversal of the prior await + refetchType:"all": the branch
+    // list invalidation is fire-and-forget so isPending (and "Checking…") bound
+    // to the forced summary round-trip. Inactive branch queries refetch on next
+    // mount; active ones still refetch in the background after invalidate.
     const fixture = createFixture();
     const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
       wrapper: fixture.Wrapper,
@@ -189,10 +189,12 @@ describe("useWorktreeWorkspacesRefresh", () => {
         settled = true;
       });
     });
-    // The summary is back, but the branch list is still held - and this is the
-    // moment the old code called the refresh done.
-    await fixture.waitForHeldRequest("branch", 1);
-    expect(settled).toBe(false);
+    // Summary force lands; branch list is still held. Refresh must already
+    // report done so the footer spinner is not wedged on inactive queries.
+    await waitFor(() => {
+      expect(settled).toBe(true);
+    });
+    expect(rendered.result.current.refresh.isRefreshing).toBe(false);
     await act(async () => {
       fixture.releaseHeldReads();
       await inFlight;
@@ -386,6 +388,81 @@ describe("useWorktreeWorkspacesRefresh", () => {
     });
     expect(fixture.calls()).toEqual([]);
   });
+
+  it("sets verifyFailed on a real (non-cancelled) forced-read error, and clears it on a successful retry", async () => {
+    const fixture = createFixture();
+    fixture.failNextForcedRead(new Error("relay unreachable"));
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("feature/login");
+    });
+    expect(rendered.result.current.refresh.verifyFailed).toBe(false);
+
+    await act(async () => {
+      await rendered.result.current.refresh.refresh().catch(() => undefined);
+    });
+    expect(rendered.result.current.refresh.verifyFailed).toBe(true);
+    // A real failure still toasts - distinct from the silent coordinator
+    // cancellation path exercised elsewhere in this file.
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+
+    // The next user-driven attempt clears the footer failure state up front,
+    // not only once the retry itself succeeds.
+    fixture.setNext({ branch: "main", resolvedAt: 7_000 });
+    await act(async () => {
+      await rendered.result.current.refresh.refresh();
+    });
+    expect(rendered.result.current.refresh.verifyFailed).toBe(false);
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("main");
+    });
+  });
+
+  it("sets verifyFailed when the one-hop post-host-change force fails", async () => {
+    // A→B cancel path: the outer refresh settles as CancelledError (no
+    // verifyFailed), then forceAgainstLiveHost fires against B. If THAT hop
+    // fails, the footer must still show the failure state — toast alone left
+    // it silently idle.
+    //
+    // Arm order matters: failNextForced is checked BEFORE holdForced in the
+    // fixture. Arming fail before A's request starts makes A reject
+    // immediately and waitForHeldRequest never sees a hold.
+    const fixture = createFixture();
+    const rendered = renderHook(() => usePicker(fixture.client, PATHS), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.branch).toBe("feature/login");
+    });
+
+    fixture.holdForcedReads();
+    let inFlight!: Promise<void>;
+    act(() => {
+      inFlight = rendered.result.current.refresh
+        .refresh()
+        .catch(() => undefined);
+    });
+    // A is held. NOW arm B to fail so the one-hop follow-up rejects.
+    await fixture.waitForHeldRequest("forced", 1);
+    fixture.failNextForcedRead(new Error("host B unreachable"));
+    // Abort the in-flight force under A; onError hands work to
+    // forceAgainstLiveHost against B, which fails immediately (failNext is
+    // checked before hold).
+    act(() => {
+      fixture.swapHost();
+    });
+    await act(async () => {
+      fixture.releaseHeldReads();
+      await inFlight;
+    });
+
+    expect(rendered.result.current.refresh.verifyFailed).toBe(true);
+    expect(toastSpy).toHaveBeenCalled();
+  });
 });
 
 /**
@@ -523,6 +600,8 @@ function createFixture(): {
    * held so a test can order settlement deterministically.
    */
   readonly releaseHeldOfKind: (kind: HeldRequestKind) => void;
+  /** The next forced read rejects with `error` instead of settling. */
+  readonly failNextForcedRead: (error: Error) => void;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -539,6 +618,7 @@ function createFixture(): {
   let holdCacheOnly = false;
   let holdForced = false;
   let holdBranches = false;
+  let failNextForced: Error | null = null;
   // Bounded so a regression that chases the host forever fails the count
   // assertion instead of spinning the suite.
   let swapsLeft = 0;
@@ -610,6 +690,11 @@ function createFixture(): {
         calls.push(params);
         const paths = params.workspacePaths;
         if (params.forceRefresh) {
+          if (failNextForced !== null) {
+            const error = failNextForced;
+            failNextForced = null;
+            return Promise.reject(error);
+          }
           if (swapsLeft > 0) {
             swapsLeft -= 1;
             client.bind(
@@ -768,6 +853,9 @@ function createFixture(): {
     },
     releaseHeldOfKind: (kind) => {
       releaseKind(kind);
+    },
+    failNextForcedRead: (error) => {
+      failNextForced = error;
     },
   };
 }
