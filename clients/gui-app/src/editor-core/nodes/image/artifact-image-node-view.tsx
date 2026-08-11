@@ -19,7 +19,7 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
   );
   let body: ReactNode;
   if (image.status === "loading") {
-    body = <AttachmentImageLoading label="Waiting for image sync" />;
+    body = <AttachmentImageLoading label="Waiting for image sync" fullWidth />;
   } else if (image.status === "unavailable") {
     body = (
       <AttachmentImageFailure
@@ -35,12 +35,16 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
         alt={alt}
         mediaType={mediaType}
         suggestedName={src.split("/").at(-1) ?? null}
-        addToArtifactSource={null}
+        fullWidth
       />
     );
   }
 
-  return <NodeViewWrapper contentEditable={false}>{body}</NodeViewWrapper>;
+  return (
+    <NodeViewWrapper contentEditable={false} className="not-prose max-w-full">
+      {body}
+    </NodeViewWrapper>
+  );
 }
 
 function readStringAttr(

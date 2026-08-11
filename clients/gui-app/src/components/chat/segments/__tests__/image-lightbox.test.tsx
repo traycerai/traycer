@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +134,31 @@ afterEach(() => {
 });
 
 describe("<ImageLightbox /> actions", () => {
+  it("keeps image actions from changing an enclosing editor selection", () => {
+    const onMouseDown = vi.fn();
+    renderWithRunner(
+      <div role="presentation" onMouseDown={onMouseDown}>
+        <ImageLightbox
+          src="blob:http://localhost/raster"
+          alt="a misty pier"
+          mediaType="image/png"
+          suggestedName="pier.png"
+          className={undefined}
+        >
+          <img src="blob:http://localhost/raster" alt="a misty pier" />
+        </ImageLightbox>
+      </div>,
+    );
+    const event = createEvent.mouseDown(
+      screen.getByRole("button", { name: "Copy image" }),
+    );
+
+    fireEvent(screen.getByRole("button", { name: "Copy image" }), event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onMouseDown).not.toHaveBeenCalled();
+  });
+
   it("downloads through saveBlobToDisk with the suggested file name", async () => {
     renderWithRunner(
       <ImageLightbox
@@ -162,6 +189,7 @@ describe("<ImageLightbox /> actions", () => {
   });
 
   it("copies through copyImageBlobToClipboard (ClipboardItem path lives there)", async () => {
+    const user = userEvent.setup();
     renderWithRunner(
       <ImageLightbox
         src="blob:http://localhost/raster"
@@ -174,7 +202,11 @@ describe("<ImageLightbox /> actions", () => {
       </ImageLightbox>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy image" }));
+    await user.tab();
+    await user.tab();
+    const copy = screen.getByRole("button", { name: "Copy image" });
+    expect(document.activeElement).toBe(copy);
+    await user.keyboard("{Enter}");
 
     await waitFor(() => {
       expect(copyImageMock).toHaveBeenCalledTimes(1);

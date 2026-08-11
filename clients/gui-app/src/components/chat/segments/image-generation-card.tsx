@@ -3,7 +3,6 @@ import type {
   ImageGenerationResult,
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
-import { AddImageToArtifactButton } from "@/components/artifacts/add-image-to-artifact-button";
 import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import {
@@ -45,7 +44,7 @@ export function ImageGenerationCard(
     <section
       tabIndex={-1}
       data-image-generation-card={props.id}
-      className="w-fit max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="w-full max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="Image generation"
     >
       <GenerationCell
@@ -124,12 +123,7 @@ function GeneratedImageContent(props: {
   }
 
   return (
-    <div className="group relative size-full">
-      <AddImageToArtifactButton
-        source={{ kind: "client", url: image.src }}
-        alt={alt.length > 0 ? alt : "Generated image"}
-        className="absolute right-2 top-2 z-10"
-      />
+    <div className="group relative size-full @container">
       <ImageLightbox
         src={image.src}
         alt={alt.length > 0 ? alt : "Generated image"}

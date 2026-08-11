@@ -1,6 +1,17 @@
-import { Check, CircleAlert } from "lucide-react";
+import { ChevronDown, CircleAlert } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { EASE_IN_OUT, EASE_OUT } from "./ease";
 import { useHoverCapable } from "./use-hover-capable";
 
@@ -43,9 +54,6 @@ function DitherMark(props: {
   readonly status: ImageGenerationStatus;
   readonly reduce: boolean;
 }): ReactNode {
-  if (props.status === "complete") {
-    return <Check aria-hidden="true" className="size-3.5" />;
-  }
   if (props.status === "error") {
     return <CircleAlert aria-hidden="true" className="size-3.5" />;
   }
@@ -213,25 +221,20 @@ export function ImageGeneration(props: ImageGenerationProps): ReactNode {
       data-slot="image-generation"
       data-state={props.status}
       aria-busy={active}
-      className="w-fit max-w-full"
+      className="w-full max-w-full"
     >
-      <div
-        style={{ width: props.mediaStyle.width }}
-        className="w-fit max-w-full"
-      >
-        <ImageGenerationMedia
-          props={props}
-          active={active}
-          reduce={reduce}
-          label={label}
-        />
-        <ImageGenerationDetails
-          status={props.status}
-          statusText={statusText}
-          prompt={props.prompt}
-          reduce={reduce}
-        />
-      </div>
+      <ImageGenerationMedia
+        props={props}
+        active={active}
+        reduce={reduce}
+        label={label}
+      />
+      <ImageGenerationDetails
+        status={props.status}
+        statusText={statusText}
+        prompt={props.prompt}
+        reduce={reduce}
+      />
     </div>
   );
 }
@@ -251,7 +254,7 @@ function ImageGenerationMedia(props: {
         ...props.props.mediaStyle,
         aspectRatio: props.props.aspectRatio,
       }}
-      className="relative isolate max-w-full overflow-hidden rounded-xl bg-muted"
+      className="relative isolate max-w-full overflow-hidden rounded-xl bg-muted @container"
     >
       <motion.div
         aria-hidden={props.props.children ? undefined : true}
@@ -290,7 +293,7 @@ function ImageGenerationMedia(props: {
         ) : null}
       </AnimatePresence>
       {props.props.resolution ? (
-        <span className="absolute right-2 top-2 z-10 rounded-full bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+        <span className="pointer-events-none absolute left-2 top-2 z-10 whitespace-nowrap rounded-full bg-background/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground @max-[8rem]:left-1 @max-[8rem]:top-1 @max-[8rem]:px-1.5">
           {props.props.resolution}
         </span>
       ) : null}
@@ -304,36 +307,59 @@ function ImageGenerationDetails(props: {
   readonly prompt: string;
   readonly reduce: boolean;
 }): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="mt-3 text-left">
-      <div
-        aria-live="polite"
-        className={
-          props.status === "error"
-            ? "flex min-h-5 items-center gap-2 text-sm font-medium text-destructive"
-            : "flex min-h-5 items-center gap-2 text-sm font-medium text-foreground"
-        }
-      >
-        <DitherMark status={props.status} reduce={props.reduce} />
-        <AnimatePresence mode="popLayout" initial={false}>
-          <motion.span
-            key={props.statusText}
-            initial={props.reduce ? false : { opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={props.reduce ? undefined : { opacity: 0, y: -4 }}
-            transition={{
-              duration: props.reduce ? 0 : 0.15,
-              ease: EASE_OUT,
-            }}
-          >
-            {props.statusText}
-          </motion.span>
-        </AnimatePresence>
-      </div>
+      {props.status === "complete" ? (
+        <span aria-live="polite" className="sr-only">
+          {props.statusText}
+        </span>
+      ) : (
+        <div
+          aria-live="polite"
+          className={
+            props.status === "error"
+              ? "mb-2 flex min-h-5 items-center gap-2 text-sm font-medium text-destructive"
+              : "mb-2 flex min-h-5 items-center gap-2 text-sm font-medium text-foreground"
+          }
+        >
+          <DitherMark status={props.status} reduce={props.reduce} />
+          <span>{props.statusText}</span>
+        </div>
+      )}
       {props.prompt ? (
-        <p className="mt-0.5 truncate text-xs text-muted-foreground">
-          “{props.prompt}”
-        </p>
+        <Collapsible
+          open={expanded}
+          onOpenChange={setExpanded}
+          className="w-full min-w-0 overflow-hidden rounded-md border border-border/60 bg-muted/20"
+        >
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="group flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left text-xs text-muted-foreground outline-none transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              aria-label={
+                expanded ? "Hide image details" : "Show image details"
+              }
+            >
+              <span className="shrink-0 font-medium text-foreground/80">
+                Image details
+              </span>
+              <span className="min-w-0 flex-1 truncate group-data-[state=open]:hidden">
+                {props.prompt}
+              </span>
+              <ChevronDown
+                className="ml-auto size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+                aria-hidden
+              />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="border-t border-border/50 px-2.5 py-2">
+            <p className="text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+              {props.prompt}
+            </p>
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
     </div>
   );

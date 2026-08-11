@@ -34,10 +34,6 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useAttachmentBlobSrc: () => blobSrcState.value,
 }));
 
-vi.mock("@/components/artifacts/add-image-to-artifact-button", () => ({
-  AddImageToArtifactButton: () => null,
-}));
-
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const TINY_PNG_DATA_URL = `data:image/png;base64,${TINY_PNG_BASE64}`;

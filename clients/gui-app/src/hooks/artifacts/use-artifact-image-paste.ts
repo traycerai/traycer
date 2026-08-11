@@ -173,19 +173,27 @@ export function useArtifactImagePaste(
   const insertAttrs = useCallback(
     (images: ReadonlyArray<PreparedArtifactImage>): number => {
       if (editor === null || editor.isDestroyed || !editor.isEditable) return 0;
+      const imageContent = images.map((image) => ({
+        type: "image",
+        attrs: {
+          src: image.src,
+          alt: image.alt,
+          attachmentHash: image.attachmentHash,
+          mediaType: image.mediaType,
+        },
+      }));
+      const selectionParent = editor.state.selection.$from.parent;
+      const replacesEmptyTextblock =
+        editor.state.selection.empty &&
+        selectionParent.isTextblock &&
+        selectionParent.content.size === 0;
       const inserted = editor
         .chain()
         .focus()
         .insertContent(
-          images.map((image) => ({
-            type: "image",
-            attrs: {
-              src: image.src,
-              alt: image.alt,
-              attachmentHash: image.attachmentHash,
-              mediaType: image.mediaType,
-            },
-          })),
+          replacesEmptyTextblock
+            ? [...imageContent, { type: "paragraph" }]
+            : imageContent,
         )
         .run();
       return inserted ? images.length : 0;

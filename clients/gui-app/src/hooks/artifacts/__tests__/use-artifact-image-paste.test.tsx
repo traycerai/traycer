@@ -210,6 +210,37 @@ describe("useArtifactImagePaste", () => {
     editor.destroy();
   });
 
+  it("restores a text caret when undo removes a pasted image", async () => {
+    const editor = makeEditor();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+    });
+    await waitFor(() => {
+      expect(countImages(editor)).toBe(1);
+    });
+
+    act(() => {
+      expect(editor.commands.undo()).toBe(true);
+    });
+    await waitFor(() => {
+      expect(countImages(editor)).toBe(0);
+    });
+    expect({
+      type: editor.state.selection.constructor.name,
+      empty: editor.state.selection.empty,
+      parentIsTextblock: editor.state.selection.$from.parent.isTextblock,
+    }).toEqual({
+      type: "TextSelection",
+      empty: true,
+      parentIsTextblock: true,
+    });
+    editor.destroy();
+  });
+
   it("aborts prepared operations that were not inserted", async () => {
     const editor = makeEditor();
     editor.setEditable(false);

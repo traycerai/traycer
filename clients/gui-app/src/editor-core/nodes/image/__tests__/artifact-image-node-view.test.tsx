@@ -16,6 +16,7 @@ import { EditorContent, EditorContext } from "@tiptap/react";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
+import { ArtifactToolbar } from "@/editor-core/toolbar/artifact-toolbar";
 
 interface AttachmentBlobState {
   readonly status: "loading" | "ready" | "unavailable";
@@ -45,6 +46,10 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
     mediaType: string,
     dataUrl: string | null,
   ) => useAttachmentBlobSrcMock(hash, mediaType, dataUrl),
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),
 }));
 
 function mountImageEditor(attrs: {
@@ -102,7 +107,9 @@ describe("ArtifactImageNodeView", () => {
         <EditorContent editor={editor} />
       </EditorContext.Provider>,
     );
-    expect(await screen.findByText(/waiting for image sync/i)).toBeTruthy();
+    const loading = await screen.findByText(/waiting for image sync/i);
+    expect(loading).toBeTruthy();
+    expect(loading.style.maxWidth).toBe("");
     expect(screen.queryByRole("img")).toBeNull();
     expect(useAttachmentBlobSrcMock).toHaveBeenCalledWith(
       "hash",
@@ -158,6 +165,25 @@ describe("ArtifactImageNodeView", () => {
     });
     expect(img.getAttribute("src")).toBe("blob:http://localhost/ready-png");
     expect(img.getAttribute("alt")).toBe("ready shot");
+    const nodeView = container.querySelector<HTMLElement>(
+      "[data-node-view-wrapper]",
+    );
+    expect(nodeView?.classList.contains("not-prose")).toBe(true);
+    expect(nodeView?.classList.contains("w-fit")).toBe(false);
+    const imageCard = nodeView?.firstElementChild;
+    expect(imageCard).toBeInstanceOf(HTMLElement);
+    if (!(imageCard instanceof HTMLElement)) {
+      throw new Error("image card not mounted");
+    }
+    expect(imageCard.classList.contains("w-full")).toBe(true);
+    expect(imageCard.style.maxWidth).toBe("");
+    expect(img.classList.contains("w-full")).toBe(true);
+    expect(img.style.maxHeight).toBe("");
+    expect(
+      screen
+        .getByRole("button", { name: /open ready shot/i })
+        .parentElement?.classList.contains("@container"),
+    ).toBe(false);
     expect(useAttachmentBlobSrcMock).toHaveBeenCalledWith(
       "ready",
       "image/png",
@@ -168,6 +194,43 @@ describe("ArtifactImageNodeView", () => {
       screen.getByRole("button", { name: /open ready shot/i }),
     ).toBeTruthy();
     fireEvent.load(img);
+    editor.destroy();
+  });
+
+  it("does not show the text formatting toolbar for an image selection", async () => {
+    blobSrcState.value = {
+      status: "ready",
+      src: "blob:http://localhost/selected-png",
+    };
+    const editor = mountImageEditor({
+      src: "images/selected.png",
+      alt: "selected shot",
+      attachmentHash: "selected",
+      mediaType: "image/png",
+    });
+    render(
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+        <ArtifactToolbar
+          editor={editor}
+          className={undefined}
+          scrollTarget={null}
+          commentAction={null}
+          suppressBubbleMenu={false}
+        />
+      </EditorContext.Provider>,
+    );
+
+    editor.commands.setNodeSelection(0);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("toolbar", {
+          name: "Editor formatting",
+          hidden: true,
+        }),
+      ).toBeNull();
+    });
     editor.destroy();
   });
 

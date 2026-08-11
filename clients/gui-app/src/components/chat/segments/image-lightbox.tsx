@@ -85,7 +85,14 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
             {props.children}
           </button>
         </DialogTrigger>
-        <div className="absolute right-2 top-2 z-10 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none">
+        <div
+          role="presentation"
+          className="pointer-events-none absolute right-2 top-2 z-10 opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 @max-[8rem]:bottom-1 @max-[8rem]:left-1 @max-[8rem]:right-auto @max-[8rem]:top-auto @max-[8rem]:pointer-events-auto @max-[8rem]:opacity-100 motion-reduce:transition-none"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
           {actions}
         </div>
       </div>
@@ -130,7 +137,7 @@ function ImageActions(props: {
   readonly onOpenExternal: () => void;
 }): ReactNode {
   return (
-    <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm backdrop-blur-sm">
+    <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm backdrop-blur-sm @max-[8rem]:gap-0 @max-[8rem]:border-0 @max-[8rem]:p-0">
       {props.canCopy ? (
         <ImageActionButton
           label="Copy image"

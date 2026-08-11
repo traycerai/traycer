@@ -103,7 +103,7 @@ export function AddImageToArtifactButton(props: {
           variant="secondary"
           size="icon-sm"
           className={cn(
-            "opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100",
+            "pointer-events-none opacity-0 shadow-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
             props.className,
           )}
           aria-label="Add image to artifact"

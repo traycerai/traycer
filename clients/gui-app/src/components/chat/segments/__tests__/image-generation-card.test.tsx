@@ -25,8 +25,8 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useAttachmentBlobSrc: () => blobSrcState.value,
 }));
 
-vi.mock("@/components/artifacts/add-image-to-artifact-button", () => ({
-  AddImageToArtifactButton: () => null,
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({ isPending: false, mutate: vi.fn() }),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -110,8 +110,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(generation?.getAttribute("aria-busy")).toBe("true");
     expect(screen.getByText("Generating image")).toBeTruthy();
     expect(screen.getByText(/a misty pier/)).toBeTruthy();
-    expect(card.className).toContain("w-fit");
-    expect(card.className.split(" ")).not.toContain("w-full");
+    expect(card.className).toContain("w-full");
     expect(frame.getAttribute("style")).toContain("22.5rem");
     expect(frame.getAttribute("style")).toContain("aspect-ratio: 1.777");
     expect(frame.getAttribute("style")).not.toContain("100vh");
@@ -142,7 +141,7 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     const img = screen.getByRole("img", { name: "a misty pier" });
     expect(generation?.getAttribute("data-state")).toBe("complete");
     expect(generation?.getAttribute("aria-busy")).toBe("false");
-    expect(screen.getByText("Image ready")).toBeTruthy();
+    expect(screen.getByText("Image ready").className).toContain("sr-only");
     expect(screen.getByText("800 × 600")).toBeTruthy();
     expect(screen.getByText(/a misty pier/)).toBeTruthy();
     expect(frame?.getAttribute("style")).toContain("22.5rem");
@@ -152,6 +151,9 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(img.className).toContain("w-auto");
     expect(img.className.split(" ")).not.toContain("w-full");
     expect(img.getAttribute("style")).toContain("22.5rem");
+    expect(
+      screen.queryByRole("button", { name: "Add image to artifact" }),
+    ).toBeNull();
   });
 
   it("keeps a small generated image intrinsic instead of stretching it", () => {
@@ -173,8 +175,8 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     expect(img.className).toContain("h-auto");
     expect(img.className).toContain("w-auto");
     expect(img.className).not.toContain("size-full");
-    expect(card.className).toContain("w-fit");
-    expect(card.className.split(" ")).not.toContain("w-full");
+    expect(screen.getByText("64 × 64")).toBeTruthy();
+    expect(card.className).toContain("w-full");
   });
 
   it("maps a provider failure to the modest error state without retry", () => {
@@ -286,8 +288,23 @@ describe("<ImageGenerationCard /> lifecycle states", () => {
     const card = screen.getByRole("region", { name: "Image generation" });
     const frame = card.querySelector('[role="img"]');
     expect(screen.getByText("Waiting for image sync")).toBeTruthy();
+    expect(screen.getByText("400 × 300")).toBeTruthy();
     expect(frame?.getAttribute("style")).toMatch(/aspect-ratio:\s*1\.333/);
     expect(frame?.getAttribute("style")).not.toMatch(/aspect-ratio:\s*1\.777/);
+  });
+
+  it("omits the dimension badge while syncing unknown dimensions", () => {
+    blobSrcState.value = { status: "loading", src: null };
+    renderCard({
+      imageResults: [
+        imageResult({
+          attachmentHash: "hash-pending-unknown",
+        }),
+      ],
+    });
+
+    expect(screen.getByText("Waiting for image sync")).toBeTruthy();
+    expect(screen.queryByText(/^\d+ × \d+$/)).toBeNull();
   });
 });
 
