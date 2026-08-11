@@ -4,8 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  HostRequestAbortedError,
   HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -24,6 +27,8 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
+import { hostStatusProbeQueryKey } from "@/lib/host/compatibility-state";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -561,7 +566,11 @@ describe("HostCompatibilityProvider startup consumers", () => {
     queryClient.clear();
   });
 
-  it("reports a first-probe transport failure as unreachable, not as a compatibility verdict", async () => {
+  it("a still-dialing probe yields checking, not failed", async () => {
+    // D5.1: a pending-class transport error with no held data is not a
+    // settled verdict. Treating `RetryableTransportError` as `failed` is what
+    // put a full-screen "Traycer Host is not responding" in front of a remote
+    // host that was seconds from ready.
     const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
     const listHarnesses = vi.fn((): ListHarnessesResponse => ({
       harnesses: [],
@@ -570,7 +579,37 @@ describe("HostCompatibilityProvider startup consumers", () => {
       hostStatus: () => {
         throw new RetryableTransportError({
           code: "RPC_ERROR",
-          message: "fetch failed",
+          message: "Remote session is not ready",
+          requestId: "req-status",
+          method: "host.status",
+          fatalDetails: null,
+        });
+      },
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("checking");
+    });
+    expect(getCompatibilityDetailText()).toBe("n/a");
+    expect(getTaskContexts).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("a settled HostTransportFailureError still yields failed + unreachable", async () => {
+    // Plain transport failure (session closed / host down) is a settled
+    // answer, not a still-dialing one - D5.1 only parks pending-class errors.
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        throw new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: "WebSocket closed before next frame",
           requestId: "req-status",
           method: "host.status",
           fatalDetails: null,
@@ -585,6 +624,161 @@ describe("HostCompatibilityProvider startup consumers", () => {
       expect(getCompatibilityStatusText()).toBe("failed");
     });
     expect(getCompatibilityDetailText()).toBe("unreachable");
+    queryClient.clear();
+  });
+
+  it("a HostRequestAbortedError on a first probe yields checking, not failed", async () => {
+    // Bind-time cancellation is the third pending-class case: an abort on the
+    // active key must not settle a failed verdict for the host that just
+    // became active.
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const { queryClient } = mountStartupConsumers({
+      hostStatus: () => {
+        throw new HostRequestAbortedError({
+          message: "request aborted by host rebind",
+          requestId: "req-status",
+          method: "host.status",
+        });
+      },
+      getTaskContexts,
+      listHarnesses,
+      onMethod: () => undefined,
+    });
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("checking");
+    });
+    expect(getCompatibilityDetailText()).toBe("n/a");
+    queryClient.clear();
+  });
+
+  it("verdict for A survives bind A→B→A from the session-lived cache", async () => {
+    // D2: gcTime: Infinity keeps the probe entry after it is re-keyed away, so
+    // A → B → A within a session is render-instant from the held verdict. The
+    // whole point of the pin is that the UI must not bounce through
+    // "checking" on the way back to A.
+    const hostB: HostDirectoryEntry = {
+      hostId: "desktop-host-b",
+      label: "Host B",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:4918/rpc",
+      version: "1.2.3",
+      status: "available",
+    };
+    const hostA: HostDirectoryEntry = {
+      hostId: localSnapshot.hostId,
+      label: localSnapshot.displayName,
+      kind: "local",
+      websocketUrl: localSnapshot.websocketUrl,
+      version: localSnapshot.version,
+      status: "available",
+    };
+    recordNegotiatedHostMethods(hostB.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+      "agent.gui.listHarnesses",
+    ]);
+
+    const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
+    const listHarnesses = vi.fn((): ListHarnessesResponse => ({
+      harnesses: [],
+    }));
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: localSnapshot,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    void host.tokenStore.signIn(
+      { token: "test-token", refreshToken: "test-refresh-token" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+      { userId: "test-user", username: "Test User" },
+      [],
+    );
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab(STARTUP_EPIC_ID, "Startup Compat");
+
+    const queryClient = buildQueryClient();
+    render(
+      <RunnerHostProvider runnerHost={host}>
+        <QueryClientProvider client={queryClient}>
+          <HostRuntimeProvider
+            registry={hostRpcRegistry}
+            messengerFactory={buildMessengerFactory({
+              hostStatus: () => compatibleHostStatus,
+              getTaskContexts,
+              listHarnesses,
+              onMethod: () => undefined,
+            })}
+            invalidator={null}
+            requestId={null}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
+            fallback={<div data-testid="runtime-fallback">runtime loading</div>}
+          >
+            <HostCompatibilityProvider>
+              <CompatibilityStatusProbe />
+            </HostCompatibilityProvider>
+          </HostRuntimeProvider>
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getCompatibilityStatusText()).toBe("compatible");
+    });
+    const hostClient = getHostBindingSnapshot()?.hostClient ?? null;
+    if (hostClient === null) throw new Error("expected a bound host client");
+    // A's probe entry is in the session-lived cache under its host-scoped key.
+    expect(
+      queryClient.getQueryData(hostStatusProbeQueryKey(hostA.hostId)),
+    ).toBeDefined();
+    // The retention itself, asserted directly. Garbage collection is
+    // TIME-based: under the 5-minute default the entry would still be present
+    // milliseconds later, so the A -> B -> A round trip below CANNOT
+    // discriminate `gcTime: Infinity` on its own - it would pass just as
+    // happily against the bug. This is the assertion that fails if the pin is
+    // dropped; the round trip pins the behavior the pin exists to produce.
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: hostStatusProbeQueryKey(hostA.hostId) })?.options
+        .gcTime,
+    ).toBe(Infinity);
+
+    act(() => {
+      hostClient.bind(hostB);
+    });
+    // B is a different key - leave it in whatever state its first probe
+    // settles. The pin is that A's entry survives the re-key, not that B
+    // itself is healthy.
+    await waitFor(() => {
+      expect(hostClient.getActiveHostId()).toBe(hostB.hostId);
+    });
+
+    // Switch back to A: the held verdict must be served in the same render
+    // path - no intermediate "checking".
+    act(() => {
+      hostClient.bind(hostA);
+    });
+    expect(hostClient.getActiveHostId()).toBe(hostA.hostId);
+    expect(getCompatibilityStatusText()).toBe("compatible");
+    expect(getCompatibilityDetailText()).toBe("live");
     queryClient.clear();
   });
 

@@ -2,6 +2,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -11,9 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { hostFailureReportIssueAction } from "@/components/layout/host-failure-report";
 import {
   HostReadinessControllerContext,
   isHostDialable,
+  postLatchSurfaceFor,
+  presentsLocalHostLifecycle,
   projectDefaultHostReadiness,
   resolveSurfaceReadiness,
   useHostReadinessController,
@@ -21,6 +25,7 @@ import {
   type DefaultHostReadinessPresentation,
   type HostReadinessController,
   type HostReadinessScope,
+  type HostTargetKind,
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import {
@@ -29,9 +34,9 @@ import {
   type HostProvisioningLifecycle,
 } from "@/components/local-host-gate";
 import { LocalHostLoadingContent } from "@/components/local-host-loading";
-import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { describeHostCompatibilityError, useHostBinding } from "@/lib/host";
+import type { HostSelectionIntent } from "@/lib/host/host-directory-service";
 import {
   useHostCompatibility,
   type HostCompatibility,
@@ -39,7 +44,6 @@ import {
 import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
-import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
@@ -66,10 +70,28 @@ export function HostReadinessControllerProvider(props: {
   const selectedEntry =
     binding === null ? null : binding.hostClient.getActiveHost();
   const targetEntry = selectedEntry ?? activeEntry;
-  const localTarget = targetEntry?.kind !== "remote";
+  const targetKind = resolveHostTargetKind(targetEntry);
   const compatibility = useHostCompatibility();
-  const canProvision =
-    authStatus === "signed-in" && runnerHost.hasLocalHost && localTarget;
+  // Read every render off the directory's LIVE state, never memoized and
+  // never from storage: while the target is UNRESOLVED this is the only thing
+  // that separates a cold local start from a remote pick whose directory row
+  // has not arrived, and the answer changes the instant the user picks a host
+  // (the selection gesture rebinds, which re-renders this controller).
+  const selectionIntent =
+    binding === null ? null : binding.directory.readSelectionIntent();
+  const localBootIntent = resolveLocalBootIntent({
+    hasLocalHost: runnerHost.hasLocalHost,
+    targetEntry,
+    selectionIntent,
+  });
+  // Keyed on INTENT, not on "not remote". Keying it on the latter armed the
+  // real local lifecycle for an unresolved remote selection:
+  // `HostProvisioningController` forwards enablement whenever the local
+  // snapshot is unavailable, which fires `convergeReady`, enables the
+  // removal-state read, and burns the one-shot attempt latch on an episode
+  // belonging to a machine the user is not pointed at. `hasLocalHost` is
+  // folded into the intent - a shell with no local host is never booting one.
+  const canProvision = authStatus === "signed-in" && localBootIntent;
 
   return (
     <HostProvisioningController
@@ -88,7 +110,8 @@ export function HostReadinessControllerProvider(props: {
           }
           lifecycle={lifecycle}
           compatibility={compatibility}
-          localTarget={localTarget}
+          targetKind={targetKind}
+          localBootIntent={localBootIntent}
           onConfigureShell={props.onConfigureShell}
           onRequestRespawn={respawn.mutate}
           respawnPending={respawn.isPending}
@@ -109,7 +132,8 @@ function HostReadinessControllerContents(props: {
   readonly hasMobileNoHost: boolean;
   readonly lifecycle: HostProvisioningLifecycle;
   readonly compatibility: HostCompatibility;
-  readonly localTarget: boolean;
+  readonly targetKind: HostTargetKind;
+  readonly localBootIntent: boolean;
   readonly onConfigureShell: () => void;
   readonly onRequestRespawn: () => void;
   readonly respawnPending: boolean;
@@ -120,7 +144,8 @@ function HostReadinessControllerContents(props: {
       presentationFromLifecycle({
         lifecycle: props.lifecycle,
         compatibility: props.compatibility,
-        localTarget: props.localTarget,
+        targetKind: props.targetKind,
+        localBootIntent: props.localBootIntent,
         configureShell: props.onConfigureShell,
         requestRespawn: props.onRequestRespawn,
         respawnPending: props.respawnPending,
@@ -128,7 +153,8 @@ function HostReadinessControllerContents(props: {
     [
       props.compatibility,
       props.lifecycle,
-      props.localTarget,
+      props.localBootIntent,
+      props.targetKind,
       props.onConfigureShell,
       props.onRequestRespawn,
       props.respawnPending,
@@ -178,16 +204,72 @@ function HostReadinessControllerContents(props: {
   );
 }
 
+/**
+ * Classifies the entry the default-host surface is pointed at. `undefined` -
+ * no selection bound and no directory row for the active id - is `unknown`,
+ * never local: see `HostTargetKind`. `mock` shells are local machines for
+ * every purpose here, matching the pre-tri-state `kind !== "remote"` reading
+ * for every entry that actually resolves.
+ */
+function resolveHostTargetKind(
+  entry: HostDirectoryEntry | undefined,
+): HostTargetKind {
+  if (entry === undefined) return "unknown";
+  return entry.kind === "remote" ? "remote" : "local";
+}
+
+/**
+ * Whether the app is booting THIS machine's own host - see
+ * `DefaultHostReadinessPresentation.localBootIntent`.
+ *
+ * A resolved entry answers for itself. An UNRESOLVED target is decided by the
+ * directory's IN-MEMORY selection intent - the live record of what the user
+ * asked for, which exists before anything binds:
+ *  - nothing selected -> a genuine cold local start (first install has no
+ *    directory row until provisioning creates one);
+ *  - the selected id IS this machine's local host -> local start, even while
+ *    the host is down and its row is the non-dialable booting twin;
+ *  - any other selected id -> a remote pick. Nothing local may arm, even
+ *    though the row has not resolved yet. This is the case that used to run a
+ *    real `convergeReady` against the wrong machine.
+ *
+ * The intent must come from memory, not from the persisted keys that seed it:
+ * both writes are best-effort and swallow failures, so on a machine with
+ * blocked storage a live remote pick reads back as "nothing selected" - which
+ * is the FIRST-INSTALL answer - and a local restart whose id write failed
+ * reads back as a remote pick. Both directions fail toward doing the wrong
+ * thing to the local machine, which is the one thing this function exists to
+ * prevent.
+ *
+ * `selectionIntent === null` means there is no directory at all (no runtime
+ * binding yet). Nothing can have been selected in that state, so the only
+ * boot it can be is the local one.
+ */
+function resolveLocalBootIntent(args: {
+  readonly hasLocalHost: boolean;
+  readonly targetEntry: HostDirectoryEntry | undefined;
+  readonly selectionIntent: HostSelectionIntent | null;
+}): boolean {
+  if (!args.hasLocalHost) return false;
+  if (args.targetEntry !== undefined) return args.targetEntry.kind !== "remote";
+  if (args.selectionIntent === null) return true;
+  const { selectedHostId, localHostId } = args.selectionIntent;
+  if (selectedHostId === null) return true;
+  return localHostId !== null && selectedHostId === localHostId;
+}
+
 function presentationFromLifecycle(args: {
   readonly lifecycle: HostProvisioningLifecycle;
   readonly compatibility: HostCompatibility;
-  readonly localTarget: boolean;
+  readonly targetKind: HostTargetKind;
+  readonly localBootIntent: boolean;
   readonly configureShell: () => void;
   readonly requestRespawn: () => void;
   readonly respawnPending: boolean;
 }): DefaultHostReadinessPresentation {
   return {
-    localTarget: args.localTarget,
+    targetKind: args.targetKind,
+    localBootIntent: args.localBootIntent,
     localHostState: args.lifecycle.localHostState,
     stage: args.lifecycle.slowStartStage,
     progress: args.lifecycle.provisioning.progress,
@@ -197,7 +279,7 @@ function presentationFromLifecycle(args: {
     removed: args.lifecycle.provisioning.removed,
     hostBusy: args.lifecycle.provisioning.hostBusy,
     canManageHost:
-      args.localTarget && args.lifecycle.provisioning.canManageHost,
+      args.targetKind === "local" && args.lifecycle.provisioning.canManageHost,
     retryProvisioning: args.lifecycle.provisioning.retry,
     forceProvisioning: args.lifecycle.provisioning.force,
     reinstall: args.lifecycle.provisioning.reinstall,
@@ -302,7 +384,7 @@ function SurfaceReadinessFallback(props: {
   if (
     props.readiness.kind === "unavailable-host" &&
     props.scope === "default-host" &&
-    presentation.localTarget &&
+    presentsLocalHostLifecycle(presentation) &&
     presentation.localHostState === "unavailable" &&
     presentation.stage === "slow"
   ) {
@@ -370,22 +452,40 @@ function SlowHostFallback(props: {
 }
 
 /**
- * Full-screen default-host gate: while the default host is not ready, NOTHING
- * host-dependent is reachable - not the tab strip, not another tab, not a
- * keyboard route change. Split view made every surface project its own
- * in-place fallback, which left the shell live and let a user drive
- * host-dependent affordances during setup.
+ * COLD-START default-host gate: until the app has been ready once this
+ * window, nothing host-dependent is reachable - not the tab strip, not
+ * another tab, not a keyboard route change. Split view made every surface
+ * project its own in-place fallback, which left the shell live and let a user
+ * drive host-dependent affordances during setup.
  *
- * Two properties are deliberate and must not be "simplified" away:
+ * After the first `ready` render the gate LATCHES and never replaces the app
+ * again (one exception below). Blocking a second time is what made every host
+ * switch - and every transient probe failure on a host that was running the
+ * whole time - throw away the entire DOM: editors, terminals, scroll
+ * positions, popovers. The recovery actions did not disappear with the
+ * block; they moved into `HostStatusStrip`, which names the transition and
+ * carries Retry / report-issue inside a live app.
+ *
+ * Latch semantics: per-window runtime state, so a window reload always
+ * re-gates. That is intended - a cold start still gets the full setup surface
+ * and the traycer#738 lockout protection it exists for. A cold start whose
+ * default host is REMOTE latches trivially (readiness passes through as
+ * `ready`), which is unchanged from today: the remote direction never had
+ * that protection, and its failures have always surfaced inline.
+ *
+ * Three properties are deliberate and must not be "simplified" away:
  *
  *  - It renders through `SurfaceReadinessFallback`, the same mapping the
  *    in-surface slot uses, so every recovery action (retry / force update /
- *    reinstall / report) survives the block. Collapsing this to a generic
- *    spinner - or re-deriving the surface here - would strand a user whose
- *    host cannot start, the exact lockout traycer#738 exists to prevent.
+ *    reinstall / report) survives the cold-start block. Collapsing this to a
+ *    generic spinner - or re-deriving the surface here - would strand a user
+ *    whose host cannot start, the exact lockout traycer#738 exists to prevent.
  *  - `/settings` still bypasses it. The splash's own "Configure shell" button
  *    navigates there, so gating settings on a ready host would make the
  *    escape hatch unreachable from the screen that offers it.
+ *  - `mobile-no-host` keeps the full-screen surface even post-latch
+ *    (`postLatchSurfaceFor`): a mobile shell with no host at all has no app
+ *    worth keeping mounted, and it is not reachable from a desktop switch.
  *
  * Readiness and presentation both come from the one controller above; this
  * adds no second subscription.
@@ -398,6 +498,16 @@ export function DefaultHostReadyGate(props: {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  // The latch is state adjusted DURING render (React's documented
+  // "adjusting state when props change" pattern) rather than a ref read in
+  // render or a `setState` in an effect: this component's whole output is a
+  // function of the latch, so it has to be render-visible, and React re-runs
+  // this render immediately - before committing anything - instead of
+  // painting an un-latched frame first.
+  const [hasBeenReady, setHasBeenReady] = useState(false);
+  if (readiness.kind === "ready" && !hasBeenReady) {
+    setHasBeenReady(true);
+  }
   // Only a signed-in user can HAVE a ready default host, so blocking anyone
   // else would hide the sign-in surface behind a host that cannot exist yet.
   // `resolveSurfaceReadiness` only special-cases auth for the request-context
@@ -406,6 +516,9 @@ export function DefaultHostReadyGate(props: {
   if (authStatus !== "signed-in") return props.children;
   if (pathname.startsWith(GATE_BYPASS_PATH_PREFIX)) return props.children;
   if (readiness.kind === "ready") return props.children;
+  if (hasBeenReady && postLatchSurfaceFor(readiness.kind) !== "splash") {
+    return props.children;
+  }
   return (
     <div
       className="flex min-h-svh w-full flex-col bg-background text-foreground"
@@ -592,126 +705,6 @@ function fallbackContent(
   }
 }
 
-/**
- * Standard "Report issue" affordance shown alongside the recovery actions on
- * the host-failure fallbacks (provisioning-error, compatibility-error,
- * incompatible-host, slow/unavailable host).
- *
- * Every one of those used to file the SAME "Could not start Traycer Host"
- * report. On 2026-07-31 that single template produced three field reports with
- * identical titles and three completely unrelated causes - an offline host that
- * could not verify the session (traycer#858), a first install whose 60s
- * readiness budget expired mid-provisioning (traycer#862), and a host that had
- * been running and serving agent turns for hours (traycer#860). Each one cost a
- * full desktop+host log pull just to learn WHICH failure it was.
- *
- * So the pre-filled report now names its own failure family (`title`/`code`)
- * and carries a one-line health snapshot. The snapshot is categorical state
- * only - never paths, error text or anything the user has to redact.
- *
- * `source` is part of that discrimination, not decoration: it is the phase the
- * failure belongs to. Only two of these four fallbacks are startup failures.
- * A compatibility probe that stops answering is a host that already ran and
- * later went quiet - the traycer#860 shape - and filing that under "Host
- * startup" sends triage down the provisioning path, which is the exact wrong
- * place to look.
- */
-function hostFailureReportIssueAction(args: {
-  readonly title: string;
-  readonly message: string;
-  readonly code: string;
-  readonly source: string;
-  readonly presentation: DefaultHostReadinessPresentation;
-  /**
-   * Whether this report is the one the retained install stage EXPLAINS - i.e.
-   * the provisioning-error card, which by construction only renders while a
-   * converge error is live (`readinessFor...`: `provisioningError !== null`).
-   * Every other failure family passes false: the retained stage outlives its
-   * attempt (it is cleared only by a new attempt or a successful settle), so a
-   * host that failed to install, came up by some other route, and later went
-   * incompatible would otherwise append a dead install stage to a report that
-   * has nothing to do with provisioning - the same wrong-path triage that the
-   * `source` split above exists to prevent.
-   */
-  readonly includeRetainedProgress: boolean;
-}): ReactNode {
-  return (
-    <ReportIssueAction
-      context={createReportIssueContext({
-        title: args.title,
-        message: `${args.message} ${describeHostHealth(
-          args.presentation,
-          args.includeRetainedProgress,
-        )}`,
-        code: args.code,
-        source: args.source,
-      })}
-      presentation="text"
-      className={undefined}
-    />
-  );
-}
-
-/**
- * One line of triage state for the pre-filled report: what the desktop shell
- * believed about the host at the moment the user filed. Everything here is a
- * fixed vocabulary the renderer already holds - no new plumbing, and nothing
- * that can carry a filesystem path or a user's own data.
- */
-function describeHostHealth(
-  presentation: DefaultHostReadinessPresentation,
-  includeRetainedProgress: boolean,
-): string {
-  const parts: string[] = [
-    `host ${presentation.localTarget ? presentation.localHostState : "remote"}`,
-    `compat ${describeCompatHealth(presentation)}`,
-  ];
-  if (presentation.provisioning) parts.push("provisioning");
-  if (presentation.removed) parts.push("removed");
-  if (presentation.hostBusy) parts.push("busy");
-  if (presentation.stage === "slow") parts.push("slow start");
-  // Fall back to the retained last event once the mutation has settled: a
-  // failed install's report must still say where it died (traycer#862's
-  // report carried no stage at all because the live value nulls on settle).
-  // Only for the report that failure belongs to - see
-  // `includeRetainedProgress`.
-  const progress =
-    presentation.progress ??
-    (includeRetainedProgress ? presentation.lastProgress : null);
-  if (progress !== null) {
-    const percent =
-      progress.percent === null ? "" : ` ${Math.round(progress.percent)}%`;
-    parts.push(`last progress ${progress.stage ?? "unknown"}${percent}`);
-  }
-  return `Host health: ${parts.join(", ")}.`;
-}
-
-function describeCompatHealth(
-  presentation: DefaultHostReadinessPresentation,
-): string {
-  const compatibility = presentation.compatibility;
-  const verdict = compatVerdict(compatibility);
-  // The host's own last answer, not the desktop's converge outcome (that is
-  // the separate `hostBusy` part): a host that reported itself busy serving
-  // turns was up and working, whatever else this report says (traycer#860).
-  const hostStatus = compatibility.hostStatus;
-  if (hostStatus === null || !hostStatus.busy) return verdict;
-  const sessions = hostStatus.busySessionCount === 1 ? "session" : "sessions";
-  return `${verdict}, busy ${hostStatus.busySessionCount} ${sessions}`;
-}
-
-function compatVerdict(
-  compatibility: DefaultHostReadinessPresentation["compatibility"],
-): string {
-  if (compatibility.status === "failed") {
-    return compatibility.unreachable ? "unreachable" : "rejected";
-  }
-  if (compatibility.status === "compatible" && compatibility.degraded) {
-    return "compatible (degraded)";
-  }
-  return compatibility.status;
-}
-
 function loadingFallback(
   kind: "loading-host" | "provisioning-host" | "compatibility-checking",
   presentation: DefaultHostReadinessPresentation,
@@ -722,14 +715,21 @@ function loadingFallback(
   // startup drop from a spinner card to a bare line plus a button, which reads
   // as an error state mid-launch. "Configure shell…" is not lost: the loading
   // body carries it inside the details disclosure.
-  if (!presentation.localTarget) {
-    // A remote host still resolving: the rich progress/log card below is
-    // local-bootstrap specific and would be misleading here.
+  if (!presentsLocalHostLifecycle(presentation)) {
+    // A remote - or not-yet-resolved - host still settling: the rich
+    // progress/log card below is local-bootstrap specific and would be
+    // misleading here (it offers to respawn a machine this app may not own).
+    // Never "Starting local Traycer Host…" on this arm. That copy is a claim
+    // about THIS machine's host, and this arm is reached precisely when the
+    // wait belongs to some other machine - a remote target, or a selection
+    // the app has not resolved yet. Saying it there described the wrong
+    // computer to the user and sent every resulting bug report at the local
+    // bootstrap path.
     return {
       message:
         kind === "compatibility-checking"
           ? "Checking Traycer Host compatibility…"
-          : (presentation.progress?.message ?? "Starting local Traycer Host…"),
+          : "Connecting to Traycer Host…",
       detail: null,
       body: null,
       footer: null,

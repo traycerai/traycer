@@ -1,5 +1,6 @@
 import { createContext, use, type Context } from "react";
 import {
+  HostRequestAbortedError,
   HostTransportFailureError,
   RetryableTransportError,
   type HostRpcError,
@@ -7,8 +8,27 @@ import {
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host/runtime";
+import { queryKeys } from "@/lib/query-keys";
 
 const HOST_STATUS_PROBE = {};
+
+/**
+ * The cache slot the compat probe below owns for one host.
+ *
+ * Exported so surfaces that must observe the probe for a SPECIFIC host id -
+ * the host status strip, which holds its "switching" state until the host it
+ * just switched TO has settled - read the same slot the probe writes instead
+ * of re-deriving the key. `useHostCompatibility()` answers only for whichever
+ * host is active at render time, which cannot distinguish "the new host's
+ * verdict" from "the old host's verdict, one render before the query re-keys".
+ */
+export function hostStatusProbeQueryKey(hostId: string): readonly unknown[] {
+  return queryKeys.hostMethod<HostRpcRegistry, "host.status">(
+    hostId,
+    "host.status",
+    HOST_STATUS_PROBE,
+  );
+}
 
 /**
  * What the host's `host.status` answer said about itself, held alongside the
@@ -125,6 +145,19 @@ export function useHostCompatibilityProbe(): HostCompatibility {
       // even if the host connection later churns. The query key is host-id
       // scoped, so a genuine host swap still re-probes.
       staleTime: Infinity,
+      // The verdict must also survive being RE-KEYED away. This probe has
+      // exactly one observer, so switching hosts leaves the previous host's
+      // entry observer-less and the default 5-minute garbage collector starts
+      // running: coming back to that host later found an empty slot and put
+      // the whole app behind a "checking" splash carrying local-bootstrap copy
+      // ("Starting local Traycer Host…") for a host that had been running the
+      // entire time. Holding the entry for the session makes A -> B -> A
+      // render from the held verdict in the same render, while `bind()`'s
+      // `refetchActive: true` sweep still re-probes in the background - so the
+      // held answer is a bridge across the switch, never a substitute for a
+      // fresh one. Safety is unchanged: a terminal INCOMPATIBLE answer is
+      // checked before held data below.
+      gcTime: Infinity,
     },
   });
   // A terminal verdict is checked FIRST so a genuine incompatibility still
@@ -166,6 +199,19 @@ export function useHostCompatibilityProbe(): HostCompatibility {
     };
   }
   if (probe.isError) {
+    // An errored probe with NO held answer is not automatically a verdict.
+    // A pending-class transport error says the request never got a chance:
+    // the session is still dialing, or the call was cancelled as the binding
+    // moved. Settling `failed` there is what put a full-screen
+    // "Traycer Host is not responding" in front of a remote host that was
+    // seconds away from ready - and the gate latched it, because the recovery
+    // wiring needs a readiness this very state prevents. Report it as the
+    // still-in-progress state it is; the strip shows amber and the query's
+    // own lifecycle (transport retry, availability recovery, an explicit
+    // Retry) settles it one way or the other.
+    if (isPendingHostProbeError(probe.error)) {
+      return { status: "checking", retry: () => void probe.refetch() };
+    }
     return {
       status: "failed",
       retry: () => void probe.refetch(),
@@ -178,6 +224,30 @@ export function useHostCompatibilityProbe(): HostCompatibility {
 }
 
 /**
+ * True for a probe failure that has NOT settled anything about the host: the
+ * transport can still reach a different outcome without anyone asking.
+ *
+ *  - `RetryableTransportError` carries the pre-send no-dispatch guarantee -
+ *    the request frame never went out, typically because the session is mid
+ *    dial/handshake.
+ *  - `HostRequestAbortedError` is a binding/context change cancelling the
+ *    call. The answer for the host we are NOW pointed at is simply not in
+ *    yet, and an abort on the active key must never settle a failed verdict
+ *    for the host that just became active.
+ *
+ * A plain `HostTransportFailureError` (session closed, host down) and any
+ * host-originated error are settled answers and fall through to `failed`.
+ * Accepts `unknown` so cache-level readers (the status strip inspects the
+ * probe's `QueryState.error`) can share this one classification.
+ */
+export function isPendingHostProbeError(error: unknown): boolean {
+  return (
+    error instanceof RetryableTransportError ||
+    error instanceof HostRequestAbortedError
+  );
+}
+
+/**
  * True when the compat probe failed without the host answering it: the
  * transport never got a reply (no bound client, dial/handshake/frame timeout,
  * dropped socket), or the host closed the connection with a fatal it marked
@@ -187,6 +257,12 @@ export function useHostCompatibilityProbe(): HostCompatibility {
  * Both arrive as `HostTransportFailureError` subclasses, which is the one
  * signal that separates "we could not talk to the host" from "the host
  * evaluated this handshake and rejected it".
+ *
+ * This drives COPY and report telemetry only - never whether the surface
+ * opens. That decision belongs to the state machine above, which now filters
+ * the pending-class subclasses out before this is ever consulted; what
+ * reaches it is a settled transport failure, so "unreachable" here means the
+ * host was genuinely not talking, not "the dial had not finished".
  */
 function isHostUnreachableError(error: HostRpcError): boolean {
   return error instanceof HostTransportFailureError;

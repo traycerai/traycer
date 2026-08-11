@@ -44,6 +44,25 @@ export interface HostDirectoryServiceOptions {
   readonly localHostIdSeeder: (() => Promise<string | null>) | null;
 }
 
+/**
+ * The user's live host-selection intent, in ids. See
+ * `HostDirectoryService.readSelectionIntent`.
+ */
+export interface HostSelectionIntent {
+  /**
+   * The host id the current selection names, or `null` when the user has not
+   * picked one (first run, or an explicit clear). NOT resolved against the
+   * directory - that is the point.
+   */
+  readonly selectedHostId: string | null;
+  /**
+   * This machine's own local host id as the directory knows it: seeded from
+   * the shell's durable pid metadata, then adopted from every local snapshot.
+   * `null` only on a machine whose local host has never announced itself.
+   */
+  readonly localHostId: string | null;
+}
+
 export type HostDirectoryListener = (
   entries: readonly HostDirectoryEntry[],
   localEntry: HostDirectoryEntry | null,
@@ -249,6 +268,53 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   list(): Promise<readonly HostDirectoryEntry[]> {
     return Promise.resolve(this.snapshot());
+  }
+
+  /**
+   * The live selection INTENT, as ids - what the user is pointed at, whether
+   * or not the directory can currently resolve it to an entry.
+   *
+   * `getSelected()` cannot answer this: it returns `null` both for "nothing
+   * selected" and for "the selected host has no row right now" (an explicit
+   * pick of an id the directory does not hold goes through `setSelected(null)`),
+   * and callers deciding whether to run LOCAL host management must tell those
+   * apart - one is a cold local start, the other is a remote host the user is
+   * waiting on.
+   *
+   * Read-only and in-memory ON PURPOSE. The persisted keys are this service's
+   * startup SEED, not the authority: `persistHostSelection` /
+   * `persistLocalHostId` swallow write failures by design (a blocked quota
+   * must never break selection), so a consumer that re-read storage would see
+   * "nothing selected" for a user who is very much pointed at a remote host,
+   * and would then provision the local machine underneath them. These fields
+   * are correct even when every write failed.
+   *
+   * Precedence mirrors `getSelected()`, minus its `getDefaultEntry()` tail: a
+   * default-promoted entry is not an intent, and its absence is exactly the
+   * "no pick yet" answer callers need.
+   */
+  readSelectionIntent(): HostSelectionIntent {
+    return {
+      selectedHostId: this.selectionIntentHostId(),
+      localHostId: this.lastKnownLocalHostId,
+    };
+  }
+
+  private selectionIntentHostId(): string | null {
+    if (this.selected !== null) {
+      return this.selected.hostId;
+    }
+    // An explicit clear (`{hostId: null}`) STOPS here rather than falling
+    // through to a restore id: the user erased the intent, and a remembered
+    // one must not resurrect it.
+    if (this.explicitSelection !== null) {
+      return this.explicitSelection.hostId;
+    }
+    return (
+      this.startupRestoreHostId ??
+      this.restoreAfterFailedRefreshHostId ??
+      this.unboundFollowUpRestoreHostId
+    );
   }
 
   refresh(): Promise<readonly HostDirectoryEntry[]> {
