@@ -22,6 +22,10 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
   folders: 1,
   worktree: 1,
   git: 1,
+  // Entity-provider tier: a PR/issue title is a deliberate human name, like a
+  // task or artifact title, not an incidental path substring.
+  "pull-requests": 0.9,
+  issues: 0.9,
   epic: 0.9,
   chat: 0.9,
   terminals: 0.9,
@@ -29,6 +33,9 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
 };
 
 const FUSE_KEYS: NonNullable<IFuseOptions<RootSearchCandidate>["keys"]> = [
+  // The identity segment a PR/issue row leads with (`#4917`). Weighted with
+  // the label so typing a bare number at root finds the row it names.
+  { name: "entry.labelPrefix", weight: 2 },
   { name: "entry.label", weight: 2 },
   { name: "entry.detail", weight: 1 },
   { name: "entry.description", weight: 0.5 },

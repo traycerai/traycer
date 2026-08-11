@@ -30,6 +30,7 @@ const FILES_PROVIDER_STEP: MentionFlowStep = {
 function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
   return {
     id,
+    labelPrefix: null,
     label,
     detail: "",
     description: "",
@@ -84,6 +85,7 @@ function open(
     query,
     commit,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
 }
@@ -101,6 +103,7 @@ function openSlash(
     query: "",
     commit,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
 }
@@ -122,6 +125,7 @@ describe("composer picker store session ownership", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().openPicker({
@@ -133,6 +137,7 @@ describe("composer picker store session ownership", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
 
@@ -165,6 +170,7 @@ describe("composer picker store session ownership", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
 
@@ -256,6 +262,7 @@ describe("composer picker store", () => {
       query: "src",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -434,6 +441,7 @@ describe("composer picker store", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -566,6 +574,7 @@ describe("composer picker store", () => {
       query: "",
       commit: NOOP_COMMIT,
       dismiss: null,
+      focusEditor: null,
       clientRect: null,
     });
     store.getState().setItems({

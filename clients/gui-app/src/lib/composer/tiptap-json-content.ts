@@ -5,6 +5,8 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   Attachment,
   EntityMentionContextType,
+  GithubMentionAttachment,
+  GithubMentionContextType,
   ImageAttachment,
   MentionAttachment,
   PathKind,
@@ -167,6 +169,27 @@ export function mentionAttrsFromAttachment(
     };
   }
 
+  if (isGithubMentionAttachment(mention)) {
+    return {
+      contextType: mention.contextType,
+      // The entity token doubles as the node id, exactly as it does for every
+      // other entity mention: `github-pr:org/repo#123` is already unique.
+      id: mention.path,
+      path: mention.path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: mention.label,
+      description: mention.description,
+      githubHost: mention.githubHost,
+      organizationLogin: mention.organizationLogin,
+      repositoryName: mention.repositoryName,
+      issueNumber: mention.issueNumber,
+      url: mention.url,
+    };
+  }
+
   if (isEntityMentionAttachment(mention)) {
     return {
       contextType: mention.contextType,
@@ -205,6 +228,9 @@ export function mentionAttachmentFromAttrs(
   }
   if (contextType === "git") {
     return gitMentionAttachmentFromAttrs(attrs);
+  }
+  if (contextType === "github_pull_request" || contextType === "github_issue") {
+    return githubMentionAttachmentFromAttrs(attrs, contextType);
   }
   if (
     contextType === "epic" ||
@@ -719,6 +745,54 @@ function gitMentionAttachmentFromAttrs(
   };
 }
 
+/**
+ * Rebuilds a GitHub chip from its node attributes.
+ *
+ * A chip with no `organizationLogin`/`repositoryName`/`issueNumber` cannot be
+ * turned back into a reference at all - `formatMentionForLLMQuery` would emit
+ * `@github-pr:/#` - so it is rejected here and the node falls back to plain
+ * text rather than shipping a broken reference to the agent.
+ */
+function githubMentionAttachmentFromAttrs(
+  attrs: Record<string, unknown>,
+  contextType: GithubMentionContextType,
+): MentionAttachment | null {
+  const organizationLogin = stringValue(attrs.organizationLogin);
+  const repositoryName = stringValue(attrs.repositoryName);
+  const issueNumber = numberValue(attrs.issueNumber);
+  if (
+    organizationLogin === null ||
+    repositoryName === null ||
+    issueNumber === null
+  ) {
+    return null;
+  }
+  const prefix =
+    contextType === "github_pull_request" ? "github-pr" : "github-issue";
+  const path =
+    stringValue(attrs.path) ??
+    `${prefix}:${organizationLogin}/${repositoryName}#${issueNumber}`;
+  const reference = `${organizationLogin}/${repositoryName}#${issueNumber}`;
+  return {
+    kind: "mention",
+    contextType,
+    path,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: stringValue(attrs.label) ?? `#${issueNumber}`,
+    description: stringValue(attrs.description) ?? reference,
+    // github.com is the only host the picker can produce today; an older or
+    // hand-edited node without the field still names a resolvable reference.
+    githubHost: stringValue(attrs.githubHost) ?? "github.com",
+    organizationLogin,
+    repositoryName,
+    issueNumber,
+    url: stringValue(attrs.url) ?? "",
+  };
+}
+
 function entityMentionAttachmentFromAttrs(
   attrs: Record<string, unknown>,
   contextType: EntityMentionContextType,
@@ -801,4 +875,13 @@ function isEntityMentionAttachment(
   mention: MentionAttachment,
 ): mention is Extract<MentionAttachment, { readonly epicId: string }> {
   return "epicId" in mention;
+}
+
+function isGithubMentionAttachment(
+  mention: MentionAttachment,
+): mention is GithubMentionAttachment {
+  return (
+    mention.contextType === "github_pull_request" ||
+    mention.contextType === "github_issue"
+  );
 }

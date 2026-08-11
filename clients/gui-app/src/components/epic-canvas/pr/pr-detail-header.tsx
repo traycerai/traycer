@@ -123,7 +123,7 @@ export function PrDetailHeader(props: {
           <PrDetailStaleness observedAt={props.observedAt} />
         </span>
         {props.notice === null ? null : (
-          <PrSourceNoticeHint notice={props.notice} />
+          <PrSourceNoticeHint notice={props.notice} subject="pull-requests" />
         )}
         <PrDetailGitHubLink prUrl={props.core.prUrl} />
         <Button

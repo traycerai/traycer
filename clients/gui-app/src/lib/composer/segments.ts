@@ -10,8 +10,11 @@ export const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 // leaves `-agent` unconsumed, fails the anchor, and backtracks into the longer
 // arm. What the anchors buy is exactly that - no partial prefix can be
 // mistaken for a whole token.
+// `github-pr` / `github-issue` are listed ahead of the shorter prefixes for
+// readability only - the alternation is anchored at both ends, so no prefix can
+// swallow another's token.
 const COMPLETE_ENTITY_TOKEN_REGEX =
-  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal):[^/\s]+\/[^\s]+)$/u;
+  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent|terminal|github-pr|github-issue):[^/\s]+\/[^\s]+)$/u;
 
 interface MentionTokenMatch {
   path: string;

@@ -2,6 +2,7 @@ import type { Editor } from "@tiptap/core";
 import type { PluginKey } from "@tiptap/pm/state";
 import type { SuggestionProps } from "@tiptap/suggestion";
 import { isDismissedMentionQuery } from "@/lib/composer/mentions/mention-dismissal";
+import { githubMentionSectionForStep } from "@/lib/composer/mentions/providers";
 import { activePickerItemDisabledReason } from "./composer-picker-store";
 import type {
   ComposerPickerItem,
@@ -71,6 +72,17 @@ export function createComposerSuggestionRender<
     // before a microtask drains (setContent + setTextSelection).
     let exitEpoch = 0;
 
+    // The prose heuristics are step-dependent, and the step lives in the
+    // store - `,` and `:` are prose everywhere except inside the PR/Issue
+    // sections, where they are ordinary title punctuation. Read at decision
+    // time rather than captured: the user can drill into a section without the
+    // suggestion session restarting.
+    const inGithubMentionSection = (): boolean => {
+      const state = args.pickerStore.getState();
+      if (state.kind !== "mention") return false;
+      return githubMentionSectionForStep(state.step) !== null;
+    };
+
     // Ends the tiptap suggestion session itself (see `suggestionPluginKey`).
     // Deferred: dismissals fire inside the plugin's own update cycle, and
     // dispatching a transaction synchronously would re-enter it.
@@ -123,6 +135,13 @@ export function createComposerSuggestionRender<
           if (latestProps === null) return;
           dismissOccurrence(latestProps.editor);
         },
+        // The editor handle only exists here, so the one place that has to
+        // hand focus back to the composer (the filter popover's close) reaches
+        // it through the store, exactly like `commit` and `dismiss`.
+        focusEditor: () => {
+          if (latestProps === null) return;
+          latestProps.editor.commands.focus();
+        },
         clientRect: props.clientRect ?? null,
       });
     };
@@ -132,7 +151,10 @@ export function createComposerSuggestionRender<
         latestProps = props;
         // A pasted "@ ..." or "@x, y" is already prose; never open for it,
         // and end the plugin session so a later `@` elsewhere can start over.
-        if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+        if (
+          args.kind === "mention" &&
+          isDismissedMentionQuery(props.query, inGithubMentionSection())
+        ) {
           dismissed = true;
           exitPluginSession(props.editor);
           return;
@@ -146,7 +168,10 @@ export function createComposerSuggestionRender<
         // space): close the menu now and end the plugin session. The plugin
         // records the dismissed range, so this `@` occurrence stays dismissed
         // while a new `@` elsewhere opens fresh.
-        if (args.kind === "mention" && isDismissedMentionQuery(props.query)) {
+        if (
+          args.kind === "mention" &&
+          isDismissedMentionQuery(props.query, inGithubMentionSection())
+        ) {
           dismissOccurrence(props.editor);
           return;
         }

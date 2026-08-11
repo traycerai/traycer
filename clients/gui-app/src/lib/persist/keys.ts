@@ -59,6 +59,13 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const lastSelectedHostKey = (): string =>
   persistKey("last-selected-host");
 
+// The composer's PR/Issue mention filters, sticky per (task, section).
+// Deliberately unscoped by identity, like the host picker above: this is a view
+// preference about the menu, never round-tripped to the host and carrying no
+// account-specific content of its own.
+export const githubMentionFiltersKey = (): string =>
+  persistKey(STORE_KEYS.githubMentionFilters);
+
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not
 // about who is signed in. The directory uses it to keep the machine's own
@@ -184,7 +191,7 @@ export const PERSIST_STORES = [
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
-  // ── Static zustand stores (26) ───────────────────────────────────────────
+  // ── Static zustand stores (27) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -251,6 +258,11 @@ export const PERSIST_STORES = [
   {
     camelName: "providerLoginTerminals",
     leaf: "provider-login-terminals",
+    kind: "static",
+  },
+  {
+    camelName: "githubMentionFilters",
+    leaf: "github-mention-filters",
     kind: "static",
   },
 

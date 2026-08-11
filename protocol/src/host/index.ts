@@ -8,6 +8,8 @@ export * from "./git-schemas";
 export * from "./lifecycle";
 export * from "./managed-command";
 export * from "./migration";
+export * from "./mention-contracts";
+export * from "./mention-schemas";
 export * from "./notifications";
 export * from "./pr-contracts";
 export * from "./pr-schemas";

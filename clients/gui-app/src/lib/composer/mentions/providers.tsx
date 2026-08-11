@@ -13,8 +13,28 @@ import type {
 import { basenameOfPath } from "@/lib/path";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type {
+  GithubMentionRow,
+  GithubMentionSection,
+} from "@traycer/protocol/host/mention-schemas";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
+import {
+  githubMentionAttachmentFromRow,
+  githubMentionCategoryIcon,
+  githubMentionPreview,
+  githubMentionReference,
+  githubMentionRowIcon,
+  githubMentionRowTrailing,
+} from "./github-mention-display";
+import {
+  githubMentionEntryId,
+  parseGithubReferenceQuery,
+} from "./github-mention-rows";
+import {
+  NO_STEP_CHROME_CAPABILITY,
+  type MentionStepChromeCapability,
+} from "./step-chrome";
 import {
   artifactsIcon,
   descriptionForSuggestion,
@@ -51,6 +71,8 @@ export type MentionProviderId =
   | "folders"
   | "worktree"
   | "git"
+  | "pull-requests"
+  | "issues"
   | "epic"
   | "chat"
   | "terminals"
@@ -77,6 +99,15 @@ export type MentionMenuAction =
 
 export interface MentionMenuEntry {
   readonly id: string;
+  /**
+   * A short, never-truncated segment rendered ahead of `label` - the PR/issue
+   * `#4917`. It is separate from `label` rather than prefixed onto it because
+   * the two truncate differently: the number is the row's identity and must
+   * survive at any width, while the title is what gives way.
+   *
+   * `null` for every row that has no such identity segment.
+   */
+  readonly labelPrefix: string | null;
   readonly label: string;
   readonly detail: string;
   readonly description: string;
@@ -193,7 +224,33 @@ export interface ComposerMentionProviderContext {
    * Epic) keep the legacy raw-root RPC so a suggestion never disappears.
    */
   readonly epicAttachedRoots: ReadonlySet<string>;
+  /** PR/issue rows for the CURRENT step, already merged, filtered and ranked. */
+  readonly github: GithubMentionProviderContext;
 }
+
+/**
+ * One section's rows as the picker should show them right now. The hook owns
+ * which rows these are - at root they are cache-only (root search never hits
+ * the network), inside a section they are the catalog merged with the live
+ * search - so the provider renders one list and never has to know which.
+ */
+export interface GithubMentionSectionContext {
+  readonly rows: ReadonlyArray<GithubMentionRow>;
+  /** Drops the repo name from every row's trailing string when true. */
+  readonly singleRepositoryScope: boolean;
+}
+
+export interface GithubMentionProviderContext {
+  readonly pullRequests: GithubMentionSectionContext;
+  readonly issues: GithubMentionSectionContext;
+  /** Sampled once per build so every row's relative age agrees. */
+  readonly now: number;
+}
+
+export const EMPTY_GITHUB_SECTION_CONTEXT: GithubMentionSectionContext = {
+  rows: [],
+  singleRepositoryScope: false,
+};
 
 export const ROOT_MENTION_STEP: MentionFlowStep = { kind: "root" };
 
@@ -249,6 +306,17 @@ export abstract class ComposerMentionProvider {
       header: this.label,
       empty: `No matching ${this.label.toLowerCase()}`,
     };
+  }
+
+  /**
+   * The STATIC half of the step's chrome: which affordances this step has at
+   * all. Live values (a refetch closure, whether it is in flight, the host's
+   * freshness stamp) cannot come from here - this registry is a hook-free
+   * module singleton - and are published into the picker store instead. See
+   * `step-chrome.ts`.
+   */
+  stepChromeCapability(_step: MentionFlowStep): MentionStepChromeCapability {
+    return NO_STEP_CHROME_CAPABILITY;
   }
 
   protected providerStep(stepId: string, workspacePath: string | null) {
@@ -760,6 +828,183 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
       empty: "No artifacts available",
     };
   }
+
+  // Artifacts have always rendered a refresh button; until now it re-set the
+  // step it was already on, which `setStep` early-returns from, so it spun for
+  // its minimum visible time and refetched nothing. The capability is declared
+  // here and `useMentionItems` publishes the real `refetch`.
+  stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
+    if (!isArtifactMentionStep(step)) return NO_STEP_CHROME_CAPABILITY;
+    return { refresh: true, freshness: false, filter: false };
+  }
+}
+
+/**
+ * The two repo-flavoured mention categories. Structurally identical - only the
+ * row vocabulary and the filter presets differ - so they share one class and
+ * differ by `section`.
+ *
+ * Gated on `roots.length > 0` exactly like Files/Folders/Git, which makes the
+ * epic-less landing composer a first-class case: it has attached folders, so
+ * it gets both sections, scoped to those folders' repos.
+ *
+ * The categories appear even when the attached folders have no GitHub remote.
+ * Hiding them would make the feature undiscoverable for precisely the users
+ * who need to learn why it is empty; the section explains itself inside.
+ */
+class GithubMentionProvider extends ComposerMentionProvider {
+  readonly id: MentionProviderId;
+  readonly rootOrder: number;
+  protected readonly label: string;
+  protected readonly description: string;
+  private readonly section: GithubMentionSection;
+  private readonly emptyCopy: string;
+  private readonly resolveLabel: string;
+
+  constructor(section: GithubMentionSection) {
+    super();
+    this.section = section;
+    const isPullRequests = section === "pull-requests";
+    this.id = isPullRequests ? "pull-requests" : "issues";
+    // After Git's 30 (repo-flavoured context belongs beside it), before the
+    // Task category at 40.
+    this.rootOrder = isPullRequests ? 32 : 34;
+    this.label = isPullRequests ? "Pull requests" : "Issues";
+    this.description = isPullRequests
+      ? "Repository pull requests"
+      : "Repository issues";
+    this.emptyCopy = isPullRequests
+      ? "No matching pull requests"
+      : "No matching issues";
+    this.resolveLabel = isPullRequests
+      ? "Resolve in Pull requests..."
+      : "Resolve in Issues...";
+  }
+
+  rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
+    if (context.roots.length === 0) return null;
+    return providerEntry({
+      id: `provider:${this.id}`,
+      label: this.label,
+      description: this.description,
+      icon: githubMentionCategoryIcon(this.section),
+      step: this.providerStep("root", null),
+    });
+  }
+
+  /**
+   * Root search is served from the warmed cache only - no GitHub call per
+   * keystroke at root - plus, for a reference-shaped query, a row that drills
+   * into this section with the query intact. That row is what keeps a `#4917`
+   * the cache does not hold from dead-ending: the section can still resolve it.
+   */
+  rootSearchEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [
+      ...this.rowEntries(context),
+      ...this.referenceResolveEntries(context),
+    ];
+  }
+
+  stepEntries(
+    _step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [backEntry("Mentions"), ...this.rowEntries(context)];
+  }
+
+  menuCopy(_step: MentionFlowStep): MentionMenuCopy {
+    return { header: this.label, empty: this.emptyCopy };
+  }
+
+  stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
+    if (step.kind !== "provider" || step.providerId !== this.id) {
+      return NO_STEP_CHROME_CAPABILITY;
+    }
+    return { refresh: true, freshness: true, filter: true };
+  }
+
+  private sectionContext(
+    context: ComposerMentionProviderContext,
+  ): GithubMentionSectionContext {
+    return this.section === "pull-requests"
+      ? context.github.pullRequests
+      : context.github.issues;
+  }
+
+  private rowEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    const section = this.sectionContext(context);
+    return section.rows.map((row) =>
+      githubRowEntry(
+        row,
+        this.section,
+        section.singleRepositoryScope,
+        context.github.now,
+      ),
+    );
+  }
+
+  private referenceResolveEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    // Same gate as `rootEntry`. Without it a folderless composer - where
+    // neither category is offered anywhere - still gets two rows for a
+    // reference query, each drilling into a section whose catalog query is
+    // disabled: a permanent "Not yet fetched" and a refresh button that can
+    // never fetch.
+    if (context.roots.length === 0) return EMPTY_MENU_ENTRIES;
+    const reference = parseGithubReferenceQuery(context.query);
+    if (reference === null) return EMPTY_MENU_ENTRIES;
+    // A pasted URL already says which section it belongs to; offering to
+    // resolve a `/pull/` link under Issues would be an invitation to a dead end.
+    if (reference.kind === "url" && reference.section !== this.section) {
+      return EMPTY_MENU_ENTRIES;
+    }
+    return [
+      navigateEntry({
+        id: `github-resolve:${this.id}`,
+        label: this.resolveLabel,
+        detail: "",
+        description: this.label,
+        icon: githubMentionCategoryIcon(this.section),
+        step: this.providerStep("root", null),
+      }),
+    ];
+  }
+}
+
+function githubRowEntry(
+  row: GithubMentionRow,
+  section: GithubMentionSection,
+  singleRepositoryScope: boolean,
+  now: number,
+): MentionMenuEntry {
+  return {
+    id: githubMentionEntryId(section, row),
+    labelPrefix: `#${row.number}`,
+    label: row.title,
+    detail: githubMentionRowTrailing(row, singleRepositoryScope, now),
+    description: githubMentionReference(row),
+    icon: githubMentionRowIcon(row),
+    action: {
+      kind: "complete",
+      mention: githubMentionAttachmentFromRow(row, singleRepositoryScope),
+    },
+    preview: githubMentionPreview(row, now),
+  };
+}
+
+/** True while the picker is inside either GitHub section. */
+export function githubMentionSectionForStep(
+  step: MentionFlowStep,
+): GithubMentionSection | null {
+  if (step.kind !== "provider") return null;
+  if (step.providerId === "pull-requests") return "pull-requests";
+  if (step.providerId === "issues") return "issues";
+  return null;
 }
 class MentionProviderRegistry {
   private readonly providersById: ReadonlyMap<
@@ -854,6 +1099,11 @@ class MentionProviderRegistry {
     return this.provider(step.providerId).menuCopy(step);
   }
 
+  stepChromeCapability(step: MentionFlowStep): MentionStepChromeCapability {
+    if (step.kind === "root") return NO_STEP_CHROME_CAPABILITY;
+    return this.provider(step.providerId).stepChromeCapability(step);
+  }
+
   provider(id: MentionProviderId): ComposerMentionProvider {
     const provider = this.providersById.get(id);
     if (provider === undefined) {
@@ -868,6 +1118,8 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new FolderMentionProvider(),
   new WorktreeMentionProvider(),
   new GitMentionProvider(),
+  new GithubMentionProvider("pull-requests"),
+  new GithubMentionProvider("issues"),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
   new TerminalMentionProvider(),
@@ -893,6 +1145,7 @@ function providerEntry(args: ProviderEntryArgs): MentionMenuEntry {
 function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
   return {
     id: args.id,
+    labelPrefix: null,
     label: args.label,
     detail: args.detail,
     description: args.description,
@@ -905,6 +1158,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
 function backEntry(description: string): MentionMenuEntry {
   return {
     id: "mention-back",
+    labelPrefix: null,
     label: "Back",
     detail: "",
     description,
@@ -920,6 +1174,7 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
   return [
     {
       id: entry.id,
+      labelPrefix: null,
       label: entry.label,
       detail: detailForSuggestion(entry),
       description: descriptionForSuggestion(entry),

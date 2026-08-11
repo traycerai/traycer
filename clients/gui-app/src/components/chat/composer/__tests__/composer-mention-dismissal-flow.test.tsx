@@ -80,6 +80,7 @@ function mentionItem(path: string): ComposerPickerItem {
     kind: "mention",
     entry: {
       id: `mention:${path}`,
+      labelPrefix: null,
       label: path,
       detail: "",
       description: "",

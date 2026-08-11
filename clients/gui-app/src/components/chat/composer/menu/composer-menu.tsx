@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCwIcon } from "lucide-react";
 import { RemoveScroll } from "react-remove-scroll";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -24,14 +23,19 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
-import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
-  isArtifactMentionStep,
   mentionProviderRegistry,
   type MentionFlowStep,
+  type MentionStepChrome,
 } from "@/lib/composer/mentions";
 import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
+
+import {
+  MentionStepChromeBanner,
+  MentionStepChromeBar,
+  MentionStepChromeStatusRow,
+} from "./mention-step-chrome-bar";
 
 import {
   activePickerItemDisabledReason,
@@ -47,13 +51,11 @@ import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
 };
 const LOAD_FAILED_LABEL = "Couldn't load commands";
-const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
 // Open-time preference only: how much room a side needs before it is worth
 // opening into. The rendered menu routinely exceeds this - a full roster of
@@ -74,6 +76,7 @@ interface MenuSlice {
   readonly fetching: boolean;
   readonly loadFailed: boolean;
   readonly step: MentionFlowStep;
+  readonly stepChrome: MentionStepChrome | null;
 }
 
 function selectMenuSlice(state: {
@@ -86,6 +89,7 @@ function selectMenuSlice(state: {
   fetching: boolean;
   loadFailed: boolean;
   step: MentionFlowStep;
+  stepChrome: MentionStepChrome | null;
 }): MenuSlice {
   return {
     open: state.open,
@@ -97,6 +101,7 @@ function selectMenuSlice(state: {
     fetching: state.fetching,
     loadFailed: state.loadFailed,
     step: state.step,
+    stepChrome: state.stepChrome,
   };
 }
 
@@ -117,6 +122,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
     fetching,
     loadFailed,
     step,
+    stepChrome,
   } = slice;
   const paneFocused = usePaneFocused();
 
@@ -137,6 +143,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
       fetching={fetching}
       loadFailed={loadFailed}
       step={step}
+      stepChrome={stepChrome}
       menuId={menuId}
     />
   );
@@ -152,6 +159,7 @@ interface ComposerMenuPortalProps {
   readonly fetching: boolean;
   readonly loadFailed: boolean;
   readonly step: MentionFlowStep;
+  readonly stepChrome: MentionStepChrome | null;
   readonly menuId: string;
 }
 
@@ -166,6 +174,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     fetching,
     loadFailed,
     step,
+    stepChrome,
     menuId,
   } = props;
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -206,16 +215,14 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     [items, kind],
   );
 
-  const refreshAvailable = kind === "mention" && isArtifactMentionStep(step);
-  const refreshArtifacts = useCallback(() => {
-    pickerStore.getState().setStep(step);
-    return Promise.resolve();
-  }, [pickerStore, step]);
-  const artifactRefresh = useRefreshSpinner({
-    onRefresh: refreshArtifacts,
-    externalRefreshing: loading,
-    timeoutMs: COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS,
-  });
+  const chrome = kind === "mention" ? stepChrome : null;
+  // Focus goes back to the EDITOR, never to the popover's trigger: the caret
+  // lives in the composer and Radix's default restore would strand it in the
+  // menu chrome. `dismiss`/`commit` are already how this layer reaches the
+  // editor, so the picker's own commit path owns the handle.
+  const returnFocusToEditor = useCallback(() => {
+    pickerStore.getState().focusEditor?.();
+  }, [pickerStore]);
 
   // MentionPreviewPanel does its own pre-paint scrollIntoView for rows that
   // have a preview (see its layout effect), but it early-returns before
@@ -261,7 +268,9 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   }, [pickerStore]);
 
   const headerLabel = copy.header;
-  const emptyLabel = copy.empty;
+  // A step can say something truer than the provider's generic copy - an empty
+  // GitHub scope is not "no matching pull requests".
+  const emptyLabel = chrome?.emptyLabel ?? copy.empty;
   const dialogContentShard = useMemo(() => activeDialogContentShard(), []);
   const removeScrollShards = useMemo(
     () =>
@@ -306,8 +315,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         // shift() keeps the grown menu on-screen (CLAUDE.md sizing).
         className="pointer-events-auto fixed top-0 left-0 z-50 w-max min-w-[min(90vw,16rem)] max-w-[min(90vw,26rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg"
       >
-        <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5">
-          <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5">
+          <div className="flex min-w-0 shrink items-center gap-1.5">
             <div className="min-w-0 truncate text-overline font-medium uppercase text-muted-foreground/70">
               {headerLabel}
             </div>
@@ -319,36 +328,13 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
               />
             ) : null}
           </div>
-          {refreshAvailable ? (
-            <TooltipWrapper
-              label="Refresh artifacts"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <span className="inline-flex">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Refresh artifacts"
-                  className="-my-1 text-muted-foreground/70 hover:text-foreground"
-                  disabled={artifactRefresh.refreshing}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                  }}
-                  onClick={artifactRefresh.trigger}
-                >
-                  <RefreshCwIcon
-                    className={cn(
-                      "size-3.5",
-                      artifactRefresh.refreshing && "animate-spin",
-                    )}
-                  />
-                </Button>
-              </span>
-            </TooltipWrapper>
-          ) : null}
+          {chrome === null ? <span className="flex-1" /> : null}
+          {chrome === null ? null : (
+            <MentionStepChromeBar
+              chrome={chrome}
+              onReturnFocus={returnFocusToEditor}
+            />
+          )}
         </div>
         <div
           ref={listRef}
@@ -366,6 +352,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
               : "max-h-[min(50vh,16rem)]",
           )}
         >
+          {chrome === null ? null : <MentionStepChromeBanner chrome={chrome} />}
           <ComposerMenuBody
             renderedItems={renderedItems}
             loading={loading}
@@ -374,6 +361,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
             showEmptyLabelWithItems={showEmptyLabelWithItems}
             activeIndex={activeIndex}
             pickerStore={pickerStore}
+            appendedStatus={chrome?.appendedStatus ?? null}
           />
         </div>
       </div>
@@ -466,6 +454,13 @@ interface ComposerMenuBodyProps {
   readonly showEmptyLabelWithItems: boolean;
   readonly activeIndex: number;
   readonly pickerStore: ComposerPickerStore;
+  /**
+   * Label for a spinner row appended BELOW the rows - `Searching GitHub…`.
+   * Distinct from `loading`, which means "nothing to show yet": local results
+   * are never blocked on a remote search, so this covers the wait without the
+   * list collapsing.
+   */
+  readonly appendedStatus: string | null;
 }
 
 function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
@@ -477,6 +472,7 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     showEmptyLabelWithItems,
     activeIndex,
     pickerStore,
+    appendedStatus,
   } = props;
   const loadingRow = (
     <div className="flex items-center gap-2 px-3 py-2 text-ui-xs text-muted-foreground/80">
@@ -513,7 +509,18 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
       </div>
     );
   }
-  if (renderedItems.length === 0) return emptyRow(emptyLabel, false);
+  const statusRow =
+    appendedStatus === null ? null : (
+      <MentionStepChromeStatusRow label={appendedStatus} />
+    );
+  if (renderedItems.length === 0) {
+    return (
+      <>
+        {emptyRow(emptyLabel, false)}
+        {statusRow}
+      </>
+    );
+  }
   const rows = renderedItems.map((item, index) => {
     const disabled = item.disabledReason !== null;
     const isActive = index === activeIndex;
@@ -567,10 +574,16 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
       <>
         {rows}
         {emptyRow(emptyLabel, true)}
+        {statusRow}
       </>
     );
   }
-  return rows;
+  return (
+    <>
+      {rows}
+      {statusRow}
+    </>
+  );
 }
 
 function emptyRow(emptyLabel: string, centered: boolean): ReactNode {

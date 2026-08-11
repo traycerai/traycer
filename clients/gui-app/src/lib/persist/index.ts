@@ -9,6 +9,7 @@ export {
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  githubMentionFiltersKey,
   lastLocalHostIdKey,
   lastSelectedHostKey,
   interviewDraftKey,

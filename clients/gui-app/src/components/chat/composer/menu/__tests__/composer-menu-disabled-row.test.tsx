@@ -65,6 +65,7 @@ function openTriggered(
     query: "",
     commit: () => undefined,
     dismiss: null,
+    focusEditor: null,
     clientRect: null,
   });
   store.getState().setItems({

@@ -14,6 +14,7 @@ function entry(fields: {
 }): MentionMenuEntry {
   return {
     id: fields.id,
+    labelPrefix: null,
     label: fields.label,
     detail: fields.detail ?? "",
     description: fields.description ?? "",

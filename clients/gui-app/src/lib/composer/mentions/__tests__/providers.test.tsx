@@ -5,7 +5,11 @@ import type {
   MentionMenuEntry,
   MentionSearchPathsRequest,
 } from "../providers";
-import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
+import {
+  EMPTY_GITHUB_SECTION_CONTEXT,
+  mentionProviderRegistry,
+  ROOT_MENTION_STEP,
+} from "../providers";
 import type {
   EpicChatMentionEntry,
   EpicTerminalAgentMentionEntry,
@@ -26,6 +30,11 @@ function context(
     agentEntries: [],
     terminalEntries: [],
     epicAttachedRoots: new Set(),
+    github: {
+      pullRequests: EMPTY_GITHUB_SECTION_CONTEXT,
+      issues: EMPTY_GITHUB_SECTION_CONTEXT,
+      now: 0,
+    },
     ...overrides,
   };
 }
@@ -123,7 +132,16 @@ describe("mention provider registry", () => {
   it("returns root providers in the composer order", () => {
     expect(
       labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, context({}))),
-    ).toEqual(["Files", "Folders", "Worktrees", "Git", "Task", "Artifacts"]);
+    ).toEqual([
+      "Files",
+      "Folders",
+      "Worktrees",
+      "Git",
+      "Pull requests",
+      "Issues",
+      "Task",
+      "Artifacts",
+    ]);
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {
@@ -154,6 +172,8 @@ describe("mention provider registry", () => {
       "Folders",
       "Worktrees",
       "Git",
+      "Pull requests",
+      "Issues",
       "Task",
       "Agents",
       "Terminals",
@@ -161,7 +181,7 @@ describe("mention provider registry", () => {
     ]);
 
     const agentRows = mentionProviderRegistry.entries(
-      navigateEntry(entries[5]),
+      navigateEntry(entries[7]),
       context({ currentEpicId: "epic-1", agentEntries }),
     );
 
@@ -173,7 +193,7 @@ describe("mention provider registry", () => {
       "Kickoff chat",
       "Codex run",
     ]);
-    expect(mentionProviderRegistry.menuCopy(navigateEntry(entries[5]))).toEqual(
+    expect(mentionProviderRegistry.menuCopy(navigateEntry(entries[7]))).toEqual(
       { header: "Agents", empty: "No agents available" },
     );
 
@@ -211,7 +231,7 @@ describe("mention provider registry", () => {
       ROOT_MENTION_STEP,
       context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
     );
-    const terminalsStep = navigateEntry(entries[6]);
+    const terminalsStep = navigateEntry(entries[8]);
 
     const rows = mentionProviderRegistry.entries(
       terminalsStep,

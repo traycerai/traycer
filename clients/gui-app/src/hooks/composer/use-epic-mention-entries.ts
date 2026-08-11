@@ -18,7 +18,17 @@ export interface UseEpicMentionEntriesResult {
   readonly isLoading: boolean;
   readonly isFetching: boolean;
   readonly lastFetchedAt: number;
-  readonly refetch: () => void;
+  /**
+   * Refetches every `epic.mention*` query behind this list, resolving when
+   * they all settle.
+   *
+   * It resolves rather than returning void because the composer's Artifacts
+   * refresh button awaits it: the button's spinner has to reflect a real
+   * round-trip. Until this was wired up, that button called `setStep` with the
+   * step it was already on, which the picker store early-returns from - so it
+   * spun for its minimum visible time and fetched nothing at all.
+   */
+  readonly refetch: () => Promise<void>;
   readonly error: HostRpcError | null;
 }
 
@@ -45,9 +55,10 @@ export function useEpicMentionEntries(
         query.dataUpdatedAt > 0 ? [query.dataUpdatedAt] : [],
       ),
     ),
-    refetch: () => {
-      void Promise.all(queries.map((query) => query.refetch()));
-    },
+    refetch: () =>
+      Promise.all(queries.map((query) => query.refetch())).then(
+        () => undefined,
+      ),
     error: queries.find((query) => query.error !== null)?.error ?? null,
   };
 }

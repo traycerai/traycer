@@ -130,6 +130,7 @@ describe("composer mention flow", () => {
       kind: "mention",
       entry: {
         id: "mention-1",
+        labelPrefix: null,
         label: "src/foo.ts",
         detail: "",
         description: "",
@@ -169,6 +170,7 @@ describe("composer mention flow", () => {
       kind: "mention",
       entry: {
         id: "mention-1",
+        labelPrefix: null,
         label: "src/foo.ts",
         detail: "",
         description: "",
@@ -201,6 +203,7 @@ describe("composer mention flow", () => {
       kind: "mention",
       entry: {
         id: "mention-1",
+        labelPrefix: null,
         label: "platform.ts",
         detail: "",
         description: "",

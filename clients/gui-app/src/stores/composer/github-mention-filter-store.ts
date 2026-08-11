@@ -1,0 +1,143 @@
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+import type {
+  GithubMentionSection,
+  GithubMentionRepository,
+} from "@traycer/protocol/host/mention-schemas";
+
+import {
+  defaultGithubMentionFilter,
+  isDefaultGithubMentionFilter,
+  withGithubMentionRepository,
+  type GithubMentionFilter,
+} from "@/lib/composer/mentions/github-mention-rows";
+import { basePersistOptions, githubMentionFiltersKey } from "@/lib/persist";
+
+/**
+ * The composer's PR/Issue mention filters, sticky per (task, section).
+ *
+ * A VIEW preference and nothing more: it is never round-tripped to the host,
+ * and a composer without a task reads defaults every time (the "this task's own
+ * PRs" bucket does not exist there, so a remembered narrowing would be a
+ * preference carried in from somewhere it did not apply).
+ *
+ * Stored per epic rather than globally because the useful narrowing is
+ * task-shaped - "review requested, in this repo" is an answer about the work in
+ * front of you, not a global mode.
+ */
+
+interface GithubMentionFilterStore {
+  readonly filtersByKey: Readonly<Record<string, GithubMentionFilter>>;
+  readonly setFilter: (input: {
+    /** Null is the landing composer - adjustable, but never persisted. */
+    readonly epicId: string | null;
+    readonly section: GithubMentionSection;
+    readonly filter: GithubMentionFilter;
+  }) => void;
+  readonly resetForTests: () => void;
+}
+
+/**
+ * The bucket a composer WITHOUT a task writes into.
+ *
+ * It is a real, adjustable bucket rather than a read-only default, because a
+ * funnel that silently refuses every selection is a broken control, not a
+ * simplification. It is excluded from persistence below, which is what makes
+ * "composers without a task start from defaults" true across sessions while
+ * still letting the user narrow the list in front of them right now.
+ */
+const LANDING_SCOPE = "\x00landing";
+
+function storeKey(
+  epicId: string | null,
+  section: GithubMentionSection,
+): string {
+  return `${epicId ?? LANDING_SCOPE}\x1f${section}`;
+}
+
+function isLandingKey(key: string): boolean {
+  return key.startsWith(`${LANDING_SCOPE}\x1f`);
+}
+
+export const useGithubMentionFilterStore = create<GithubMentionFilterStore>()(
+  persist(
+    (set) => ({
+      filtersByKey: {},
+      setFilter: ({ epicId, section, filter }) => {
+        set((state) => {
+          const key = storeKey(epicId, section);
+          // Back to defaults is a DELETE, not a stored default: the funnel's
+          // dot is "a filter is active", and a persisted row that happens to
+          // equal the default would be indistinguishable from a real one the
+          // next time the shape of "default" changes.
+          if (isDefaultGithubMentionFilter(section, filter)) {
+            if (!Object.hasOwn(state.filtersByKey, key)) return state;
+            const next = { ...state.filtersByKey };
+            delete next[key];
+            return { filtersByKey: next };
+          }
+          return {
+            filtersByKey: { ...state.filtersByKey, [key]: filter },
+          };
+        });
+      },
+      resetForTests: () => {
+        set({ filtersByKey: {} });
+      },
+    }),
+    {
+      ...basePersistOptions(githubMentionFiltersKey()),
+      // Task-keyed rows persist; the landing composer's do not. Its filter is
+      // adjustable for as long as that composer is on screen and starts from
+      // defaults on the next launch - stickiness is keyed to the task, and
+      // that composer has none to key to.
+      partialize: (state) => ({
+        filtersByKey: Object.fromEntries(
+          Object.entries(state.filtersByKey).filter(
+            ([key]) => !isLandingKey(key),
+          ),
+        ),
+      }),
+    },
+  ),
+);
+
+/**
+ * The filter to apply right now. A landing composer reads its own in-session
+ * bucket, which starts empty on every launch because it is never persisted.
+ */
+export function selectGithubMentionFilter(
+  state: GithubMentionFilterStore,
+  epicId: string | null,
+  section: GithubMentionSection,
+): GithubMentionFilter {
+  const key = storeKey(epicId, section);
+  if (!Object.hasOwn(state.filtersByKey, key)) {
+    return defaultGithubMentionFilter(section);
+  }
+  return state.filtersByKey[key];
+}
+
+/**
+ * A stored repository selection that is no longer in scope (the folder was
+ * detached, or the cache has not warmed yet) must not silently hide every row.
+ * The filter falls back to "all repositories" for as long as the selection is
+ * unrepresented, without forgetting it.
+ */
+export function reconcileRepositorySelection(
+  section: GithubMentionSection,
+  filter: GithubMentionFilter,
+  repositories: ReadonlyArray<GithubMentionRepository>,
+): GithubMentionFilter {
+  const selected = filter.repository;
+  if (selected === null) return filter;
+  const present = repositories.some(
+    (repository) =>
+      repository.githubHost === selected.githubHost &&
+      repository.owner === selected.owner &&
+      repository.repo === selected.repo,
+  );
+  if (present) return filter;
+  return withGithubMentionRepository(section, filter, null);
+}

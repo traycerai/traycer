@@ -5,6 +5,7 @@ export enum ContextType {
   Folder = "folder",
   Worktree = "worktree",
   GithubIssue = "github_issue",
+  GithubPullRequest = "github_pull_request",
   Attachment = "attachment",
   Phase = "phase",
   ReviewComment = "review_comment",
@@ -245,6 +246,7 @@ export interface MentionAttrs {
   organizationLogin?: string;
   repositoryName?: string;
   issueNumber?: number;
+  githubHost?: string;
   branchName?: string;
   commitHash?: string;
   gitType?: string;
@@ -287,7 +289,8 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const title = attrs.label || attrs.id || "";
       return `epic:${title}`;
     }
-    case ContextType.GithubIssue: {
+    case ContextType.GithubIssue:
+    case ContextType.GithubPullRequest: {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
@@ -403,11 +406,16 @@ function formatMentionForLLMQuery(
     }
     case ContextType.Epic:
       return atRef(attrs.relPath || `epic:${attrs.epicId || attrs.id || ""}`);
-    case ContextType.GithubIssue: {
+    case ContextType.GithubIssue:
+    case ContextType.GithubPullRequest: {
       const org = attrs.organizationLogin || "";
       const repo = attrs.repositoryName || "";
       const issue = attrs.issueNumber || "";
-      return `github:${org}/${repo}#${issue}`;
+      const prefix =
+        attrs.contextType === ContextType.GithubPullRequest
+          ? "github-pr"
+          : "github-issue";
+      return `@${prefix}:${org}/${repo}#${issue} [url=${attrs.url || ""}]`;
     }
     case ContextType.Git: {
       if (attrs.branchName)
@@ -502,6 +510,20 @@ function formatMentionForUser(
   if (attrs.contextType === ContextType.User) {
     const name = attrs.label || attrs.id || "";
     return `@${name}`;
+  }
+
+  // GitHub references carry their durable URL in the LLM form and are never
+  // materialized against this host. Unlike file/artifact references, a stale
+  // validation result must not append `[NOT FOUND]` to either kind of chip.
+  if (
+    attrs.contextType === ContextType.GithubIssue ||
+    attrs.contextType === ContextType.GithubPullRequest
+  ) {
+    const formatted = formatMentionForDisplayQuery({
+      ...attrs,
+      contextType: attrs.contextType,
+    });
+    return `\`${formatted}\``;
   }
 
   // Use shared formatting for all other types. `contextType` is

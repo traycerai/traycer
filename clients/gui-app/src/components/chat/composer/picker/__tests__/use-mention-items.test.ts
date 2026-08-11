@@ -668,6 +668,7 @@ describe("mentionNoMatchDismissVerdict", () => {
     terminalLoading: false,
     terminalFetching: false,
     terminalError: null,
+    referenceQuery: false,
   };
 
   it("closes when every source, including the terminal list, has settled with no match", () => {
