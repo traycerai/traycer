@@ -251,10 +251,17 @@ export function LandingTerminalPanel(): ReactNode {
     null,
   );
 
-  const replaceDirectoryRequest = useCallback(
+  const writeDirectoryRequest = useCallback(
     (request: LandingTerminalDirectoryRequest | null): void => {
       directoryRequestRef.current = request;
       setDirectoryRequest(request);
+    },
+    [],
+  );
+
+  const replaceDirectoryRequest = useCallback(
+    (request: LandingTerminalDirectoryRequest | null): void => {
+      writeDirectoryRequest(request);
       if (request !== null && request.selectedTarget === null) {
         requestPrimaryFocus({
           kind: "landing-terminal-directory",
@@ -262,7 +269,7 @@ export function LandingTerminalPanel(): ReactNode {
         });
       }
     },
-    [],
+    [writeDirectoryRequest],
   );
 
   const setPanelOpen = useCallback(
@@ -416,6 +423,10 @@ export function LandingTerminalPanel(): ReactNode {
         selectedTarget,
         error: null,
       });
+      requestPrimaryFocus({
+        kind: "landing-terminal-directory",
+        requestId: request.key,
+      });
     },
     [replaceDirectoryRequest, selectWorkspacePath],
   );
@@ -423,12 +434,23 @@ export function LandingTerminalPanel(): ReactNode {
   const handleReconciliationError = useCallback(() => {
     const request = directoryRequestRef.current;
     if (request === null || request.selectedTarget === null) return;
-    replaceDirectoryRequest({
+    const ownsFocus = hasPrimaryFocusIntent(
+      (target) =>
+        target.kind === "landing-terminal-directory" &&
+        target.requestId === request.key,
+    );
+    writeDirectoryRequest({
       ...request,
       selectedTarget: null,
       error: "The terminal directory could not be opened.",
     });
-  }, [replaceDirectoryRequest]);
+    if (ownsFocus) {
+      requestPrimaryFocus({
+        kind: "landing-terminal-directory",
+        requestId: request.key,
+      });
+    }
+  }, [writeDirectoryRequest]);
 
   const activateTerminalTab = useCallback(
     (instanceId: string) => {
