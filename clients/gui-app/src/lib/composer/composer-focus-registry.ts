@@ -1,35 +1,44 @@
-type FocusCallback = () => void;
+import {
+  registerPrimaryFocusEndpoint,
+  requestPrimaryFocus,
+  type PrimaryFocusEndpoint,
+  type PrimaryFocusTarget,
+} from "@/lib/focus/primary-focus-coordinator";
 
 interface Entry {
-  readonly focus: FocusCallback;
+  readonly target: PrimaryFocusTarget;
   readonly isActive: boolean;
 }
 
 const entries = new Set<Entry>();
 
 export function registerComposerFocus(
-  focus: FocusCallback,
+  surfaceId: string,
+  endpoint: PrimaryFocusEndpoint,
   isActive: boolean,
 ): () => void {
-  const entry: Entry = { focus, isActive };
+  const entry: Entry = {
+    target: { kind: "composer", surfaceId },
+    isActive,
+  };
   entries.add(entry);
+  const unregister = registerPrimaryFocusEndpoint(entry.target, endpoint);
   return () => {
     entries.delete(entry);
+    unregister();
   };
 }
 
 export function focusActiveComposer(): boolean {
-  let fallback: FocusCallback | null = null;
+  let fallback: Entry | null = null;
   for (const entry of entries) {
     if (entry.isActive) {
-      entry.focus();
+      requestPrimaryFocus(entry.target);
       return true;
     }
-    fallback = entry.focus;
+    fallback = entry;
   }
-  if (fallback !== null) {
-    fallback();
-    return true;
-  }
-  return false;
+  if (fallback === null) return false;
+  requestPrimaryFocus(fallback.target);
+  return true;
 }

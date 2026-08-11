@@ -1391,7 +1391,6 @@ describe("<TerminalXtermHost /> terminal find", () => {
   });
 
   it("focuses an activated terminal after the clicked tab's own focus settles", async () => {
-    vi.useFakeTimers();
     const focusOrder: string[] = [];
 
     function ActivationHarness() {
@@ -1401,10 +1400,10 @@ describe("<TerminalXtermHost /> terminal find", () => {
           <button
             type="button"
             onClick={() => {
+              // Native pointer focus lands on the tab before its click handler
+              // commits the active terminal pane.
+              focusOrder.push("tab");
               setActive(true);
-              window.setTimeout(() => {
-                focusOrder.push("tab");
-              }, 0);
             }}
           >
             Activate terminal tab
@@ -1440,13 +1439,9 @@ describe("<TerminalXtermHost /> terminal find", () => {
       screen.getByRole("button", { name: "Activate terminal tab" }),
     );
 
-    expect(focusOrder).toEqual([]);
-
-    await act(async () => {
-      await vi.runOnlyPendingTimersAsync();
+    await waitFor(() => {
+      expect(focusOrder).toEqual(["tab", "terminal"]);
     });
-
-    expect(focusOrder).toEqual(["tab", "terminal"]);
   });
 
   it("does not steal focus from the control that activated the terminal pane", async () => {

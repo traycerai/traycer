@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -25,7 +26,10 @@ import {
 } from "@/lib/composer/composer-editor-incarnation";
 import type { MentionAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
-import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import {
+  focusActiveComposer,
+  registerComposerFocus,
+} from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
@@ -265,6 +269,7 @@ function useIngestPastedComposerImagesGetter(
 }
 
 function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
+  const composerSurfaceId = useId();
   const {
     initialContent,
     initialSelection,
@@ -414,20 +419,30 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     editor.setEditable(!disabled, false);
   }, [editor, disabled]);
 
+  useLayoutEffect(() => {
+    if (editor === null) return;
+    return registerComposerFocus(
+      composerSurfaceId,
+      {
+        focus: () => {
+          editor.commands.focus();
+        },
+        containsActiveElement: (activeElement) =>
+          activeElement === editor.view.dom ||
+          (activeElement !== null && editor.view.dom.contains(activeElement)),
+        isEligible: () => editor.view.dom.isConnected,
+      },
+      isActive,
+    );
+  }, [composerSurfaceId, editor, isActive]);
+
   useEffect(() => {
     if (editor === null) return;
     if (!isActive) return;
     if (editor.isFocused) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
-    editor.commands.focus();
+    focusActiveComposer();
   }, [editor, isActive, paneActivationFocusIntent]);
-
-  useEffect(() => {
-    if (editor === null) return;
-    return registerComposerFocus(() => {
-      editor.commands.focus();
-    }, isActive);
-  }, [editor, isActive]);
 
   useEffect(() => {
     if (editor === null) return;

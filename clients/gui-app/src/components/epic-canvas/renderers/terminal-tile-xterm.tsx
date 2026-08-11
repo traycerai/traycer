@@ -48,12 +48,16 @@ import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
 import {
   useActivePaneEffect,
+  usePaneFocused,
   useFocusedPaneValue,
   useVisiblePaneEffect,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
-import { registerTerminalFocus } from "@/lib/terminals/terminal-focus-registry";
+import {
+  focusTerminalInstance,
+  registerTerminalFocus,
+} from "@/lib/terminals/terminal-focus-registry";
 import {
   acquireXtermHost,
   adoptWarmSessionInstance,
@@ -432,17 +436,25 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     canvasRef,
     theme,
   });
-  useActiveTerminalFocus(termRef, props.shouldFocusOnActivePane);
+  const paneFocused = usePaneFocused();
+  useActiveTerminalFocus(props.instanceId, props.shouldFocusOnActivePane);
   // Imperative focus bridge. Surfaces whose reveal is not a pane-visibility
   // flip (the landing panel expanding around an always-mounted tile, or a tab
   // created before its engine exists) focus through the registry instead of
   // `shouldFocusOnActivePane`.
   useEffect(() => {
     if (!props.registerImperativeFocus) return;
-    return registerTerminalFocus(props.instanceId, () => {
-      termRef.current?.focus();
-    });
-  }, [props.instanceId, props.registerImperativeFocus]);
+    return registerTerminalFocus(
+      props.instanceId,
+      () => {
+        termRef.current?.focus();
+      },
+      (activeElement) =>
+        activeElement !== null &&
+        mountRef.current?.contains(activeElement) === true,
+      () => paneFocused && mountRef.current !== null,
+    );
+  }, [paneFocused, props.instanceId, props.registerImperativeFocus]);
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));
@@ -1289,20 +1301,15 @@ function clearTerminalAtlasSafely(canvas: CanvasAddon | null): void {
 }
 
 function useActiveTerminalFocus(
-  termRef: RefObject<Terminal | null>,
+  instanceId: string,
   shouldFocusOnActivePane: boolean,
 ): void {
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const focusVisibleTerminal = useCallback(() => {
     if (!shouldFocusOnActivePane) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
-    const focusTimer = window.setTimeout(() => {
-      termRef.current?.focus();
-    }, 0);
-    return () => {
-      clearTimeout(focusTimer);
-    };
-  }, [paneActivationFocusIntent, shouldFocusOnActivePane, termRef]);
+    focusTerminalInstance(instanceId);
+  }, [instanceId, paneActivationFocusIntent, shouldFocusOnActivePane]);
   useActivePaneEffect(focusVisibleTerminal);
 }
 

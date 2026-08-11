@@ -12,10 +12,10 @@ import type { LandingTerminalAvailability } from "./landing-terminal-availabilit
  * what makes the terminal-gesture snapshot leak-proof by construction rather
  * than by auditing each consumer.
  *
- * - While a gesture is PENDING (panel opened / `+`): the fields are the frozen
- *   captured snapshot — the draft/host/folder/availability captured at
- *   panel-open, a `generation` for settlement matching, and a `client` PINNED
- *   to the captured host (or `null` = fail-closed, no pinned client).
+ * - While a gesture is PENDING (panel opened / `+`): draft, host,
+ *   availability, and client are captured at panel-open. The provider keeps
+ *   reading folder metadata from that captured draft so an open chooser tracks
+ *   pin/add/remove changes without following newly focused draft or host state.
  * - While NO gesture is pending: the fields are live focus (normal non-gesture
  *   operation), with `client` the app-wide default client and `generation` 0 —
  *   nothing outside a gesture changes.
@@ -24,6 +24,8 @@ export interface LandingTerminalTarget {
   readonly draftId: string | null;
   readonly hostId: string | null;
   readonly primaryWorkspacePath: string | null;
+  readonly workspacePaths: ReadonlyArray<string>;
+  readonly launchWorkspacePath: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly generation: number;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -55,6 +57,10 @@ export interface LandingTerminalGestureValue {
    * reveal-and-create chord. Consumers never capture; they read `target`.
    */
   readonly capture: () => LandingTerminalTarget;
+  /** Select a currently attached path and advance the pending generation. */
+  readonly selectWorkspacePath: (
+    workspacePath: string,
+  ) => LandingTerminalTarget | null;
   /** Clear the pending gesture (settlement, collapse, or user tab pick). */
   readonly clearPending: () => void;
 }
