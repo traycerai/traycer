@@ -68,6 +68,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
+  HostNotificationEntryV21,
   HostNotificationsEntityRef,
   HostNotificationsPresenceEntity,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -81,6 +82,17 @@ export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
   /** The live per-window router owns this provider's toast navigation. */
   readonly navigate: NotificationNavigate;
+}
+
+function consumeSupersededAppLocalFailures(
+  entry: HostNotificationEntryV21,
+): void {
+  if (entry.severity !== "done") return;
+  const entity = notificationEntityFromHostEntry(entry);
+  if (entity === null) return;
+  useAppLocalNotificationsStore
+    .getState()
+    .markFailuresSupersededByCompletion(entity, entry.updatedAt);
 }
 
 /**
@@ -215,11 +227,17 @@ export function NotificationsSessionProvider(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (localHostId !== hostId) return;
-      if (
-        frame.kind === "snapshot" ||
-        frame.kind === "cleared" ||
-        frame.kind === "removed"
-      ) {
+      if (frame.kind === "snapshot") {
+        invalidateNotificationIndicators(queryClient, hostId, hostClient);
+        for (const entry of [
+          ...frame.attention.entries,
+          ...frame.recent.entries,
+        ]) {
+          consumeSupersededAppLocalFailures(entry);
+        }
+        return;
+      }
+      if (frame.kind === "cleared" || frame.kind === "removed") {
         invalidateNotificationIndicators(queryClient, hostId, hostClient);
         return;
       }
@@ -253,6 +271,7 @@ export function NotificationsSessionProvider(
         );
       }
       if (entity === null) return;
+      consumeSupersededAppLocalFailures(frame.entry);
       const activeEntity = activeEntityRef.current;
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
@@ -475,6 +494,9 @@ export function NotificationsSessionProvider(
         onAuthError,
         onEntitlementDenied,
         (entries) => {
+          for (const row of entries) {
+            consumeSupersededAppLocalFailures(row.entry);
+          }
           displayCloudSnapshotArrivals(entries, {
             showNotification,
             playChime: playNotificationChime,

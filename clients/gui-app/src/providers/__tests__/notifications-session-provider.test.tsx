@@ -1971,6 +1971,72 @@ describe("<NotificationsSessionProvider />", () => {
     ).not.toBeNull();
   });
 
+  it("consumes only an older local failure when the same chat later completes", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { markReadCalls, streamClient } =
+      await renderHostNotificationsProvider();
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "older-local-error",
+      updatedAt: 0,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-a",
+      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-a" },
+      message: "Older local error",
+      detail: null,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "newer-local-error",
+      updatedAt: 2,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-a",
+      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-a" },
+      message: "Newer local error",
+      detail: null,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "sibling-local-error",
+      updatedAt: 0,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "chat-b",
+      payload: { kind: "chat", epicId: "epic-a", chatId: "chat-b" },
+      message: "Sibling local error",
+      detail: null,
+    });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: hostEntry({
+          id: "done-1",
+          epicId: "epic-a",
+          chatId: "chat-a",
+          severity: "done",
+        }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId["older-local-error"]
+          .readAt,
+      ).toBe(1);
+    });
+    expect(
+      useAppLocalNotificationsStore.getState().byId["newer-local-error"].readAt,
+    ).toBeNull();
+    expect(
+      useAppLocalNotificationsStore.getState().byId["sibling-local-error"]
+        .readAt,
+    ).toBeNull();
+    expect(markReadCalls).toEqual([]);
+  });
+
   it("consumes the chat after a tab activates before its canvas tile settles", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const { markReadCalls, streamClient } =

@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from "uuid";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { NotificationPayload } from "@/lib/notifications";
 import {
+  notificationEntitiesMatch,
+  notificationEntityFromPayload,
   notificationPayloadBelongsToEntity,
   parseNotificationPayload,
 } from "@/lib/notifications";
@@ -80,6 +82,10 @@ export interface AppLocalNotificationsState {
   markEntityAsRead: (
     entity: HostNotificationsEntityRef,
     readAt: number,
+  ) => void;
+  markFailuresSupersededByCompletion: (
+    entity: HostNotificationsEntityRef,
+    completedAt: number,
   ) => void;
   markAllAsRead: (readAt: number) => void;
   markAsDisplayed: (id: string, updatedAt: number) => void;
@@ -387,6 +393,42 @@ export function createAppLocalNotificationsStore(initialName: string) {
               ...state.byId,
               ...Object.fromEntries(
                 unreadEntries.map((entry) => [entry.id, { ...entry, readAt }]),
+              ),
+            };
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
+        markFailuresSupersededByCompletion: (entity, completedAt) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const supersededEntries = Object.values(state.byId).filter(
+              (entry) => {
+                if (entry.readAt !== null || entry.updatedAt >= completedAt) {
+                  return false;
+                }
+                const entryEntity = notificationEntityFromPayload(
+                  entry.payload,
+                );
+                return (
+                  entryEntity !== null &&
+                  notificationEntitiesMatch(entryEntity, entity)
+                );
+              },
+            );
+            if (supersededEntries.length === 0) return state;
+            const byId = {
+              ...state.byId,
+              ...Object.fromEntries(
+                supersededEntries.map((entry) => [
+                  entry.id,
+                  { ...entry, readAt: completedAt },
+                ]),
               ),
             };
             const projection = projectAppLocalNotifications(byId);

@@ -73,9 +73,9 @@ describe("notification indicator state", () => {
   });
 });
 
-/** The cloud predicates are a port of the host's `indicatorState` SQL, so
- * these pin the four `MAX(CASE WHEN ...)` arms and the entity join against
- * that source rather than against the shape of the code under them. */
+/** The cloud predicates mirror the host's `indicatorState` SQL, so these pin
+ * prompt aggregation, terminal chronology, and the entity join against that
+ * source rather than against the shape of the code under them. */
 describe("cloud notification indicator derivation", () => {
   function wrap(
     entryId: string,
@@ -96,20 +96,36 @@ describe("cloud notification indicator derivation", () => {
     severity: "done" | "failure" | "info",
     readAt: number | null,
   ): HostNotificationsCloudFeedRow {
-    return wrap(entryId, {
-      id: entryId,
-      updatedAt: 1,
+    return stoppedAt({
+      entryId,
+      severity,
       readAt,
+      updatedAt: 1,
+      chatId: "chat-1",
+    });
+  }
+
+  function stoppedAt(input: {
+    readonly entryId: string;
+    readonly severity: "done" | "failure" | "info";
+    readonly readAt: number | null;
+    readonly updatedAt: number;
+    readonly chatId: string;
+  }): HostNotificationsCloudFeedRow {
+    return wrap(input.entryId, {
+      id: input.entryId,
+      updatedAt: input.updatedAt,
+      readAt: input.readAt,
       kind: "agent.stopped",
       sourceRef: null,
-      severity,
+      severity: input.severity,
       outcome: "completed",
       epicId: "epic-1",
-      chatId: "chat-1",
+      chatId: input.chatId,
       payload: {
         kind: "chat",
         epicId: "epic-1",
-        chatId: "chat-1",
+        chatId: input.chatId,
         outcome: "completed",
       },
     });
@@ -154,17 +170,91 @@ describe("cloud notification indicator derivation", () => {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
 
-  it("aggregates a chat's rows into the entity's flags", () => {
+  it("uses the newest terminal outcome for a chat", () => {
     const result = selectCloudNotificationIndicators(
       rowsById([
-        stopped("done-unread", "done", null),
-        stopped("failure-unread", "failure", null),
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
       ]),
       [],
       ["chat-1"],
     );
 
     expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: false,
+      unreadDone: true,
+    });
+  });
+
+  it("keeps a newer failure above an older completion", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
+      ]),
+      [],
+      ["chat-1"],
+    );
+
+    expect(result.chats["chat-1"]).toEqual({
+      pendingApproval: false,
+      pendingInterview: false,
+      pendingFork: false,
+      unreadFailure: true,
+      unreadDone: false,
+    });
+  });
+
+  it("does not let one chat's completion hide a sibling failure", () => {
+    const result = selectCloudNotificationIndicators(
+      rowsById([
+        stoppedAt({
+          entryId: "done-unread",
+          severity: "done",
+          readAt: null,
+          updatedAt: 2,
+          chatId: "chat-1",
+        }),
+        stoppedAt({
+          entryId: "failure-unread",
+          severity: "failure",
+          readAt: null,
+          updatedAt: 1,
+          chatId: "chat-2",
+        }),
+      ]),
+      ["epic-1"],
+      [],
+    );
+
+    expect(result.epics["epic-1"]).toEqual({
       pendingApproval: false,
       pendingInterview: false,
       pendingFork: false,
