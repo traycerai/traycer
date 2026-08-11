@@ -18,7 +18,8 @@ export const NotificationIndicatorsContext =
 
 export function useSurfaceNotificationIndicatorState(
   entity: HostNotificationsEntityRef,
+  originHostId: string | null,
 ): NotificationIndicatorState {
   const indicators = useContext(NotificationIndicatorsContext);
-  return useNotificationIndicatorState(entity, indicators);
+  return useNotificationIndicatorState(entity, originHostId, indicators);
 }

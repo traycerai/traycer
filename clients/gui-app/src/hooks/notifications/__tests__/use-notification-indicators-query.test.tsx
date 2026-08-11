@@ -165,7 +165,7 @@ function IndicatorProbe(props: {
   readonly entity: HostNotificationsEntityRef;
   readonly testId: string;
 }): ReactNode {
-  const state = useSurfaceNotificationIndicatorState(props.entity);
+  const state = useSurfaceNotificationIndicatorState(props.entity, null);
   const lit = [
     state.pendingFork ? "pendingFork" : null,
     state.pendingApproval ? "pendingApproval" : null,

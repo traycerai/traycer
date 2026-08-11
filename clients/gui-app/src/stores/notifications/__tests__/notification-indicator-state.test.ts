@@ -25,6 +25,7 @@ describe("notification indicator state", () => {
         },
       },
       { epicId: "epic-1", chatId: "chat-1" },
+      null,
       {
         epics: {},
         chats: {
@@ -66,10 +67,45 @@ describe("notification indicator state", () => {
         },
       },
       { epicId: "epic-1" },
+      null,
       { epics: {}, chats: {} },
     );
 
     expect(state.unreadFailure).toBe(true);
+  });
+
+  it("keeps a host-bound tab free of another host's local failure", () => {
+    const state = {
+      byId: {
+        failure: {
+          id: "failure",
+          originHostId: "host-a",
+          updatedAt: 1,
+          readAt: null,
+          kind: "stream.transport.error" as const,
+          sourceRef: "chat-1",
+          payload: {
+            kind: "chat" as const,
+            epicId: "epic-1",
+            chatId: "chat-1",
+          },
+          message: "Connection lost",
+          detail: null,
+          displayedUpdatedAt: null,
+        },
+      },
+    };
+    const entity = { epicId: "epic-1", chatId: "chat-1" };
+    const indicators = { epics: {}, chats: {} };
+
+    expect(
+      selectNotificationIndicatorState(state, entity, "host-b", indicators)
+        .unreadFailure,
+    ).toBe(false);
+    expect(
+      selectNotificationIndicatorState(state, entity, "host-a", indicators)
+        .unreadFailure,
+    ).toBe(true);
   });
 });
 

@@ -338,7 +338,8 @@ export function NotificationsSessionProvider(
         frame.entry.severity === "done" || frame.entry.severity === "failure";
       if (
         activeEntity === null ||
-        activeEntity.originHostId !== hostId ||
+        (activeEntity.originHostId !== null &&
+          activeEntity.originHostId !== hostId) ||
         !notificationEntitiesMatch(activeEntity.entity, entity)
       )
         return;

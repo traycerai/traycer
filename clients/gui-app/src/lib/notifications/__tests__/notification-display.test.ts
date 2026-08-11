@@ -1,9 +1,13 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   displayAppLocalNotification,
+  displayCloudSnapshotArrivals,
   displayForwardedForegroundNotification,
   displayHostChannelEmission,
   displayNotificationRows,
@@ -574,6 +578,20 @@ function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
   };
 }
 
+function cloudRow(
+  id: string,
+  chatId: string,
+  originHostId: string,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId: id,
+    originHostId,
+    coalesceKey: id,
+    entry: hostEntry(id, chatId),
+    presentation: { epicTitle: null, chatTitle: null },
+  };
+}
+
 const EMISSION_N1_N2_DELIVERY_KEY = JSON.stringify([
   JSON.stringify(["host:n-1", 10, "n-1"]),
   JSON.stringify(["host:n-2", 10, "n-2"]),
@@ -606,7 +624,7 @@ describe("host channel emission focus gate", () => {
         instanceId: `${chatId}-instance`,
         type: "chat",
         name: "Chat",
-        hostId: "host-1",
+        hostId: "stream-host-1",
       }),
     );
   }
@@ -674,6 +692,33 @@ describe("host channel emission focus gate", () => {
     });
     expect(typeof nativeCall.title).toBe("string");
     expect(typeof nativeCall.body).toBe("string");
+  });
+
+  it("still displays the same chat when it arrives from another host", () => {
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayHostChannelEmission(
+      [hostEntry("host-b-chat", "chat-1")],
+      target,
+      "stream-host-2",
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.playChime).toHaveBeenCalledOnce();
+  });
+
+  it("keeps cloud focus suppression scoped to the row's origin host", () => {
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayCloudSnapshotArrivals(
+      [cloudRow("cloud-host-b-chat", "chat-1", "stream-host-2")],
+      target,
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.playChime).toHaveBeenCalledOnce();
   });
 
   it("keys an emission identically whether or not this window filtered it", () => {
@@ -766,7 +811,7 @@ describe("forwarded foreground display gate", () => {
         instanceId: `${chatId}-instance`,
         type: "chat",
         name: "Chat",
-        hostId: "host-1",
+        hostId: "origin-host-1",
       }),
     );
   }

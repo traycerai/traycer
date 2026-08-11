@@ -98,6 +98,10 @@ describe("app-local notifications store", () => {
     expect(hasAppLocalCompletionReceipt(receipt)).toBe(false);
     expect(window.localStorage.getItem(key)).toBeNull();
 
+    window.localStorage.setItem(key, JSON.stringify({ id: 1, observedAt: 10 }));
+    expect(hasAppLocalCompletionReceipt(receipt)).toBe(false);
+    expect(window.localStorage.getItem(key)).toBeNull();
+
     recordAppLocalCompletionReceipt({
       ...receipt,
       id: "done",
@@ -389,6 +393,62 @@ describe("app-local notifications store", () => {
     expect(secondWindow.getState().byId["later-failure"].readAt).toBeNull();
   });
 
+  it("keeps reconciling a completion batch when one receipt write fails", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("failure", 10, null));
+    const failedReceipt = {
+      userId: "user-a",
+      originHostId: "host-a",
+      occurrenceKey: "failed@20",
+    };
+    const originalSetItem = Storage.prototype.setItem.bind(window.localStorage);
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation((key, value) => {
+        if (key === appLocalNotificationCompletionReceiptKey(failedReceipt)) {
+          throw new DOMException(
+            "Storage quota exceeded",
+            "QuotaExceededError",
+          );
+        }
+        originalSetItem(key, value);
+      });
+
+    try {
+      store.getState().recordCompletions([
+        {
+          originHostId: "host-a",
+          completion: { id: "failed", occurrenceKey: "failed@20" },
+          entity: { epicId: "epic-1", chatId: "chat-1" },
+          observedAt: 20,
+        },
+        {
+          originHostId: "host-a",
+          completion: { id: "stored", occurrenceKey: "stored@21" },
+          entity: null,
+          observedAt: 21,
+        },
+      ]);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    expect(store.getState().byId.failure.readAt).toBe(20);
+    expect(store.getState().observedCompletionsByHost["host-a"]).toHaveLength(
+      2,
+    );
+    expect(
+      hasAppLocalCompletionReceipt({
+        userId: "user-a",
+        originHostId: "host-a",
+        occurrenceKey: "stored@21",
+      }),
+    ).toBe(true);
+  });
+
   it("bounds and prunes persisted completion observations", () => {
     const store = createAppLocalNotificationsStore(
       appLocalNotificationsKey("user-a"),
@@ -650,6 +710,27 @@ describe("app-local notifications store", () => {
 
     expect(store.getState().byId.epic.readAt).toBe(20);
     expect(store.getState().byId.chat.readAt).toBeNull();
+  });
+
+  it("consumes matching epic rows across hosts for a hostless presence", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert({
+      ...entry("host-a-epic", 10, null),
+      payload: { kind: "epic", epicId: "epic-1" },
+    });
+    store.getState().upsert({
+      ...entry("host-b-epic", 11, null),
+      originHostId: "host-b",
+      payload: { kind: "epic", epicId: "epic-1" },
+    });
+
+    store.getState().markEntityAsRead(null, { epicId: "epic-1" }, 20);
+
+    expect(store.getState().byId["host-a-epic"].readAt).toBe(20);
+    expect(store.getState().byId["host-b-epic"].readAt).toBe(20);
   });
 
   it("does not resurface an existing client-error row when the producer repeats", () => {

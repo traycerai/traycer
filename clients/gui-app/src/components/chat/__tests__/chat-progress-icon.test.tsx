@@ -306,6 +306,7 @@ function renderIcon() {
   return render(
     <ChatProgressIcon
       chatId={CHAT_ID}
+      originHostId={null}
       className={undefined}
       epicId={EPIC_ID}
       mutedClassName="text-muted-foreground"

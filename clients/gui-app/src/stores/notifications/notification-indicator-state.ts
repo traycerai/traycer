@@ -35,6 +35,7 @@ const EMPTY_HOST_INDICATOR_STATE = EMPTY_NOTIFICATION_INDICATOR_STATE;
 export function selectNotificationIndicatorState(
   state: Pick<AppLocalNotificationsState, "byId">,
   entity: HostNotificationsEntityRef,
+  originHostId: string | null,
   indicators: HostNotificationsIndicatorStateResponse,
 ): NotificationIndicatorState {
   const hostState =
@@ -44,6 +45,7 @@ export function selectNotificationIndicatorState(
   const unreadLocalFailure = Object.values(state.byId).some(
     (entry) =>
       entry.readAt === null &&
+      (originHostId === null || entry.originHostId === originHostId) &&
       (entity.chatId === undefined
         ? notificationPayloadBelongsToEpic(entry.payload, entity.epicId)
         : notificationPayloadBelongsToEntity(entry.payload, entity)),
@@ -62,10 +64,16 @@ export function selectNotificationIndicatorState(
 
 export function useNotificationIndicatorState(
   entity: HostNotificationsEntityRef,
+  originHostId: string | null,
   indicators: HostNotificationsIndicatorStateResponse,
 ): NotificationIndicatorState {
   const byId = useAppLocalNotificationsStore((state) => state.byId);
-  return selectNotificationIndicatorState({ byId }, entity, indicators);
+  return selectNotificationIndicatorState(
+    { byId },
+    entity,
+    originHostId,
+    indicators,
+  );
 }
 
 export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResponse =

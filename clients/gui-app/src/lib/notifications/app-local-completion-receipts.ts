@@ -40,27 +40,38 @@ export function recordAppLocalCompletionReceipts(
   receipts: ReadonlyArray<AppLocalCompletionReceipt>,
 ): void {
   for (const receipt of receipts) {
-    window.localStorage.setItem(
-      appLocalNotificationCompletionReceiptKey(receipt),
-      JSON.stringify({
-        id: receipt.id,
-        observedAt: receipt.observedAt,
-      }),
-    );
+    try {
+      window.localStorage.setItem(
+        appLocalNotificationCompletionReceiptKey(receipt),
+        JSON.stringify({
+          id: receipt.id,
+          observedAt: receipt.observedAt,
+        }),
+      );
+    } catch {
+      // Receipt persistence is best-effort. The in-memory ledger must still
+      // advance so a full or unavailable localStorage cannot abort the whole
+      // completion batch and leave matching failures unreconciled.
+    }
   }
-  const hosts = new Map<string, { userId: string; originHostId: string }>();
+  const hostsByUser = new Map<string, Set<string>>();
   for (const receipt of receipts) {
-    hosts.set(`${receipt.userId}\u0000${receipt.originHostId}`, receipt);
+    const hostIds = hostsByUser.get(receipt.userId) ?? new Set<string>();
+    hostIds.add(receipt.originHostId);
+    hostsByUser.set(receipt.userId, hostIds);
   }
-  for (const { userId, originHostId } of hosts.values()) {
+  for (const [userId, hostIds] of hostsByUser) {
+    const stored = storedCompletionReceiptsForUser(userId);
+    const removedForHostCaps = new Set<string>();
+    for (const originHostId of hostIds) {
+      const removed = removeOldestReceipts(
+        stored.filter((receipt) => receipt.originHostId === originHostId),
+        APP_LOCAL_COMPLETION_RECEIPT_CAP_PER_HOST,
+      );
+      for (const key of removed) removedForHostCaps.add(key);
+    }
     removeOldestReceipts(
-      storedCompletionReceiptsForHost(userId, originHostId),
-      APP_LOCAL_COMPLETION_RECEIPT_CAP_PER_HOST,
-    );
-  }
-  for (const userId of new Set(receipts.map((receipt) => receipt.userId))) {
-    removeOldestReceipts(
-      storedCompletionReceiptsForUser(userId),
+      stored.filter((receipt) => !removedForHostCaps.has(receipt.key)),
       APP_LOCAL_COMPLETION_RECEIPT_GLOBAL_CAP,
     );
   }
@@ -88,17 +99,18 @@ export function clearAppLocalCompletionReceipts(userId: string): void {
 function removeOldestReceipts(
   receipts: ReadonlyArray<StoredCompletionReceipt>,
   cap: number,
-): void {
-  if (receipts.length <= cap) return;
-  [...receipts]
+): ReadonlySet<string> {
+  if (receipts.length <= cap) return new Set();
+  const removed = [...receipts]
     .sort((left, right) => {
       if (left.observedAt !== right.observedAt) {
         return right.observedAt - left.observedAt;
       }
       return right.key.localeCompare(left.key);
     })
-    .slice(cap)
-    .forEach((receipt) => window.localStorage.removeItem(receipt.key));
+    .slice(cap);
+  removed.forEach((receipt) => window.localStorage.removeItem(receipt.key));
+  return new Set(removed.map((receipt) => receipt.key));
 }
 
 function storedCompletionReceiptsForHost(

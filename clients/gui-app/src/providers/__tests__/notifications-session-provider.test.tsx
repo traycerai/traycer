@@ -422,10 +422,13 @@ function appendEntry(entry: NotificationEntry): void {
 function hostEntry(input: {
   readonly id: string;
   readonly epicId: string;
-  readonly chatId: string;
+  readonly chatId: string | null;
   readonly severity: "done" | "failure" | "needs_action";
 }): HostNotificationEntry {
   if (input.severity === "needs_action") {
+    if (input.chatId === null) {
+      throw new Error("Interview notification fixtures require a chat.");
+    }
     return {
       id: input.id,
       updatedAt: 1,
@@ -450,11 +453,14 @@ function hostEntry(input: {
     outcome: "completed",
     epicId: input.epicId,
     chatId: input.chatId,
-    payload: {
-      epicId: input.epicId,
-      chatId: input.chatId,
-      outcome: "completed",
-    },
+    payload:
+      input.chatId === null
+        ? { epicId: input.epicId, outcome: "completed" }
+        : {
+            epicId: input.epicId,
+            chatId: input.chatId,
+            outcome: "completed",
+          },
   };
 }
 
@@ -2295,6 +2301,7 @@ describe("<NotificationsSessionProvider />", () => {
       selectNotificationIndicatorState(
         { byId: {} },
         { epicId: "epic-a", chatId: "chat-a" },
+        null,
         {
           epics: {},
           chats: {
@@ -2463,6 +2470,37 @@ describe("<NotificationsSessionProvider />", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(markReadCalls).toEqual([]);
+  });
+
+  it("consumes epic rows from the local host for an epic-only presence", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { markReadCalls, streamClient } =
+      await renderHostNotificationsProvider();
+
+    act(() => {
+      useEpicCanvasStore.getState().openEpicTab("epic-a", "Epic");
+      hasFocus.mockReturnValue(true);
+      sendPresence();
+    });
+    await waitFor(() => expect(markReadCalls).toHaveLength(1));
+    markReadCalls.splice(0);
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: hostEntry({
+          id: "done-epic-row",
+          epicId: "epic-a",
+          chatId: null,
+          severity: "done",
+        }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
+    });
+
+    await waitFor(() => expect(markReadCalls).toHaveLength(1));
   });
 
   it("does not consume done rows while the window is unfocused", async () => {
