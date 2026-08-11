@@ -17,7 +17,14 @@ import type {
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
+  clearPendingTerminalFocus,
+  focusTerminalInstance,
+  terminalFocusOwnsInstance,
+} from "@/lib/terminals/terminal-focus-registry";
+import {
+  landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
@@ -59,6 +66,26 @@ function LandingTerminalTileBootstrap(
   const removeExitedTab = useLandingTerminalStore(
     (state) => state.removeExitedTab,
   );
+  const handleExitedTab = useCallback(
+    (instanceId: string): void => {
+      const ownsFocus = terminalFocusOwnsInstance(instanceId);
+      const wasActive =
+        useLandingTerminalStore.getState().activeInstanceId === instanceId;
+      removeExitedTab(props.landingPageId, instanceId);
+      if (!wasActive || !ownsFocus) return;
+      const state = useLandingTerminalStore.getState();
+      if (
+        landingTerminalLayoutFor(state, props.landingPageId).panelOpen &&
+        state.activeInstanceId !== null
+      ) {
+        focusTerminalInstance(state.activeInstanceId);
+        return;
+      }
+      clearPendingTerminalFocus(instanceId);
+      focusActiveComposer();
+    },
+    [props.landingPageId, removeExitedTab],
+  );
   const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
   const hostEntry = useHostDirectoryEntry(props.tab.hostId);
   const preparePayload = useCallback(
@@ -84,13 +111,8 @@ function LandingTerminalTileBootstrap(
 
   useEffect(() => {
     if (!bootstrap.hostSessionExited) return;
-    removeExitedTab(props.landingPageId, props.tab.instanceId);
-  }, [
-    bootstrap.hostSessionExited,
-    props.landingPageId,
-    props.tab.instanceId,
-    removeExitedTab,
-  ]);
+    handleExitedTab(props.tab.instanceId);
+  }, [bootstrap.hostSessionExited, handleExitedTab, props.tab.instanceId]);
 
   useEffect(() => {
     if (bootstrap.createError?.code !== "TERMINAL_ID_TAKEN") return;
@@ -142,9 +164,7 @@ function LandingTerminalTileBootstrap(
     <LandingTerminalTileLive
       handle={bootstrap.handle}
       tab={props.tab}
-      onExited={(instanceId) =>
-        removeExitedTab(props.landingPageId, instanceId)
-      }
+      onExited={handleExitedTab}
     />
   );
 }

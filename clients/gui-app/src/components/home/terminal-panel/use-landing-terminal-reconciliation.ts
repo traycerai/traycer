@@ -72,6 +72,8 @@ interface LandingTerminalReconciliationArgs {
     variables: LandingTerminalKillVariables,
   ) => Promise<unknown>;
   readonly onReconciled: (context: LandingTerminalHostContext) => void;
+  /** Runs when the fresh terminal list cannot be fetched for this generation. */
+  readonly onError: () => void;
   /**
    * Runs after a reconciliation generation has fully applied (store updated,
    * host context published). Receives the same generation's host context so
@@ -125,6 +127,7 @@ export function useLandingTerminalReconciliation(
     client,
     killTerminal,
     onReconciled,
+    onError,
     onSettled,
   } = args;
   const queryClient = useQueryClient();
@@ -191,9 +194,13 @@ export function useLandingTerminalReconciliation(
       );
       if (
         isAborted(controller.signal) ||
-        client.getActiveHostId() !== activeHostId ||
-        freshResponse === null
+        client.getActiveHostId() !== activeHostId
       ) {
+        releaseLatch();
+        return;
+      }
+      if (freshResponse === null) {
+        onError();
         releaseLatch();
         return;
       }
@@ -279,6 +286,7 @@ export function useLandingTerminalReconciliation(
     killTerminal,
     landingPageId,
     onReconciled,
+    onError,
     onSettled,
     panelOpen,
     primaryWorkspacePath,

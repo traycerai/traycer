@@ -14,6 +14,12 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
+  handlePrimaryFocusIn,
+  reconcilePrimaryFocus,
+  resetPrimaryFocusCoordinatorForTests,
+  setPrimaryFocusInteractionActive,
+} from "@/lib/focus/primary-focus-coordinator";
+import {
   registerTerminalFocus,
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
@@ -41,6 +47,8 @@ const mocks = vi.hoisted(() => ({
   probeError: null,
   dataUpdatedAt: 1,
   primaryWorkspacePath: null as string | null,
+  workspacePaths: [] as ReadonlyArray<string>,
+  mutableWorkspacePaths: [] as string[],
   kill: vi.fn(),
   killAsync: vi.fn(() => Promise.resolve({ killed: true })),
   reconcileXtermHostAfterLayoutTransition: vi.fn(),
@@ -117,6 +125,7 @@ vi.mock(
       readonly draftId: string | null;
     }) => ({
       primaryWorkspacePath: mocks.primaryWorkspacePath,
+      folders: mocks.workspacePaths,
       // Tag the source with the draft it was keyed by so a test can assert the
       // provider keys it to the CAPTURED draft while a gesture pins.
       draftId: key.surface === "landing" ? key.draftId : null,
@@ -310,6 +319,7 @@ describe("<LandingTerminalPanel />", () => {
   const focusCleanups: Array<() => void> = [];
 
   beforeEach(() => {
+    resetPrimaryFocusCoordinatorForTests();
     resetTerminalFocusRegistryForTests();
     mocks.activeHostId = null;
     mocks.clientActiveHostId = null;
@@ -319,6 +329,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeError = null;
     mocks.dataUpdatedAt = 1;
     mocks.primaryWorkspacePath = null;
+    mocks.workspacePaths = [];
+    mocks.mutableWorkspacePaths = [];
     mocks.kill.mockReset();
     mocks.killAsync.mockClear();
     // Reset (not just clear): a test may override the return with a fail-closed
@@ -345,6 +357,7 @@ describe("<LandingTerminalPanel />", () => {
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
+    resetPrimaryFocusCoordinatorForTests();
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
   });
@@ -1065,8 +1078,25 @@ describe("<LandingTerminalPanel />", () => {
     const tab = useLandingTerminalStore.getState().tabs[0];
     const terminalFocus = vi.fn();
     const composerFocus = vi.fn();
-    focusCleanups.push(registerTerminalFocus(tab.instanceId, terminalFocus));
-    focusCleanups.push(registerComposerFocus(composerFocus, true));
+    focusCleanups.push(
+      registerTerminalFocus(
+        tab.instanceId,
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
+    );
+    focusCleanups.push(
+      registerComposerFocus(
+        "test-composer-close-last",
+        {
+          focus: composerFocus,
+          containsActiveElement: () => true,
+          isEligible: () => true,
+        },
+        true,
+      ),
+    );
 
     act(() => {
       dispatchAction("app.terminal.toggle", router);
@@ -1273,7 +1303,14 @@ describe("<LandingTerminalPanel />", () => {
     });
     useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
     const terminalFocus = vi.fn();
-    focusCleanups.push(registerTerminalFocus("tab-1", terminalFocus));
+    focusCleanups.push(
+      registerTerminalFocus(
+        "tab-1",
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
+    );
 
     render(panelUi());
 
@@ -1309,14 +1346,19 @@ describe("<LandingTerminalPanel />", () => {
     // request must fire exactly then, not get lost.
     const terminalFocus = vi.fn();
     focusCleanups.push(
-      registerTerminalFocus(created.instanceId, terminalFocus),
+      registerTerminalFocus(
+        created.instanceId,
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
     );
     await waitFor(() => {
       expect(terminalFocus).toHaveBeenCalledTimes(1);
     });
   });
 
-  it("fulfils tab-activation focus only after the commit, never synchronously", async () => {
+  it("parks tab-activation focus until the endpoint becomes eligible", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1334,23 +1376,30 @@ describe("<LandingTerminalPanel />", () => {
     });
     const [first] = useLandingTerminalStore.getState().tabs;
     const firstFocus = vi.fn();
-    focusCleanups.push(registerTerminalFocus(first.instanceId, firstFocus));
+    let firstEligible = true;
+    focusCleanups.push(
+      registerTerminalFocus(
+        first.instanceId,
+        firstFocus,
+        () => true,
+        () => firstEligible,
+      ),
+    );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     firstFocus.mockClear();
 
-    // At click time the target tile's wrapper is still `invisible` (React has
-    // not committed the active flip), and a browser rejects focus on hidden
-    // elements without retrying - so the registry must defer fulfilment past
-    // the commit instead of invoking the callback inside the click handler.
+    firstEligible = false;
     fireEvent.click(
       screen.getByTestId(`landing-terminal-tab-${first.instanceId}`),
     );
     expect(firstFocus).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(firstFocus).toHaveBeenCalledTimes(1);
+    act(() => {
+      firstEligible = true;
+      reconcilePrimaryFocus();
     });
+    expect(firstFocus).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an opening gesture on draft A when focus switches to draft B before terminal.list settles", async () => {
@@ -1747,7 +1796,17 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
     const composerFocus = vi.fn();
-    focusCleanups.push(registerComposerFocus(composerFocus, true));
+    focusCleanups.push(
+      registerComposerFocus(
+        "test-composer-new-tab",
+        {
+          focus: composerFocus,
+          containsActiveElement: () => true,
+          isEligible: () => true,
+        },
+        true,
+      ),
+    );
 
     act(() => {
       dispatchAction("tab.close", router);
@@ -1756,6 +1815,542 @@ describe("<LandingTerminalPanel />", () => {
       expect(testLayout().panelOpen).toBe(false);
       expect(composerFocus).toHaveBeenCalled();
     });
+  });
+
+  it("chooses a non-primary directory before opening a terminal", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+
+    expect(
+      await screen.findByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+    const panel = screen.getByTestId("landing-terminal-panel");
+    expect(panel.className).toContain("transition-[width]");
+    expect(panel.className).not.toContain("transition-[width,visibility]");
+    const pickerInput = screen.getByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(pickerInput);
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
+      "/workspace/other",
+    );
+    expect(
+      screen.queryByTestId("landing-terminal-directory-picker"),
+    ).toBeNull();
+  });
+
+  it("focuses the terminal after a mouse directory selection", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    setPrimaryFocusInteractionActive(true);
+    fireEvent.click(screen.getByText("/workspace/other"));
+    setPrimaryFocusInteractionActive(false);
+    await drainDeferredListFetches(resolvers);
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+
+    const terminalTarget = document.createElement("textarea");
+    document.body.append(terminalTarget);
+    const terminalFocus = vi.fn(() => terminalTarget.focus());
+    const tab = useLandingTerminalStore.getState().tabs[0];
+    focusCleanups.push(
+      registerTerminalFocus(
+        tab.instanceId,
+        terminalFocus,
+        (activeElement) => activeElement === terminalTarget,
+        () => true,
+      ),
+    );
+
+    await waitFor(() => expect(terminalFocus).toHaveBeenCalled());
+    terminalTarget.remove();
+  });
+
+  it("does not refocus a selected directory after focus moves before settlement", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    const composer = document.createElement("button");
+    document.body.append(composer);
+    composer.focus();
+    handlePrimaryFocusIn(composer);
+    await drainDeferredListFetches(resolvers);
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+
+    const terminalTarget = document.createElement("textarea");
+    document.body.append(terminalTarget);
+    const terminalFocus = vi.fn(() => terminalTarget.focus());
+    const tab = useLandingTerminalStore.getState().tabs[0];
+    focusCleanups.push(
+      registerTerminalFocus(
+        tab.instanceId,
+        terminalFocus,
+        (activeElement) => activeElement === terminalTarget,
+        () => true,
+      ),
+    );
+
+    expect(terminalFocus).not.toHaveBeenCalled();
+    terminalTarget.remove();
+    composer.remove();
+  });
+
+  it("keeps the chooser open when its captured host is no longer active", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    let pinnedHostId = "host-a";
+    mocks.buildTransientHostClient.mockImplementation(() => ({
+      getActiveHostId: () => pinnedHostId,
+      onChange: () => () => undefined,
+    }));
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    pinnedHostId = "host-b";
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    expect(
+      await screen.findByText("The selected host is no longer available."),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(pickerInput));
+  });
+
+  it("keeps the chooser open when a directory is detached before selection", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.mutableWorkspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.workspacePaths = mocks.mutableWorkspacePaths;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    mocks.mutableWorkspacePaths.splice(1, 1);
+    fireEvent.click(screen.getByText("/workspace/other"));
+
+    expect(
+      await screen.findByText("That directory is no longer attached."),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(pickerInput));
+  });
+
+  it("resets the chooser when opening the selected directory fails", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    mocks.queryClient.fetchQuery.mockRejectedValue(new Error("offline"));
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    expect(
+      await screen.findByText("The terminal directory could not be opened."),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(pickerInput));
+  });
+
+  it("keeps intervening focus when opening the selected directory fails", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const rejecters: Array<(error: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejecters.push(reject);
+        }),
+    );
+    render(panelUi());
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", fakeKeybindingRouter());
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    const other = document.createElement("button");
+    document.body.append(other);
+    other.focus();
+    handlePrimaryFocusIn(other);
+    await act(async () => {
+      for (let pass = 0; pass < 10; pass += 1) {
+        rejecters.splice(0).forEach((reject) => reject(new Error("offline")));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    expect(
+      await screen.findByText("The terminal directory could not be opened."),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(other);
+    other.remove();
+  });
+
+  it("updates an open chooser when the captured draft's primary changes", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    const view = render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    await screen.findByTestId("landing-terminal-directory-picker");
+
+    mocks.primaryWorkspacePath = "/workspace/other";
+    view.rerender(panelUi());
+
+    const pickerInput = screen.getByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByText("Primary").closest("[data-slot='command-item']")
+          ?.textContent,
+      ).toContain("other");
+      expect(document.activeElement).toBe(pickerInput);
+    });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
+        "/workspace/other",
+      );
+    });
+  });
+
+  it("reuses a matching terminal after choosing its directory on reopen", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "project-tab",
+      sessionId: "project-session",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project · New Terminal",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "other-tab",
+      sessionId: "other-session",
+      hostId: "host-a",
+      cwd: "/workspace/other",
+      name: "other · New Terminal",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().activateTab("project-tab");
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+    focusCleanups.push(
+      registerTerminalFocus(
+        "project-tab",
+        () => {
+          screen.getByTestId("landing-terminal-tab-project-tab").focus();
+        },
+        () => true,
+        () => true,
+      ),
+    );
+    focusCleanups.push(
+      registerTerminalFocus(
+        "other-tab",
+        () => {
+          screen.getByTestId("landing-terminal-tab-other-tab").focus();
+        },
+        () => true,
+        () => true,
+      ),
+    );
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(pickerInput);
+    });
+    fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+        "other-tab",
+      );
+      expect(document.activeElement).toBe(
+        screen.getByTestId("landing-terminal-tab-other-tab"),
+      );
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+  });
+
+  it("always creates for explicit new-terminal actions after directory selection", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+
+    const createInOther = async (): Promise<void> => {
+      const pickerInput = await screen.findByRole("combobox", {
+        name: "Create terminal in workspace",
+      });
+      await waitFor(() => {
+        expect(document.activeElement).toBe(pickerInput);
+      });
+      fireEvent.click(await screen.findByText("/workspace/other"));
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId("landing-terminal-directory-picker"),
+        ).toBeNull();
+      });
+    };
+
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    await createInOther();
+
+    act(() => {
+      dispatchAction("app.terminal.new", router);
+    });
+    await createInOther();
+
+    act(() => {
+      dispatchAction("tab.new", router);
+    });
+    await createInOther();
+
+    fireEvent.doubleClick(screen.getByTestId("landing-terminal-tab-strip"));
+    await createInOther();
+
+    const otherTabs = useLandingTerminalStore
+      .getState()
+      .tabs.filter((tab) => tab.cwd === "/workspace/other");
+    expect(otherTabs).toHaveLength(4);
+  });
+
+  it("cancels a chooser opened from a collapsed panel without spawning", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+    const composerFocus = vi.fn();
+    focusCleanups.push(
+      registerComposerFocus(
+        "test-composer-toggle",
+        {
+          focus: composerFocus,
+          containsActiveElement: () => true,
+          isEligible: () => true,
+        },
+        true,
+      ),
+    );
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    fireEvent.keyDown(pickerInput, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(testLayout().panelOpen).toBe(false);
+      expect(composerFocus).toHaveBeenCalled();
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("returns from the inline chooser to the active terminal", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    const newTerminalButton = screen.getByTestId("landing-terminal-new-tab");
+    fireEvent.click(newTerminalButton);
+    const pickerInput = await screen.findByRole("combobox", {
+      name: "Create terminal in workspace",
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(pickerInput);
+    });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Cancel terminal creation",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("landing-terminal-directory-picker"),
+      ).toBeNull();
+      expect(document.activeElement).toBe(newTerminalButton);
+    });
+    expect(testLayout().panelOpen).toBe(true);
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+  });
+
+  it("clears an open chooser when the panel collapses through the store", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.workspacePaths = ["/workspace/project", "/workspace/other"];
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    expect(
+      await screen.findByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
+
+    act(() =>
+      useLandingTerminalStore
+        .getState()
+        .setPanelOpen(TEST_LANDING_PAGE_ID, false),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("landing-terminal-directory-picker"),
+      ).toBeNull();
+    });
+
+    const router = fakeKeybindingRouter();
+    act(() => {
+      dispatchAction("tab.new", router);
+    });
+    expect(
+      await screen.findByTestId("landing-terminal-directory-picker"),
+    ).toBeTruthy();
   });
 
   it("reopens onto the pinned folder: spawns there when no terminal matches, reuses one that does", async () => {
@@ -1869,7 +2464,12 @@ describe("<LandingTerminalPanel />", () => {
     // fires when the auto-spawned tile engine registers after create.
     const terminalFocus = vi.fn();
     focusCleanups.push(
-      registerTerminalFocus(created.instanceId, terminalFocus),
+      registerTerminalFocus(
+        created.instanceId,
+        terminalFocus,
+        () => true,
+        () => true,
+      ),
     );
     await waitFor(() => {
       expect(terminalFocus).toHaveBeenCalledTimes(1);

@@ -67,7 +67,7 @@ afterEach(() => {
  * actually running, and doctor deliberately ignores the field on stale
  * metadata (it would describe a process that is already gone).
  */
-function writePidJson(layer0: unknown): void {
+function writePidJson(layer0: unknown, layer0Slot: unknown): void {
   const hostRoot = join(workHome, ".traycer", "host");
   mkdirSync(hostRoot, { recursive: true });
   writeFileSync(
@@ -83,6 +83,10 @@ function writePidJson(layer0: unknown): void {
         startedAt: "2026-07-27T00:00:00.000Z",
         processStartTimeMs: 1_700_000_000_000,
         layer0,
+        // `JSON.stringify` omits an `undefined` value, so the default call
+        // writes a record with no such key at all - which is exactly what
+        // every host that predates ticket 38, and every non-pool host, writes.
+        layer0Slot,
       },
       null,
       2,
@@ -151,12 +155,15 @@ async function runDoctorHere(): Promise<
 describe("runDoctor Layer 0 guarantee reporting", () => {
   it("reports a degraded host, with the cause and evidence that name the loss", async () => {
     stageQuietEnvironment();
-    writePidJson({
-      status: "degraded",
-      attemptId: "host-4242",
-      cause: "addon-load-failed",
-      evidence: "Cannot find module 'lifecycle_lock.node'",
-    });
+    writePidJson(
+      {
+        status: "degraded",
+        attemptId: "host-4242",
+        cause: "addon-load-failed",
+        evidence: "Cannot find module 'lifecycle_lock.node'",
+      },
+      undefined,
+    );
 
     const issues = await runDoctorHere();
     const issue = issues.find(
@@ -184,17 +191,20 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
 
   it("carries a structured os-error cause through to the report", async () => {
     stageQuietEnvironment();
-    writePidJson({
-      status: "degraded",
-      attemptId: "host-4242",
-      cause: {
-        kind: "os-error",
-        syscall: "open",
-        code: "EACCES",
-        fsType: null,
+    writePidJson(
+      {
+        status: "degraded",
+        attemptId: "host-4242",
+        cause: {
+          kind: "os-error",
+          syscall: "open",
+          code: "EACCES",
+          fsType: null,
+        },
+        evidence: "kernel lifecycle lock acquisition was not determinable",
       },
-      evidence: "kernel lifecycle lock acquisition was not determinable",
-    });
+      undefined,
+    );
 
     const issues = await runDoctorHere();
     const issue = issues.find(
@@ -207,7 +217,7 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
 
   it("stays quiet for a host that holds the guarantee", async () => {
     stageQuietEnvironment();
-    writePidJson({ status: "acquired", attemptId: "host-4242" });
+    writePidJson({ status: "acquired", attemptId: "host-4242" }, undefined);
 
     const issues = await runDoctorHere();
 
@@ -218,6 +228,92 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
     ).toBeUndefined();
     // The rest of the engine still ran - this row is not vacuously quiet
     // because doctor produced nothing at all.
+    expect(
+      issues.find((candidate) => candidate.code === "PORT_UNREACHABLE"),
+    ).toBeDefined();
+  });
+
+  /**
+   * chat-sync-v2 ticket 38. A dev identity-pool host takes TWO Layer 0 locks -
+   * slot home and identity home - and until ticket 38 only the identity one
+   * reached pid.json. Not by picking the wrong record of two: the slot outcome
+   * was DISCARDED before any record existed, because `main-bootstrap` only
+   * announces it on the arm where that lock PREVENTS startup, and that arm
+   * returns. So this exact combination - identity `acquired`, slot `degraded` -
+   * published a clean `acquired` and doctor answered "guaranteed" to the one
+   * question the record exists for.
+   */
+  it("reports a degraded SLOT home even when the identity home was acquired", async () => {
+    stageQuietEnvironment();
+    writePidJson(
+      { status: "acquired", attemptId: "host-4242" },
+      {
+        status: "degraded",
+        attemptId: "host-4242",
+        cause: "addon-load-failed",
+        evidence: "slot home lock could not be held",
+      },
+    );
+
+    const issues = await runDoctorHere();
+    const issue = issues.find(
+      (candidate) => candidate.code === "HOST_LAYER0_NOT_GUARANTEED",
+    );
+
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("warning");
+    // Names WHICH home lost it - an investigator holding two homes and one
+    // warning cannot act on "the host is degraded".
+    expect(issue?.message).toContain("slot home");
+    expect(issue?.message).toContain("slot home lock could not be held");
+    expect(issue?.details).toMatchObject({
+      layer0: { status: "acquired" },
+      layer0Slot: { status: "degraded" },
+    });
+  });
+
+  it("reports BOTH homes when both lost the lock", async () => {
+    stageQuietEnvironment();
+    writePidJson(
+      {
+        status: "degraded",
+        attemptId: "host-4242",
+        cause: "addon-load-failed",
+        evidence: "identity home lock could not be held",
+      },
+      {
+        status: "degraded",
+        attemptId: "host-4242",
+        cause: "fs-unsupported",
+        evidence: "slot home lock could not be held",
+      },
+    );
+
+    const issues = await runDoctorHere();
+    const issue = issues.find(
+      (candidate) => candidate.code === "HOST_LAYER0_NOT_GUARANTEED",
+    );
+
+    // One issue carrying both, not two issues: it is one guarantee, lost.
+    expect(issue?.message).toContain("identity home");
+    expect(issue?.message).toContain("slot home");
+    expect(issue?.message).toContain("fs-unsupported");
+  });
+
+  it("stays quiet for a pool host where BOTH homes held the lock", async () => {
+    stageQuietEnvironment();
+    writePidJson(
+      { status: "acquired", attemptId: "host-4242" },
+      { status: "acquired", attemptId: "host-4242" },
+    );
+
+    const issues = await runDoctorHere();
+
+    expect(
+      issues.find(
+        (candidate) => candidate.code === "HOST_LAYER0_NOT_GUARANTEED",
+      ),
+    ).toBeUndefined();
     expect(
       issues.find((candidate) => candidate.code === "PORT_UNREACHABLE"),
     ).toBeDefined();
@@ -258,7 +354,7 @@ describe("runDoctor Layer 0 guarantee reporting", () => {
    */
   it("reports a status this CLI does not recognise rather than falling silent", async () => {
     stageQuietEnvironment();
-    writePidJson({ status: "quarantined", attemptId: "host-4242" });
+    writePidJson({ status: "quarantined", attemptId: "host-4242" }, undefined);
 
     const issues = await runDoctorHere();
     const issue = issues.find(

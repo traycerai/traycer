@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { m, useReducedMotion } from "motion/react";
 import {
   Bell,
   Check,
@@ -42,6 +43,8 @@ import {
 
 interface NotificationRowProps {
   readonly feedId: string;
+  /** Briefly identifies a row that just moved from Attention into Recent. */
+  readonly highlightRelocation: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   /** Dismiss an unresolved `needs_action` Attention row (stamps `resolvedAt`).
@@ -60,6 +63,33 @@ function isOriginUnavailable(input: {
   if (!requiresOriginHost) return false;
   if (input.row.originHostId === null) return true;
   return input.originStatus !== "available";
+}
+
+/**
+ * The motion props the row's `layout` animation needs, or their inert forms.
+ *
+ * Extracted rather than inlined as four ternaries because this row now carries
+ * both the reduced-motion branches and the pack-attribution presentation, and
+ * the union of the two pushed `NotificationRow` past the module's complexity
+ * ceiling. The reduced-motion answer is one decision, so it reads better as
+ * one function than as the same conditional spelled four times.
+ */
+function rowMotionProps(options: {
+  readonly feedId: string;
+  readonly shouldReduceMotion: boolean;
+}): {
+  readonly layout: "position" | false;
+  readonly layoutId: string | undefined;
+  readonly exit: { readonly opacity: number } | undefined;
+} {
+  if (options.shouldReduceMotion) {
+    return { layout: false, layoutId: undefined, exit: undefined };
+  }
+  return {
+    layout: "position",
+    layoutId: `notification-row-${options.feedId}`,
+    exit: { opacity: 0 },
+  };
 }
 
 function isBlockingAttentionRow(row: MergedNotificationRow): boolean {
@@ -94,6 +124,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   // user has a remote host selected.
   const localHost = useReactiveLocalHostEntry();
   const runnerHost = useRunnerHostOrNull();
+  const shouldReduceMotion = useReducedMotion() === true;
   if (row === null) return null;
 
   const packPresentation = resolvePackRowPresentation({
@@ -112,8 +143,20 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
 
+  const motionProps = rowMotionProps({
+    feedId: row.feedId,
+    shouldReduceMotion,
+  });
+
   return (
-    <li
+    <m.li
+      layout={motionProps.layout}
+      layoutId={motionProps.layoutId}
+      exit={motionProps.exit}
+      transition={{
+        layout: { duration: 0.24, ease: "easeOut" },
+        opacity: { duration: 0.12, ease: "easeOut" },
+      }}
       // hover:/has-[:focus-visible]: give the whole row a subtle tint
       // whenever any of its interactive controls is hovered or keyboard-
       // focused, so the user can see what they're targeting - distinct from
@@ -139,6 +182,16 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       }
       data-notification-pack-locality={packPresentation.locality}
     >
+      {props.highlightRelocation && !shouldReduceMotion ? (
+        <m.span
+          aria-hidden
+          data-testid="notification-relocation-highlight"
+          className="pointer-events-none absolute inset-0 bg-primary/15"
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 0 }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+        />
+      ) : null}
       {!isRead ? (
         <span
           aria-hidden
@@ -173,7 +226,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           onResolve={props.onResolve}
         />
       </div>
-    </li>
+    </m.li>
   );
 }
 

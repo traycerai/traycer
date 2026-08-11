@@ -97,6 +97,7 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
               pendingInterview: false,
               unreadFailure: false,
               unreadDone: true,
+              pendingFork: false,
             },
           },
         }}

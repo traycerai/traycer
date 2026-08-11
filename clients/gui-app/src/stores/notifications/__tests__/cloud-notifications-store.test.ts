@@ -69,6 +69,50 @@ function cloudRow(
   };
 }
 
+function cloudFailureRow(
+  entryId: string,
+  createdAt: number,
+): HostNotificationsCloudFeedRow {
+  const row = cloudRow(entryId, createdAt, "host-a");
+  return {
+    ...row,
+    entry: {
+      ...row.entry,
+      severity: "failure",
+    },
+  };
+}
+
+function cloudPromptRow(
+  entryId: string,
+  createdAt: number,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-a",
+    coalesceKey: `approval.requested:${entryId}`,
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt: null,
+      kind: "approval.requested",
+      sourceRef: entryId,
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "approval",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        approvalId: entryId,
+      },
+    },
+    presentation: { epicTitle: "Epic", chatTitle: "Chat" },
+  };
+}
+
 class ControlledSession implements IStreamSession {
   private statusChangeHandler: StatusChangeHandler | null = null;
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -332,6 +376,87 @@ describe("cloud notifications store", () => {
     expect(cloud.connectionState).toBe("reconnecting");
     expect(cloud.rows).toEqual({ [cloudNotificationFeedId("entry-a")]: row });
     expect(cloud.version).toBe(4);
+  });
+
+  it("removes an unread failure from both optimistic summary counts when marked read", () => {
+    const failure = cloudFailureRow("entry-failure", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markReadLocally(failure.entryId, 20);
+
+    const cloud = useCloudNotificationsStore.getState();
+    expect(
+      cloud.rows[cloudNotificationFeedId(failure.entryId)]?.entry.readAt,
+    ).toBe(20);
+    expect(cloud.summary).toEqual({
+      totalCount: 1,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
+  it("keeps unresolved needs-action rows in attention after optimistic mark-all-read", () => {
+    const failure = cloudFailureRow("entry-failure", 10);
+    const prompt = cloudPromptRow("entry-prompt", 20);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure, prompt],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 2 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markAllReadLocally(30);
+
+    const cloud = useCloudNotificationsStore.getState();
+    expect(cloud.summary).toEqual({
+      totalCount: 2,
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+    expect(Object.values(cloud.rows).map((row) => row?.entry.readAt)).toEqual([
+      30, 30,
+    ]);
+  });
+
+  it("preserves summary-only attention after optimistic mark-all-read", () => {
+    const failure = cloudFailureRow("entry-failure", 10);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure],
+      // The relay summary also covers one unrenderable unresolved prompt.
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 2 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markAllReadLocally(30);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+  });
+
+  it("decrements optimistic attention only for failures during entity-read fan-out", () => {
+    const failure = cloudFailureRow("entry-failure", 10);
+    const informational = cloudRow("entry-info", 20, "host-a");
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure, informational],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore
+      .getState()
+      .beginEntityRead([failure.entryId, informational.entryId], 30);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
   });
 
   it("opens the distinct cloud method and creates a fresh session after terminal failure", () => {

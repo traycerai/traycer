@@ -28,9 +28,9 @@ const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
  * accidentally read instead of the captured target — the terminal-gesture leak
  * class is closed by construction.
  *
- * While a gesture pins the panel the target is frozen to the captured
- * host/folder/client/availability; otherwise it is live focus, so ordinary
- * (non-gesture) operation is unchanged.
+ * While a gesture pins the panel, host/client/availability stay captured while
+ * the workspace source remains live for that captured draft. Otherwise the
+ * target is live focus, so ordinary (non-gesture) operation is unchanged.
  */
 export function LandingTerminalGestureProvider(props: {
   readonly draftId: string | null;
@@ -78,6 +78,7 @@ export function LandingTerminalGestureProvider(props: {
   );
   const workspace = useHomeWorkspaceSource(stagingKey, null);
   const liveWorkspacePath = workspace.primaryWorkspacePath;
+  const liveWorkspacePaths = workspace.folders;
 
   // Downgrade memory: keep the pending gesture's availability in step with the
   // captured host's LATEST observed verdict while that host stays selected. A
@@ -108,6 +109,8 @@ export function LandingTerminalGestureProvider(props: {
       draftId,
       hostId: activeHostId,
       primaryWorkspacePath: liveWorkspacePath,
+      workspacePaths: [...liveWorkspacePaths],
+      launchWorkspacePath: liveWorkspacePath,
       availability,
       generation: gestureGenerationRef.current + 1,
       client: pinnedClient,
@@ -123,7 +126,30 @@ export function LandingTerminalGestureProvider(props: {
     draftId,
     hostDirectory,
     liveWorkspacePath,
+    liveWorkspacePaths,
   ]);
+
+  const selectWorkspacePath = useCallback(
+    (workspacePath: string): LandingTerminalTarget | null => {
+      if (
+        pendingGesture === null ||
+        !liveWorkspacePaths.includes(workspacePath)
+      ) {
+        return null;
+      }
+      const next: LandingTerminalTarget = {
+        ...pendingGesture,
+        primaryWorkspacePath: liveWorkspacePath,
+        workspacePaths: [...liveWorkspacePaths],
+        launchWorkspacePath: workspacePath,
+        generation: gestureGenerationRef.current + 1,
+      };
+      gestureGenerationRef.current = next.generation;
+      setPendingGesture(next);
+      return next;
+    },
+    [liveWorkspacePath, liveWorkspacePaths, pendingGesture],
+  );
 
   const clearPending = useCallback(() => {
     setPendingGesture(null);
@@ -131,7 +157,8 @@ export function LandingTerminalGestureProvider(props: {
 
   // While no gesture pins, the target is live focus (default client, generation
   // 0) so nothing outside a gesture changes. While a gesture pins, it is the
-  // frozen snapshot with a pinned-or-null client.
+  // captured routing snapshot with a pinned-or-null client; the chooser reads
+  // current folder metadata separately from `workspace` above.
   const target = useMemo<LandingTerminalTarget>(
     () =>
       openGesture === null
@@ -139,6 +166,8 @@ export function LandingTerminalGestureProvider(props: {
             draftId,
             hostId: activeHostId,
             primaryWorkspacePath: liveWorkspacePath,
+            workspacePaths: liveWorkspacePaths,
+            launchWorkspacePath: liveWorkspacePath,
             availability,
             generation: 0,
             client: defaultClient,
@@ -150,6 +179,7 @@ export function LandingTerminalGestureProvider(props: {
       defaultClient,
       draftId,
       liveWorkspacePath,
+      liveWorkspacePaths,
       openGesture,
     ],
   );
@@ -163,6 +193,7 @@ export function LandingTerminalGestureProvider(props: {
       openEpisodeDraftId,
       workspace,
       capture,
+      selectWorkspacePath,
       clearPending,
     }),
     [
@@ -171,6 +202,7 @@ export function LandingTerminalGestureProvider(props: {
       draftId,
       openEpisodeDraftId,
       openGesture,
+      selectWorkspacePath,
       target,
       workspace,
     ],

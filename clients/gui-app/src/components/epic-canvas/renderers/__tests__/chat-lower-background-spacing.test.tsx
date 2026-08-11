@@ -116,7 +116,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
     viewTabId: TAB_ID,
     chatId: CHAT_ID,
     runtime: { snapshotLoaded: true },
-    access: { isViewer: false, canAct: true },
+    access: { isViewer: false, canAct: true, readOnlyNotice: null },
     turn: {
       activeTurnStatus: null,
       steerCapable: false,

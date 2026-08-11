@@ -19,6 +19,7 @@
 import type { CreateChatResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { v4 as uuidv4 } from "uuid";
 import { displayTitle } from "@/lib/display-title";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
@@ -39,6 +40,7 @@ export type NewChatSplitPosition = "right" | "bottom";
 
 export interface CreateChatCommandCallbacks {
   readonly onSuccess: (result: CreateChatResponse) => void;
+  readonly onError: (error: HostRpcError) => void;
 }
 
 // Caller-supplied request never carries `hostId`; the mutation hook
@@ -104,9 +106,19 @@ export interface OpenNewChatInActiveTileArgs {
    *  with host defaults (today's behavior for every caller but the clone
    *  flow, which carries the source chat's own settings forward). */
   readonly settings: ChatRunSettings | null;
+  /** Optional fork source - `null` for an ordinary empty chat (every caller
+   *  but the clone flow, chat-sync-v2 ticket 34B1). */
+  readonly forkSource: CreateChatMutationInput["forkSource"] | null;
   readonly source: AnalyticsSource;
   readonly createChat: CreateChatCommand;
   readonly openWhenProjected: OpenWhenProjected;
+  /** The create call failed outright (never reached `onSuccess`).
+   *  `useEpicCreateChat`'s own `onError` already toasts regardless of what
+   *  this callback does, so it exists for a caller that needs to REACT to
+   *  the failure, not merely report it - the clone flow (ticket 34B1) is the
+   *  one caller that does: a checkpoint-unavailable refusal retries
+   *  settings-only instead of giving up. Every other caller passes a no-op. */
+  readonly onCreateError: (error: HostRpcError) => void;
 }
 
 const noop: CancelFn = () => undefined;
@@ -117,7 +129,12 @@ export function openNewChatInActiveTile(
   let cancelled = false;
   let projectionCancel: CancelFn | null = null;
   args.createChat(
-    buildCreateChatRequest(args.epicId, args.worktreeIntent, args.settings),
+    buildCreateChatRequest(
+      args.epicId,
+      args.worktreeIntent,
+      args.settings,
+      args.forkSource,
+    ),
     {
       onSuccess: (result) => {
         if (cancelled) return;
@@ -130,6 +147,7 @@ export function openNewChatInActiveTile(
           source: args.source,
         });
       },
+      onError: args.onCreateError,
     },
   );
   return () => {
@@ -206,6 +224,7 @@ function buildCreateChatRequest(
   epicId: string,
   worktreeIntent: WorktreeIntent | null,
   settings: ChatRunSettings | null,
+  forkSource: CreateChatMutationInput["forkSource"] | null,
 ): CreateChatMutationInput {
   return {
     epicId,
@@ -219,6 +238,7 @@ function buildCreateChatRequest(
     workspaceMode: deriveWorkspaceMode(1, worktreeIntent),
     worktreeIntent,
     settings,
+    forkSource,
   };
 }
 

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   type MouseEvent,
   type ReactNode,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/context-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
+import { registerPrimaryFocusEndpoint } from "@/lib/focus/primary-focus-coordinator";
 import { cn } from "@/lib/utils";
 import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
 
@@ -108,8 +110,23 @@ function NewTerminalButton(props: {
 }): ReactNode {
   const { disabledReason, onAdd } = props;
   const disabled = disabledReason !== null;
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(
+    () =>
+      registerPrimaryFocusEndpoint(
+        { kind: "landing-terminal-new-tab" },
+        {
+          focus: () => buttonRef.current?.focus(),
+          containsActiveElement: (activeElement) =>
+            activeElement === buttonRef.current,
+          isEligible: () => buttonRef.current !== null,
+        },
+      ),
+    [],
+  );
   const button = (
     <Button
+      ref={buttonRef}
       type="button"
       variant="ghost"
       size="icon-sm"

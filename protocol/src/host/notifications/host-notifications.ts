@@ -770,12 +770,22 @@ export type HostNotificationsSubscribeClientFrame = z.infer<
   typeof hostNotificationsSubscribeClientFrameSchema
 >;
 
-export const hostNotificationsIndicatorStateSchema = z.object({
+/** Released `indicatorState@1.0` entity flags. FROZEN. */
+export const hostNotificationsIndicatorStateSchemaV10 = z.object({
   pendingApproval: z.boolean(),
   pendingInterview: z.boolean(),
   unreadFailure: z.boolean(),
   unreadDone: z.boolean(),
 });
+export type HostNotificationsIndicatorStateV10 = z.infer<
+  typeof hostNotificationsIndicatorStateSchemaV10
+>;
+
+/** `indicatorState@1.1`: pending fork truth is independent of feed read state. */
+export const hostNotificationsIndicatorStateSchema =
+  hostNotificationsIndicatorStateSchemaV10.extend({
+    pendingFork: z.boolean(),
+  });
 export type HostNotificationsIndicatorState = z.infer<
   typeof hostNotificationsIndicatorStateSchema
 >;
@@ -786,6 +796,15 @@ export const hostNotificationsIndicatorStateRequestSchema = z.object({
 });
 export type HostNotificationsIndicatorStateRequest = z.infer<
   typeof hostNotificationsIndicatorStateRequestSchema
+>;
+
+/** Released `indicatorState@1.0` response. FROZEN. */
+export const hostNotificationsIndicatorStateResponseSchemaV10 = z.object({
+  epics: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
+  chats: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
+});
+export type HostNotificationsIndicatorStateResponseV10 = z.infer<
+  typeof hostNotificationsIndicatorStateResponseSchemaV10
 >;
 
 export const hostNotificationsIndicatorStateResponseSchema = z.object({
@@ -1288,12 +1307,49 @@ export const hostNotificationsSetConfig = defineRpcContract({
   responseSchema: hostNotificationsConfigResponseSchema,
 });
 
-export const hostNotificationsIndicatorState = defineRpcContract({
+export const hostNotificationsIndicatorStateV10 = defineRpcContract({
   method: "host.notifications.indicatorState",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsIndicatorStateRequestSchema,
+  responseSchema: hostNotificationsIndicatorStateResponseSchemaV10,
+});
+
+export const hostNotificationsIndicatorState = defineRpcContract({
+  method: "host.notifications.indicatorState",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostNotificationsIndicatorStateRequestSchema,
   responseSchema: hostNotificationsIndicatorStateResponseSchema,
 });
+
+/**
+ * A v1.0 peer predates fork indicators. Default the new pending-class flag to
+ * false so a newer renderer keeps its sidebar fully functional against an
+ * older host rather than treating field absence as a malformed response.
+ */
+export const hostNotificationsIndicatorStateUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof hostNotificationsIndicatorStateV10,
+    typeof hostNotificationsIndicatorState
+  >({
+    from: hostNotificationsIndicatorStateV10.schemaVersion,
+    to: hostNotificationsIndicatorState.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => ({
+      epics: addPendingForkDefault(response.epics),
+      chats: addPendingForkDefault(response.chats),
+    }),
+  });
+
+function addPendingForkDefault(
+  states: Readonly<Record<string, HostNotificationsIndicatorStateV10>>,
+): Record<string, HostNotificationsIndicatorState> {
+  return Object.fromEntries(
+    Object.entries(states).map(([id, state]) => [
+      id,
+      { ...state, pendingFork: false },
+    ]),
+  );
+}
 
 /**
  * `host.notificationHooks.*@1.0` - status, test, and whole-file save surface

@@ -14,7 +14,9 @@ import { MigrationRunController } from "@/components/migration/migration-run-con
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
+import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 
 interface AppShellProps {
   children: ReactNode;
@@ -28,58 +30,67 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   const { children } = props;
   const activeHostId = useReactiveActiveHostId();
+  // Observed, never rendered. A publication fork resolves itself now - the
+  // banner and the dialog that used to read this query are gone - but the
+  // per-chat `pendingFork` indicator is derived from an open fork episode and
+  // its own query has no push channel for the moment one opens or closes. One
+  // app-wide mount supplies that edge, because an episode is a HOST fact and
+  // not a property of any open tab.
+  useChatForkEventQuery();
 
   return (
-    <DiffWorkerPoolProvider>
-      <div className="min-h-screen bg-canvas text-canvas-foreground">
-        <RootDndProvider>
-          <div className="relative flex h-screen w-full flex-col">
-            <AppHeader variant="app" />
-            <HostConnectionDegradedBanner />
-            <main className="relative flex min-h-0 flex-1 flex-col">
-              {/* The app's edge-to-edge content viewport. Individual surfaces
+    <PrimaryFocusCoordinatorProvider>
+      <DiffWorkerPoolProvider>
+        <div className="min-h-screen bg-canvas text-canvas-foreground">
+          <RootDndProvider>
+            <div className="relative flex h-screen w-full flex-col">
+              <AppHeader variant="app" />
+              <HostConnectionDegradedBanner />
+              <main className="relative flex min-h-0 flex-1 flex-col">
+                {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}
-              <div className="relative flex min-h-0 flex-1 overflow-hidden">
-                <TopLevelSurfaceActivationProvider>
-                  <TopLevelTabHost />
-                </TopLevelSurfaceActivationProvider>
-                <div
-                  className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
-                  data-testid="route-adapter-layer"
-                >
-                  {children}
-                </div>
-                {/* Single window-wide terminal mount: the gesture provider's
+                <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                  <TopLevelSurfaceActivationProvider>
+                    <TopLevelTabHost />
+                  </TopLevelSurfaceActivationProvider>
+                  <div
+                    className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
+                    data-testid="route-adapter-layer"
+                  >
+                    {children}
+                  </div>
+                  {/* Single window-wide terminal mount: the gesture provider's
                     state must survive draft/split focus changes, so it lives
                     here rather than inside any one landing pane. The panel's
                     DOM is portaled into the selected pane's anchor, which owns
                     its layout and clipping. */}
-                <HostScopeReady scope="default-host">
-                  <LandingTerminalHost />
-                </HostScopeReady>
-              </div>
-              <TileFindOwnerBridge />
-              <TileSelectAllBridge />
-            </main>
-            <OpenFolderDialog />
-            <RemoteFolderPickerDialog />
-            <QuitInterceptBridge />
-            <MigrationRunController />
-            <MigrationBlockingModalHost />
-            {/* Test-only probe: binds the active hostId to a hidden DOM
+                  <HostScopeReady scope="default-host">
+                    <LandingTerminalHost />
+                  </HostScopeReady>
+                </div>
+                <TileFindOwnerBridge />
+                <TileSelectAllBridge />
+              </main>
+              <OpenFolderDialog />
+              <RemoteFolderPickerDialog />
+              <QuitInterceptBridge />
+              <MigrationRunController />
+              <MigrationBlockingModalHost />
+              {/* Test-only probe: binds the active hostId to a hidden DOM
                 attribute so the mobile-cardinality integration tests can
                 assert the runner-host auto-bind machinery without depending
                 on the now-removed host-status footer. Hidden from a11y
                 and visual layout. */}
-            <span
-              aria-hidden
-              data-testid="active-host-probe"
-              data-bound-host-id={activeHostId === null ? "" : activeHostId}
-              className="sr-only"
-            />
-          </div>
-        </RootDndProvider>
-      </div>
-    </DiffWorkerPoolProvider>
+              <span
+                aria-hidden
+                data-testid="active-host-probe"
+                data-bound-host-id={activeHostId === null ? "" : activeHostId}
+                className="sr-only"
+              />
+            </div>
+          </RootDndProvider>
+        </div>
+      </DiffWorkerPoolProvider>
+    </PrimaryFocusCoordinatorProvider>
   );
 }

@@ -120,6 +120,23 @@ export function cliInstallHomeDir(environment: Environment): string {
   return cliHomeDir(environment);
 }
 
+/**
+ * Content-addressed store for published chat parts.
+ *
+ * Under the SHARED CLI home rather than the per-install one, and that is the
+ * point of it: an entry is named by the sha256 of its own bytes, so it cannot
+ * be stale for a newer CLI, a different environment, or a different signed-in
+ * user - only absent. Scoping it per install would throw the cache away on
+ * every upgrade for no property gained.
+ *
+ * Nothing here is authoritative and nothing needs backing up: every entry is a
+ * copy of bytes the cloud still holds, and losing the directory costs one cold
+ * read. See `chat-part-cache.ts` for why deleting it is always safe.
+ */
+export function cliChatPartCacheDir(): string {
+  return join(CLI_HOME, "chat-parts");
+}
+
 export function cliManifestPath(environment: Environment): string {
   return join(cliInstallHomeDir(environment), "manifest.json");
 }
