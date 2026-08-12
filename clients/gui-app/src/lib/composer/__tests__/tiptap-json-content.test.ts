@@ -627,4 +627,24 @@ describe("GitHub mention attachments across an HTML round-trip", () => {
       );
     },
   );
+
+  // The wire schema requires a POSITIVE integer, and this reconstruction path
+  // reaches an attachment without passing the query parser's `referenceNumber`
+  // - so `#0` and `#-4` were buildable here even though no catalog or search
+  // response can ever contain them.
+  it.each([[0], [-4], [1.5], ["0"]])(
+    "rejects the non-positive or fractional issueNumber %j",
+    (issueNumber) => {
+      expect(buildAttachmentsFromJSONContent(githubDoc(issueNumber))).toEqual(
+        [],
+      );
+    },
+  );
+
+  it("still accepts the smallest real reference", () => {
+    // The control: the rule is `> 0`, not `> 1`.
+    expect(buildAttachmentsFromJSONContent(githubDoc(1))).toEqual([
+      expect.objectContaining({ path: "github-pr:acme/widgets#1" }),
+    ]);
+  });
 });

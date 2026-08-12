@@ -877,11 +877,22 @@ export function numberValue(value: unknown): number | null {
  * into a reference that points somewhere else.
  */
 function issueNumberValue(value: unknown): number | null {
+  // Positive SAFE INTEGER, on both paths. `numberValue` only rejects
+  // non-finite, so the direct path accepted `0`, negatives and fractions, and
+  // the digit-string path accepted `"0"` - each producing an attachment like
+  // `github-pr:org/repo#0` that serializes a reference no catalog or search
+  // response can ever contain. `githubMentionRowBaseSchema` requires a
+  // positive integer on the wire; this is the same rule for the node
+  // reconstruction path, which reaches attachments without passing the query
+  // parser's `referenceNumber`.
   const direct = numberValue(value);
-  if (direct !== null) return direct;
+  if (direct !== null) return positiveIssueNumber(direct);
   if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  return positiveIssueNumber(Number(value));
+}
+
+function positiveIssueNumber(parsed: number): number | null {
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function pathKindValue(value: unknown): PathKind | null {

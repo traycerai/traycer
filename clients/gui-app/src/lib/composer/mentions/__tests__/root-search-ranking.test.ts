@@ -43,10 +43,15 @@ function githubCandidate(fields: {
   id: string;
   labelPrefix: string;
   label: string;
+  description?: string;
 }): RootSearchCandidate {
   return {
     entry: {
-      ...entry({ id: fields.id, label: fields.label }),
+      ...entry({
+        id: fields.id,
+        label: fields.label,
+        description: fields.description,
+      }),
       labelPrefix: fields.labelPrefix,
     },
     providerId: "pull-requests",
@@ -211,6 +216,45 @@ describe("rankRootSearchEntries", () => {
         id: "pr1",
         labelPrefix: "#4917",
         label: "Stop the busy-loop",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
+  });
+
+  // The repository-qualified reference form. `labelPrefix` is only `#123`, so
+  // the identity a qualified query names lives in `description` - tiering
+  // without it put the exact row in the bottom tier, below any row whose label
+  // merely starts with those characters.
+  it("ranks a repository-qualified reference above a label that starts with it", () => {
+    const candidates = [
+      candidate("artifacts", {
+        id: "a1",
+        label: "acme/widgets#123 postmortem",
+      }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#123",
+        label: "Stop the busy-loop",
+        description: "acme/widgets#123",
+      }),
+    ];
+
+    expect(rankedLabels(candidates, "acme/widgets#123")[0]).toBe(
+      "Stop the busy-loop",
+    );
+  });
+
+  it("still ranks a GitHub row by its title when the query is a title", () => {
+    // The control, repeated for the description path: adding a third tiering
+    // field must not let an unrelated description outrank a real title match.
+    const candidates = [
+      candidate("artifacts", { id: "a1", label: "Notes about stopping" }),
+      githubCandidate({
+        id: "pr1",
+        labelPrefix: "#123",
+        label: "Stop the busy-loop",
+        description: "acme/widgets#123",
       }),
     ];
 

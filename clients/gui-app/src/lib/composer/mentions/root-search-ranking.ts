@@ -81,14 +81,34 @@ export interface RankedRootSearch {
  * fall from the prefix tier to the substring one.
  */
 function tierTextFor(candidate: RootSearchCandidate, query: string): string {
-  const { labelPrefix, label } = candidate.entry;
+  const { labelPrefix, label, description } = candidate.entry;
   if (labelPrefix === null) return label;
+  // `description` is the row's canonical reference (`acme/widgets#123`), and it
+  // is the ONLY field carrying the repository-qualified form: `labelPrefix` is
+  // just `#123`. Tiering without it put a qualified query's exact row in the
+  // bottom tier again - the same defect as the bare-number case, one reference
+  // shape along.
+  //
+  // Only the best tier is used, so a field that does not match cannot demote a
+  // field that does; which string is returned is immaterial beyond its tier.
   const lowerQuery = query.toLowerCase();
-  const lowerPrefix = labelPrefix.toLowerCase();
-  if (lowerPrefix.startsWith(lowerQuery)) return labelPrefix;
-  if (label.toLowerCase().startsWith(lowerQuery)) return label;
-  if (lowerPrefix.includes(lowerQuery)) return labelPrefix;
-  return label;
+  let best = label;
+  let bestTier = tierOf(label, lowerQuery);
+  for (const text of [labelPrefix, description]) {
+    const tier = tierOf(text, lowerQuery);
+    if (tier < bestTier) {
+      bestTier = tier;
+      best = text;
+    }
+  }
+  return best;
+}
+
+/** 0 prefix hit, 1 substring hit, 2 neither - `resortByNameTier`'s own order. */
+function tierOf(text: string, lowerQuery: string): number {
+  const lowerText = text.toLowerCase();
+  if (lowerText.startsWith(lowerQuery)) return 0;
+  return lowerText.includes(lowerQuery) ? 1 : 2;
 }
 
 export function rankRootSearchEntries(
