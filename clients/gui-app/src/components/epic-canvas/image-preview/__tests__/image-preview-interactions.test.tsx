@@ -256,6 +256,7 @@ function renderPreview(compact: boolean): void {
       animationMs={200}
       transformRef={null}
       onTransformChange={null}
+      doubleClickOverride={null}
       onDecodeError={null}
     />,
   );

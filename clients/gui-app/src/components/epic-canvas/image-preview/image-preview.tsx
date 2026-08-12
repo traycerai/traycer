@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -13,7 +14,7 @@ import {
   TransformWrapper,
   type ReactZoomPanPinchRef,
 } from "react-zoom-pan-pinch";
-import { Copy, Maximize2, Minus, Plus, RotateCcw } from "lucide-react";
+import { Copy, Maximize2, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -28,14 +29,17 @@ import {
 import {
   ACTUAL_SIZE_EPSILON,
   DEFAULT_ANIMATION_MS,
+  effectiveMinScale,
   fitScaleFor,
   initialFitTransform,
   MAX_SCALE,
   MIN_SCALE,
+  transformMatchesFit,
   ZOOM_BOUNDARY_EPSILON,
   ZOOM_STEP,
   type ContainerSize,
   type ImagePreviewTransformState,
+  type TransformOrigin,
 } from "./image-preview-transform";
 
 export { DEFAULT_ANIMATION_MS };
@@ -61,9 +65,30 @@ export interface ImagePreviewProps {
    * internally (today's other caller, the workspace tile).
    */
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null> | null;
-  /** Fired on every transform change (gesture or this instance's own toolbar) so a caller can mirror it onto a linked peer; `null` when standalone. */
+  /**
+   * Fired on every transform change (gesture or this instance's own
+   * toolbar) so a caller can mirror it onto a linked peer; `null` when
+   * standalone. `origin` distinguishes a genuine user GESTURE (pan/pinch/
+   * wheel, reported by the library's own event handlers) from a
+   * PROGRAMMATIC transform this instance issued itself (Fit/Actual-size/
+   * zoom, or its own autonomous resize-refit) - review finding #3: a
+   * caller linking multiple instances must never mirror a programmatic
+   * transform's raw numbers onto a differently-sized peer (each peer
+   * computes its OWN fit), and must not read it as "the user manually
+   * zoomed away".
+   */
   readonly onTransformChange:
-    ((state: ImagePreviewTransformState) => void) | null;
+    | ((state: ImagePreviewTransformState, origin: TransformOrigin) => void)
+    | null;
+  /**
+   * Overrides the internal double-click fit/actual toggle entirely - a
+   * caller linking multiple instances (`ImageDiffView`, review finding #3)
+   * must drive BOTH sides through its own dual-dispatch (each computing its
+   * own fit), not let one side's internal handler run solo and get mirrored
+   * onto the peer. `null` keeps the built-in per-instance toggle (the
+   * standalone workspace tile).
+   */
+  readonly doubleClickOverride: (() => void) | null;
   /**
    * Toolbar/gesture transform animation duration in ms - ONE motion
    * language per context (ticket 07, better-ui audit): `0` for a caller
@@ -123,6 +148,7 @@ export function ImagePreview(props: ImagePreviewProps) {
     onDecodeError,
     onTransformChange,
     transformRef: externalRef,
+    doubleClickOverride,
     animationMs,
   } = props;
   const internalTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
@@ -131,23 +157,47 @@ export function ImagePreview(props: ImagePreviewProps) {
   const setImgRef = useCallback((el: HTMLImageElement | null): void => {
     imgRef.current = el;
   }, []);
-  // Reactive (not a ref): drives the toolbar's Fit/Actual-size buttons'
-  // `aria-pressed` state, which the active-variant CSS turns into a filled
-  // background - the active zoom mode must be STATICALLY visible in the
-  // toolbar (UI polish requirements #6/#7), not only inferable from the
-  // image's rendered size. Zoom is a THIRD state distinct from both: at an
-  // intermediate zoom (e.g. a zoom-in click from fit), neither reads
-  // pressed - `isActualSize` below is derived from `scale`, never from
-  // `!isFitted` (that conflated "not fitted" with "at 100%").
-  const [isFitted, setIsFitted] = useState(true);
+  // Set (synchronously, bracketing the imperative call) around every
+  // transform WE issue ourselves - Fit/Actual-size/zoom, or the autonomous
+  // resize-refit effect below - so `handleTransformed` can report each
+  // `onTransform` firing's true origin (review finding #3). Safe as a
+  // call-stack guard specifically because `animationTime: 0` is verified
+  // synchronous/single-fire in installed react-zoom-pan-pinch@4.0.4 (the
+  // only context that reads this origin, `ImageDiffView`, always passes 0).
+  const programmaticTransformRef = useRef(false);
   const [isPanning, setIsPanning] = useState(false);
-  const [scale, setScale] = useState(1);
-  // `scale` only updates from the library's own `onTransform` - but that
-  // fires on CHANGE, not necessarily for the static `initialScale` a
-  // `TransformWrapper` mounts with, so the "Actual size" pressed state
-  // would otherwise read stale-true (`scale` still at its `1` default)
-  // even when the real initial transform is a fit scale far from 100%.
-  const [scaleSynced, setScaleSynced] = useState(false);
+  // The single source of truth for "where is this image right now" -
+  // `isFitted`/`isActualSize` below are DERIVED from comparing this against
+  // the live fit transform, never a manually-toggled flag a gesture handler
+  // could leave stuck (review finding #2: a plain click's mousedown, or a
+  // pinch/ctrl-wheel that never fires `onPanningStart`, used to desync a
+  // separate `isFitted` boolean from what the transform actually was).
+  const [transform, setTransform] = useState<ImagePreviewTransformState>({
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+  });
+  // `transform` only updates from the library's own `onTransform` - but
+  // that fires on CHANGE, not necessarily for the static `initialScale`/
+  // `initialPositionX/Y` a `TransformWrapper` mounts with, so the derived
+  // pressed states would otherwise read against a stale `{scale: 1, ...}`
+  // default even when the real initial transform is a fit far from that.
+  const [transformSynced, setTransformSynced] = useState(false);
+  // Client-decoded fallback for `props.meta`'s width/height (review finding
+  // #6): the host intentionally reports every SVG as dimensionless, so
+  // there is nothing to compute a fit FROM until the blob-URL `<img>` itself
+  // decodes and reports its own natural size. Reset on `url` change (render-
+  // time adjustment, same pattern as the rest of this file) so a stale
+  // decode from a PREVIOUS dimensionless file never survives a URL swap.
+  const [decodedSize, setDecodedSize] = useState<ContainerSize | null>(null);
+  const [decodedSizeUrl, setDecodedSizeUrl] = useState<string | null>(null);
+  if (decodedSizeUrl !== props.url) {
+    setDecodedSizeUrl(props.url);
+    setDecodedSize(null);
+  }
+  const handleNaturalSize = useCallback((size: ContainerSize): void => {
+    setDecodedSize(size);
+  }, []);
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">(
     "idle",
   );
@@ -192,32 +242,54 @@ export function ImagePreview(props: ImagePreviewProps) {
     return { width: image.naturalWidth, height: image.naturalHeight };
   }, []);
 
+  // `props.meta` is authoritative when it declares dimensions; `decodedSize`
+  // (review finding #6) only fills the gap for a host-reported dimension-
+  // less file (every SVG) once the blob-URL `<img>` itself has decoded.
   const metaSize: ContainerSize | null =
     props.meta === null ||
     props.meta.width === null ||
     props.meta.height === null
-      ? null
+      ? decodedSize
       : { width: props.meta.width, height: props.meta.height };
 
   const stage = stageReadinessFor(stageSize, metaSize);
+  // The live fit transform for THIS render's stage/meta size - recomputed
+  // every render (not cached), so it tracks a pane resize automatically.
+  // `null` while there's nothing to fit against yet.
+  const liveFit = stage.kind === "ready" ? stage.transform : null;
+  // Never greater than the current fit (review finding #7) - a huge image's
+  // fit can and must sit below the normal interactive floor.
+  const effectiveMin =
+    liveFit !== null ? effectiveMinScale(liveFit.scale) : MIN_SCALE;
+  // The single derivation review finding #2 asks for: fitted iff the
+  // CURRENT transform (from wherever it came - gesture, toolbar, refit) IS
+  // the live fit transform. No manual flag to get stuck.
+  const isFitted = liveFit !== null && transformMatchesFit(transform, liveFit);
+  const isActualSize = Math.abs(transform.scale - 1) < ACTUAL_SIZE_EPSILON;
 
   // Adjusted DURING RENDER (not an effect - react.dev's "adjusting state
   // when a prop changes" pattern), once: as soon as the initial fit
-  // transform is known, `scale` starts from ITS value instead of the `1`
-  // default, so `isActualSize` below is correct from the very first paint.
-  if (!scaleSynced && stage.kind === "ready") {
-    setScaleSynced(true);
-    setScale(stage.transform.scale);
+  // transform is known, `transform` starts from ITS value instead of the
+  // `{scale: 1, ...}` default, so the derivations above are correct from
+  // the very first paint.
+  if (!transformSynced && liveFit !== null) {
+    setTransformSynced(true);
+    setTransform(liveFit);
   }
 
   // Re-fit on resize ONLY while still in fitted state - a manual zoom/pan
-  // is never yanked out from under the user by a pane resize.
+  // is never yanked out from under the user by a pane resize. Bracketed as
+  // a programmatic transform (review finding #3) so a caller linking this
+  // instance to a peer never mirrors an autonomous refit's raw numbers or
+  // reads it as "the user manually zoomed away".
   useEffect(() => {
     if (!isFitted || stageSize === null) return;
     const ref = transformRef.current;
     const natural = readNaturalSize();
     if (ref === null || natural === null) return;
+    programmaticTransformRef.current = true;
     ref.centerView(fitScaleFor(stageSize, natural), 0);
+    programmaticTransformRef.current = false;
   }, [stageSize, isFitted, readNaturalSize, transformRef]);
 
   // Plain (not `useCallback`-wrapped) - each reads `transformRef.current` at
@@ -238,29 +310,37 @@ export function ImagePreview(props: ImagePreviewProps) {
     const container = stageRect();
     const natural = readNaturalSize();
     if (ref === null || container === null || natural === null) return;
+    programmaticTransformRef.current = true;
     ref.centerView(fitScaleFor(container, natural), animationMs);
-    setIsFitted(true);
+    programmaticTransformRef.current = false;
   }
 
   function handleActualSize(): void {
+    programmaticTransformRef.current = true;
     transformRef.current?.centerView(1, animationMs);
-    setIsFitted(false);
+    programmaticTransformRef.current = false;
   }
 
   function handleZoomIn(): void {
+    programmaticTransformRef.current = true;
     transformRef.current?.zoomIn(ZOOM_STEP, animationMs);
-    setIsFitted(false);
+    programmaticTransformRef.current = false;
   }
 
   function handleZoomOut(): void {
+    programmaticTransformRef.current = true;
     transformRef.current?.zoomOut(ZOOM_STEP, animationMs);
-    setIsFitted(false);
+    programmaticTransformRef.current = false;
   }
 
   // Plain functions (not `useCallback`), matching `handleFit`/etc. above -
   // they close over this render's `isFitted`/`handleFit`/etc. directly, and
   // the React Compiler auto-memoizes the component as a whole.
   function handleDoubleClick(): void {
+    if (doubleClickOverride !== null) {
+      doubleClickOverride();
+      return;
+    }
     if (isFitted) {
       handleActualSize();
       return;
@@ -291,8 +371,9 @@ export function ImagePreview(props: ImagePreviewProps) {
     }
   }
 
+  // Cursor styling only (review finding #2) - mousedown is not a completed
+  // transform, so this never touches the fit/actual-size derivation above.
   const handlePanningStart = useCallback((): void => {
-    setIsFitted(false);
     setIsPanning(true);
   }, []);
 
@@ -302,8 +383,11 @@ export function ImagePreview(props: ImagePreviewProps) {
 
   const handleTransformed = useCallback(
     (_ref: ReactZoomPanPinchRef, state: ImagePreviewTransformState): void => {
-      setScale(state.scale);
-      onTransformChange?.(state);
+      setTransform(state);
+      const origin: TransformOrigin = programmaticTransformRef.current
+        ? "programmatic"
+        : "gesture";
+      onTransformChange?.(state, origin);
     },
     [onTransformChange],
   );
@@ -338,12 +422,11 @@ export function ImagePreview(props: ImagePreviewProps) {
 
   const caption = formatImagePreviewCaption(props.meta);
   const aspectRatio = imagePreviewAspectRatio(props.meta);
-  const isActualSize = Math.abs(scale - 1) < ACTUAL_SIZE_EPSILON;
   const zoomDisabled = props.status !== "ready";
   const zoomOutDisabled =
-    zoomDisabled || scale <= MIN_SCALE + ZOOM_BOUNDARY_EPSILON;
+    zoomDisabled || transform.scale <= effectiveMin + ZOOM_BOUNDARY_EPSILON;
   const zoomInDisabled =
-    zoomDisabled || scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
+    zoomDisabled || transform.scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
@@ -410,7 +493,7 @@ export function ImagePreview(props: ImagePreviewProps) {
             </Button>
           </TooltipWrapper>
           <TooltipWrapper
-            label="Actual size (0)"
+            label="Actual size (100%)"
             side="top"
             sideOffset={undefined}
             align={undefined}
@@ -418,14 +501,15 @@ export function ImagePreview(props: ImagePreviewProps) {
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="sm"
               aria-pressed={isActualSize}
               disabled={zoomDisabled}
               onClick={handleActualSize}
               onKeyDown={handleKeyDown}
               aria-label="Actual size"
+              className="min-w-12 tabular-nums"
             >
-              <RotateCcw className="size-4" />
+              100%
             </Button>
           </TooltipWrapper>
           <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
@@ -458,6 +542,8 @@ export function ImagePreview(props: ImagePreviewProps) {
           aspectRatio,
           setImgRef,
           stage,
+          effectiveMin,
+          animationMs,
           gesturesEnabled: props.gesturesEnabled,
           isPanning,
           transformRef,
@@ -466,6 +552,7 @@ export function ImagePreview(props: ImagePreviewProps) {
           onPanningStop: handlePanningStop,
           onTransform: handleTransformed,
           onDecodeError: handleDecodeError,
+          onNaturalSize: handleNaturalSize,
         })}
       </div>
       {caption !== null ? (
@@ -496,6 +583,9 @@ function renderImagePreviewStage(args: {
   readonly aspectRatio: number | null;
   readonly setImgRef: (el: HTMLImageElement | null) => void;
   readonly stage: StageReadiness;
+  /** Review finding #7: never greater than the current fit, so a huge image's fit is always within interactive zoom-out range. */
+  readonly effectiveMin: number;
+  readonly animationMs: number;
   readonly gesturesEnabled: boolean;
   readonly isPanning: boolean;
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
@@ -507,6 +597,7 @@ function renderImagePreviewStage(args: {
     state: ImagePreviewTransformState,
   ) => void;
   readonly onDecodeError: () => void;
+  readonly onNaturalSize: (size: ContainerSize) => void;
 }): ReactNode {
   if (args.status === "ready" && args.url !== null) {
     if (args.stage.kind === "measuring") {
@@ -515,10 +606,13 @@ function renderImagePreviewStage(args: {
       return renderSkeleton(args.aspectRatio);
     }
     if (args.stage.kind === "no-dimensions") {
-      // `meta` never declared width/height (a dimension-less SVG) - no
-      // basis to compute an initial fit from; render constrained via CSS
-      // instead of unconstrained, with no transform (no natural size to
-      // seed one safely from yet).
+      // `meta` never declared width/height (a dimension-less SVG, review
+      // finding #6) - render constrained via CSS with no transform until
+      // `onNaturalSize` reports a decoded size (this same `<img>` element),
+      // at which point the stage recomputes as `ready` and this branch is
+      // replaced by the transform-enabled one below. A genuinely
+      // dimensionless decode (0x0) never calls back, so this stays the
+      // permanent, correct fallback for that file.
       return (
         <div className="flex size-full items-center justify-center p-2">
           <ImageStageImg
@@ -526,6 +620,7 @@ function renderImagePreviewStage(args: {
             fileName={args.fileName}
             setImgRef={args.setImgRef}
             onDecodeError={args.onDecodeError}
+            onNaturalSize={args.onNaturalSize}
             className="max-h-full max-w-full object-contain"
           />
         </div>
@@ -537,7 +632,7 @@ function renderImagePreviewStage(args: {
         initialScale={args.stage.transform.scale}
         initialPositionX={args.stage.transform.positionX}
         initialPositionY={args.stage.transform.positionY}
-        minScale={MIN_SCALE}
+        minScale={args.effectiveMin}
         maxScale={MAX_SCALE}
         limitToBounds
         centerOnInit={false}
@@ -552,6 +647,10 @@ function renderImagePreviewStage(args: {
           velocityDisabled: true,
         }}
         trackPadPanning={{
+          // Library default is `disabled: true` (review finding #1) - a
+          // partial config object merges OVER that default, so an ordinary
+          // two-finger trackpad pan stayed rejected until this was explicit.
+          disabled: false,
           velocityDisabled: true,
         }}
         pinch={{
@@ -560,6 +659,13 @@ function renderImagePreviewStage(args: {
         doubleClick={{
           disabled: true,
         }}
+        // Review finding #4: the "0ms everywhere" echo-safety premise (used
+        // by `ImageDiffView`'s reentrancy guard) is only exhaustive if EVERY
+        // library-owned animation is pinned to the same duration - these two
+        // default to 200ms regardless of our own explicit `animationTime`
+        // args, and can fire after a pinch/pan settles out of bounds.
+        zoomAnimation={{ animationTime: args.animationMs }}
+        autoAlignment={{ animationTime: args.animationMs }}
         onTransform={args.onTransform}
         onPanningStart={args.onPanningStart}
         onPanningStop={args.onPanningStop}
@@ -585,6 +691,7 @@ function renderImagePreviewStage(args: {
               fileName={args.fileName}
               setImgRef={args.setImgRef}
               onDecodeError={args.onDecodeError}
+              onNaturalSize={args.onNaturalSize}
               className="max-w-none"
             />
           </div>
@@ -625,16 +732,19 @@ function ImageStageImg(props: {
   readonly fileName: string;
   readonly setImgRef: (el: HTMLImageElement | null) => void;
   readonly onDecodeError: () => void;
+  /** Review finding #6: reports the blob-URL `<img>`'s own decoded natural size, the only way to fit/pan/zoom a host-reported-dimensionless file (every SVG). Ignored (never called) for a genuinely 0x0 decode. */
+  readonly onNaturalSize: (size: ContainerSize) => void;
   readonly className: string;
 }): ReactNode {
   // Skeleton -> image cross-fade (UI polish requirement #4): opacity-only,
   // <=150ms, and SKIPPED for an already-cached URL - `HTMLImageElement`
   // reports `complete: true` synchronously once the browser has the bytes
   // decoded, which a fresh network load never does before this first
-  // render. Syncing with that browser-owned, event-driven state (`onLoad`)
-  // is exactly what an effect is for, unlike a plain "reset derived state
-  // on prop change" that render-time adjustment would otherwise cover.
-  const { setImgRef } = props;
+  // render. `useLayoutEffect`, not `useEffect` (review finding #8): a
+  // passive effect runs AFTER the browser paints, so a cached remount still
+  // flashed one hidden frame before the fade; layout timing reads
+  // `complete` and applies it before that paint.
+  const { setImgRef, onNaturalSize } = props;
   const [loaded, setLoaded] = useState(false);
   const localImgRef = useRef<HTMLImageElement | null>(null);
   const setImgEl = useCallback(
@@ -644,10 +754,20 @@ function ImageStageImg(props: {
     },
     [setImgRef],
   );
-  useEffect(() => {
-    setLoaded(localImgRef.current?.complete === true);
-  }, [props.url]);
-  const handleLoad = useCallback((): void => setLoaded(true), []);
+  const reportNaturalSizeIfKnown = useCallback((): void => {
+    const el = localImgRef.current;
+    if (el === null || el.naturalWidth <= 0 || el.naturalHeight <= 0) return;
+    onNaturalSize({ width: el.naturalWidth, height: el.naturalHeight });
+  }, [onNaturalSize]);
+  useLayoutEffect(() => {
+    const complete = localImgRef.current?.complete === true;
+    setLoaded(complete);
+    if (complete) reportNaturalSizeIfKnown();
+  }, [props.url, reportNaturalSizeIfKnown]);
+  const handleLoad = useCallback((): void => {
+    setLoaded(true);
+    reportNaturalSizeIfKnown();
+  }, [reportNaturalSizeIfKnown]);
 
   return (
     <img

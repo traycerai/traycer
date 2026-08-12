@@ -7,14 +7,7 @@ import {
   type RefObject,
 } from "react";
 import type { ReactZoomPanPinchRef } from "react-zoom-pan-pinch";
-import {
-  FileMinus,
-  FilePlus,
-  Maximize2,
-  Minus,
-  Plus,
-  RotateCcw,
-} from "lucide-react";
+import { FileMinus, FilePlus, Maximize2, Minus, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -27,13 +20,49 @@ import {
 } from "@/hooks/assets/use-image-asset";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
 import {
+  clampPositionToVisibleBounds,
   fitScaleFor,
   MAX_SCALE,
   MIN_SCALE,
   ZOOM_BOUNDARY_EPSILON,
   ZOOM_STEP,
   type ImagePreviewTransformState,
+  type TransformOrigin,
 } from "./image-preview-transform";
+
+/** A side's own current scale and interactive bounds (review finding #3/#7) - read directly off its RZPP instance's `setup`, which its own `ImagePreview` keeps correctly in sync (including a fit below the normal `MIN_SCALE` floor for a huge image). Never derived from the OTHER side's numbers. */
+interface SideBounds {
+  readonly scale: number;
+  readonly minScale: number;
+  readonly maxScale: number;
+}
+
+const DEFAULT_SIDE_BOUNDS: SideBounds = {
+  scale: 1,
+  minScale: MIN_SCALE,
+  maxScale: MAX_SCALE,
+};
+
+function readSideBounds(
+  ref: RefObject<ReactZoomPanPinchRef | null>,
+  scale: number,
+): SideBounds {
+  const setup = ref.current?.instance.setup;
+  return {
+    scale,
+    minScale: setup?.minScale ?? MIN_SCALE,
+    maxScale: setup?.maxScale ?? MAX_SCALE,
+  };
+}
+
+/** Review finding #3: an EXISTING side blocks the shared zoom-out button once it's at ITS OWN floor (finding #7: that floor can be below the constant `MIN_SCALE`). */
+function sideAtMin(exists: boolean, bounds: SideBounds): boolean {
+  return exists && bounds.scale <= bounds.minScale + ZOOM_BOUNDARY_EPSILON;
+}
+
+function sideAtMax(exists: boolean, bounds: SideBounds): boolean {
+  return exists && bounds.scale >= bounds.maxScale - ZOOM_BOUNDARY_EPSILON;
+}
 
 export interface ImageDiffViewProps {
   readonly runningDir: string;
@@ -64,10 +93,16 @@ export interface ImageDiffViewProps {
  *   number forced onto a differently-sized peer.
  * - A GESTURE on either side (drag, pinch, ctrl+wheel) instead mirrors that
  *   side's raw `{scale, positionX, positionY}` onto the peer via
- *   `setTransform` - exact for same-dimension sides, and for mismatched
- *   dimensions simply syncs scale/position with the peer's OWN
- *   `limitToBounds` clamping it into range (ticket 07: "do not over-
- *   engineer sub-pixel alignment for mismatched dimensions").
+ *   `setTransform` - exact for same-dimension sides. `setTransform` calls
+ *   the library's `setState` directly and bypasses `limitToBounds` entirely
+ *   (review finding #5), so for mismatched dimensions the mirrored position
+ *   is clamped against the peer's OWN live bounds first - sane containment
+ *   only (ticket 07: "do not over-engineer sub-pixel alignment for
+ *   mismatched dimensions"), never a reimplementation of the library's
+ *   padding-aware bounds engine.
+ * - A PROGRAMMATIC transform (this side's own resize-refit, or a
+ *   double-click - review finding #3) is never mirrored at all: each side
+ *   recomputes its own fit/actual-size independently instead.
  * Compact (bundle) variant: static fit only, no toolbar, no gestures -
  * matches decision #18's affordance-free intent.
  */
@@ -88,12 +123,15 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // own initial fit scale (that's computed privately inside each instance),
   // so a scale-derived `Math.abs(scale - 1) < epsilon` would read
   // stale-true from `scale`'s `1` default until the first `onTransform`
-  // arrives. `scale` still exists below for the zoom-boundary disable
-  // check, where a stale default is harmless (both directions stay enabled
-  // until a real value arrives).
+  // arrives.
   const [isFitted, setIsFitted] = useState(true);
   const [isActualSize, setIsActualSize] = useState(false);
-  const [scale, setScale] = useState(1);
+  // Per-side, never a single shared value (review finding #3): each side
+  // can have its own natural size and therefore its own fit/interactive
+  // floor (finding #7), so the shared zoom buttons must disable when
+  // EITHER side is at ITS OWN boundary, not some averaged/last-writer value.
+  const [oldBounds, setOldBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
+  const [newBounds, setNewBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
 
   // A rename's two sides can straddle the extension allowlist (pre-landing
   // review, P0: `old.png -> new.txt` / `old.txt -> new.png`) - each side is
@@ -147,30 +185,34 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldAsset = useImageAsset(oldRequest);
   const newAsset = useImageAsset(newRequest);
 
+  // `origin` (review finding #3) distinguishes a genuine user GESTURE on
+  // THIS side from a PROGRAMMATIC transform `ImagePreview` issued itself -
+  // its own autonomous resize-refit, most importantly, which recomputes
+  // THIS side's own correct fit for its own new size and must never be
+  // read as "the user manually zoomed away" or mirrored onto the
+  // differently-sized peer (that would stomp the peer's own correct fit).
+  // Bounds tracking runs UNCONDITIONALLY though - even a programmatic
+  // refit changes this side's own current scale/floor, and the shared
+  // zoom-boundary buttons must reflect that regardless of origin.
   const handleOldTransform = useCallback(
-    (state: ImagePreviewTransformState): void => {
-      setScale(state.scale);
-      // Skipped during a toolbar-driven dual-dispatch (see `dualDispatch`
-      // below) - that path sets `isFitted`/`isActualSize` explicitly
-      // itself, correctly, instead of this generic "any transform change
-      // means an intermediate zoom" rule, which only applies to a genuine
-      // per-side gesture.
-      if (!syncingTransformRef.current) {
+    (state: ImagePreviewTransformState, origin: TransformOrigin): void => {
+      setOldBounds(readSideBounds(oldTransformRef, state.scale));
+      if (origin === "gesture" && !syncingTransformRef.current) {
         setIsFitted(false);
         setIsActualSize(false);
+        mirrorTransform(syncingTransformRef, newTransformRef, state);
       }
-      mirrorTransform(syncingTransformRef, newTransformRef, state);
     },
     [],
   );
   const handleNewTransform = useCallback(
-    (state: ImagePreviewTransformState): void => {
-      setScale(state.scale);
-      if (!syncingTransformRef.current) {
+    (state: ImagePreviewTransformState, origin: TransformOrigin): void => {
+      setNewBounds(readSideBounds(newTransformRef, state.scale));
+      if (origin === "gesture" && !syncingTransformRef.current) {
         setIsFitted(false);
         setIsActualSize(false);
+        mirrorTransform(syncingTransformRef, oldTransformRef, state);
       }
-      mirrorTransform(syncingTransformRef, oldTransformRef, state);
     },
     [],
   );
@@ -212,12 +254,33 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     setIsActualSize(false);
   }, [dualDispatch]);
 
+  // Matches the shared toolbar's own instant dual-dispatch (image-preview
+  // decision log) rather than letting one side's internal handler run solo
+  // - review finding #3: that would mirror a raw fit/actual transform
+  // computed for THIS side's size onto the differently-sized peer instead
+  // of the peer computing its own.
+  const handleSideDoubleClick = useCallback((): void => {
+    if (isFitted) {
+      handleActualSize();
+      return;
+    }
+    handleFit();
+  }, [isFitted, handleActualSize, handleFit]);
+
   const zoomDisabled =
     oldAsset.status !== "ready" && newAsset.status !== "ready";
+  // Disable when EITHER existing side is at ITS OWN boundary (review
+  // finding #3) - each side's `minScale` already reflects its own fit floor
+  // (finding #7), so this stays correct even when the two sides' floors
+  // differ.
   const zoomOutDisabled =
-    zoomDisabled || scale <= MIN_SCALE + ZOOM_BOUNDARY_EPSILON;
+    zoomDisabled ||
+    sideAtMin(oldSideExists, oldBounds) ||
+    sideAtMin(newSideExists, newBounds);
   const zoomInDisabled =
-    zoomDisabled || scale >= MAX_SCALE - ZOOM_BOUNDARY_EPSILON;
+    zoomDisabled ||
+    sideAtMax(oldSideExists, oldBounds) ||
+    sideAtMax(newSideExists, newBounds);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
@@ -287,7 +350,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
               </Button>
             </TooltipWrapper>
             <TooltipWrapper
-              label="Actual size (0)"
+              label="Actual size (100%)"
               side="top"
               sideOffset={undefined}
               align={undefined}
@@ -295,13 +358,14 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="sm"
                 aria-pressed={isActualSize}
                 disabled={zoomDisabled}
                 onClick={handleActualSize}
                 aria-label="Actual size"
+                className="min-w-12 tabular-nums"
               >
-                <RotateCcw className="size-4" />
+                100%
               </Button>
             </TooltipWrapper>
           </div>
@@ -318,6 +382,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             compact={props.compact}
             transformRef={oldTransformRef}
             onTransformChange={handleOldTransform}
+            doubleClickOverride={props.compact ? null : handleSideDoubleClick}
             onOpenExternally={props.onOpenExternally}
             openExternallyOpening={props.openExternallyOpening}
           />
@@ -332,6 +397,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             compact={props.compact}
             transformRef={newTransformRef}
             onTransformChange={handleNewTransform}
+            doubleClickOverride={props.compact ? null : handleSideDoubleClick}
             onOpenExternally={props.onOpenExternally}
             openExternallyOpening={props.openExternallyOpening}
           />
@@ -358,6 +424,15 @@ function fitSide(ref: RefObject<ReactZoomPanPinchRef | null>): void {
   );
 }
 
+/**
+ * Mirrors `state` onto `peerRef`, clamped to the peer's OWN live bounds
+ * (review finding #5) - `setTransform` calls the library's `setState`
+ * directly, bypassing `limitToBounds` entirely (verified against installed
+ * v4.0.4), so an unclamped mirror onto a smaller peer could push its
+ * content wholly offscreen. Sane containment only, not a reimplementation
+ * of the library's padding-aware bounds engine (ticket 07: "do not over-
+ * engineer sub-pixel alignment for mismatched dimensions").
+ */
 function mirrorTransform(
   syncingRef: { current: boolean },
   peerRef: RefObject<ReactZoomPanPinchRef | null>,
@@ -366,8 +441,32 @@ function mirrorTransform(
   if (syncingRef.current) return;
   const peer = peerRef.current;
   if (peer === null) return;
+  const wrapper = peer.instance.wrapperComponent;
+  const content = peer.instance.contentComponent;
   syncingRef.current = true;
-  peer.setTransform(state.positionX, state.positionY, state.scale, 0);
+  if (wrapper === null || content === null) {
+    peer.setTransform(state.positionX, state.positionY, state.scale, 0);
+  } else {
+    // `getBoundingClientRect()` for the wrapper, `offsetWidth`/`offsetHeight`
+    // for the content - the same measurement split `fitSide` above uses.
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const scaledWidth = content.offsetWidth * state.scale;
+    const scaledHeight = content.offsetHeight * state.scale;
+    peer.setTransform(
+      clampPositionToVisibleBounds(
+        state.positionX,
+        wrapperRect.width,
+        scaledWidth,
+      ),
+      clampPositionToVisibleBounds(
+        state.positionY,
+        wrapperRect.height,
+        scaledHeight,
+      ),
+      state.scale,
+      0,
+    );
+  }
   syncingRef.current = false;
 }
 
@@ -381,7 +480,11 @@ function ImageDiffSide(props: {
   readonly emptyLabel: "Added" | "Deleted";
   readonly compact: boolean;
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
-  readonly onTransformChange: (state: ImagePreviewTransformState) => void;
+  readonly onTransformChange: (
+    state: ImagePreviewTransformState,
+    origin: TransformOrigin,
+  ) => void;
+  readonly doubleClickOverride: (() => void) | null;
   readonly onOpenExternally: (() => void) | null;
   readonly openExternallyOpening: boolean;
 }): ReactNode {
@@ -431,14 +534,16 @@ function ImageDiffSide(props: {
       compact
       gesturesEnabled={!props.compact}
       // One motion language within the diff view (ticket 07, better-ui
-      // audit): a double-click on either side calls THIS ImagePreview's own
-      // internal fit/actual handlers, which must match the shared
-      // toolbar's instant dual-dispatch, not the standalone tile's smooth
-      // default - a mix of the two would read as inconsistent in the same
-      // view.
+      // audit): double-click is intercepted entirely by
+      // `doubleClickOverride` (review finding #3) - it drives the shared
+      // toolbar's own dual-dispatch instead of this instance's internal
+      // fit/actual handler, so both sides move together and each computes
+      // its own fit, matching the toolbar exactly rather than mirroring one
+      // side's raw numbers onto the other.
       animationMs={0}
       transformRef={props.compact ? null : props.transformRef}
       onTransformChange={props.compact ? null : props.onTransformChange}
+      doubleClickOverride={props.doubleClickOverride}
       onDecodeError={handleDecodeError}
     />
   );

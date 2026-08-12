@@ -333,6 +333,7 @@ function WorkspaceImageFileTile(props: {
           animationMs={DEFAULT_ANIMATION_MS}
           transformRef={null}
           onTransformChange={null}
+          doubleClickOverride={null}
           onDecodeError={handleDecodeError}
         />
       </div>

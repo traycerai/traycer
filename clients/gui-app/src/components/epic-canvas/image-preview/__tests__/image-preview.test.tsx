@@ -29,6 +29,7 @@ function renderPreview(
       animationMs={DEFAULT_ANIMATION_MS}
       transformRef={null}
       onTransformChange={null}
+      doubleClickOverride={null}
       onDecodeError={null}
     />,
   );
