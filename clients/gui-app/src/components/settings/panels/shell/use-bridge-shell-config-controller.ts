@@ -71,6 +71,13 @@ export function useBridgeShellConfigController(props: {
 
   return {
     config: configQuery.data,
+    // The bridge reads the on-disk store directly, so there is no transport to
+    // fail the way a host RPC can. Its errors surface through the runner's own
+    // toasts; the panel's read-failed arm is for the RPC path.
+    configError: null,
+    retryConfig: () => {
+      void configQuery.refetch();
+    },
     shells: shellListQuery.data ?? [],
     overrides: envListQuery.data ?? [],
     shellPending:

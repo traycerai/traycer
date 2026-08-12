@@ -126,6 +126,11 @@ export function useRpcShellConfigController(props: {
 
   return {
     config: configQuery.data,
+    configError: configQuery.error,
+    retryConfig: () => {
+      void configQuery.refetch();
+      void shellListQuery.refetch();
+    },
     shells: shellListQuery.data?.shells ?? [],
     overrides: envListQuery.data?.entries ?? [],
     shellPending:

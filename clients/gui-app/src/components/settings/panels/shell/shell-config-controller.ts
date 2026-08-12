@@ -1,4 +1,5 @@
 import type { QueryKey } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ConfigDetectedShell,
   ConfigEnvEntry,
@@ -48,6 +49,17 @@ export interface ShellCommandCallbacks {
 export interface ShellConfigController {
   /** `undefined` while the effective shell is still loading. */
   readonly config: ShellConfigSnapshot | undefined;
+  /**
+   * Why `config` is still `undefined`, when the reason is a failed read rather
+   * than an in-flight one.
+   *
+   * Without it a rejected `config.shell.get` is indistinguishable from loading,
+   * and the panel skeletons forever: these reads do not retry, so a remote host
+   * that drops mid-read leaves a surface with no error text and no way back.
+   */
+  readonly configError: HostRpcError | null;
+  /** Re-issue the failed reads. */
+  readonly retryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
   readonly overrides: readonly ConfigEnvEntry[];
   /** Any shell-config write is in flight. */

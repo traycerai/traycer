@@ -142,6 +142,22 @@ export function HostDoctorRpcCard(props: {
       </DoctorMessage>
     );
   }
+  // A failed run leaves `report` null forever, and the toast that announced it
+  // is gone within seconds - so without this the card sits on "Running Doctor…"
+  // for the life of the sheet, spinning at a request that already finished, and
+  // offers no way to try again from inside the card.
+  // `isError` already excludes pending in the mutation's discriminated state,
+  // so testing that too would be dead weight the linter can prove redundant.
+  if (report === null && doctorRun.isError) {
+    return (
+      <div className="space-y-3" data-testid="host-doctor-run-failed">
+        <DoctorMessage>
+          {`Couldn't run Doctor on ${hostName}. The host may have gone away mid-check.`}
+        </DoctorMessage>
+        <DoctorRerunRow pending={doctorRun.isPending} onRerun={run} />
+      </div>
+    );
+  }
   if (report === null) {
     return (
       <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-ui-sm text-muted-foreground">

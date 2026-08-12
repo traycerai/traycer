@@ -94,21 +94,27 @@ const FREE_PORT_ISSUE: HostDoctorIssue = {
 function renderDoctor(options: {
   readonly isLocalMachine: boolean;
   readonly withBridge: boolean;
+  readonly doctorFails: boolean;
 }): IHostManagement {
   const hostId = options.isLocalMachine ? "host-local" : "host-remote";
   const fixture = buildOverviewHostFixture({
     hostId,
     isLocalMachine: options.isLocalMachine,
     overrideHandlers: {
-      "host.doctor": () => ({
-        status: "ok" as const,
-        issues: [FREE_PORT_ISSUE],
-        // Empty on purpose: the vantage taxonomy is the host's call, and an
-        // empty set is what a relay-served report carries. Putting
-        // PORT_CONFLICT in here would filter the issue out and make every
-        // assertion below vacuous.
-        triviallyGreenIssueCodes: [],
-      }),
+      "host.doctor": () => {
+        if (options.doctorFails) {
+          throw new Error("host went away mid-check");
+        }
+        return {
+          status: "ok" as const,
+          issues: [FREE_PORT_ISSUE],
+          // Empty on purpose: the vantage taxonomy is the host's call, and an
+          // empty set is what a relay-served report carries. Putting
+          // PORT_CONFLICT in here would filter the issue out and make every
+          // assertion below vacuous.
+          triviallyGreenIssueCodes: [],
+        };
+      },
     },
   });
   recordNegotiatedHostMethods(hostId, OVERVIEW_METHODS);
@@ -175,6 +181,7 @@ describe("Overview doctor — the three local-only repairs", () => {
     const management = renderDoctor({
       isLocalMachine: true,
       withBridge: true,
+      doctorFails: false,
     });
 
     fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
@@ -204,7 +211,11 @@ describe("Overview doctor — the three local-only repairs", () => {
     // and nothing here can reach another machine's ports or service manager.
     // The honest affordance is the command to run there, so the fix BUTTON
     // must be absent rather than present-and-broken.
-    renderDoctor({ isLocalMachine: false, withBridge: true });
+    renderDoctor({
+      isLocalMachine: false,
+      withBridge: true,
+      doctorFails: false,
+    });
 
     fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
     expect(
@@ -221,12 +232,34 @@ describe("Overview doctor — the three local-only repairs", () => {
     // no local CLI to run a repair with. The route keys on the BRIDGE being
     // present, not on the host being local — keying on locality alone would
     // render a fix button here that can only throw.
-    renderDoctor({ isLocalMachine: true, withBridge: false });
+    renderDoctor({
+      isLocalMachine: true,
+      withBridge: false,
+      doctorFails: false,
+    });
 
     fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
     expect(
       await screen.findByTestId("host-doctor-copy-command-PORT_CONFLICT"),
     ).toBeTruthy();
     expect(screen.queryByTestId("host-doctor-fix-PORT_CONFLICT")).toBeNull();
+  });
+
+  it("offers a re-run when the Doctor request itself fails", async () => {
+    // The failure path only toasted, and the toast is gone in seconds. `report`
+    // stayed null, so the card sat on "Running Doctor…" for the life of the
+    // sheet - spinning at a request that had already finished, with no way to
+    // try again from inside the card.
+    renderDoctor({
+      isLocalMachine: true,
+      withBridge: false,
+      doctorFails: true,
+    });
+
+    fireEvent.click(await screen.findByTestId("host-overview-run-doctor"));
+
+    expect(await screen.findByTestId("host-doctor-run-failed")).toBeTruthy();
+    expect(screen.queryByText("Running Doctor…")).toBeNull();
+    expect(screen.getByTestId("host-doctor-rerun")).toBeTruthy();
   });
 });

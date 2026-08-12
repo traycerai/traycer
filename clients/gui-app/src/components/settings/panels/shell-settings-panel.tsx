@@ -10,6 +10,7 @@ import type {
   ConfigEnvEntry,
 } from "@traycer/protocol/host/config/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { isWindows } from "@/lib/keybindings/platform";
 import {
   HoverCard,
@@ -48,6 +49,7 @@ import type {
 import { useBridgeShellConfigController } from "@/components/settings/panels/shell/use-bridge-shell-config-controller";
 import { useRpcShellConfigController } from "@/components/settings/panels/shell/use-rpc-shell-config-controller";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -436,6 +438,8 @@ function ShellSettingsPanelBody(props: {
       <TerminalShellGroup
         compact={compact}
         config={config}
+        configError={controller.configError}
+        onRetryConfig={controller.retryConfig}
         shells={shells}
         probeSource={controller.probeSource}
         pending={shellPending}
@@ -463,9 +467,51 @@ function ShellSettingsPanelBody(props: {
   );
 }
 
+/**
+ * What the shell card shows when there is no config to show.
+ *
+ * A failed read is not a slow one, and these queries do not retry: without the
+ * error arm a remote host that drops mid-read leaves the card skeletoning
+ * forever, with no error text and no way back. Extracted rather than inlined so
+ * the third state does not push `TerminalShellGroup` past the complexity ceiling.
+ */
+function ShellConfigUnavailable(props: {
+  readonly compact: boolean;
+  readonly configError: HostRpcError | null;
+  readonly onRetryConfig: () => void;
+}): ReactNode {
+  if (props.configError === null) {
+    return (
+      <div className={props.compact ? "p-4" : "p-5"}>
+        <ShellCardSkeleton />
+      </div>
+    );
+  }
+  return (
+    <div
+      className={cn("space-y-3", props.compact ? "p-4" : "p-5")}
+      data-testid="shell-config-read-failed"
+    >
+      <p className="text-ui-sm text-muted-foreground">
+        Couldn&apos;t read this host&apos;s shell settings.
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={props.onRetryConfig}
+      >
+        Try again
+      </Button>
+    </div>
+  );
+}
+
 function TerminalShellGroup(props: {
   readonly compact: boolean;
   readonly config: ShellConfigSnapshot | undefined;
+  readonly configError: HostRpcError | null;
+  readonly onRetryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
   readonly probeSource: ShellProbeSource;
   readonly pending: boolean;
@@ -503,9 +549,11 @@ function TerminalShellGroup(props: {
           label="Startup flags"
         />
         {config === undefined ? (
-          <div className={props.compact ? "p-4" : "p-5"}>
-            <ShellCardSkeleton />
-          </div>
+          <ShellConfigUnavailable
+            compact={props.compact}
+            configError={props.configError}
+            onRetryConfig={props.onRetryConfig}
+          />
         ) : (
           <div>
             <div className={props.compact ? "p-3" : "p-5"}>
