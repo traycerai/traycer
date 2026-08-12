@@ -23,22 +23,17 @@
 export function publishedChatLockReason(input: {
   /** Whether something answers to the owning host id at all. */
   readonly ownerIsReachable: boolean;
+  /**
+   * Whether the owning host IS the host serving this read - i.e. this
+   * device. See the same-host sentence below for why it cannot share the
+   * cross-host one.
+   */
+  readonly ownerIsThisHost: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
 }): string {
-  // Two sentences for two different situations, because one of them stops
-  // being true mid-session. Saying "which is offline" under a banner announcing
-  // that same host is back reads as a bug in whichever line the user believes
-  // second - and the useful instruction changes too: there is nothing to wait
-  // for once the host is back, only a live tab to open.
-  // Three states, because the middle one is real and neither of the others
-  // describes it: a host that answers but does not hold this chat. Telling
-  // someone it is offline would be false, and telling them to open it live
-  // would send them at a button that can do nothing.
-  const base = input.ownerIsReachable
-    ? `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
-    : `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
+  const base = publishedCopySentence(input);
   if (input.unreadableCount > 0) {
     return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }
@@ -60,16 +55,70 @@ export function publishedChatLockReason(input: {
  */
 export function replicaChatLockReason(input: {
   readonly ownerIsReachable: boolean;
+  /** Same fact, same reason, as `publishedChatLockReason`'s. */
+  readonly ownerIsThisHost: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
-  const base = input.ownerIsReachable
-    ? `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`
-    : `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
+  const base = replicaCopySentence(input);
   if (input.unreadableCount > 0) {
     return `${base} ${unreadableItemsSentence(input.unreadableCount)}`;
   }
   return base;
+}
+
+/**
+ * Which copy the published branch is showing, and where its live counterpart
+ * is - the sentence the tails above are appended to.
+ *
+ * Reachability comes first, because that half stops being true mid-session:
+ * saying "which is offline" under a banner announcing that same host is back
+ * reads as a bug in whichever line the user believes second, and the useful
+ * instruction changes with it (there is nothing to wait for once the host is
+ * back, only a live tab to open). A host that ANSWERS and still does not hold
+ * this chat is its own state, neither "offline" nor openable - telling that
+ * reader to wait would be false, and pointing them at a live tab would send
+ * them at a button that can do nothing.
+ *
+ * The reachable arm splits again on WHOSE host the owner is. "lives on <label> ...
+ * not available live from this device" describes one machine holding the chat
+ * and a second one reading it, so when the owner IS the host serving this
+ * read every clause of it turns false at once: it prints the reader's own
+ * machine as elsewhere and tells them the thing in front of them is somewhere
+ * they are not. What is true there is narrower and says nothing about
+ * devices - this host no longer has the live chat.
+ *
+ * The unreachable arm stays one sentence for both, because nothing answered:
+ * there is no "the host said it isn't here" to report, only a host to wait
+ * for, and that is as true of this machine's own host as of anyone else's.
+ */
+function publishedCopySentence(input: {
+  readonly ownerIsReachable: boolean;
+  readonly ownerIsThisHost: boolean;
+  readonly ownerLabel: string;
+}): string {
+  if (!input.ownerIsReachable) {
+    return `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
+  }
+  if (input.ownerIsThisHost) {
+    return `Showing the last published copy of this agent. Its live history is no longer on this host.`;
+  }
+  return `Showing the last published copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`;
+}
+
+/** The doc-replica branch's counterpart, splitting the same three ways. */
+function replicaCopySentence(input: {
+  readonly ownerIsReachable: boolean;
+  readonly ownerIsThisHost: boolean;
+  readonly ownerLabel: string;
+}): string {
+  if (!input.ownerIsReachable) {
+    return `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
+  }
+  if (input.ownerIsThisHost) {
+    return `Showing this device's synced copy of this agent. Its live history is no longer on this host.`;
+  }
+  return `Showing this device's synced copy of this agent, which lives on ${input.ownerLabel}. It is not available live from this device.`;
 }
 
 /**

@@ -54,6 +54,13 @@ export interface ChatLowerInteractionSurfacesProps {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly chatId: string;
+  /**
+   * The tile's bound host. A prop rather than a `useTabHostId()` read so this
+   * surface stays renderable on its own (several suites mount it directly),
+   * and so the host it resolves chat-session state under is visible at the
+   * boundary like `epicId` and `chatId` already are.
+   */
+  readonly hostId: string;
   readonly runtime: ChatLowerRuntimeState;
   readonly access: ChatLowerAccessState;
   readonly turn: ChatLowerTurnState;
@@ -279,10 +286,13 @@ export function ChatLowerInteractionSurfaces(
   // received A2A responses alike (the latter render read-only).
   const queueVisible = props.queue.value.items.length > 0;
   // Read here rather than inside the dock: the same count decides the dock's
-  // Background section and the spacing of everything below it.
+  // Background section and the spacing of everything below it. Scoped to the
+  // tile's bound host - that is the host the tile opened the session under,
+  // and a same-id chat on another machine is a different agent.
   const runningManagedCommandCount = useRunningManagedCommandsForChat(
     props.epicId,
     props.chatId,
+    props.hostId,
   ).length;
   const backgroundVisible = chatBackgroundSectionVisible({
     backgroundItemCount: props.backgroundItems?.length ?? 0,

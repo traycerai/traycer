@@ -572,6 +572,7 @@ const validSnapshot: LocalHostSnapshot = {
   pid: 1234,
   systemHostName: "desktop-1",
   displayName: "desktop-1",
+  availability: "available",
 };
 
 function buildDroppedFile(name: string, type: string, content: string): File {

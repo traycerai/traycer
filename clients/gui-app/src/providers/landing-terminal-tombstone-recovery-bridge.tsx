@@ -2,6 +2,10 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import { useLandingTerminalKill } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
+import {
+  isHostReachable,
+  type HostAvailability,
+} from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * Drains durable landing-terminal close tombstones when their bound host
@@ -13,9 +17,9 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
   const kill = useLandingTerminalKill();
   const killRef = useRef(kill);
-  const availabilityRef = useRef<
-    ReadonlyMap<string, "available" | "unavailable">
-  >(new Map());
+  const availabilityRef = useRef<ReadonlyMap<string, HostAvailability>>(
+    new Map(),
+  );
 
   useEffect(() => {
     killRef.current = kill;
@@ -33,9 +37,16 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
 
     for (const pending of pendingKills) {
       const status = currentAvailability.get(pending.hostId);
+      const previous = previousAvailability.get(pending.hostId);
+      // The edge is "became REACHABLE", not "became available". The kill needs
+      // a dialable host, which `busy` is - and after int #48 a host recovering
+      // from a stall goes unavailable -> busy and may sit there, so an
+      // `=== "available"` edge would simply never fire and strand the
+      // tombstone with the host terminal still alive.
       if (
-        status === "available" &&
-        previousAvailability.get(pending.hostId) !== "available"
+        status !== undefined &&
+        isHostReachable(status) &&
+        (previous === undefined || !isHostReachable(previous))
       ) {
         killRef.current.mutate(pending);
       }

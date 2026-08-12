@@ -255,6 +255,7 @@ import {
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
+  epicListChatRecordsV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -5101,6 +5102,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicChatReplicaReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // The store-backed chat RECORD channel (chat-sync-v2 ticket 49). Optional and
+  // host-LOCAL for the same reason as the two above: it answers out of this
+  // host's own chat registry, which is the only place those rows exist. A
+  // client talking to a host without it runs doc-only - the record table it
+  // already had before the single-write pivot - so the degrade arm needs no
+  // surface of its own, only the absence of the union.
+  "epic.listChatRecords": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListChatRecordsV10,
           upgradeFromPreviousVersion: null,
         },
       },

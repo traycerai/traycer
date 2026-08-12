@@ -18,6 +18,7 @@ import {
 
 const EPIC_ID = "epic-wake";
 const CHAT_ID = "chat-wake";
+const HOST_ID = "host-wake";
 
 interface Harness {
   readonly handle: ChatSessionStoreHandle;
@@ -182,9 +183,12 @@ describe("subscribeChatSessionWakeRetry", () => {
 
     const harness = createHarness(CHAT_ID);
     __getChatSessionRegistryForTests().acquire(
-      EPIC_ID,
-      CHAT_ID,
-      "wake-test-scope",
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
       () => harness.handle,
     );
     driveTerminallyClosed(harness);
@@ -209,9 +213,12 @@ describe("subscribeChatSessionWakeRetry", () => {
 
     const harness = createHarness(CHAT_ID);
     __getChatSessionRegistryForTests().acquire(
-      EPIC_ID,
-      CHAT_ID,
-      "wake-test-scope",
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
       () => harness.handle,
     );
     harness.callbacks().onConnectionStatus("reconnecting", null);
@@ -245,9 +252,12 @@ describe("subscribeChatSessionWakeRetry", () => {
 
     const harness = createHarness(CHAT_ID);
     __getChatSessionRegistryForTests().acquire(
-      EPIC_ID,
-      CHAT_ID,
-      "wake-test-scope",
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
       () => harness.handle,
     );
     harness.callbacks().onConnectionStatus("reconnecting", null);
@@ -273,9 +283,12 @@ describe("subscribeChatSessionWakeRetry", () => {
 
     const harness = createHarness(CHAT_ID);
     __getChatSessionRegistryForTests().acquire(
-      EPIC_ID,
-      CHAT_ID,
-      "wake-test-scope",
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
       () => harness.handle,
     );
     harness.callbacks().onConnectionStatus("reconnecting", null);
@@ -308,9 +321,12 @@ describe("subscribeChatSessionWakeRetry", () => {
 
     const harness = createHarness(CHAT_ID);
     __getChatSessionRegistryForTests().acquire(
-      EPIC_ID,
-      CHAT_ID,
-      "wake-test-scope",
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
       () => harness.handle,
     );
     harness.callbacks().onConnectionStatus("reconnecting", null);
@@ -336,9 +352,12 @@ describe("subscribeChatSessionWakeRetry", () => {
 
     const harness = createHarness(CHAT_ID);
     __getChatSessionRegistryForTests().acquire(
-      EPIC_ID,
-      CHAT_ID,
-      "wake-test-scope",
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "wake-test-scope",
+      },
       () => harness.handle,
     );
     driveTerminallyClosed(harness);

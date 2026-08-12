@@ -209,6 +209,7 @@ import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar
 import { resolveProfileAccentDot } from "@/components/worktree/worktree-owner-settings-model";
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -605,7 +606,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         .sort(),
     [tree, originVisibleIds],
   );
+  const epicSessionHostId = useEpicSessionHostId();
   const notificationIndicators = useNotificationIndicators({
+    // The chats in this tree are THIS Epic session's, and the session's host is
+    // not necessarily the app-wide active one - a retained Epic tab keeps its
+    // binding while another host is selected. `indicatorState` is computed over
+    // one host's own rows, so the active host would answer about chats it does
+    // not own (see `EpicBackupStatusIndicator`, which scopes the same way for
+    // the same reason).
+    hostId: epicSessionHostId,
     epicIds: [],
     chatIds: indicatorChatIds,
     enabled: indicatorChatIds.length > 0,
@@ -1393,6 +1402,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       epicId={epicId}
       tabId={tabId}
       nodeId={nodeId}
+      ownerHostId={ownerHostId}
       nodeName={nodeName}
       artifactType={artifactType}
       depth={depth}
@@ -1438,6 +1448,9 @@ interface ChatNodeShellProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly nodeId: string;
+  /** The row's OWN owner host, resolved once in `ChatNode` and threaded down
+   *  so the leading icon and the archive affordances read the same session. */
+  readonly ownerHostId: string | null;
   readonly nodeName: string;
   readonly artifactType: EpicNodeKind;
   readonly depth: number;
@@ -1512,6 +1525,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
   const status = useChatRowOwnStatusKind({
     epicId: props.epicId,
     nodeId: props.nodeId,
+    ownerHostId: props.ownerHostId,
     artifactType: props.artifactType,
   });
   return (
@@ -1539,6 +1553,7 @@ function ChatNodeShellBody(
     epicId,
     tabId,
     nodeId,
+    ownerHostId,
     nodeName,
     artifactType,
     depth,
@@ -1634,6 +1649,7 @@ function ChatNodeShellBody(
           <ChatRenameRow
             epicId={epicId}
             depth={depth}
+            ownerHostId={ownerHostId}
             artifactType={artifactType}
             renameInputRef={renameInputRef}
             renameValue={renameValue}
@@ -1866,6 +1882,9 @@ function useNodeIconDisplay(artifactType: EpicNodeKind): {
 function ChatRowLeadingIcon(props: {
   readonly epicId: string;
   readonly nodeId: string;
+  /** The row's OWN owner host, off its projection row - see
+   *  {@link ChatRowOwnLeadingIcon}. */
+  readonly ownerHostId: string | null;
   readonly artifactType: EpicNodeKind;
   readonly hasChildren: boolean;
   readonly expanded: boolean;
@@ -1875,6 +1894,7 @@ function ChatRowLeadingIcon(props: {
       <ChatRowLeadingIconWithNestedRollup
         epicId={props.epicId}
         nodeId={props.nodeId}
+        ownerHostId={props.ownerHostId}
         artifactType={props.artifactType}
       />
     );
@@ -1883,6 +1903,7 @@ function ChatRowLeadingIcon(props: {
     <ChatRowOwnLeadingIcon
       epicId={props.epicId}
       nodeId={props.nodeId}
+      ownerHostId={props.ownerHostId}
       artifactType={props.artifactType}
     />
   );
@@ -1900,6 +1921,7 @@ const ChatRowLeadingIconWithNestedRollup = memo(
   function ChatRowLeadingIconWithNestedRollup(props: {
     readonly epicId: string;
     readonly nodeId: string;
+    readonly ownerHostId: string | null;
     readonly artifactType: EpicNodeKind;
   }) {
     const rollup = useChatDescendantStatus({
@@ -1925,6 +1947,7 @@ const ChatRowLeadingIconWithNestedRollup = memo(
       <ChatRowOwnLeadingIcon
         epicId={props.epicId}
         nodeId={props.nodeId}
+        ownerHostId={props.ownerHostId}
         artifactType={props.artifactType}
       />
     );
@@ -1939,6 +1962,14 @@ const ChatRowLeadingIconWithNestedRollup = memo(
 function ChatRowOwnLeadingIcon(props: {
   readonly epicId: string;
   readonly nodeId: string;
+  /**
+   * The row's OWN owner host, read off its projection row rather than from a
+   * tab binding: a sidebar row is not inside any `TabHostProvider`, and the
+   * tree deliberately lists chats owned by connected PEER hosts alongside
+   * this machine's. `chatId` is host-minted, so without the row's own host the
+   * status read could land on a same-id chat living on a different machine.
+   */
+  readonly ownerHostId: string | null;
   readonly artifactType: EpicNodeKind;
 }) {
   if (props.artifactType === "chat") {
@@ -1952,6 +1983,7 @@ function ChatRowOwnLeadingIcon(props: {
       <ChatProgressIcon
         epicId={props.epicId}
         chatId={props.nodeId}
+        hostId={props.ownerHostId}
         className={undefined}
         mutedClassName="text-muted-foreground/70"
         testId="chat-sidebar-spinner"
@@ -2114,6 +2146,7 @@ function StaticSidebarNodeIcon(props: { readonly artifactType: EpicNodeKind }) {
 interface ChatRenameRowProps {
   readonly epicId: string;
   readonly depth: number;
+  readonly ownerHostId: string | null;
   readonly artifactType: EpicNodeKind;
   readonly renameInputRef: React.RefObject<HTMLInputElement | null>;
   readonly renameValue: string;
@@ -2130,6 +2163,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
   const {
     epicId,
     depth,
+    ownerHostId,
     artifactType,
     renameInputRef,
     renameValue,
@@ -2161,6 +2195,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
         <ChatRowOwnLeadingIcon
           epicId={epicId}
           nodeId={nodeId}
+          ownerHostId={ownerHostId}
           artifactType={artifactType}
         />
       </ChatRowLeadingIconSlot>
@@ -2443,6 +2478,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           <ChatRowLeadingIcon
             epicId={epicId}
             nodeId={nodeId}
+            ownerHostId={ownerHostId}
             artifactType={artifactType}
             hasChildren={hasChildren}
             expanded={expanded}
@@ -2509,6 +2545,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <ChatRowLeadingIcon
           epicId={epicId}
           nodeId={nodeId}
+          ownerHostId={ownerHostId}
           artifactType={artifactType}
           hasChildren={hasChildren}
           expanded={expanded}
@@ -3071,9 +3108,13 @@ function chatRowMenuEntries(
 function useChatRowOwnStatusKind(args: {
   readonly epicId: string;
   readonly nodeId: string;
+  /** The row's OWN owner host - same rule and same reason as
+   *  {@link ChatRowOwnLeadingIcon}'s, so the archive affordances and the
+   *  leading icon resolve the SAME session and cannot disagree. */
+  readonly ownerHostId: string | null;
   readonly artifactType: EpicNodeKind;
 }): ChatRowStatus {
-  const { epicId, nodeId, artifactType } = args;
+  const { epicId, nodeId, ownerHostId, artifactType } = args;
   const indicatorState = useSurfaceNotificationIndicatorState({
     epicId,
     chatId: nodeId,
@@ -3083,7 +3124,11 @@ function useChatRowOwnStatusKind(args: {
   // Terminal-agent rows have no chat session and never carried a read-only
   // lock (their PTY runs host-side), so the viewer arm is chat-only.
   const isChat = artifactType === "chat";
-  const sessionHandle = useExistingChatSessionHandle(epicId, nodeId);
+  const sessionHandle = useExistingChatSessionHandle(
+    epicId,
+    nodeId,
+    ownerHostId,
+  );
   const subscribeSession = useMemo(
     () => (onChange: () => void) => {
       if (sessionHandle === null) return () => undefined;

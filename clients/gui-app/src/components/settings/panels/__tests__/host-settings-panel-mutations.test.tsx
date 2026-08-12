@@ -1048,6 +1048,7 @@ function makeLocalHostSnapshot(): LocalHostSnapshot {
     pid: 12345,
     systemHostName: "hardiks-macbook",
     displayName: "hardiks-macbook",
+    availability: "available",
   };
 }
 

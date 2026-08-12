@@ -10,7 +10,7 @@ import type { HostFsLayout } from "../host/host-paths";
 import { readHostLayer0Record } from "../host/host-state";
 import { log, resolveDesktopLogPath } from "./logger";
 import { handleGetMetrics } from "./diagnostics";
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
   SupportBuildPublicDraftResult,
@@ -92,7 +92,7 @@ type FrozenEvidenceEntry =
   | { readonly kind: "ready"; readonly evidence: FrozenEvidence };
 
 export interface SupportHostSnapshotProvider {
-  getSnapshot(): DesktopLocalHostSnapshot | null;
+  getSnapshot(): DesktopPublishedHostSnapshot | null;
 }
 
 export interface SupportAuthSessionProvider {

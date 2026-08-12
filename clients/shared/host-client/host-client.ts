@@ -8,7 +8,7 @@ import type {
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
-import type { HostDirectoryEntry } from "./host-directory";
+import { isHostReachable, type HostDirectoryEntry } from "./host-directory";
 import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
 import {
   HostBindingAuthorityRegistry,
@@ -732,6 +732,19 @@ function sameHostId(
 }
 
 /**
+ * Status is compared through `isHostReachable`, not by value: `available` and
+ * `busy` are the SAME transport (the process is alive, the `websocketUrl` is
+ * unchanged, and every per-request dial to it keeps completing - `busy` only
+ * says one probe went unanswered). Comparing the raw status made an
+ * available<->busy flap - which a wedged host emits repeatedly, and which the
+ * degraded/hysteresis ladder is designed to keep emitting - cancel and abort
+ * every in-flight request on the bound host, sweep its whole query scope with
+ * `refetchActive`, and announce `host-updated` to every subscriber, for a host
+ * that never stopped being dialable. Only crossing INTO or OUT OF
+ * `unavailable` changes what a caller can do with this entry. This is the
+ * third member of the family that decision belongs to, alongside the GUI's
+ * transport key and the authority registry's snapshot.
+ *
  * `publicKey` is compared separately from the base fields (R-1): a remote
  * host's static Noise key can rotate (re-enrollment / corruption recovery -
  * `registerOrAdoptHost` overwrites the key on the same `hostId`) while every
@@ -754,7 +767,7 @@ function sameHostTransport(
     previous.kind === next.kind &&
     previous.websocketUrl === next.websocketUrl &&
     previous.version === next.version &&
-    previous.status === next.status &&
+    isHostReachable(previous.status) === isHostReachable(next.status) &&
     remotePublicKeyOf(previous) === remotePublicKeyOf(next)
   );
 }

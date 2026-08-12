@@ -14,6 +14,7 @@ function makeSnapshot(hostId: string): LocalHostSnapshot {
     pid: 4242,
     systemHostName: hostId,
     displayName: hostId,
+    availability: "available",
   };
 }
 

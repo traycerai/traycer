@@ -170,6 +170,16 @@ function makeMeta(permissionRole: PermissionRole | null): SnapshotMetaEpic {
 }
 
 function registerPendingHandoff(): void {
+  registerPendingHandoffCreatedAt(Date.now());
+}
+
+/**
+ * `createdAt` is load-bearing: the coordinator gives up on a chat that never
+ * projects at `createdAt + CHAT_PROJECTION_DEADLINE_MS`. A live handoff is
+ * registered "now" so that deadline stays far outside every test below; the
+ * give-up path is exercised by registering one whose deadline already passed.
+ */
+function registerPendingHandoffCreatedAt(createdAt: number): void {
   useInitialChatHandoffStore.getState().register({
     ...HANDOFF_SCOPE,
     chatId: CHAT_ID,
@@ -179,7 +189,7 @@ function registerPendingHandoff(): void {
     placement: { kind: "active-tile" },
     messageId: "msg-test",
     clientActionId: "cai-test",
-    createdAt: 1,
+    createdAt,
   });
 }
 
@@ -452,6 +462,96 @@ describe("initial chat handoff route coordinator", () => {
       1,
     );
 
+    queryClient.clear();
+  });
+
+  it("gives up on a folded chat that never projects and releases its pending-create mark", async () => {
+    // A create that produced NO chat (a host that dropped the folded seed, or
+    // a create that failed after the tab was already eager-opened) leaves this
+    // tab around a chat id that exists on no host and in no cloud row. The
+    // pending-create mark is what exempts it from the record-liveness sweep in
+    // `use-epic-route-synchronization`, so without a deadline that tab is
+    // permanent - blank forever, with nothing to load into it.
+    registerPendingHandoffCreatedAt(Date.now() - 120_000);
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    // Owner snapshot, live connection, and NO chat in the projection: the
+    // epic is ready and the chat still is not there.
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null);
+      epicCallbacks.onSnapshot(
+        makeMeta("owner"),
+        Y.encodeStateAsUpdate(new Y.Doc()),
+      );
+    });
+
+    await waitFor(() => {
+      expect(handoffStatus()).toBe("failed");
+    });
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(false);
+    });
+    // The hook does not close tabs - releasing the mark is what hands the
+    // orphan back to the record-liveness sweep.
+    expect(canvasChatTabs().filter((tab) => tab.id === CHAT_ID)).toHaveLength(
+      1,
+    );
+    expect(testState.request).not.toHaveBeenCalledWith(
+      "epic.createChat",
+      expect.anything(),
+    );
+    queryClient.clear();
+  });
+
+  it("releases the pending-create mark when the handoff leaves this scope", async () => {
+    // The handoff can vanish from {host,user,epic} without ever going
+    // terminal - consumed elsewhere, signed-out user, active-host swap. The
+    // mark is this hook's to release; nobody else knows the tile is still
+    // exempt from the sweep.
+    registerPendingHandoff();
+    const queryClient = renderWithProviders(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </EpicSessionProvider>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null);
+      epicCallbacks.onSnapshot(
+        makeMeta("owner"),
+        Y.encodeStateAsUpdate(new Y.Doc()),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(true);
+    });
+
+    act(() => {
+      useInitialChatHandoffStore.getState().consume(HANDOFF_SCOPE);
+    });
+
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().pendingCreateArtifactIds.has(CHAT_ID),
+      ).toBe(false);
+    });
     queryClient.clear();
   });
 

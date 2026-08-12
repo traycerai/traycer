@@ -11,6 +11,7 @@ import type {
   EpicCloudSyncStatus,
   EpicMigrationPhase,
 } from "@traycer/protocol/host/epic/subscribe";
+import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
@@ -42,9 +43,12 @@ import type {
 import {
   EMPTY_ARTIFACT_ROOM_DIRTY,
   EMPTY_ARTIFACT_ROOMS_SLICE,
+  EMPTY_CHATS_SLICE,
   EMPTY_PROJECTED_SLICES,
 } from "./types";
 import {
+  chatRecordsSlice,
+  chatSlicesEq,
   getArtifactEntry,
   getArtifactsMap,
   getChatEntry,
@@ -277,6 +281,18 @@ export interface OpenEpicState {
    * tree input.
    */
   readonly deletedArtifacts: DeletedArtifactsSlice;
+  /**
+   * The Y.Doc's own chat entries. The projector's working state, NOT a
+   * component-facing slice - read {@link OpenEpicState.chats}, which is this
+   * unioned with the host's store-backed records.
+   */
+  readonly docChats: ChatsSlice;
+  /**
+   * The host's store-backed chat records (`epic.listChatRecords`), as last
+   * served. Empty in doc-only mode: an older host that lacks the method, or
+   * before the first response lands.
+   */
+  readonly chatRecords: ChatsSlice;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
@@ -410,6 +426,18 @@ export interface OpenEpicState {
    * No-op when no migration has been observed on this session.
    */
   retryMigration: () => void;
+  /**
+   * Publishes the host's `epic.listChatRecords` answer into the record table.
+   *
+   * The store-backed half of `chats` (chat-sync-v2 ticket 49). Idempotent and
+   * change-gated: an answer that says the same thing as the last one writes
+   * nothing, so the poll behind it costs no renders while an epic is quiet.
+   *
+   * Never called in doc-only mode - an older host answers `E_HOST_UNSUPPORTED`
+   * and the caller simply does not call this, leaving the record slice empty and
+   * `chats` identical to the doc projection.
+   */
+  applyChatRecords: (records: readonly ChatRecordSummary[]) => void;
   /** Forcibly closes the underlying stream session. Idempotent. */
   dispose: () => void;
 
@@ -1476,6 +1504,16 @@ export function createOpenEpicStore(
   const getCurrentChatProjectionUserId = (): string | null =>
     useAuthStore.getState().profile?.userId ?? null;
 
+  /**
+   * The host's store-backed chat records, held OUTSIDE the store state as the
+   * projector's input (the mirrored copy in `state.chatRecords` is what
+   * components and tests read). A closure variable rather than a state read
+   * because the projector runs inside `setState` computations, where reading
+   * the store it is about to write is exactly the kind of cycle that produces a
+   * projection built from half-updated state.
+   */
+  let chatRecords: ChatsSlice = EMPTY_CHATS_SLICE;
+
   // The projector hides chats owned by a different signed-in user. The owner
   // id is the canonical `profile.userId` (NOT the store's `userId` option,
   // which is the email used for persist namespacing). Read lazily so a session
@@ -1483,6 +1521,7 @@ export function createOpenEpicStore(
   // projection.
   const projector: EpicProjector = createEpicProjector(
     getCurrentChatProjectionUserId,
+    () => chatRecords,
   );
 
   const handleDocUpdate = (updateBytes: Uint8Array, origin: unknown) => {
@@ -2516,6 +2555,7 @@ export function createOpenEpicStore(
           awareness,
           bindingVersion: 0,
           ...EMPTY_PROJECTED_SLICES,
+          chatRecords: EMPTY_CHATS_SLICE,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
           artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
           rootDirty: null,
@@ -2626,6 +2666,29 @@ export function createOpenEpicStore(
             if (!reopen) {
               streamClient?.retryMigration();
             }
+          },
+
+          applyChatRecords: (records) => {
+            if (disposed) return;
+            const next = chatRecordsSlice(records);
+            const nextSlice =
+              next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
+            if (chatSlicesEq(chatRecords, nextSlice)) return;
+            chatRecords = nextSlice;
+            // A full re-projection rather than a hand-rolled patch: `chats`
+            // feeds the tree and the role-claim slices, and re-deriving those
+            // here would be a second implementation of the projector's own
+            // composition, free to drift from it. Records change rarely (this
+            // is gated on an actual difference), so the cost is a snapshot-
+            // shaped re-project on a real change and nothing at all otherwise.
+            set(
+              projector.isAttached()
+                ? { chatRecords: nextSlice, ...projector.projectFull() }
+                : // Nothing attached yet: the records are held, and the
+                  // attach-time projection folds them in through the same
+                  // getter. Writing EMPTY slices here would erase the store.
+                  { chatRecords: nextSlice },
+            );
           },
 
           dispose: () => {

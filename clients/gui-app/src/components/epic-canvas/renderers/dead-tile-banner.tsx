@@ -327,13 +327,25 @@ export function ChatHostStartingBanner(
 }
 
 /**
- * Two distinct causes land on this ONE banner (chat-sync-v2 ticket 35): the
- * bound host is genuinely unreachable, or the host answered but this chat's
- * row isn't there (`chat.subscribe` terminated with `CHAT_NOT_VISIBLE` -
- * ticket 35's view-arm). "is offline" is false for the second cause, so the
- * copy branches on `reason` rather than always naming the host as down.
+ * Three distinct causes land on this ONE banner, and no two of them are the
+ * same sentence (chat-sync-v2 tickets 35 and 49):
+ *
+ * - `host-offline` - the bound host is genuinely unreachable. Nothing was
+ *   asked and nothing answered, so the host is what has to come back.
+ * - `chat-not-visible` - a reachable host that is NOT this device answered,
+ *   and answered that it has nothing for this chat (`chat.subscribe`
+ *   terminated `CHAT_NOT_VISIBLE`). "is offline" would be false here.
+ * - `chat-not-on-this-host` - the same answer, from the host this device is
+ *   connected to (a leased-identity twin, a store this identity never
+ *   adopted). Naming that host as a place the history "isn't available"
+ *   reads as "your own machine is unreachable" - the lie that sent two live
+ *   debugging sessions after a healthy host on 2026-08-11. The host
+ *   ANSWERED; the chat is what is missing. The clone it offers also lands on
+ *   this same machine, so the "stays bound to <label>" disclosure the other
+ *   two carry has nothing left to disclose.
  */
-export type ChatDeadTileBannerReason = "host-offline" | "chat-not-visible";
+export type ChatDeadTileBannerReason =
+  "host-offline" | "chat-not-visible" | "chat-not-on-this-host";
 
 export interface ChatDeadTileBannerProps {
   readonly hostLabel: string;
@@ -374,12 +386,35 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     reportTitle: "Agent history unavailable",
     reportMessage: "The agent's history could not be found on its bound host.",
   },
+  // Deliberately names no host: the one it would name is the machine the
+  // reader is looking at, and every label this device could print for it
+  // ("mac-mini", the raw id) reads as somewhere else. Nor does it offer to
+  // wait - the host already answered, so there is nothing to come back.
+  "chat-not-on-this-host": {
+    message: () => (
+      <>
+        This agent&apos;s history is no longer on this host. Showing the last
+        published copy; cloning creates a new agent from it.
+      </>
+    ),
+    reportTitle: "Agent history missing on this host",
+    reportMessage:
+      "The connected host answered that it no longer has this agent's history.",
+  },
 };
 
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
   return (
+    // A live region, like the other two chat banners: which of the three
+    // truths above is on screen is carried ONLY by this sentence, and the
+    // banner appears (and swaps between reasons) mid-session without any
+    // focus move - unannounced, a screen-reader user is told nothing about
+    // why the composer beneath it locked. Polite `status` rather than
+    // `alert`: nothing here is urgent and the transcript stays readable.
     <div
+      role="status"
+      data-reason={props.reason}
       data-testid={props.testId}
       className={cn(
         "flex items-center gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-ui-sm text-warning-foreground",

@@ -83,6 +83,18 @@ const NODE: PublishedChatTileRef = {
   ownerHostId: "owner-host-1",
 };
 
+/**
+ * The SAME ref shape the canvas builds when this device's own connected host
+ * answers `CHAT_NOT_VISIBLE` for one of its chats (tickets 47/48): the
+ * serving host and the owning host are one machine, which is exactly what
+ * `hostId === ownerHostId` says. Nothing about it is probed - the copy's
+ * footer has to read that off the ref.
+ */
+const SAME_HOST_NODE: PublishedChatTileRef = {
+  ...NODE,
+  ownerHostId: NODE.hostId,
+};
+
 function refusedUnpublished(): CloudChatTranscriptState {
   const read: CloudChatRead = { chat: null, outcome: { kind: "unpublished" } };
   return { kind: "refused", read };
@@ -388,6 +400,32 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     // the "which is offline" sentence past the point it stopped being true.
     expect(view.textContent).toContain("not available live from this device");
     expect(view.textContent).not.toContain("which is offline");
+  });
+
+  it("drops the other-machine phrasing when the copy's owner IS the serving host", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue({
+      status: "reachable",
+      hostLabel: "Ada's Mac",
+    });
+
+    render(
+      <PublishedChatTile
+        node={SAME_HOST_NODE}
+        viewTabId="tab-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    const view = screen.getByTestId("chat-tile-session-view");
+    // Same state as the test above (reachable owner, synced copy) - only the
+    // ref differs, and that alone must move the footer off copy that reads
+    // the reader's own machine as somewhere else.
+    expect(view.textContent).toContain("no longer on this host");
+    expect(view.textContent).not.toContain("lives on");
+    expect(view.textContent).not.toContain("from this device");
   });
 
   it("appends the unreadable-item count to the replica lock reason", () => {

@@ -7,7 +7,7 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import type { ZoomPercent } from "../../ipc-contracts/zoom-types";
-import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   QuitDecision,
   UnsyncedEditsSnapshot,
@@ -267,7 +267,9 @@ export interface IpcSupportService {
   ): Promise<SupportBuildPublicDraftResult>;
 }
 
-type HostChangeListener = (snapshot: DesktopLocalHostSnapshot | null) => void;
+type HostChangeListener = (
+  snapshot: DesktopPublishedHostSnapshot | null,
+) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
 
@@ -289,7 +291,7 @@ export interface QuitDecisionWaiter {
  * status read and the log tail used by Doctor/support remain.
  */
 export interface IpcHostLifecycle {
-  getSnapshot(): DesktopLocalHostSnapshot | null;
+  getSnapshot(): DesktopPublishedHostSnapshot | null;
   on(event: "change", listener: HostChangeListener): void;
   off(event: "change", listener: HostChangeListener): void;
   /**
@@ -327,7 +329,14 @@ export interface IpcHostLifecycle {
    * host-busy surfacing can judge off the reload's own result rather than a
    * `getSnapshot()` a concurrent reload may not have assigned yet.
    */
-  reloadSnapshotFromDisk(): Promise<DesktopLocalHostSnapshot | null>;
+  reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null>;
+  /**
+   * Out-of-band evidence that the published endpoint just answered a probe
+   * this lifecycle did not run. Repairs a degraded (`busy`) verdict without
+   * waiting for the retry ladder; a no-op once the verdict is `available`.
+   * See `HostLifecycle.noteEndpointAnswered`.
+   */
+  noteEndpointAnswered(): void;
   /**
    * Idempotent (re-)install of the pid-metadata watcher. The respawn
    * handler calls this to recover from a watcher that was silently

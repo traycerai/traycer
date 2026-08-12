@@ -109,6 +109,16 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.ownerHostId.length > 0
       ? ownerReachability.hostLabel
       : "another device";
+  // Whether the machine that owns this chat is the one serving this copy.
+  // Read off the ref rather than probed: `hostId` is the serving host this
+  // tile is bound to for life and `ownerHostId` is the row's owner, so their
+  // equality IS the question, settled at open and stable for the tab's life
+  // (a later active-host swap cannot reach either field). Reached by the
+  // canvas substituting a copy for a chat its own connected host answered
+  // `CHAT_NOT_VISIBLE` for - see `ChatDeadTileBanner`'s
+  // `chat-not-on-this-host`, whose banner this footer sits under.
+  const ownerIsThisHost =
+    node.ownerHostId.length > 0 && node.ownerHostId === node.hostId;
 
   // The one transition an on-demand read cannot cover: the owner came back
   // while this copy was open. Same reachability source the sidebar row's lock
@@ -227,6 +237,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={replicaChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerIsThisHost,
             ownerLabel,
             unreadableCount: replicaConversion.unreadableCount,
           })}
@@ -299,6 +310,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
           currentEpicId={props.epicId}
           readOnlyNotice={publishedChatLockReason({
             ownerIsReachable: ownerReachability.status === "reachable",
+            ownerIsThisHost,
             ownerLabel,
             unreadableCount: conversion.unreadableCount,
             fidelityNotice: state.fidelityNotice,

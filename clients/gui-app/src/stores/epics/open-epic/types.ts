@@ -213,6 +213,16 @@ export interface EpicProjectedSlices {
   readonly epic: EpicHeader;
   readonly artifacts: ArtifactsSlice;
   readonly deletedArtifacts: DeletedArtifactsSlice;
+  /**
+   * The Y.Doc's own chat entries, before the host's store-backed records are
+   * folded in. Not for components - it is the projector's INPUT state, kept
+   * separate so an incremental doc patch (including the upgrade sweep's
+   * DELETE of a proven-published entry) reconciles against the doc's history
+   * rather than against the union, which would let a doc removal take a live
+   * store-backed chat with it.
+   */
+  readonly docChats: ChatsSlice;
+  /** Doc entries unioned with the host's records. Components read THIS. */
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
@@ -238,6 +248,16 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
 export const EMPTY_ARTIFACT_ROOM_DIRTY: Readonly<Record<string, boolean>> =
   Object.freeze({} as Record<string, boolean>);
 
+/**
+ * The empty chat table, shared by the doc slice, the record slice and the union
+ * so "nothing here" is one reference everywhere - a fresh empty object per
+ * source would make every downstream `Object.is` check see a change.
+ */
+export const EMPTY_CHATS_SLICE: ChatsSlice = Object.freeze({
+  byId: Object.freeze({} as Record<string, ChatProjection>),
+  allIds: EMPTY_ARRAY,
+});
+
 export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
   byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
 });
@@ -256,10 +276,8 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     byId: Object.freeze({} as Record<string, DeletedArtifactProjection>),
     allIds: EMPTY_ARRAY,
   }),
-  chats: Object.freeze({
-    byId: Object.freeze({} as Record<string, ChatProjection>),
-    allIds: EMPTY_ARRAY,
-  }),
+  docChats: EMPTY_CHATS_SLICE,
+  chats: EMPTY_CHATS_SLICE,
   tuiAgents: Object.freeze({
     byId: Object.freeze({} as Record<string, TuiAgentProjection>),
     allIds: EMPTY_ARRAY,

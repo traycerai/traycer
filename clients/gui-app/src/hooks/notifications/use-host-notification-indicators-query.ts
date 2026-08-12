@@ -6,7 +6,8 @@ import type {
   HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { notificationsQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -17,6 +18,25 @@ const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
 };
 
 export interface UseHostNotificationIndicatorsArgs {
+  /**
+   * The host to ASK. Required, and required to be explicit: this RPC is
+   * computed over ONE host's SQLite rows, so an answer is only about the
+   * entities that host owns. A caller that reaches for the app-wide active
+   * host because it is the easy one to get is exactly how a chat bound to
+   * another host ends up asking a machine that has never heard of it - and how
+   * a host-minted id that two hosts happen to share lights the wrong surface.
+   *
+   * `null` means the app-wide active host, which is the right answer only for
+   * a caller whose ids are EPIC ids: an Epic is a shared cloud entity rather
+   * than a host-owned record.
+   *
+   * Resolution stays INSIDE this hook rather than being hoisted to the caller,
+   * because this module is the seam every consuming surface's test already
+   * replaces. A caller that resolved its own client would reach the host
+   * runtime around that seam, and every suite rendering such a surface would
+   * have to start providing one.
+   */
+  readonly hostId: string | null;
   readonly epicIds: ReadonlyArray<string>;
   readonly chatIds: ReadonlyArray<string>;
   readonly enabled: boolean;
@@ -38,7 +58,7 @@ export interface HostNotificationIndicatorsQuery {
 export function useHostNotificationIndicators(
   args: UseHostNotificationIndicatorsArgs,
 ): HostNotificationIndicatorsQuery {
-  const client = useHostClient();
+  const client = useHostClientForHostId(args.hostId);
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const requests = useMemo(
     () => indicatorRequests(args.epicIds, args.chatIds),

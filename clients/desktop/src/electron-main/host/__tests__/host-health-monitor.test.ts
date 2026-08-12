@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
+import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type { IpcHostLifecycle } from "../../ipc/runner-ipc-bridge";
 
 vi.mock("electron", () => ({
@@ -54,7 +54,7 @@ function startMonitor(deps: {
   readonly probe: (websocketUrl: string) => Promise<boolean>;
   readonly readMetadata: (
     path: string,
-  ) => Promise<DesktopLocalHostSnapshot | null>;
+  ) => Promise<DesktopPublishedHostSnapshot | null>;
   readonly respawn: () => Promise<void>;
 }): HostHealthMonitor {
   return startHostHealthMonitor({
@@ -71,13 +71,14 @@ function startMonitor(deps: {
   });
 }
 
-const SNAPSHOT: DesktopLocalHostSnapshot = {
+const SNAPSHOT: DesktopPublishedHostSnapshot = {
   hostId: "host-1",
   websocketUrl: "ws://127.0.0.1:55555/rpc",
   version: "1.0.0",
   pid: process.pid,
   systemHostName: "test-host",
   displayName: "Test Host",
+  availability: "available",
 };
 
 function fakeHost(overrides: Partial<IpcHostLifecycle>): IpcHostLifecycle {
@@ -91,6 +92,7 @@ function fakeHost(overrides: Partial<IpcHostLifecycle>): IpcHostLifecycle {
     identityEnrollmentFile: "/fake/identity/enrollment.json",
     isDisposed: false,
     reloadSnapshotFromDisk: vi.fn(async () => null),
+    noteEndpointAnswered: vi.fn(),
     ensureWatcherInstalled: vi.fn(),
     getRecentLogTail: vi.fn(async () => null),
     ...overrides,
@@ -165,7 +167,7 @@ describe("startHostHealthMonitor", () => {
     // host is merely busy" would hold the stale snapshot for the whole
     // unreachable-demote window, leaving the renderer on a dead endpoint for ten
     // minutes when a reload converges it on the next tick.
-    const replacement: DesktopLocalHostSnapshot = {
+    const replacement: DesktopPublishedHostSnapshot = {
       ...SNAPSHOT,
       pid: SNAPSHOT.pid + 1,
       websocketUrl: "ws://127.0.0.1:55556/rpc",
@@ -241,7 +243,7 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("F2: treats a handshake-reachable stale PID as down instead of resetting the recovery counters", async () => {
-    const staleSnapshot: DesktopLocalHostSnapshot = {
+    const staleSnapshot: DesktopPublishedHostSnapshot = {
       ...SNAPSHOT,
       pid: 999_999,
     };
@@ -305,7 +307,7 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("P5: retries a lock-deferred recovery after the monitor has demoted its snapshot", async () => {
-    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
     let respawnCalls = 0;
     const respawn = vi.fn(async () => {
       respawnCalls += 1;
@@ -334,7 +336,7 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("F5: retains recovery ownership until a retry is followed by a reload-confirmed snapshot", async () => {
-    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
     let respawnCalls = 0;
     const reload = vi.fn(async () => {
       if (respawnCalls === 0) {
@@ -374,7 +376,7 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("F6: counts generic retry failures while the monitor owns a null snapshot", async () => {
-    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
     let respawnCalls = 0;
     const respawn = vi.fn(async () => {
       respawnCalls += 1;
@@ -414,8 +416,8 @@ describe("startHostHealthMonitor", () => {
   });
 
   it("F13: does not start a null-snapshot retry after disposal during its metadata read", async () => {
-    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
-    const metadataGate = deferred<DesktopLocalHostSnapshot | null>();
+    let snapshot: DesktopPublishedHostSnapshot | null = SNAPSHOT;
+    const metadataGate = deferred<DesktopPublishedHostSnapshot | null>();
     let metadataReads = 0;
     let respawnCalls = 0;
     const respawn = vi.fn(async () => {
@@ -583,10 +585,14 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
-  it("surfaces manual recovery after a long unreachable stretch but still refuses to kill it", async () => {
-    // Alive, but nothing has answered for far longer than any epic open. The
-    // renderer gets its unavailable card so Retry is reachable; the decision to
-    // actually kill a running process stays with the user.
+  it("never demotes a live host, however long it stays unreachable (int #48)", async () => {
+    // The 2026-08-11 regression guard, and the exact inversion of what this
+    // test used to assert. It used to require a demote after
+    // UNREACHABLE_DEMOTE_MS so the renderer would offer a Retry card. A demote
+    // tells the renderer the host is GONE, and on 2026-08-11 that verdict -
+    // against a host answering RPCs in milliseconds - locked every chat on the
+    // machine read-only for two hours. Liveness is the authority: while the
+    // process is there, the monitor holds, forever if need be.
     const respawn = vi.fn(async () => {});
     const reload = vi.fn(async () => null);
     const monitor = startHostHealthMonitor({
@@ -602,37 +608,24 @@ describe("startHostHealthMonitor", () => {
       readLiveness: ALIVE,
     });
 
-    // Inside the window: held, no demote.
-    await ticks(300);
+    // Well past the old ten-minute escalation, and then some.
+    await ticks(700);
     expect(reload).not.toHaveBeenCalled();
-
-    // Past 10 minutes of continuous unreachability: demote for Retry, but the
-    // process is still never killed.
-    await ticks(400);
-    expect(reload).toHaveBeenCalled();
     expect(respawn).not.toHaveBeenCalled();
     monitor.dispose();
   });
 
-  it("stops re-probing a demoted host whose process is still alive", async () => {
-    // Once demoted with a living process, recovery belongs to the user - the
-    // answer cannot change until the process exits or Retry is pressed. Asking
-    // every tick is not free: each liveness probe spawns a child process (`ps`,
-    // or `tasklist` + `powershell` on Windows), so an afternoon-long wedge would
-    // spawn thousands for an answer nobody is waiting on.
+  it("throttles the liveness re-read while holding a live host busy", async () => {
+    // The hold is now unbounded, so the cost guard that used to live behind the
+    // demote has to live inside the hold itself: each liveness probe spawns a
+    // child process (`ps`, or `tasklist` + `powershell` on Windows), and an
+    // afternoon-long stall would otherwise spawn one every other tick forever.
     const respawn = vi.fn(async () => {});
-    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
     // One spy for both readers, so this counts total probes the way the machine
     // pays for them.
     const readLiveness = vi.fn(ALIVE);
     const monitor = startHostHealthMonitor({
-      host: fakeHost({
-        getSnapshot: () => snapshot,
-        reloadSnapshotFromDisk: vi.fn(async () => {
-          snapshot = null; // the demote the renderer sees
-          return null;
-        }),
-      }),
+      host: fakeHost({ reloadSnapshotFromDisk: vi.fn(async () => null) }),
       intervalMs: INTERVAL_MS,
       probe: vi.fn(async () => false),
       readMetadata: vi.fn(async () => SNAPSHOT),
@@ -644,16 +637,62 @@ describe("startHostHealthMonitor", () => {
       readLiveness,
     });
 
-    // Past the demote window, so the snapshot is gone and every later tick lands
-    // in the null-snapshot arm - the one that used to ask on every pass.
+    // Settle into the hold.
     await ticks(700);
-    const atDemote = readLiveness.mock.calls.length;
+    const atHold = readLiveness.mock.calls.length;
 
-    // Four more minutes of unchanged wedge. Ungated this is one probe per tick.
+    // Four more minutes of unchanged wedge. Ungated this is one probe every
+    // other tick (~120); throttled it is a handful.
     await ticks(240);
-    expect(readLiveness.mock.calls.length - atDemote).toBeLessThanOrEqual(4);
-    // Still never killed, which is the point of holding at all.
+    expect(readLiveness.mock.calls.length - atHold).toBeLessThanOrEqual(4);
     expect(respawn).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("hands a successful probe back to the lifecycle so a busy verdict can recover", async () => {
+    // The recovery half of int #48. Probes against the wedged host succeeded
+    // continuously for two hours on 2026-08-11 while the renderer was still
+    // being told the host was gone: nothing carried the success back to the
+    // component that owns the verdict.
+    const noteEndpointAnswered = vi.fn();
+    let reachable = false;
+    const monitor = startMonitor({
+      host: fakeHost({ noteEndpointAnswered }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => reachable),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn: vi.fn(async () => {}),
+    });
+
+    await ticks(2);
+    expect(noteEndpointAnswered).not.toHaveBeenCalled();
+
+    reachable = true;
+    await ticks(1);
+    expect(noteEndpointAnswered).toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("re-reads the disk while the snapshot is null so the state is never terminal", async () => {
+    // A null snapshot with nothing scheduled to re-examine it is the shape of
+    // the two-hour wedge: the pid-file watcher is edge-triggered on WRITES, so
+    // a host that is already up and never rewrites pid.json produces no edge.
+    // This arm used to return immediately - "recovery belongs to other flows" -
+    // which is true of RESTARTING the host and not of looking at the disk.
+    const reload = vi.fn(async () => null);
+    const monitor = startMonitor({
+      host: fakeHost({
+        getSnapshot: () => null,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => null),
+      respawn: vi.fn(async () => {}),
+    });
+
+    await ticks(3);
+    expect(reload).toHaveBeenCalled();
     monitor.dispose();
   });
 

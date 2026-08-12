@@ -41,7 +41,10 @@ import type {
   OpenEpicState,
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
+import {
+  EMPTY_CHATS_SLICE,
+  EMPTY_PROJECTED_SLICES,
+} from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   knownField,
@@ -436,6 +439,7 @@ function createDirtyEpicHandle(
     awareness,
     bindingVersion: 0,
     ...EMPTY_PROJECTED_SLICES,
+    chatRecords: EMPTY_CHATS_SLICE,
     artifactRooms: { stateByArtifactRoomId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
@@ -476,6 +480,7 @@ function createDirtyEpicHandle(
     },
     requestFreshSnapshot: () => undefined,
     retryMigration: () => undefined,
+    applyChatRecords: () => undefined,
     dispose: () => undefined,
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,

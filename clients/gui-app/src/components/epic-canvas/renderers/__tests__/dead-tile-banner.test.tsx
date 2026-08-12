@@ -114,5 +114,65 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).toContain("this one stays bound to");
     expect(text).not.toContain("is offline");
     expect(text).toContain("history isn't available");
+    // ...and it is still talking about ANOTHER machine, which is the whole
+    // reason the same-host case below cannot reuse it.
+    expect(text).toContain("mac-mini");
   });
+
+  // tickets 47/48: the same "not here" answer, from the host this device is
+  // CONNECTED to. Both sentences above would print the reader's own machine
+  // as somewhere their history is unavailable / stays bound to - the copy
+  // that sent two live debugging sessions after a healthy host on
+  // 2026-08-11. This variant names no host and promises no return, because
+  // the host already answered.
+  it("names no host, and no bound-host disclosure, when this device's own host answered that the chat is not here", () => {
+    render(
+      <ChatDeadTileBanner
+        hostLabel="mac-mini"
+        reason="chat-not-on-this-host"
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-here"
+        className={undefined}
+      />,
+    );
+
+    const text = screen.getByTestId("chat-dead-here").textContent;
+    expect(text).toContain("no longer on this host");
+    expect(text).not.toContain("mac-mini");
+    expect(text).not.toContain("is offline");
+    expect(text).not.toContain("stays bound to");
+    // The published copy is named, so the reader knows what they are reading.
+    expect(text).toContain("last published copy");
+    // The Clone offer survives the reword - a copy with no way forward is
+    // what this banner exists to avoid.
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+  });
+
+  // The banner appears (and swaps between reasons) mid-session with no focus
+  // move, and WHICH of the three truths is on screen lives only in this
+  // sentence. A state a screen reader is never told about is a state that
+  // does not exist for that reader - so the copy has to reach the accessible
+  // tree as a live region, not just as pixels.
+  it.each([
+    ["host-offline", "is offline"],
+    ["chat-not-visible", "history isn't available"],
+    ["chat-not-on-this-host", "no longer on this host"],
+  ] as const)(
+    "exposes the %s state through an announced live region",
+    (reason, phrase) => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="mac-mini"
+          reason={reason}
+          cloning={false}
+          onClone={() => undefined}
+          testId={`chat-dead-${reason}`}
+          className={undefined}
+        />,
+      );
+
+      expect(screen.getByRole("status").textContent).toContain(phrase);
+    },
+  );
 });

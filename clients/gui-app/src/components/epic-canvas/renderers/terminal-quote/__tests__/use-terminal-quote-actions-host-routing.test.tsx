@@ -212,8 +212,8 @@ describe("useTerminalQuoteActions host routing", () => {
    * The other half: the modal creates on the host its open request pinned,
    * not the app-wide active one. This is the composition the modal body makes
    * (`useHostClientForHostId` -> `useEpicCreateChatForHostClient`), driven
-   * against the same real transport, so a regression to `useEpicCreateChat`
-   * (which stamps the active host) fails here.
+   * against the same real transport, so a regression that sends this request
+   * on the app-wide active host fails here.
    */
   it("creates on the host the open request pinned, never the active one", async () => {
     globalClientRef.value = buildGlobalClient();
@@ -240,6 +240,7 @@ describe("useTerminalQuoteActions host routing", () => {
     act(() => {
       result.current.mutate({
         epicId: EPIC_ID,
+        hostId: TAB_HOST.hostId,
         parentId: null,
         title: "",
         chatId: "chat-1",

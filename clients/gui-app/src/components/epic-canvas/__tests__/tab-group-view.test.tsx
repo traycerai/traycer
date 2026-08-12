@@ -1260,9 +1260,14 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
         ),
       ).not.toBeNull();
     });
-    expect(
-      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
-    ).not.toBeNull();
+    const banner = container.querySelector(
+      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    // Nothing answered for this chat, so the banner is about the HOST - the
+    // one state of the three that is allowed to tell the reader to go wake a
+    // machine (ticket 47/48's copy split).
+    expect(banner?.getAttribute("data-reason")).toBe("host-offline");
     // The live chat body must NOT render alongside the copy.
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
@@ -1514,14 +1519,17 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
   });
 });
 
-// chat-sync-v2 ticket 36: a SAME-host chat (the active host IS the chat's
-// bound host) with no local record but still cloud-known - a leased
-// identity that never adopted this chat's rows. `chat-tile.tsx`'s own
-// `enabled` gate never attempts `chat.subscribe` for this shape (no local
-// record, not cross-host), so ticket 35's `fatalClose`-driven arm never
-// fires here - this is a genuinely separate exemption, driven by
-// `useCloudChatList` instead.
-describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (ticket 36)", () => {
+// chat-sync-v2 ticket 36, NARROWED by ticket 49: a SAME-host chat (the
+// active host IS the chat's bound host) with no local record but still
+// cloud-known is the ORDINARY shape of a healthy migrated chat, not evidence
+// of absence - creation stopped projecting into the epic doc (ticket 19) and
+// `ChatDocEntrySweep` deletes every entry whose publication it proves (ticket
+// 20). So the cloud row now supplies the copy's OWNER while the trigger must
+// be an honest absence signal: an unreachable owner, or the host's own
+// `CHAT_NOT_VISIBLE` terminate (which `chat-tile.tsx` can now produce for
+// this shape, because ticket 49 widened its record gate to let a cloud-known
+// chat subscribe).
+describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (tickets 36 + 49)", () => {
   afterEach(() => {
     cleanup();
     testState.mounts.clear();
@@ -1542,9 +1550,44 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
 
   const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
 
-  it("substitutes for a same-host chat with no local record that is still cloud-known", async () => {
+  // This assertion is the INVERSE of the one that shipped with ticket 36
+  // ("substitutes for a same-host chat with no local record that is still
+  // cloud-known"), which codified the defect: post-sweep that shape is every
+  // healthy migrated chat, and substituting locked each one read-only on its
+  // own connected host.
+  it("keeps the LIVE chat surface for a same-host record-less cloud-known chat while its owner is REACHABLE", async () => {
     testState.missingArtifactIds.add(CHAT.id);
     testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(groupView([CHAT], CHAT.instanceId, true));
+
+    // The live tile mounts, so `chat-tile.tsx` gets to attempt
+    // `chat.subscribe` at all - which is what makes the CHAT_NOT_VISIBLE
+    // terminate below reachable as a signal.
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
+    // Not reaped either - the cloud row still exempts it from
+    // `computeIsRemoteDeleted`, which is the other way this tab could have
+    // lost its live body.
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+  });
+
+  it("still substitutes the locked published copy when the same-host owner is UNREACHABLE", async () => {
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.unreachableHostIds.add(CHAT.hostId);
     testState.cloudKnownChatIds.add(CHAT.id);
     seedCanvas([CHAT], CHAT.instanceId);
     const { container } = render(groupView([CHAT], CHAT.instanceId, true));
@@ -1560,7 +1603,53 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
       `[data-testid="chat-dead-tile-${CHAT.id}"]`,
     );
     expect(banner).not.toBeNull();
-    expect(banner?.getAttribute("data-reason")).toBe("chat-not-visible");
+    // SAME host, but nothing answered - reachability outranks the (absent)
+    // terminate, so this keeps the host sentence rather than claiming the
+    // history "is no longer on this host", which would assert something no
+    // one has said while the host is down.
+    expect(banner?.getAttribute("data-reason")).toBe("host-offline");
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("substitutes for a same-host record-less chat once the REACHABLE owner's own subscribe terminates CHAT_NOT_VISIBLE", async () => {
+    // The honest absence detector for a reachable owner: not "this device's
+    // projection has no record" (true of every swept chat) but the host
+    // itself refusing the chat. `chat-tile.tsx` produces this terminate only
+    // because its record gate now lets a cloud-known chat open.
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.activeHostId = CHAT.hostId;
+    testState.cloudKnownChatIds.add(CHAT.id);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container, rerender } = render(
+      groupView([CHAT], CHAT.instanceId, true),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_NOT_VISIBLE");
+    rerender(groupView([CHAT], CHAT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    const banner = container.querySelector(
+      `[data-testid="chat-dead-tile-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    // The host the reader is connected to answered "not here" about ITSELF.
+    // Its cross-host sentence ("history isn't available on <label>", "stays
+    // bound to <label>") would print this machine's own label as somewhere
+    // else - the 2026-08-11 lie. Separate reason, separate copy.
+    expect(banner?.getAttribute("data-reason")).toBe("chat-not-on-this-host");
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
     ).toBeNull();
@@ -1607,8 +1696,11 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
   });
 
   it("flips to the live surface once a local record appears (e.g. this identity adopts the chat)", async () => {
+    // Unreachable owner is what puts this tab on the copy in the first place
+    // now; the flip under test is still the record's arrival.
     testState.missingArtifactIds.add(CHAT.id);
     testState.activeHostId = CHAT.hostId;
+    testState.unreachableHostIds.add(CHAT.hostId);
     testState.cloudKnownChatIds.add(CHAT.id);
     seedCanvas([CHAT], CHAT.instanceId);
     const { container, rerender } = render(

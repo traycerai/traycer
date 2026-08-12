@@ -253,6 +253,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     createChat.mutate(
       {
         epicId,
+        // The fork runs on the TAB's host (`useEpicCreateChatForHost` ->
+        // `useTabHostClient`), and the forked chat is bound to it for life.
+        hostId,
         parentId: target.parentId,
         title: trimmedTitle,
         chatId,

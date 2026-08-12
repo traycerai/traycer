@@ -20,6 +20,15 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ChatProgressIconProps {
   readonly epicId: string;
   readonly chatId: string;
+  /**
+   * The host that owns this chat, named by the surface rendering the icon: a
+   * canvas tab passes its ref's bound host, a sidebar row passes the host off
+   * its own projection row. A chat id alone does not identify a session (it is
+   * host-minted), so without this the icon could read a same-id chat on
+   * another machine. `null` (a row whose projection carries no host) simply
+   * means no session to read - the icon falls back to epic awareness.
+   */
+  readonly hostId: string | null;
   readonly className: string | undefined;
   readonly mutedClassName: string;
   readonly testId: string;
@@ -46,7 +55,11 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   const awarenessRunning: IndicatorRunningKind =
     useEpicAgentActivityTiers().get(props.chatId) ?? false;
   const fallbackReadOnly = useEpicPermissionRole() === "viewer";
-  const handle = useExistingChatSessionHandle(props.epicId, props.chatId);
+  const handle = useExistingChatSessionHandle(
+    props.epicId,
+    props.chatId,
+    props.hostId,
+  );
   const indicatorState = useSurfaceNotificationIndicatorState({
     epicId: props.epicId,
     chatId: props.chatId,
