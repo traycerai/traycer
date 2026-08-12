@@ -6,7 +6,13 @@ import {
   type ReactNode,
 } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type {
   ImageAssetMeta,
   UseImageAssetResult,
@@ -409,10 +415,12 @@ afterEach(() => {
 });
 
 function triggerStageResize(width: number, height: number): void {
-  state.stageRect = { width, height };
-  for (const observer of [...resizeObservers]) {
-    observer.trigger(width, height);
-  }
+  act(() => {
+    state.stageRect = { width, height };
+    for (const observer of [...resizeObservers]) {
+      observer.trigger(width, height);
+    }
+  });
 }
 
 describe("image preview interactions", () => {
@@ -520,6 +528,52 @@ describe("image preview interactions", () => {
     expect(instance.currentTransform.scale).not.toBeCloseTo(0.25);
     expect(instance.centerViewCalls).toHaveLength(0);
   });
+
+  it("refits a fitted preview when its stage resizes", () => {
+    renderPreview(false);
+
+    expect(
+      screen
+        .getByRole("button", { name: "Fit to screen" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    const image = screen.getByRole("img", { name: "photo.png" });
+    Object.defineProperty(image, "naturalWidth", {
+      configurable: true,
+      value: 640,
+    });
+    Object.defineProperty(image, "naturalHeight", {
+      configurable: true,
+      value: 480,
+    });
+
+    triggerStageResize(600, 400);
+
+    expect(state.instances[0].centerViewCalls).toEqual([[0.7, 0]]);
+  });
+
+  it("does not crash when a manual zoom is followed by a stage resize", () => {
+    renderPreview(false);
+
+    const image = screen.getByRole("img", { name: "photo.png" });
+    Object.defineProperty(image, "naturalWidth", {
+      configurable: true,
+      value: 640,
+    });
+    Object.defineProperty(image, "naturalHeight", {
+      configurable: true,
+      value: 480,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+
+    triggerStageResize(600, 400);
+
+    expect(state.instances[0].currentTransform.scale).toBeGreaterThan(1);
+    expect(state.instances[0].centerViewCalls).toHaveLength(0);
+  });
 });
 
 describe("linked image diff transforms", () => {
@@ -580,6 +634,22 @@ describe("linked image diff transforms", () => {
       wrappers.every(
         (wrapper) => wrapper.getAttribute("data-disabled") === "true",
       ),
+    ).toBe(true);
+  });
+
+  it("disables shared Zoom out immediately for an uncached huge diff image", () => {
+    const largeMeta: ImageAssetMeta = {
+      ...META,
+      width: 4_000,
+      height: 3_000,
+    };
+    state.oldAsset = { ...readyAsset("blob:old"), meta: largeMeta };
+    state.newAsset = { ...readyAsset("blob:new"), meta: largeMeta };
+
+    renderDiff({});
+
+    expect(
+      screen.getByRole("button", { name: "Zoom out" }).hasAttribute("disabled"),
     ).toBe(true);
   });
 });
