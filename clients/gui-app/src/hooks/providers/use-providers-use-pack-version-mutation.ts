@@ -13,6 +13,7 @@ import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { packVersionUseRefusalMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
+import type { VersionManagerPanelToken } from "@/components/settings/panels/provider-pack-version-manager-presence";
 import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
 
 type UsePackVersionMutationResult = UseMutationResult<
@@ -24,6 +25,7 @@ type UsePackVersionMutationResult = UseMutationResult<
 
 interface UsePackVersionMutationContext {
   readonly hostId: string | null;
+  readonly panel: VersionManagerPanelToken | null;
 }
 
 /**
@@ -43,13 +45,21 @@ interface UsePackVersionMutationContext {
  * The panel still draws a refusal inline - on the row, or in the header for a
  * cleared pin, which has no row - while it is mounted. `versionManagerPanelIsMounted`
  * is what keeps the two surfaces from both firing.
+ *
+ * `panel` is the token of the panel making the request, captured at `onMutate`
+ * so delivery asks about THAT panel rather than about panels in general. Pass
+ * null from any caller with no inline surface of its own: the hook then owns
+ * every outcome.
  */
-export function useProvidersUsePackVersion(): UsePackVersionMutationResult {
-  return useProvidersUsePackVersionForClient(useHostClient());
+export function useProvidersUsePackVersion(
+  panel: VersionManagerPanelToken | null,
+): UsePackVersionMutationResult {
+  return useProvidersUsePackVersionForClient(useHostClient(), panel);
 }
 
 export function useProvidersUsePackVersionForClient(
   client: HostClient<HostRpcRegistry> | null,
+  panel: VersionManagerPanelToken | null,
 ): UsePackVersionMutationResult {
   const queryClient = useQueryClient();
   return useHostMutation<
@@ -62,8 +72,8 @@ export function useProvidersUsePackVersionForClient(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: providersMutationKeys.usePackVersion(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (response, variables, context) => {
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null, panel }),
+      onSuccess: (response, _variables, context) => {
         if (context.hostId !== null) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
@@ -73,22 +83,32 @@ export function useProvidersUsePackVersionForClient(
           });
         }
         if (response.result.ok) {
+          // Report the pin the HOST ended up with, not the one we asked for.
+          // The schema echoes `pinnedVersion` precisely so a caller that raced
+          // another host sharing the pack store re-renders the truth instead of
+          // its own optimistic guess - assuming `variables.version` won could
+          // announce a version that is not actually pinned, or announce a clear
+          // that another host has already replaced.
+          //
           // Honest semantics: running sessions keep the binary they started
           // with. Toasted from HERE rather than per call, because the panel
           // that used to own this sentence unmounts with its popover.
+          const pinned = response.result.pinnedVersion;
           toast.success(
-            variables.version === null
+            pinned === null
               ? "Pin cleared — new sessions follow automatic version selection"
-              : `New sessions will use ${variables.version}`,
+              : `New sessions will use ${pinned}`,
           );
           return;
         }
         // A typed refusal is a SUCCESSFUL response, so `onError` never sees it.
         // The panel draws it inline - on the row, or in the header for a
         // cleared pin - whenever it is still mounted, which is better context
-        // than a toast. This covers only the case it cannot: the popover closed
-        // mid-flight and took the per-call callback with it.
-        if (!versionManagerPanelIsMounted()) {
+        // than a toast. This covers only the case it cannot: the popover that
+        // asked closed mid-flight and took the per-call callback with it.
+        // Another pack's panel being open is not a substitute - it never made
+        // the request and has no row to anchor the refusal to.
+        if (!versionManagerPanelIsMounted(context.panel)) {
           toast.error(packVersionUseRefusalMessage(response.result.code));
         }
       },

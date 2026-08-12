@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 import type {
   ProviderManagedVersions,
   ProviderPackVersion,
@@ -14,7 +14,10 @@ import {
 } from "@/components/ui/hover-card";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProviderPackVersionManagerSupport } from "./provider-pack-version-manager-capability";
-import { registerVersionManagerPanel } from "./provider-pack-version-manager-presence";
+import {
+  createVersionManagerPanelToken,
+  registerVersionManagerPanel,
+} from "./provider-pack-version-manager-presence";
 import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
 import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
@@ -110,9 +113,21 @@ export function ProviderPackVersionManagerPanel(
   // when hostId is null (no handshake possible yet).
   const methodSupport = useProviderPackVersionManagerSupport(hostId);
 
-  const install = useProvidersInstallPackVersion();
-  const remove = useProvidersRemovePackVersion();
-  const useVersion = useProvidersUsePackVersion();
+  // This panel's own identity, handed to every mutation it starts so the
+  // outcome comes back to THIS panel rather than to whichever panel happens to
+  // be mounted when the response lands. Re-minted when the pack changes: an
+  // RPC still in flight for the old pack then holds a token this panel no
+  // longer registers, and the hook toasts it instead of trusting a panel that
+  // has no row for it. A recomputation for any other reason degrades the same
+  // way - toward a toast, never toward silence.
+  const panelToken = useMemo(
+    () => createVersionManagerPanelToken(packId),
+    [packId],
+  );
+
+  const install = useProvidersInstallPackVersion(panelToken);
+  const remove = useProvidersRemovePackVersion(panelToken);
+  const useVersion = useProvidersUsePackVersion(panelToken);
   const setPolicy = useProvidersSetPackPolicy();
 
   const [rowNotice, setRowNotice] = useState<RowNotice | null>(null);
@@ -129,7 +144,15 @@ export function ProviderPackVersionManagerPanel(
   // it is, refusals draw inline below, anchored to what they are about; once
   // the popover closes this unregisters and the hooks toast instead. Without
   // it, an outcome that lands after close is either dropped or double-drawn.
-  useEffect(() => registerVersionManagerPanel(), []);
+  //
+  // Registered only for the render that actually HAS those inline surfaces.
+  // The pending and unsupported branches below return early, before any notice
+  // is drawn, so a registration there would claim an outcome it cannot show.
+  const canRenderOutcome = hostId !== null && methodSupport === true;
+  useEffect(() => {
+    if (!canRenderOutcome) return undefined;
+    return registerVersionManagerPanel(panelToken);
+  }, [canRenderOutcome, panelToken]);
 
   const sharedLine = formatSharedWithProvidersLine(
     managedVersions.sharedWithProviders,

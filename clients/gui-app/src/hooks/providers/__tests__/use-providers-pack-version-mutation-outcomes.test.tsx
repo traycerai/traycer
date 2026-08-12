@@ -37,6 +37,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 import {
+  createVersionManagerPanelToken,
   registerVersionManagerPanel,
   resetVersionManagerPanelPresence,
   versionManagerPanelIsMounted,
@@ -78,7 +79,7 @@ describe("usePackVersion outcome delivery", () => {
     mocks.request.mockResolvedValue({
       result: { ok: true, pinnedVersion: "2.0.0" },
     });
-    const { result } = renderHook(() => useProvidersUsePackVersion(), {
+    const { result } = renderHook(() => useProvidersUsePackVersion(null), {
       wrapper: wrapper(),
     });
 
@@ -95,7 +96,7 @@ describe("usePackVersion outcome delivery", () => {
     mocks.request.mockResolvedValue({
       result: { ok: true, pinnedVersion: null },
     });
-    const { result } = renderHook(() => useProvidersUsePackVersion(), {
+    const { result } = renderHook(() => useProvidersUsePackVersion(null), {
       wrapper: wrapper(),
     });
 
@@ -115,7 +116,7 @@ describe("usePackVersion outcome delivery", () => {
     mocks.request.mockResolvedValue({
       result: { ok: false, code: "below-security-floor", detail: null },
     });
-    const { result } = renderHook(() => useProvidersUsePackVersion(), {
+    const { result } = renderHook(() => useProvidersUsePackVersion(null), {
       wrapper: wrapper(),
     });
 
@@ -129,11 +130,12 @@ describe("usePackVersion outcome delivery", () => {
   });
 
   it("stays silent on a refusal while the panel is mounted to render it", async () => {
-    const release = registerVersionManagerPanel();
+    const panel = createVersionManagerPanelToken("opencode");
+    const release = registerVersionManagerPanel(panel);
     mocks.request.mockResolvedValue({
       result: { ok: false, code: "below-security-floor", detail: null },
     });
-    const { result } = renderHook(() => useProvidersUsePackVersion(), {
+    const { result } = renderHook(() => useProvidersUsePackVersion(panel), {
       wrapper: wrapper(),
     });
 
@@ -146,6 +148,72 @@ describe("usePackVersion outcome delivery", () => {
     expect(mocks.toastError).not.toHaveBeenCalled();
     release();
   });
+
+  it("toasts when the INITIATING panel is gone even though another remains", async () => {
+    // The defect a global count reintroduces. Pack A's request is in flight;
+    // the user opens pack B's popover, so A unmounts while the count stays
+    // above zero. A's refusal has no inline surface left - B has no row for it
+    // and never asked - so suppressing the toast loses the outcome entirely.
+    const packA = createVersionManagerPanelToken("opencode");
+    const releaseA = registerVersionManagerPanel(packA);
+    const packB = createVersionManagerPanelToken("claude");
+    const releaseB = registerVersionManagerPanel(packB);
+
+    mocks.request.mockResolvedValue({
+      result: { ok: false, code: "below-security-floor", detail: null },
+    });
+    const { result } = renderHook(() => useProvidersUsePackVersion(packA), {
+      wrapper: wrapper(),
+    });
+
+    result.current.mutate({ packId: "opencode", version: "0.1.0" });
+    // A's popover closes mid-flight; B stays open.
+    releaseA();
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Below the publisher's security minimum — cannot select",
+      );
+    });
+    releaseB();
+  });
+
+  it("reports the pin the host durably kept, not the one we asked for", async () => {
+    // `ok: true` echoes `pinnedVersion` because another host sharing the pack
+    // store can win the write. Announcing `variables.version` would claim a pin
+    // that is not in force.
+    mocks.request.mockResolvedValue({
+      result: { ok: true, pinnedVersion: "3.0.0" },
+    });
+    const { result } = renderHook(() => useProvidersUsePackVersion(null), {
+      wrapper: wrapper(),
+    });
+
+    result.current.mutate({ packId: "opencode", version: "2.0.0" });
+
+    await waitFor(() => {
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(
+        "New sessions will use 3.0.0",
+      );
+    });
+  });
+
+  it("reports a clear that another host has already replaced with a pin", async () => {
+    mocks.request.mockResolvedValue({
+      result: { ok: true, pinnedVersion: "3.0.0" },
+    });
+    const { result } = renderHook(() => useProvidersUsePackVersion(null), {
+      wrapper: wrapper(),
+    });
+
+    result.current.mutate({ packId: "opencode", version: null });
+
+    await waitFor(() => {
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(
+        "New sessions will use 3.0.0",
+      );
+    });
+  });
 });
 
 describe("remove outcome delivery", () => {
@@ -155,7 +223,7 @@ describe("remove outcome delivery", () => {
     mocks.request.mockResolvedValue({
       result: { ok: false, code: "deferred-locked", detail: null },
     });
-    const { result } = renderHook(() => useProvidersRemovePackVersion(), {
+    const { result } = renderHook(() => useProvidersRemovePackVersion(null), {
       wrapper: wrapper(),
     });
 
@@ -171,7 +239,7 @@ describe("remove outcome delivery", () => {
     mocks.request.mockResolvedValue({
       result: { ok: false, code: "quarantine-reserved", detail: null },
     });
-    const { result } = renderHook(() => useProvidersRemovePackVersion(), {
+    const { result } = renderHook(() => useProvidersRemovePackVersion(null), {
       wrapper: wrapper(),
     });
 
@@ -189,7 +257,7 @@ describe("install outcome delivery", () => {
     mocks.request.mockResolvedValue({
       result: { ok: false, code: "condemned", detail: null },
     });
-    const { result } = renderHook(() => useProvidersInstallPackVersion(), {
+    const { result } = renderHook(() => useProvidersInstallPackVersion(null), {
       wrapper: wrapper(),
     });
 
@@ -204,32 +272,54 @@ describe("install outcome delivery", () => {
 });
 
 describe("panel presence accounting", () => {
-  it("still reports mounted while a second panel holds a registration", () => {
+  it("answers about the panel asked about, not about panels in general", () => {
     // Settings can mount a panel for a second pack before the first finishes
-    // unmounting. A boolean would report "gone" with a panel still on screen,
-    // and the hook would toast over a visible inline notice.
-    const first = registerVersionManagerPanel();
-    const second = registerVersionManagerPanel();
+    // unmounting. Each answer has to be about the token handed in: the first
+    // panel is gone, the second is not, and one question cannot return the
+    // other's answer.
+    const first = createVersionManagerPanelToken("opencode");
+    const releaseFirst = registerVersionManagerPanel(first);
+    const second = createVersionManagerPanelToken("claude");
+    const releaseSecond = registerVersionManagerPanel(second);
 
-    first();
-    expect(versionManagerPanelIsMounted()).toBe(true);
+    releaseFirst();
+    expect(versionManagerPanelIsMounted(first)).toBe(false);
+    expect(versionManagerPanelIsMounted(second)).toBe(true);
 
-    second();
-    expect(versionManagerPanelIsMounted()).toBe(false);
+    releaseSecond();
+    expect(versionManagerPanelIsMounted(second)).toBe(false);
   });
 
-  it("releases only once, so a re-invoked effect cleanup cannot go negative", () => {
-    const release = registerVersionManagerPanel();
+  it("gives two panels for the same pack distinct identities", () => {
+    // The pack id is a debugging label, not the key. Two popovers for one pack
+    // are two surfaces, and releasing one must not answer for the other.
+    const first = createVersionManagerPanelToken("opencode");
+    const second = createVersionManagerPanelToken("opencode");
+    const releaseFirst = registerVersionManagerPanel(first);
+    registerVersionManagerPanel(second);
+
+    releaseFirst();
+    expect(versionManagerPanelIsMounted(first)).toBe(false);
+    expect(versionManagerPanelIsMounted(second)).toBe(true);
+  });
+
+  it("treats an unclaimed outcome as one the hook must report", () => {
+    // No token means no panel ever claimed the outcome, so there is nothing on
+    // screen to draw it and the hook has to toast.
+    expect(versionManagerPanelIsMounted(null)).toBe(false);
+  });
+
+  it("releases only once, so a re-invoked effect cleanup cannot unregister a live panel", () => {
+    // React double-invokes effects in development: mount, cleanup, mount. The
+    // second cleanup call must not delete the registration the re-run just
+    // made, which would report "no panel" with a panel mounted and silently
+    // restore the original defect.
+    const panel = createVersionManagerPanelToken("opencode");
+    const release = registerVersionManagerPanel(panel);
     release();
+    registerVersionManagerPanel(panel);
     release();
 
-    // Were the second release to decrement, the count would sit at -1: one
-    // later registration would leave it at 0, reporting "no panel" with a
-    // panel mounted, and silently restoring the original defect.
-    const second = registerVersionManagerPanel();
-    expect(versionManagerPanelIsMounted()).toBe(true);
-
-    second();
-    expect(versionManagerPanelIsMounted()).toBe(false);
+    expect(versionManagerPanelIsMounted(panel)).toBe(true);
   });
 });

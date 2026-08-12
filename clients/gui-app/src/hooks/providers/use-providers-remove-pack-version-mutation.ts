@@ -13,6 +13,7 @@ import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { removeResultUserMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
+import type { VersionManagerPanelToken } from "@/components/settings/panels/provider-pack-version-manager-presence";
 import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
 
 type RemovePackVersionMutationResult = UseMutationResult<
@@ -24,6 +25,7 @@ type RemovePackVersionMutationResult = UseMutationResult<
 
 interface RemovePackVersionMutationContext {
   readonly hostId: string | null;
+  readonly panel: VersionManagerPanelToken | null;
 }
 
 /**
@@ -37,13 +39,21 @@ interface RemovePackVersionMutationContext {
  * per-call `onError`: this panel lives inside an unforced Radix popover, so
  * closing the version menu mid-flight unmounts the mutation observer and
  * TanStack drops the per-call callback.
+ *
+ * `panel` is the token of the panel making the request, captured at `onMutate`
+ * so delivery asks about THAT panel rather than about panels in general. Pass
+ * null from any caller with no inline surface of its own: the hook then owns
+ * every outcome.
  */
-export function useProvidersRemovePackVersion(): RemovePackVersionMutationResult {
-  return useProvidersRemovePackVersionForClient(useHostClient());
+export function useProvidersRemovePackVersion(
+  panel: VersionManagerPanelToken | null,
+): RemovePackVersionMutationResult {
+  return useProvidersRemovePackVersionForClient(useHostClient(), panel);
 }
 
 export function useProvidersRemovePackVersionForClient(
   client: HostClient<HostRpcRegistry> | null,
+  panel: VersionManagerPanelToken | null,
 ): RemovePackVersionMutationResult {
   const queryClient = useQueryClient();
   return useHostMutation<
@@ -56,7 +66,7 @@ export function useProvidersRemovePackVersionForClient(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: providersMutationKeys.removePackVersion(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null, panel }),
       onSuccess: (response, _variables, context) => {
         if (context.hostId !== null) {
           void queryClient.invalidateQueries({
@@ -68,8 +78,10 @@ export function useProvidersRemovePackVersionForClient(
         }
         if (response.result.ok) return;
         // Typed refusals ride the success path, so `onError` cannot see them.
-        // Only cover the case the panel cannot: it unmounted mid-flight.
-        if (versionManagerPanelIsMounted()) return;
+        // Only cover the case the panel cannot: the panel that asked unmounted
+        // mid-flight. Another pack's panel being open is not a substitute - it
+        // has no row for this version and never made the request.
+        if (versionManagerPanelIsMounted(context.panel)) return;
         const message = removeResultUserMessage(response.result);
         // `deferred-locked` is not a failure - the delete is recorded and runs
         // at turnover. Toasting it as an error would contradict the row, which
