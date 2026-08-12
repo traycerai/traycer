@@ -226,6 +226,7 @@ export function useChatSessionHandle(
       { epicId, chatId, hostId, scopeKey },
       (factoryEpicId, factoryChatId) =>
         createChatSessionStore({
+          hostId,
           epicId: factoryEpicId,
           chatId: factoryChatId,
           userId,

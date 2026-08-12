@@ -139,10 +139,13 @@ function createHarness(ownedEntries: OwnedIndicatorRows): Harness {
 }
 
 function Probe(props: { readonly chatId: string }): ReactNode {
-  const state = useSurfaceNotificationIndicatorState({
-    epicId: "epic-1",
-    chatId: props.chatId,
-  });
+  const state = useSurfaceNotificationIndicatorState(
+    {
+      epicId: "epic-1",
+      chatId: props.chatId,
+    },
+    null,
+  );
   return (
     <span data-testid={`probe-${props.chatId}`}>
       {[

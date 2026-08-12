@@ -82,6 +82,7 @@ function registerChatSession(
     },
     () =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId: EPIC_ID,
         chatId,
         userId: null,

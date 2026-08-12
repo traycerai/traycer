@@ -57,6 +57,7 @@ function providerStateWith(
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
   };
 }
@@ -327,6 +328,10 @@ describe("preparing labels", () => {
  * binary the host will happily spawn. Softening the blocking copy would not
  * have been enough: "Claude Code setup failed" is simply false there, and
  * "Preparing Claude Code…" announces a wait that is not happening.
+ *
+ * The shared strings name the managed copy's update only - never the
+ * provider's readiness, and never a download percentage the user is not
+ * waiting on.
  */
 describe("labels for an install that blocks nothing", () => {
   const runnable = (
@@ -340,19 +345,33 @@ describe("labels for an install that blocks nothing", () => {
     fallbackRunnable: true,
   });
 
-  it("leads with the fact that the provider works", () => {
+  it("names a background managed download without a percentage", () => {
     expect(
       providerPackPreparingLabel(runnable("downloading", 42), "Claude Code"),
-    ).toBe("Claude Code is ready to use · installing managed copy… 42%");
+    ).toBe("Updating Claude Code in background");
     expect(
       providerPackPreparingLabel(runnable("downloading", null), "Claude Code"),
-    ).toBe("Claude Code is ready to use · installing managed copy…");
-    expect(
-      providerPackPreparingLabel(runnable("error", null), "Claude Code"),
-    ).toBe("Claude Code is ready to use · managed copy failed to install");
+    ).toBe("Updating Claude Code in background");
+    expect(providerPackPreparingShortLabel(runnable("downloading", 42))).toBe(
+      "Updating in background",
+    );
+    expect(providerPackPreparingShortLabel(runnable("downloading", null))).toBe(
+      "Updating in background",
+    );
   });
 
-  it("never borrows the blocking copy", () => {
+  it("names a non-blocking managed failure without the blocking setup line", () => {
+    expect(
+      providerPackPreparingLabel(runnable("error", null), "Claude Code"),
+    ).toBe(
+      "Claude Code update failed - the download could not be reached. Retry when you're back online.",
+    );
+    expect(providerPackPreparingShortLabel(runnable("error", null))).toBe(
+      "Update failed",
+    );
+  });
+
+  it("never borrows the gating copy or a percentage", () => {
     for (const preparing of [
       runnable("downloading", 42),
       runnable("downloading", null),
@@ -363,19 +382,21 @@ describe("labels for an install that blocks nothing", () => {
       // dead-provider line. Neither describes a provider the user can run.
       expect(label).not.toContain("Preparing Claude Code");
       expect(label).not.toContain("Claude Code setup failed");
+      expect(label).not.toMatch(/%/);
       const short = providerPackPreparingShortLabel(preparing);
       expect(short).not.toBe("Setup failed");
       expect(short).not.toContain("Preparing");
-      expect(short.startsWith("Ready")).toBe(true);
+      expect(short).not.toMatch(/%/);
     }
   });
 });
 
 /**
- * `unrepairable` is the only reason that is not a "try again" (see
+ * `unrepairable` is a terminal non-retryable reason (see
  * `providerManagedInstallErrorReasonSchema`): the bytes verified against their
  * signed digest and were defective anyway, so the registry holds the identical
- * blob fleet-wide and no reinstall can change the outcome.
+ * blob fleet-wide and no reinstall can change the outcome. The exhaustive
+ * allow-list test below covers the broader default-deny policy.
  *
  * The failure these two describes exist to catch is a QUIET one - the enum
  * grows, the new member lands in `providerPackErrorDetail`'s deliberately
@@ -390,9 +411,7 @@ const detailFor = (reason: ProviderManagedInstallErrorReason): string =>
 describe("the terminal `unrepairable` reason", () => {
   it("never tells the user to retry a build that can never work", () => {
     const copy = detailFor("unrepairable");
-    // The whole point. `default:` returns "retry to try again." and every
-    // other reason's copy contains "retry" or "Retry" on purpose - only this
-    // one must not, in any casing.
+    // This terminal reason's detail must never promise a retry, in any casing.
     expect(copy).not.toMatch(/retry/i);
     // ...and it is not the fail-open fallback wearing different words: the
     // `unknown` arm is the closest neighbour that DOES route to a retry, so a
@@ -403,22 +422,10 @@ describe("the terminal `unrepairable` reason", () => {
     expect(copy).not.toContain("Preparing");
   });
 
-  it("is the only reason whose surface may not offer a retry", () => {
+  it("is non-retryable, like every reason outside the allow-list", () => {
     expect(providerPackRetryable(blockingFailure("unrepairable", null))).toBe(
       false,
     );
-    // Enumerated, not sampled: every other member of the closed enum stays
-    // retryable, because for those a user-initiated `providers.ensurePack` is
-    // the user's only way to clear the backoff. An exclusion that grew to cover
-    // one of these would strand a recoverable failure with no action at all.
-    for (const reason of [
-      "disk-full",
-      "network",
-      "verification",
-      "unknown",
-    ] as const) {
-      expect(providerPackRetryable(blockingFailure(reason, null))).toBe(true);
-    }
     // A download in flight has nothing to retry either, and for the opposite
     // reason - it has not failed.
     expect(providerPackRetryable(blockingDownload(42))).toBe(false);
@@ -435,37 +442,23 @@ describe("the terminal `unrepairable` reason", () => {
     ).toBe(false);
   });
 
-  it("forces a retryability decision for every reason the protocol defines", () => {
+  it("default-denies retry for every protocol reason outside the explicit allow-list", () => {
     // Enumerating the CLOSED SET from the schema itself, not a hand-copied
-    // list: the failure mode this whole allow-list exists for is a new member
-    // silently inheriting a default. A member added to the protocol without a
-    // deliberate choice here fails this test rather than shipping a button
-    // that does nothing.
-    const decided = new Set<ProviderManagedInstallErrorReason>([
+    // member list: a new protocol reason that is not on the allow-list must
+    // stay non-retryable. That is the load-bearing default-deny property -
+    // stronger than naming one terminal reason, and constructible without
+    // casts.
+    const retryable = new Set<ProviderManagedInstallErrorReason>([
       "disk-full",
       "network",
       "verification",
-      "unknown",
       "live-owner-stalled",
-      "unrepairable",
-      "trust-unavailable",
-      "local-storage-mismatch",
-    ]);
-    const nonRetryable = new Set<ProviderManagedInstallErrorReason>([
-      "unrepairable",
-      "trust-unavailable",
-      // The host has already STOPPED refetching for this reason - that is what
-      // the reason means. A retry button would restart nothing: the click
-      // reaches `providers.ensurePack`, which would meet the same strike record
-      // and the same device. The user's move is the disk, or a CLI outside the
-      // managed store.
-      "local-storage-mismatch",
+      "unknown",
     ]);
 
     for (const reason of providerManagedInstallErrorReasonSchema.options) {
-      expect(decided.has(reason)).toBe(true);
       expect(providerPackRetryable(blockingFailure(reason, null))).toBe(
-        !nonRetryable.has(reason),
+        retryable.has(reason),
       );
     }
   });

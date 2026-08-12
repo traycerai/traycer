@@ -1529,9 +1529,10 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   const activityStatus = useEpicActivityStatus(
     props.item.taskType === "epic" ? props.item.epicId : null,
   );
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.item.epicId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: props.item.epicId },
+    null,
+  );
   return (
     <NotificationIndicatorIcon
       state={indicatorState}

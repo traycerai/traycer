@@ -529,6 +529,7 @@ function shouldPromoteToolSegment(
   segment: ToolSegment,
   promotedToolBlockIds: ReadonlySet<string>,
 ): boolean {
+  if (segment.toolName === "image_generation") return true;
   if (segment.agentMessageSend !== null) return true;
   // A backgrounded command/Monitor stays a standalone card for its whole life -
   // running, completed, stopped, errored, and after reload - keyed on the

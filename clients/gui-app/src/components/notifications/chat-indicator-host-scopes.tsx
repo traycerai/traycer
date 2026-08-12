@@ -1,5 +1,4 @@
 import { useContext, useMemo, type ReactNode } from "react";
-import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
@@ -11,6 +10,7 @@ import {
   mergeHostPendingForkIntoCloudIndicators,
   mergeIndicatorStateResponses,
   selectCloudNotificationIndicators,
+  type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
 /**
@@ -112,12 +112,28 @@ function ChatIndicatorHostLayer(props: {
     enabled: props.chatIds.length > 0,
   });
   const inherited = useContext(NotificationIndicatorsContext);
-  const merged: HostNotificationsIndicatorStateResponse = useMemo(
+  const merged: SurfaceNotificationIndicators = useMemo(
     () =>
       props.isCloud
-        ? mergeHostPendingForkIntoCloudIndicators(inherited, host.data)
-        : mergeIndicatorStateResponses(inherited, host.data),
-    [props.isCloud, inherited, host.data],
+        ? mergeHostPendingForkIntoCloudIndicators(
+            inherited,
+            host.data,
+            props.hostId,
+          )
+        : {
+            ...mergeIndicatorStateResponses(inherited, host.data),
+            // This layer read exactly one host, so its rows file under that
+            // host's origin - same rule the single-host hook applies.
+            byOriginHostId: {
+              ...inherited.byOriginHostId,
+              [props.hostId]: mergeIndicatorStateResponses(
+                inherited.byOriginHostId?.[props.hostId] ??
+                  EMPTY_INDICATOR_STATE_RESPONSE,
+                host.data,
+              ),
+            },
+          },
+    [props.isCloud, inherited, host.data, props.hostId],
   );
   return (
     <NotificationIndicatorsProvider indicators={merged}>

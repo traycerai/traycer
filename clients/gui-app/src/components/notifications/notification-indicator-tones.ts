@@ -17,8 +17,11 @@ import type {
  * per-row `NotificationIndicatorIcon` and the chat tree's descendant-status
  * rollup badge derive their glyph and color from these, so the two surfaces
  * cannot drift apart. `attentionTone` also encodes the attention-tier
- * precedence (failure > fork > interview > approval); the running and unread-done
- * tiers slot in below it at each consumer per its activity signal.
+ * precedence (failure > fork > interview > approval); the running and
+ * unread-done tiers slot in below it at each consumer per its activity signal.
+ * Producers resolve terminal chronology per entity before states reach this
+ * renderer, so a mixed failure/done aggregate means different descendants
+ * still need both tones represented and failure must win.
  */
 export type NotificationStatusKind =
   | "failure"

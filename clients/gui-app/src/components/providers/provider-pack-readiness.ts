@@ -169,9 +169,8 @@ export function providerPackPreparingByHarnessId(
  * the blocking one. "Claude Code setup failed" in front of a user whose Claude
  * Code is running fine from PATH is simply false, and "Preparing…" on a
  * provider they can use right now reads as a wait they do not have. The
- * fallback lines lead with the fact that matters - it works - and mirror the
- * Settings notice ("Running from PATH · installing managed copy") so the two
- * surfaces describe one situation the same way.
+ * fallback label describes the managed copy's update, not the provider's
+ * readiness: that is the one subject the status cell owns.
  */
 export function providerPackPreparingLabel(
   preparing: ProviderPackPreparing,
@@ -179,12 +178,9 @@ export function providerPackPreparingLabel(
 ): string {
   if (!providerPackBlocksExecution(preparing)) {
     if (preparing.kind === "error") {
-      return `${providerLabel} is ready to use · managed copy failed to install`;
+      return `${providerLabel} update failed - ${providerPackErrorDetail(preparing.reason)}`;
     }
-    if (preparing.percent !== null) {
-      return `${providerLabel} is ready to use · installing managed copy… ${preparing.percent}%`;
-    }
-    return `${providerLabel} is ready to use · installing managed copy…`;
+    return `Updating ${providerLabel} in background`;
   }
   if (preparing.kind === "error") {
     return `${providerLabel} setup failed - ${providerPackErrorDetail(preparing.reason)}`;
@@ -200,11 +196,8 @@ export function providerPackPreparingShortLabel(
   preparing: ProviderPackPreparing,
 ): string {
   if (!providerPackBlocksExecution(preparing)) {
-    if (preparing.kind === "error") return "Ready · managed install failed";
-    if (preparing.percent !== null) {
-      return `Ready · installing… ${preparing.percent}%`;
-    }
-    return "Ready · installing…";
+    if (preparing.kind === "error") return "Update failed";
+    return "Updating in background";
   }
   if (preparing.kind === "error") return "Setup failed";
   if (preparing.percent !== null) return `Preparing… ${preparing.percent}%`;
@@ -215,31 +208,27 @@ export function providerPackPreparingShortLabel(
  * Whether a failed pack's surface may OFFER a retry, as opposed to only
  * describing the failure.
  *
- * Every reason but `unrepairable` is a genuine "try again": a user-initiated
- * `providers.ensurePack` clears the pack's backoff and jumps the queue.
- * `unrepairable` means the local copy verified against its signed digest and
- * was defective anyway, so the host has recorded the cell as TERMINAL and
- * refuses further installs for it - the click cannot do anything, now or later,
- * and `providerManagedInstallErrorReasonSchema`'s own contract is that a
- * renderer must not draw the affordance. Withholding it is the same
- * "gated and labelled, never offered-then-failed" rule the rest of this module
- * follows, applied one level in: the tab is still labelled with why it failed.
+ * The five allow-listed reasons are genuine "try again" cases: a
+ * user-initiated `providers.ensurePack` clears the pack's backoff and jumps
+ * the queue. Other reasons are terminal or require a different transition, so
+ * their renderer must not draw an affordance that cannot move them.
+ * `unrepairable`, for example, means the local copy verified against its
+ * signed digest and was defective anyway; the host has recorded the cell as
+ * terminal and refuses further installs for it. Withholding the retry is the
+ * same "gated and labelled, never offered-then-failed" rule the rest of this
+ * module follows, applied one level in: the tab is still labelled with why it
+ * failed.
  *
- * An ALLOW-LIST, not an exclusion. The exclusion form was sound only while
- * `unrepairable` was the single non-retryable member, and its own justification
- * - unknown members normalize to null, so everything reaching here is known -
- * is exactly what makes it dangerous now: a KNOWN new member is retryable by
- * default, silently. `trust-unavailable` proved it. That reason means the host
- * has no install machinery at all, so the exclusion form would have drawn a
- * retry button whose click reaches `providers.ensurePack` on a host that
- * cannot serve it - offered-then-failed, the precise thing this module exists
- * to prevent, reintroduced by a one-line vocabulary addition.
+ * An ALLOW-LIST, not an exclusion. An exclusion silently treats every newly
+ * known reason as retryable. `trust-unavailable` demonstrates why that is
+ * unsafe: the host has no install machinery at all, so a retry button would
+ * reach `providers.ensurePack` and be offered-then-failed. Adding a reason
+ * now requires deciding whether a click can move it.
  *
- * The set now has three non-retryable members for three unrelated causes (a
- * defective published build; a host that cannot verify its keyring; a device
- * whose storage keeps corrupting a verified archive), which is the point at
- * which "list what is allowed" stops being ceremony. Adding a reason now
- * requires deciding whether a click can move it.
+ * The current non-retryable reasons cover a defective published build, a host
+ * that cannot verify its keyring, and a device whose storage keeps corrupting
+ * a verified archive. The allow-list makes the policy durable as that closed
+ * vocabulary grows.
  */
 const PROVIDER_PACK_RETRYABLE_REASONS: ReadonlySet<
   NonNullable<ProviderPackPreparing["reason"]>

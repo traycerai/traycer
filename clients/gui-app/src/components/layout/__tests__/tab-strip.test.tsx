@@ -353,6 +353,7 @@ function registerChatSession(epicId: string, chatId: string): void {
     },
     (factoryEpicId, factoryChatId) =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId: factoryEpicId,
         chatId: factoryChatId,
         userId: null,

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   AgentMessageSend,
   BackgroundTaskOutput,
+  ImageGenerationResult,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -47,6 +48,7 @@ import {
   useChatOpenStoreScope,
 } from "@/stores/chats/open-store-scope";
 import { ElapsedTime } from "./segment-elapsed";
+import { ImageGenerationCard } from "./image-generation-card";
 
 interface ToolSegmentProps {
   id: string;
@@ -74,6 +76,7 @@ interface ToolSegmentProps {
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
   durationMs: number | null;
+  imageResults: ReadonlyArray<ImageGenerationResult>;
   variant: "card" | "row";
   headerFindUnitId: string | null;
 }
@@ -253,6 +256,20 @@ function renderToolStreamingFooter(props: {
 }
 
 export function ToolSegment(props: ToolSegmentProps) {
+  if (props.toolName === "image_generation" && props.variant === "card") {
+    return (
+      <ImageGenerationCard
+        id={props.id}
+        inputSummary={props.inputSummary}
+        inputDetail={props.inputDetail}
+        error={props.error}
+        isStreaming={props.isStreaming}
+        endState={props.endState}
+        stopped={props.stopped}
+        imageResults={props.imageResults}
+      />
+    );
+  }
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
   }

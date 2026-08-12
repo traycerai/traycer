@@ -448,6 +448,7 @@ function toolSegment(
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
+    imageResults: [],
     startedAt: 0,
     durationMs: null,
     parentId: null,

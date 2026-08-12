@@ -1,6 +1,7 @@
 import type { Editor } from "@tiptap/react";
 import { useEditorState } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
+import { NodeSelection } from "@tiptap/pm/state";
 import {
   Bold,
   Code,
@@ -136,11 +137,12 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
       // Hide inside code blocks - inline formatting would be rejected
       // by the schema and the bar would flash against an empty selection.
       if (currentEditor.isActive("codeBlock")) return false;
-      // Hide over atom blocks (mermaid diagrams / wireframes) - each
-      // ships its own floating toolbar and the global formatting bar
-      // would fight with it visually and semantically.
+      // Hide over atom blocks: text formatting does not apply to images, and
+      // diagrams ship their own floating toolbars.
       if (currentEditor.isActive("mermaidBlock")) return false;
       if (currentEditor.isActive("uiPreviewBlock")) return false;
+      if (currentEditor.isActive("image")) return false;
+      if (currentEditor.state.selection instanceof NodeSelection) return false;
       return from !== to;
     },
     [commentAction],

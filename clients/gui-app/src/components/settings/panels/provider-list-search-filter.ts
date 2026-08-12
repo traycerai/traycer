@@ -6,6 +6,7 @@
  */
 import Fuse, { type IFuseOptions } from "fuse.js";
 import type {
+  ModelProviderEntry,
   ProviderMcpServer,
   ProviderMcpTool,
   ProviderPlugin,
@@ -82,6 +83,26 @@ const PLUGINS_FUSE_OPTIONS: IFuseOptions<ProviderPlugin> = {
   ],
 };
 
+/**
+ * Model provider rows render the display name; the id is what the user typed in
+ * a config file or read in someone's docs (`amazon-bedrock`, `github-copilot`),
+ * so it stays searchable even though the row shows the friendlier name first.
+ *
+ * A TIGHTER threshold than the rest of this module, and that is the one
+ * difference worth stating: this list is ~180 entries against the others'
+ * handful, so 0.4 over a two-character query returns most of the catalog and
+ * the search reads as broken. Nothing else here has enough rows for the
+ * looseness to show.
+ */
+const MODEL_PROVIDERS_FUSE_OPTIONS: IFuseOptions<ModelProviderEntry> = {
+  ...BASE_FUSE_OPTIONS,
+  threshold: 0.3,
+  keys: [
+    { name: "name", weight: 2 },
+    { name: "id", weight: 1 },
+  ],
+};
+
 export function isProviderListSearchActive(query: string): boolean {
   return query.trim().length > 0;
 }
@@ -123,6 +144,17 @@ export function filterProviderSkills(
 ): readonly ProviderSkill[] {
   if (!isProviderListSearchActive(query)) return skills;
   return new Fuse([...skills], SKILLS_FUSE_OPTIONS)
+    .search(query.trim())
+    .map((result) => result.item);
+}
+
+/** See {@link MODEL_PROVIDERS_FUSE_OPTIONS} for the visible-row matching rule. */
+export function filterModelProviders(
+  entries: readonly ModelProviderEntry[],
+  query: string,
+): readonly ModelProviderEntry[] {
+  if (!isProviderListSearchActive(query)) return entries;
+  return new Fuse([...entries], MODEL_PROVIDERS_FUSE_OPTIONS)
     .search(query.trim())
     .map((result) => result.item);
 }

@@ -35,6 +35,8 @@ function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
     description: "",
     icon: FAKE_ICON,
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }

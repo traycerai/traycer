@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
   downgradeProviderCliStateToV10,
   providerCliStateSchema,
   providerMutationCliStateSchemaV20,
@@ -20,6 +21,7 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -236,6 +238,7 @@ describe("nativeCapabilities on ProviderCliState", () => {
             remove: [],
           },
         },
+        modelProviders: null,
       },
     });
     expect(state.nativeCapabilities.mcp?.perToolBacking).toBe("store");
@@ -263,6 +266,7 @@ describe("nativeCapabilities on ProviderCliState", () => {
         },
         plugins: null,
         skills: null,
+        modelProviders: null,
       }).mcp?.perToolBacking,
     ).toBe("degraded-server-level");
   });
@@ -290,11 +294,13 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       providers: [baseState("amp")],
     });
     const upgraded = providersListUpgradeV6ToV7.upgradeResponse(v60);
+    // The v7.0-shaped default, not the live one: this hop's target is the
+    // pinned v7.0 line, whose default carries `modelProviders: null`.
     expect(upgraded.providers[0]?.nativeCapabilities).toEqual(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      DEFAULT_PROVIDER_NATIVE_CAPABILITIES_V70,
     );
     expect(upgraded.native).toBeNull();
-    expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
+    expect(() => providersListResponseSchemaV70.parse(upgraded)).not.toThrow();
   });
 
   // `native` rides v7.0 ALONE. It was authored against the live request object
@@ -362,7 +368,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
       native: { ok: true, kind: "mcp", servers: [] },
     });
-    const result = providersListDowngradeV7ToV6.downgradeResponse(v70);
+    const result = providersListDowngradeV7ToV6.downgradeResponse(
+      providersListResponseSchemaV70.parse(v70),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -392,11 +400,14 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
               traycerSessionToolsNotice: true,
             },
             skills: null,
+            modelProviders: null,
           },
         },
       ],
     });
-    const result = providersListDowngradeV7ToV3.downgradeResponse(v31);
+    const result = providersListDowngradeV7ToV3.downgradeResponse(
+      providersListResponseSchemaV70.parse(v31),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -419,7 +430,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV2.downgradeResponse(v31);
+    const result = providersListDowngradeV7ToV2.downgradeResponse(
+      providersListResponseSchemaV70.parse(v31),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(
@@ -439,6 +452,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         mcp: sampleMcpCapabilities,
         plugins: null,
         skills: null,
+        modelProviders: null,
       },
     });
     const downgraded = downgradeProviderCliStateToV10(latest);
@@ -451,7 +465,9 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     const list = providersListResponseSchema.parse({
       providers: [latest],
     });
-    const listResult = providersListDowngradeV7ToV1.downgradeResponse(list);
+    const listResult = providersListDowngradeV7ToV1.downgradeResponse(
+      providersListResponseSchemaV70.parse(list),
+    );
     expect(listResult.ok).toBe(true);
     if (!listResult.ok) return;
     expect(listResult.value.providers[0]).not.toHaveProperty(
@@ -472,6 +488,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
             mcp: sampleMcpCapabilities,
             plugins: null,
             skills: null,
+            modelProviders: null,
           },
         },
       ],
@@ -499,6 +516,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
           mcp: sampleMcpCapabilities,
           plugins: null,
           skills: null,
+          modelProviders: null,
         },
       }),
     };
@@ -1156,6 +1174,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
         mcp: sampleMcpCapabilities,
         plugins: null,
         skills: null,
+        modelProviders: null,
       },
     });
     const asMutationV20 = providerMutationCliStateSchemaV20.parse(latest);

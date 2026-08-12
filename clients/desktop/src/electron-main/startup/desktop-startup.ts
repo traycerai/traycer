@@ -496,6 +496,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const authTokenStore = new FileTokenStore({
     environment: config.environment,
     authnBaseUrl: config.authnBaseUrl,
+    watchImpl: undefined,
   });
 
   const hostLabel = labelForEnvironment(config.environment);

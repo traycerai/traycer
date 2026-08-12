@@ -23,6 +23,15 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
+  chatStreamErrorNotification,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import {
+  liveChatCompletionAcknowledgementMatches,
+  liveChatCompletionAcknowledgements,
+  type LiveChatCompletionAcknowledgementTransport,
+} from "@/lib/notifications/live-chat-completion-acknowledgements";
+import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
   stagedWorktreeIntentIsSuspended,
@@ -84,6 +93,7 @@ import type {
   Chat,
   ChatEvent,
   ContentBlock,
+  ImageResolutionEntry,
   InterviewAnswer,
   Message,
   UserMessageSender,
@@ -187,6 +197,13 @@ export interface LiveAssistantMessage {
    */
   readonly startedAt: number;
   readonly blocksVersion: number;
+  readonly imageResolutions: ReadonlyArray<{
+    readonly messageId: string;
+    readonly entry: ImageResolutionEntry;
+  }>;
+  /** Message owner of the currently streamed blocks' image resolutions. */
+  readonly imageResolutionOwnerMessageId?: string | null;
+  readonly imageResolutionsVersion: number;
   readonly timestamp: number;
   /**
    * Reasoning effort + service tier the turn is running with, mirrored from
@@ -566,6 +583,7 @@ export interface ChatSessionState {
 }
 
 export interface ChatSessionStoreOptions {
+  readonly hostId: string;
   readonly epicId: string;
   readonly chatId: string;
   readonly userId: string | null;
@@ -738,12 +756,38 @@ function restoreStagedWorktreeIntentForPending(
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
 ): ChatSessionStoreHandle {
+  return createChatSessionStoreWithNotificationDependencies(options, {
+    completionAcknowledgements: liveChatCompletionAcknowledgements,
+    appLocalNotifications: useAppLocalNotificationsStore,
+  });
+}
+
+export interface ChatSessionNotificationDependencies {
+  readonly completionAcknowledgements: LiveChatCompletionAcknowledgementTransport;
+  readonly appLocalNotifications: Pick<
+    typeof useAppLocalNotificationsStore,
+    "getState"
+  >;
+}
+
+export function createChatSessionStoreWithNotificationDependencies(
+  options: ChatSessionStoreOptions,
+  notificationDependencies: ChatSessionNotificationDependencies,
+): ChatSessionStoreHandle {
+  const notificationUserId = options.userId;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
   // Assigned synchronously inside the `create()` initializer below, where the
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
+  let fatalCloseNotificationGeneration: number | null = null;
+  // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
+  // turn that produced that close so another renderer's later live completion
+  // can still acknowledge this renderer's matching failure. A subsequent
+  // active turn or fatal close supersedes this slot.
+  let fatalCloseTurnId: string | null = null;
+  let unsubscribeLiveCompletionAcknowledgements = (): void => undefined;
   // Bumped whenever the connection the pendings were dispatched on is gone: a
   // transport `reconnecting`/`closed` status, or a stream-client replacement
   // (`retry`). Pending actions are stamped with this at dispatch, and the
@@ -1321,6 +1365,44 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The chat stream is the only source that can prove a success happened
+        // after a renderer-local transport failure. Notification-feed rows
+        // arrive on an independent replicated stream, so their arrival order
+        // cannot establish lifecycle order. A live terminal completion can:
+        // acknowledge only this host-bound chat's earlier local failure.
+        // Matching the active turn also keeps a late terminal delta from an
+        // older turn from consuming a failure that belongs to the current
+        // one. If the connection closes after this event, the recurring
+        // failure write below flips the row unread again.
+        if (
+          frame.event.type === "turn.completed" &&
+          get().activeTurn?.turnId === frame.event.turnId &&
+          notificationUserId !== null &&
+          notificationDependencies.appLocalNotifications.getState()
+            .activeUserId === notificationUserId
+        ) {
+          const observedAt = Date.now();
+          notificationDependencies.appLocalNotifications
+            .getState()
+            .markEntityAsRead(
+              options.hostId,
+              { epicId: options.epicId, chatId: options.chatId },
+              observedAt,
+            );
+          // Every renderer has its own app-local Zustand store. Broadcast the
+          // same live, causally-qualified proof so a sibling window whose
+          // stream died can acknowledge its copy of the earlier failure too.
+          // This is deliberately ephemeral: replaying a retained completion
+          // could consume a failure from a later connection lifecycle.
+          notificationDependencies.completionAcknowledgements.publish({
+            userId: notificationUserId,
+            originHostId: options.hostId,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            turnId: frame.event.turnId,
+            observedAt,
+          });
+        }
         bufferedDeltas.push(frame.event);
         lease.requestFlush();
         // The `code: "auth"` error frame is the one live push that flips the
@@ -1583,6 +1665,10 @@ export function createChatSessionStore(
       onSnapshot: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onSnapshot(frame);
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+          fatalCloseTurnId = null;
+        }
       },
       onWorktreeStateChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
@@ -1607,6 +1693,10 @@ export function createChatSessionStore(
       onTurnStateChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onTurnStateChanged(frame);
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+          fatalCloseTurnId = null;
+        }
       },
       onBlockDelta: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
@@ -1662,6 +1752,24 @@ export function createChatSessionStore(
       },
       onConnectionStatus: (status, reason) => {
         if (!isCurrentStream(streamGeneration)) return;
+        if (
+          status === "closed" &&
+          reason?.kind === "fatalError" &&
+          fatalCloseNotificationGeneration !== streamGeneration
+        ) {
+          fatalCloseNotificationGeneration = streamGeneration;
+          fatalCloseTurnId = get().activeTurn?.turnId ?? null;
+          notificationDependencies.appLocalNotifications
+            .getState()
+            .upsertRecurringFailure(
+              chatStreamErrorNotification({
+                hostId: options.hostId,
+                epicId: options.epicId,
+                chatId: options.chatId,
+                details: reason.details,
+              }),
+            );
+        }
         callbacks.onConnectionStatus(status, reason);
       },
     });
@@ -2564,12 +2672,47 @@ export function createChatSessionStore(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
         closeStreamClient();
       },
     };
   });
+
+  if (notificationUserId !== null) {
+    unsubscribeLiveCompletionAcknowledgements =
+      notificationDependencies.completionAcknowledgements.subscribe(
+        (acknowledgement) => {
+          const activeTurnId = store.getState().activeTurn?.turnId ?? null;
+          const recoverableTurnId = activeTurnId ?? fatalCloseTurnId;
+          if (
+            !liveChatCompletionAcknowledgementMatches(acknowledgement, {
+              userId: notificationUserId,
+              originHostId: options.hostId,
+              epicId: options.epicId,
+              chatId: options.chatId,
+              recoverableTurnId,
+            })
+          ) {
+            return;
+          }
+          const notifications =
+            notificationDependencies.appLocalNotifications.getState();
+          if (notifications.activeUserId !== notificationUserId) return;
+          // Renderer clocks share one machine clock. Preserve timestamp ties
+          // and anything later so an ambiguous or genuinely newer disconnect
+          // remains red; only clearly older failures are superseded.
+          notifications.markEntityAsReadBefore(
+            options.hostId,
+            { epicId: options.epicId, chatId: options.chatId },
+            Date.now(),
+            acknowledgement.observedAt,
+          );
+          if (activeTurnId === null) fatalCloseTurnId = null;
+        },
+      );
+  }
 
   return {
     epicId: options.epicId,
@@ -2992,6 +3135,81 @@ function withoutPendingInterview(
 function applyBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
+): Partial<ChatSessionState> {
+  return event.type === "image_resolution.updated"
+    ? applyImageResolutionDelta(state, event)
+    : applyContentDelta(state, event);
+}
+
+function applyImageResolutionDelta(
+  state: ChatSessionState,
+  event: Extract<RuntimeEvent, { type: "image_resolution.updated" }>,
+): Partial<ChatSessionState> {
+  const messageIndex = state.messages.findIndex(
+    (message) =>
+      message.role === "assistant" && message.messageId === event.messageId,
+  );
+  if (messageIndex < 0) {
+    const activeTurn = state.activeTurn;
+    if (
+      activeTurn === null ||
+      event.turnId === null ||
+      event.turnId !== activeTurn.turnId
+    ) {
+      return {};
+    }
+    const liveAssistant = liveAssistantForActiveTurn(
+      state.liveAssistantMessage,
+      activeTurn,
+    );
+    const resolutionIndex = liveAssistant.imageResolutions.findIndex(
+      (resolution) =>
+        resolution.messageId === event.messageId &&
+        resolution.entry.canonicalSource === event.entry.canonicalSource,
+    );
+    const imageResolutions =
+      resolutionIndex < 0
+        ? [
+            ...liveAssistant.imageResolutions,
+            {
+              messageId: event.messageId,
+              entry: event.entry,
+            },
+          ]
+        : liveAssistant.imageResolutions.map((resolution, index) =>
+            index === resolutionIndex
+              ? { ...resolution, entry: event.entry }
+              : resolution,
+          );
+    return {
+      liveAssistantMessage: {
+        ...liveAssistant,
+        imageResolutionOwnerMessageId: event.messageId,
+        imageResolutions,
+        imageResolutionsVersion: liveAssistant.imageResolutionsVersion + 1,
+        timestamp: event.timestamp,
+      },
+    };
+  }
+  const message = state.messages[messageIndex];
+  if (message.role !== "assistant") return {};
+  const entryIndex = message.imageResolutions.findIndex(
+    (entry) => entry.canonicalSource === event.entry.canonicalSource,
+  );
+  const imageResolutions =
+    entryIndex < 0
+      ? [...message.imageResolutions, event.entry]
+      : message.imageResolutions.map((entry, index) =>
+          index === entryIndex ? event.entry : entry,
+        );
+  const messages = state.messages.slice();
+  messages[messageIndex] = { ...message, imageResolutions };
+  return { messages };
+}
+
+function applyContentDelta(
+  state: ChatSessionState,
+  event: Exclude<RuntimeEvent, { type: "image_resolution.updated" }>,
 ): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
   // "% context left" composer chip can update during the turn. It must
@@ -3459,6 +3677,13 @@ function assistantMessageFromLiveAssistant(
       fallbackStatus,
     ),
   );
+  const ownerMessageId = liveAssistant.imageResolutionOwnerMessageId;
+  const imageResolutions =
+    ownerMessageId === undefined
+      ? liveAssistant.imageResolutions.map((resolution) => resolution.entry)
+      : liveAssistant.imageResolutions
+          .filter((resolution) => resolution.messageId === ownerMessageId)
+          .map((resolution) => resolution.entry);
   return {
     role: "assistant",
     // This frozen row is a transient safety-net placeholder that the host's
@@ -3474,6 +3699,7 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
+    imageResolutions,
   };
 }
 
@@ -3550,6 +3776,9 @@ function liveAssistantForActiveTurn(
     blocks: [],
     startedAt: activeTurn.startedAt,
     blocksVersion: 0,
+    imageResolutions: [],
+    imageResolutionOwnerMessageId: null,
+    imageResolutionsVersion: 0,
     timestamp: activeTurn.updatedAt,
     reasoningEffort: activeTurn.reasoningEffort,
     serviceTier: activeTurn.serviceTier,

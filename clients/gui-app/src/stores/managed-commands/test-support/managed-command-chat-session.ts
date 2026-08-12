@@ -49,6 +49,7 @@ export function installManagedCommandChatSession(args: {
     },
     (storeEpicId, storeChatId) =>
       createChatSessionStore({
+        hostId,
         epicId: storeEpicId,
         chatId: storeChatId,
         userId: null,

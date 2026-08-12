@@ -28,9 +28,14 @@ import {
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
-import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import {
+  isTransientLiveAssistantMessageId,
+  transientLiveAssistantMessageId,
+} from "@/lib/chat/transient-live-assistant-message-id";
 import type {
   AssistantTurnMeta,
+  AssistantMarkdownImageResolution,
+  AssistantMarkdownImageTarget,
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
@@ -469,6 +474,10 @@ function completedSteerBadge(
 // Identity-stable empties for the head/tail partition's no-merge fast path.
 const NO_MESSAGES: ReadonlyArray<Message> = [];
 const NO_RENDERED_MESSAGES: ReadonlyArray<ChatMessageModel> = [];
+const NO_DEDUPLICATED_IMAGE_TARGETS: ReadonlyMap<
+  string,
+  AssistantMarkdownImageTarget
+> = new Map();
 const NO_STEERED_IDS: ReadonlySet<string> = new Set();
 const NO_PENDING_APPROVALS: ReadonlyArray<ChatApprovalState> = [];
 const NO_PENDING_FILE_EDIT_APPROVALS: ReadonlyArray<ChatFileEditApprovalState> =
@@ -1009,6 +1018,8 @@ export function useRenderedMessages(
       turnStoppedByTurnKey,
       sweepRetainedTurnKeys: retainedTurnKeys,
       ctx: displayContext,
+      epicId,
+      chatId: ownerId,
     });
   }, [
     partition,
@@ -1023,6 +1034,8 @@ export function useRenderedMessages(
     steeredMessageIds,
     turnStoppedByTurnKey,
     displayContext,
+    epicId,
+    ownerId,
   ]);
 
   // The tail: re-derives per streamed delta, but walks only the active turn's
@@ -1049,6 +1062,8 @@ export function useRenderedMessages(
             // walk (once per snapshot) sweeps the turn cache.
             sweepRetainedTurnKeys: null,
             ctx: displayContext,
+            epicId,
+            chatId: ownerId,
           }),
     [
       partition,
@@ -1062,6 +1077,8 @@ export function useRenderedMessages(
       steeredMessageIds,
       turnStoppedByTurnKey,
       displayContext,
+      epicId,
+      ownerId,
     ],
   );
 
@@ -1084,6 +1101,8 @@ export function useRenderedMessages(
         activeRunState,
         turnPauseAccounting,
         ctx: displayContext,
+        epicId,
+        chatId: ownerId,
       }),
     [
       liveAssistant,
@@ -1094,6 +1113,8 @@ export function useRenderedMessages(
       activeRunState,
       turnPauseAccounting,
       displayContext,
+      epicId,
+      ownerId,
     ],
   );
 
@@ -1457,6 +1478,11 @@ interface AssistantTurnAccumulator {
   serviceTier: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
+  imageResolutionsByBlockId: Map<
+    string,
+    ReadonlyArray<AssistantMarkdownImageResolution>
+  >;
+  generatedImageBlockIdByHash: Map<string, string>;
 }
 
 interface PersistedMessagesRenderInput {
@@ -1490,6 +1516,8 @@ interface PersistedMessagesRenderInput {
    */
   readonly sweepRetainedTurnKeys: ReadonlySet<string> | null;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 interface RenderLiveAssistantInput {
@@ -1506,6 +1534,8 @@ interface RenderLiveAssistantInput {
   readonly activeRunState: ChatMessageRunState | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 function renderPersistedMessages(
@@ -1730,6 +1760,8 @@ function renderPersistedAssistantMessageTurn(
     userMessagesById: args.userMessagesById,
     startedAt,
     ctx: input.ctx,
+    epicId: input.epicId,
+    chatId: input.chatId,
   });
   turnCache.set(turnKey, { cacheKey, models });
   return models;
@@ -1744,6 +1776,14 @@ function addAssistantMessageToAccumulator(
   const existing = turnAccumulator.get(turnKey);
   if (existing !== undefined) {
     ownedTurnBlocks(existing).push(...message.blocks);
+    addAssistantImageProjection(
+      existing,
+      message.blocks,
+      message.imageResolutions.map((entry) => ({
+        messageId: message.messageId,
+        entry,
+      })),
+    );
     existing.signatureParts.push(assistantRecordSignature(message));
     // A turn split across multiple AssistantMessage records (subagent flows,
     // legacy/migrated snapshots) must merge timestamps, not keep the FIRST
@@ -1768,7 +1808,7 @@ function addAssistantMessageToAccumulator(
     existing.messageId = message.messageId;
     return;
   }
-  turnAccumulator.set(turnKey, {
+  const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
     sender: message.sender,
     startedAt: message.startedAt,
@@ -1781,7 +1821,44 @@ function addAssistantMessageToAccumulator(
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
     costUsd: message.usage?.costUsd ?? null,
-  });
+    imageResolutionsByBlockId: new Map(),
+    generatedImageBlockIdByHash: new Map(),
+  };
+  addAssistantImageProjection(
+    created,
+    message.blocks,
+    message.imageResolutions.map((entry) => ({
+      messageId: message.messageId,
+      entry,
+    })),
+  );
+  turnAccumulator.set(turnKey, created);
+}
+
+function addAssistantImageProjection(
+  acc: AssistantTurnAccumulator,
+  blocks: ReadonlyArray<ContentBlock>,
+  resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+): void {
+  for (const block of blocks) {
+    if (block.type === "text") {
+      acc.imageResolutionsByBlockId.set(block.blockId, resolutions);
+      continue;
+    }
+    if (block.type !== "tool_call" || block.toolName !== "image_generation") {
+      continue;
+    }
+    // Image-generation cards stay top-level even when their tool call belongs
+    // to a subagent, so their hashes are valid echo-deduplication targets.
+    for (const result of block.imageResults) {
+      if (!acc.generatedImageBlockIdByHash.has(result.attachmentHash)) {
+        acc.generatedImageBlockIdByHash.set(
+          result.attachmentHash,
+          block.blockId,
+        );
+      }
+    }
+  }
 }
 
 function minNullable(a: number | null, b: number | null): number | null {
@@ -1800,7 +1877,40 @@ function appendLiveAssistantBlocks(
   ownedTurnBlocks(acc).push(...liveAssistant.blocks);
   // The live record carries a monotonic version, so the streaming turn
   // re-signs in O(1) per delta instead of re-hashing its whole block list.
-  acc.signatureParts.push(`live:${liveAssistant.blocksVersion}`);
+  acc.signatureParts.push(
+    `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
+  );
+  addLiveAssistantImageProjection(acc, liveAssistant);
+}
+
+function addLiveAssistantImageProjection(
+  acc: AssistantTurnAccumulator,
+  liveAssistant: LiveAssistantMessage,
+): void {
+  const liveResolutionMessageIds = new Set(
+    liveAssistant.imageResolutions.map((resolution) => resolution.messageId),
+  );
+  let ownerMessageId: string | null =
+    liveAssistant.imageResolutionOwnerMessageId ?? null;
+  if (liveAssistant.imageResolutionOwnerMessageId === undefined) {
+    ownerMessageId = acc.messageId;
+  }
+  if (
+    liveAssistant.imageResolutionOwnerMessageId === undefined &&
+    isTransientLiveAssistantMessageId(acc.messageId)
+  ) {
+    const [onlyMessageId] = liveResolutionMessageIds;
+    ownerMessageId = liveResolutionMessageIds.size === 1 ? onlyMessageId : null;
+  }
+  addAssistantImageProjection(
+    acc,
+    liveAssistant.blocks,
+    ownerMessageId === null
+      ? []
+      : liveAssistant.imageResolutions.filter(
+          (resolution) => resolution.messageId === ownerMessageId,
+        ),
+  );
 }
 
 /**
@@ -1853,14 +1963,33 @@ function blocksIdentityToken(blocks: ReadonlyArray<ContentBlock>): number {
   return blocksIdentityCounter;
 }
 
+let imageResolutionsIdentityCounter = 0;
+const imageResolutionsIdentity = new WeakMap<
+  AssistantMessage["imageResolutions"],
+  number
+>();
+function imageResolutionsIdentityToken(
+  imageResolutions: AssistantMessage["imageResolutions"],
+): number {
+  const existing = imageResolutionsIdentity.get(imageResolutions);
+  if (existing !== undefined) return existing;
+  imageResolutionsIdentityCounter += 1;
+  imageResolutionsIdentity.set(
+    imageResolutions,
+    imageResolutionsIdentityCounter,
+  );
+  return imageResolutionsIdentityCounter;
+}
+
 function assistantRecordSignature(message: AssistantMessage): string {
+  const imageIdentity = imageResolutionsIdentityToken(message.imageResolutions);
   const version = message.blocksVersion;
   if (version !== undefined) {
-    return `v:${version}#${blocksIdentityToken(message.blocks)}`;
+    return `v:${version}#${blocksIdentityToken(message.blocks)}#i:${imageIdentity}`;
   }
   const cached = assistantRecordSignatureCache.get(message);
   if (cached !== undefined) return cached;
-  const computed = `h:${turnSignature(message.blocks)}`;
+  const computed = `h:${turnSignature(message.blocks)}#i:${imageIdentity}`;
   assistantRecordSignatureCache.set(message, computed);
   return computed;
 }
@@ -1882,7 +2011,7 @@ function assistantRecordSignature(message: AssistantMessage): string {
  */
 function turnBlocksSignature(acc: AssistantTurnAccumulator): string {
   if (acc.signatureParts.length === 1) return acc.signatureParts[0];
-  return `h:${turnSignature(acc.blocks)}`;
+  return `h:${turnSignature(acc.blocks)}#records:${acc.signatureParts.join("|")}`;
 }
 
 interface AssistantTurnRenderInput {
@@ -1905,6 +2034,8 @@ interface AssistantTurnRenderInput {
    */
   readonly startedAt: number;
   readonly ctx: RenderedMessagesDisplayContext;
+  readonly epicId: string;
+  readonly chatId: string;
 }
 
 type AssistantTurnTimelineEntry = {
@@ -1919,6 +2050,11 @@ function renderAssistantTurnRows(
 ): ReadonlyArray<ChatMessageModel> {
   const entries = assistantTurnTimelineEntries(input.acc.blocks);
   const split = entries.some(entrySplitsAssistantTurn);
+  const rowIdByBlockId = assistantRowIdsByBlockId(
+    entries,
+    input.turnKey,
+    split,
+  );
   const rows: ChatMessageModel[] = [];
   let chunk: ContentBlock[] = [];
   let chunkIndex = 0;
@@ -1934,10 +2070,13 @@ function renderAssistantTurnRows(
         runState: split ? null : input.runState,
         pause: input.pause,
         ctx: input.ctx,
+        epicId: input.epicId,
+        chatId: input.chatId,
         blocks: chunk,
         chunkIndex,
         split,
         createdAt: input.startedAt,
+        rowIdByBlockId,
       }),
     );
     chunk = [];
@@ -1975,10 +2114,13 @@ function renderAssistantTurnRows(
           runState: input.runState,
           pause: input.pause,
           ctx: input.ctx,
+          epicId: input.epicId,
+          chatId: input.chatId,
           blocks: [],
           chunkIndex: 0,
           split: false,
           createdAt: input.startedAt,
+          rowIdByBlockId,
         }),
       ],
       input,
@@ -1987,7 +2129,12 @@ function renderAssistantTurnRows(
 
   if (split) {
     return withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(rows, input, chunkIndex),
+      attachRunStateToTrailingAssistantSlice(
+        rows,
+        input,
+        chunkIndex,
+        rowIdByBlockId,
+      ),
       input,
     );
   }
@@ -2045,6 +2192,29 @@ function entrySplitsAssistantTurn(entry: AssistantTurnTimelineEntry): boolean {
   return entry.block.type === "steer";
 }
 
+function assistantRowIdsByBlockId(
+  entries: ReadonlyArray<AssistantTurnTimelineEntry>,
+  turnKey: string,
+  split: boolean,
+): ReadonlyMap<string, string> {
+  const rowIdByBlockId = new Map<string, string>();
+  let chunkIndex = 0;
+  let chunkHasBlocks = false;
+  for (const entry of entries) {
+    if (entry.block.type === "steer") {
+      if (chunkHasBlocks) chunkIndex += 1;
+      chunkHasBlocks = false;
+      continue;
+    }
+    rowIdByBlockId.set(
+      entry.block.blockId,
+      assistantSliceRowId(turnKey, chunkIndex, split),
+    );
+    chunkHasBlocks = true;
+  }
+  return rowIdByBlockId;
+}
+
 interface AssistantTurnSliceRenderInput {
   readonly acc: AssistantTurnAccumulator;
   readonly turnKey: string;
@@ -2057,6 +2227,9 @@ interface AssistantTurnSliceRenderInput {
   readonly chunkIndex: number;
   readonly split: boolean;
   readonly createdAt: number | null;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly rowIdByBlockId: ReadonlyMap<string, string>;
 }
 
 function renderAssistantTurnSlice(
@@ -2089,6 +2262,13 @@ function renderAssistantTurnSlice(
       input.blocks,
       input.checkpointView,
       input.turnComplete,
+      {
+        epicId: input.epicId,
+        chatId: input.chatId,
+        resolutionsByBlockId: input.acc.imageResolutionsByBlockId,
+        generatedImageBlockIdByHash: input.acc.generatedImageBlockIdByHash,
+        rowIdByBlockId: input.rowIdByBlockId,
+      },
     ),
     structuredContent: null,
     attachments: [],
@@ -2115,10 +2295,37 @@ function renderAssistantTurnSlice(
   };
 }
 
+function deduplicatedAssistantImageTargets(
+  generatedImageBlockIdByHash: ReadonlyMap<string, string>,
+  rowIdByBlockId: ReadonlyMap<string, string>,
+  resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+): ReadonlyMap<string, AssistantMarkdownImageTarget> {
+  if (generatedImageBlockIdByHash.size === 0) {
+    return NO_DEDUPLICATED_IMAGE_TARGETS;
+  }
+
+  const targetsBySource = new Map<string, AssistantMarkdownImageTarget>();
+  for (const resolution of resolutions) {
+    const entry = resolution.entry;
+    if (entry.state !== "resolved") continue;
+    const toolBlockId = generatedImageBlockIdByHash.get(entry.attachmentHash);
+    if (toolBlockId === undefined) continue;
+    const rowId = rowIdByBlockId.get(toolBlockId);
+    if (rowId === undefined) continue;
+    const target = { toolBlockId, rowId };
+    targetsBySource.set(entry.source, target);
+    targetsBySource.set(entry.canonicalSource, target);
+  }
+  return targetsBySource.size === 0
+    ? NO_DEDUPLICATED_IMAGE_TARGETS
+    : targetsBySource;
+}
+
 function attachRunStateToTrailingAssistantSlice(
   rows: ReadonlyArray<ChatMessageModel>,
   input: AssistantTurnRenderInput,
   nextChunkIndex: number,
+  rowIdByBlockId: ReadonlyMap<string, string>,
 ): ReadonlyArray<ChatMessageModel> {
   // A live turn needs a trailing indicator row. A STOPPED turn needs one too,
   // for a different reason: `withTurnCompletion` stamps `completedAt`/`stopped`
@@ -2162,10 +2369,13 @@ function attachRunStateToTrailingAssistantSlice(
       runState: input.runState,
       pause: input.pause,
       ctx: input.ctx,
+      epicId: input.epicId,
+      chatId: input.chatId,
       blocks: [],
       chunkIndex: nextChunkIndex,
       split: true,
       createdAt,
+      rowIdByBlockId,
     }),
   ];
 }
@@ -2379,25 +2589,31 @@ function renderLiveAssistant(
   if (input.mergesIntoPersisted) {
     return [];
   }
+  const acc: AssistantTurnAccumulator = {
+    messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    sender: liveAssistant.sender,
+    startedAt: liveAssistant.startedAt,
+    timestamp: liveAssistant.timestamp,
+    // A standalone live row owns its list from the start: it is built fresh
+    // here each pass and never aliases a persisted record.
+    blocks: [...liveAssistant.blocks],
+    blocksOwned: true,
+    signatureParts: [
+      `live:${liveAssistant.blocksVersion}:images:${liveAssistant.imageResolutionsVersion}`,
+    ],
+    profileLabel:
+      input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
+    reasoningEffort: liveAssistant.reasoningEffort,
+    serviceTier: liveAssistant.serviceTier,
+    // A live turn has no final cost yet; it surfaces once the turn completes
+    // and re-renders via the persisted path. The live footer is suppressed.
+    costUsd: null,
+    imageResolutionsByBlockId: new Map(),
+    generatedImageBlockIdByHash: new Map(),
+  };
+  addLiveAssistantImageProjection(acc, liveAssistant);
   return renderAssistantTurnRows({
-    acc: {
-      messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
-      sender: liveAssistant.sender,
-      startedAt: liveAssistant.startedAt,
-      timestamp: liveAssistant.timestamp,
-      // A standalone live row owns its list from the start: it is built fresh
-      // here each pass and never aliases a persisted record.
-      blocks: [...liveAssistant.blocks],
-      blocksOwned: true,
-      signatureParts: [`live:${liveAssistant.blocksVersion}`],
-      profileLabel:
-        input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
-      reasoningEffort: liveAssistant.reasoningEffort,
-      serviceTier: liveAssistant.serviceTier,
-      // A live turn has no final cost yet; it surfaces once the turn completes
-      // and re-renders via the persisted path. The live footer is suppressed.
-      costUsd: null,
-    },
+    acc,
     turnKey: liveAssistant.turnId,
     checkpointView: input.checkpointViews.get(liveAssistant.turnId) ?? null,
     // Live turn is by definition still streaming — hold back the group.
@@ -2417,6 +2633,8 @@ function renderLiveAssistant(
     // live→persisted reconciliation.
     startedAt: liveAssistant.startedAt,
     ctx: input.ctx,
+    epicId: input.epicId,
+    chatId: input.chatId,
   }).map((message) =>
     message.role === "assistant"
       ? { ...message, statusLabel: "Streaming" }
@@ -2559,6 +2777,9 @@ function assistantSliceRowId(
   return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
 }
 
+const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
+  [];
+
 function queueSteerRowId(queueItemId: string): string {
   return `steer:${queueItemId}`;
 }
@@ -2567,12 +2788,54 @@ function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,
   checkpointView: CheckpointManifestView | null,
   turnComplete: boolean,
+  imageProjection: {
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly resolutionsByBlockId: ReadonlyMap<
+      string,
+      ReadonlyArray<AssistantMarkdownImageResolution>
+    >;
+    readonly generatedImageBlockIdByHash: ReadonlyMap<string, string>;
+    readonly rowIdByBlockId: ReadonlyMap<string, string>;
+  },
 ): ReadonlyArray<MessageSegment> {
   const flat: MessageSegment[] = [];
+  const targetsByResolutions = new Map<
+    ReadonlyArray<AssistantMarkdownImageResolution>,
+    ReadonlyMap<string, AssistantMarkdownImageTarget>
+  >();
+  const targetsFor = (
+    resolutions: ReadonlyArray<AssistantMarkdownImageResolution>,
+  ): ReadonlyMap<string, AssistantMarkdownImageTarget> => {
+    const cached = targetsByResolutions.get(resolutions);
+    if (cached !== undefined) return cached;
+    const computed = deduplicatedAssistantImageTargets(
+      imageProjection.generatedImageBlockIdByHash,
+      imageProjection.rowIdByBlockId,
+      resolutions,
+    );
+    targetsByResolutions.set(resolutions, computed);
+    return computed;
+  };
   for (const block of blocks) {
     const segment = blockToSegment(block);
     if (segment !== null) {
-      flat.push(segment);
+      const resolutions =
+        imageProjection.resolutionsByBlockId.get(block.blockId) ??
+        NO_IMAGE_RESOLUTIONS;
+      flat.push(
+        segment.kind === "text"
+          ? {
+              ...segment,
+              assistantImageContext: {
+                epicId: imageProjection.epicId,
+                chatId: imageProjection.chatId,
+                resolutions,
+                deduplicatedTargetsBySource: targetsFor(resolutions),
+              },
+            }
+          : segment,
+      );
     }
   }
   const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
@@ -2623,8 +2886,10 @@ function isSubagentChildSegment(
   // provider_notice IS eligible too - a notice on a subagent's own thread
   // nests under that card instead of interrupting the top-level transcript;
   // one with no matching parent (or none) falls through to topLevel below.
+  // Image-generation cards stay top-level so SubagentChildrenSection cannot
+  // swallow a nested generation while rendering only child agents.
   return (
-    segment.kind === "tool" ||
+    (segment.kind === "tool" && segment.toolName !== "image_generation") ||
     segment.kind === "file_change" ||
     segment.kind === "command" ||
     segment.kind === "subagent" ||
@@ -3195,6 +3460,7 @@ const BLOCK_HANDLERS: {
     startedAt: block.startedAt ?? block.timestamp,
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
+    imageResults: block.imageResults,
   }),
   file_change: (block) => ({
     kind: "file_change",

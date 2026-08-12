@@ -621,6 +621,7 @@ function nextStepsAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -660,6 +661,7 @@ function skillNextStepsAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 
@@ -707,6 +709,7 @@ function streamingInterviewAssistantMessage(): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 

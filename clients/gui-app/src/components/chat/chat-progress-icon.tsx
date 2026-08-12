@@ -26,7 +26,8 @@ interface ChatProgressIconProps {
    * its own projection row. A chat id alone does not identify a session (it is
    * host-minted), so without this the icon could read a same-id chat on
    * another machine. `null` (a row whose projection carries no host) simply
-   * means no session to read - the icon falls back to epic awareness.
+   * means no session to read - the icon falls back to epic awareness. The same
+   * host also scopes the notification indicator to this chat's origin.
    */
   readonly hostId: string | null;
   readonly className: string | undefined;
@@ -60,10 +61,13 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
     props.chatId,
     props.hostId,
   );
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId,
-    chatId: props.chatId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    {
+      epicId: props.epicId,
+      chatId: props.chatId,
+    },
+    props.hostId,
+  );
   if (handle === null) {
     return (
       <ChatProgressPresentation

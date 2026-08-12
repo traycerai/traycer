@@ -195,7 +195,7 @@ export function useLandingComposerPaste(params: {
     }),
     [disabled, draftId],
   );
-  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths);
+  return useComposerPasteEvents(imageIngest, insertAttrs, filePaths, undefined);
 }
 
 // A base64 clipboard image whose decoded size would exceed the per-image cap is

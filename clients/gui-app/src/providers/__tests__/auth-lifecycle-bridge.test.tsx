@@ -57,6 +57,7 @@ function fakeChatHandle(
   const calls = { close: 0 };
   return {
     handle: createChatSessionStore({
+      hostId: "host-a",
       epicId,
       chatId,
       userId,

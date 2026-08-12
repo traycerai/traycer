@@ -456,6 +456,7 @@ function useChatDescendantStatus(args: {
         const indicatorState = selectNotificationIndicatorState(
           state,
           { epicId, chatId },
+          null,
           indicators,
         );
         const kind = chatDescendantKind(
@@ -631,6 +632,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         const indicatorState = selectNotificationIndicatorState(
           state,
           { epicId, chatId },
+          null,
           notificationIndicators,
         );
         return (
@@ -1929,10 +1931,10 @@ const ChatRowLeadingIconWithNestedRollup = memo(
       nodeId: props.nodeId,
     });
     const activityTiers = useEpicAgentActivityTiers();
-    const selfIndicator = useSurfaceNotificationIndicatorState({
-      epicId: props.epicId,
-      chatId: props.nodeId,
-    });
+    const selfIndicator = useSurfaceNotificationIndicatorState(
+      { epicId: props.epicId, chatId: props.nodeId },
+      null,
+    );
     if (rollup !== null) {
       const selfTier = activityTiers.get(props.nodeId);
       // Chat and terminal-agent parents rank alike: a TUI agent's
@@ -2023,10 +2025,10 @@ function TerminalAgentProgressIcon(props: {
   const tier = useEpicAgentActivityTiers().get(props.nodeId);
   const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
   const icon = useNodeIconDisplay("terminal-agent");
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId,
-    chatId: props.nodeId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: props.epicId, chatId: props.nodeId },
+    null,
+  );
   // The underlying harness's brand mark (Claude, Codex, …) so the row reads
   // as the tool driving the agent. Brand marks keep their own colors and
   // intentionally don't follow the per-type icon-color customization; the
@@ -3115,10 +3117,10 @@ function useChatRowOwnStatusKind(args: {
   readonly artifactType: EpicNodeKind;
 }): ChatRowStatus {
   const { epicId, nodeId, ownerHostId, artifactType } = args;
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId,
-    chatId: nodeId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId, chatId: nodeId },
+    ownerHostId,
+  );
   const awarenessTier = useEpicAgentActivityTiers().get(nodeId);
   const isViewer = useContext(SidebarViewerContext);
   // Terminal-agent rows have no chat session and never carried a read-only
