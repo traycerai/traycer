@@ -1,9 +1,7 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
-import { Code2Icon, ImageIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
 import type {
   GitChangedFile,
   GitGetFileDiffResponse,
@@ -675,35 +673,6 @@ function useGitImageDiffRouting(file: GitChangedFile): {
     </DiffTabHeaderPortal>
   ) : null;
   return { showImageDiff, svgToggle };
-}
-
-function SvgViewToggleButton(props: {
-  readonly switchTo: "image" | "source";
-  readonly onClick: () => void;
-}): ReactNode {
-  const label = props.switchTo === "image" ? "View image" : "View source";
-  return (
-    <TooltipWrapper
-      label={label}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={props.onClick}
-        aria-label={label}
-      >
-        {props.switchTo === "image" ? (
-          <ImageIcon className="size-4" />
-        ) : (
-          <Code2Icon className="size-4" />
-        )}
-      </Button>
-    </TooltipWrapper>
-  );
 }
 
 function isLoadedGitDiff(

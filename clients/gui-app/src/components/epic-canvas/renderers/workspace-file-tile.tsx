@@ -12,7 +12,8 @@ import {
   type ReportIssueContext,
 } from "@/lib/report-issue-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { Code2Icon, ExternalLinkIcon, ImageIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
+import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
@@ -199,35 +200,6 @@ function WorkspaceFileTileRouter(props: {
         ) : null
       }
     />
-  );
-}
-
-function SvgViewToggleButton(props: {
-  readonly switchTo: "image" | "source";
-  readonly onClick: () => void;
-}) {
-  const label = props.switchTo === "image" ? "View image" : "View source";
-  return (
-    <TooltipWrapper
-      label={label}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={props.onClick}
-        aria-label={label}
-      >
-        {props.switchTo === "image" ? (
-          <ImageIcon className="size-4" />
-        ) : (
-          <Code2Icon className="size-4" />
-        )}
-      </Button>
-    </TooltipWrapper>
   );
 }
 
