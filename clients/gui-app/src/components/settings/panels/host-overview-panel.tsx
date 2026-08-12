@@ -309,6 +309,7 @@ export function HostOverviewPanel(props: {
           managedInstallation(installationQuery.data)?.installRecord ?? null
         }
         loading={installationQuery.isPending}
+        readFailed={installationQuery.isError}
       />
 
       {/* No list of the OTHER hosts, and no "Add host": a page about one host
@@ -545,6 +546,8 @@ function HostOverviewInstallationCard(props: {
   readonly degrade: OverviewDegradeReason | null;
   readonly record: InstallationDetailsRecord | null;
   readonly loading: boolean;
+  /** The read itself failed - which is NOT the same as "no record". */
+  readonly readFailed: boolean;
 }): ReactNode {
   if (!props.usable) return null;
   return (
@@ -554,17 +557,49 @@ function HostOverviewInstallationCard(props: {
       dataTestId={undefined}
       fill={false}
     >
-      {props.degrade === null ? (
-        <InstallationDetailsDisclosure
-          record={props.record}
-          loading={props.loading}
-          emptyMessage={`${props.hostName} is running from a checkout or an unpacked tree, so it has no installation record.`}
-        />
-      ) : (
-        <HostOverviewNotice testId="host-overview-installation-degraded">
-          {describeOverviewDegrade(props.degrade, props.hostName)}
-        </HostOverviewNotice>
-      )}
+      <HostOverviewInstallationBody
+        hostName={props.hostName}
+        degrade={props.degrade}
+        record={props.record}
+        loading={props.loading}
+        readFailed={props.readFailed}
+      />
     </SettingsGroup>
+  );
+}
+
+/**
+ * Three outcomes, and the middle one is the finding: a FAILED read is not an
+ * unmanaged host. Collapsing both to `record: null` made the card assert that
+ * this host runs from a checkout or an unpacked tree - a fact the RPC never
+ * established, stated to the user as if it had.
+ */
+function HostOverviewInstallationBody(props: {
+  readonly hostName: string;
+  readonly degrade: OverviewDegradeReason | null;
+  readonly record: InstallationDetailsRecord | null;
+  readonly loading: boolean;
+  readonly readFailed: boolean;
+}): ReactNode {
+  if (props.degrade !== null) {
+    return (
+      <HostOverviewNotice testId="host-overview-installation-degraded">
+        {describeOverviewDegrade(props.degrade, props.hostName)}
+      </HostOverviewNotice>
+    );
+  }
+  if (props.readFailed && props.record === null) {
+    return (
+      <HostOverviewNotice testId="host-overview-installation-unreadable">
+        {`Couldn't read ${props.hostName}'s installation record.`}
+      </HostOverviewNotice>
+    );
+  }
+  return (
+    <InstallationDetailsDisclosure
+      record={props.record}
+      loading={props.loading}
+      emptyMessage={`${props.hostName} is running from a checkout or an unpacked tree, so it has no installation record.`}
+    />
   );
 }
