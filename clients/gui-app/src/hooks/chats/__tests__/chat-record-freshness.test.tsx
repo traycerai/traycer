@@ -90,8 +90,12 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     parentChatId: null,
     createdAt: 1,
     updatedAt: 2,
+    archived: false,
     archivedAt: null,
     runSettingsSummary: "claude",
+    revision: 1,
+    visibility: "private",
+    origin: "own",
     ...overrides,
   };
 }
@@ -204,6 +208,11 @@ function createFixture(): Fixture {
           if (index >= 0) {
             records[index] = {
               ...records[index],
+              // BOTH fields, the way a real host answers: `archived` is the
+              // rendering-authoritative boolean every row can carry, and
+              // `archivedAt` the timestamp only an OWN row has. A fixture that
+              // moved the timestamp alone would describe a row no host emits.
+              archived: params.archived,
               archivedAt: params.archived ? 5 : null,
             };
           }

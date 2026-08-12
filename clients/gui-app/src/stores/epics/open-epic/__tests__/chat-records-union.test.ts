@@ -11,6 +11,10 @@
  * The ablation each of these is written against: with the union removed
  * (`chats` = the doc projection), the first test's chat is in no slice at all -
  * no record, no tree row, nothing to rename.
+ *
+ * The second describe block drives the PUSH half (`applyChatRecordDelta`,
+ * multi-host-chats record layer) into the SAME table, with its own ablations
+ * named on each test.
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -83,8 +87,12 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     parentChatId: null,
     createdAt: 1,
     updatedAt: 2,
+    archived: false,
     archivedAt: null,
     runSettingsSummary: "claude",
+    revision: 1,
+    visibility: "private",
+    origin: "own",
     ...overrides,
   };
 }
@@ -143,6 +151,16 @@ function seedChats(
     for (const [id, entry] of entries) chats.set(id, entry);
     doc.getMap("epic").set("chats", chats);
   };
+}
+
+function signedInAs(userId: string): void {
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId, userName: userId, email: `${userId}@example.com` },
+      { userId, username: userId },
+      [],
+    );
 }
 
 describe("chats.byId unions the host's records with the doc projection", () => {
@@ -250,6 +268,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
         title: "Renamed since",
         isTitleEditedByUser: true,
         parentChatId: null,
+        archived: true,
         archivedAt: 5_000,
       }),
     ]);
@@ -374,6 +393,322 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     store.getState().applyChatRecords([record({ chatId: "a" })]);
     expect(store.getState().chats.allIds).toEqual(["a"]);
     expect(store.getState().tree.nodeById.b).toBeUndefined();
+    session.handle.dispose();
+  });
+});
+
+describe("applyChatRecordDelta pushes into the same table the poll fills", () => {
+  it("lands a brand-new chat, tree row included, with no poll in between", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecords([record({ chatId: "existing" })]);
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "pushed",
+        title: "Pushed chat",
+        parentChatId: "existing",
+        revision: 1,
+      }),
+    });
+
+    const state = store.getState();
+    expect(state.chats.allIds.slice().sort()).toEqual(["existing", "pushed"]);
+    expect(state.chats.byId.pushed.title).toBe("Pushed chat");
+    // The record channel's whole point: a store-only chat with a tree row.
+    expect(state.tree.nodeById.pushed.parentId).toBe("existing");
+    expect(state.tree.childrenByParent.existing).toEqual(["pushed"]);
+    session.handle.dispose();
+  });
+
+  it("never lets a collaborator's SAME-ID row evict the viewer's own chat", () => {
+    // Record identity is `(epicId, ownerUserId, chatId)`: the id is host-minted,
+    // so two users can hold the same one inside one task. Ablation: key
+    // `chatRecordRows` on `chatId` alone and the second delta below overwrites
+    // the first - the viewer's own chat vanishes from their own sidebar because
+    // somebody else created a chat whose id happened to collide.
+    //
+    // The collaborator's row carries a HIGHER revision, which is the realistic
+    // case and the one that matters: revisions are monotonic PER RECORD, so two
+    // owners' revisions for the same id are incomparable. Under id-only keying
+    // the staleness guard would compare them anyway - and the bigger number
+    // wins, whoever it belongs to.
+    signedInAs("user-a");
+    try {
+      const session = newSession(seedChats([]));
+      const store = session.handle.store;
+      store.getState().applyChatRecordDelta({
+        kind: "upsert",
+        epicId: "epic-test",
+        record: record({
+          chatId: "c",
+          title: "Mine",
+          ownerUserId: "user-a",
+          revision: 2,
+        }),
+      });
+      store.getState().applyChatRecordDelta({
+        kind: "upsert",
+        epicId: "epic-test",
+        record: record({
+          chatId: "c",
+          title: "Theirs",
+          ownerUserId: "user-b",
+          originHostId: "host-2",
+          origin: "foreign",
+          visibility: "task",
+          revision: 99,
+        }),
+      });
+
+      expect(store.getState().chats.allIds).toEqual(["c"]);
+      expect(store.getState().chats.byId.c.title).toBe("Mine");
+      expect(store.getState().chats.byId.c.userId).toBe("user-a");
+      session.handle.dispose();
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("retains a held-back row and re-derives the table when the signed-in user changes", () => {
+    // The reason selecting one owner AT INGEST is safe: the raw rows are all
+    // retained, so a user switch rebuilds the table rather than re-filtering a
+    // selection that was already frozen. Ablation: drop the
+    // `republishChatRecordsForCurrentUser` call from the auth subscription and
+    // user-b signs in to user-a's chat list.
+    signedInAs("user-a");
+    try {
+      const session = newSession(seedChats([]));
+      const store = session.handle.store;
+      store.getState().applyChatRecords([
+        record({ chatId: "mine", ownerUserId: "user-a" }),
+        record({
+          chatId: "theirs",
+          ownerUserId: "user-b",
+          origin: "foreign",
+        }),
+      ]);
+      expect(store.getState().chats.allIds).toEqual(["mine"]);
+
+      signedInAs("user-b");
+      expect(store.getState().chats.allIds).toEqual(["theirs"]);
+      session.handle.dispose();
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("takes a FOREIGN row - another host's replica - into chats.byId", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "elsewhere",
+        title: "On my other machine",
+        originHostId: "host-2",
+        origin: "foreign",
+        visibility: "task",
+        revision: 4,
+      }),
+    });
+
+    const state = store.getState();
+    expect(state.chats.allIds).toEqual(["elsewhere"]);
+    // The MINTING host, carried through - a chat is bound to its host for life,
+    // so a tab opened from this row must dial host-2 and not this one.
+    expect(state.chats.byId.elsewhere.hostId).toBe("host-2");
+    // A replica carries no settings tuple; the row only ever held a summary.
+    expect(state.chats.byId.elsewhere.settings).toBeNull();
+    expect(state.tree.rootIds).toEqual(["elsewhere"]);
+    session.handle.dispose();
+  });
+
+  it("reads a foreign ARCHIVED row as archived, though it carries no timestamp", () => {
+    // The two planes disagree about the TYPE of this fact: the host registry
+    // stores a timestamp, the cloud row (which a foreign row replicates) stores
+    // a boolean. Ablation: copy `archivedAt` straight through in
+    // `chatProjectionFromRecord` and this row renders as an ACTIVE chat.
+    const session = newSession(seedChats([]));
+    session.handle.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "foreign-archived",
+        origin: "foreign",
+        archived: true,
+        archivedAt: null,
+        updatedAt: 900,
+        revision: 2,
+      }),
+    });
+
+    const projection =
+      session.handle.store.getState().chats.byId["foreign-archived"];
+    expect(projection.archivedAt).not.toBeNull();
+    // An own row still reports its real timestamp - the derivation adds a
+    // floor, it does not overwrite what the registry knows.
+    session.handle.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({
+        chatId: "own-archived",
+        archived: true,
+        archivedAt: 5_000,
+        revision: 2,
+      }),
+    });
+    expect(
+      session.handle.store.getState().chats.byId["own-archived"].archivedAt,
+    ).toBe(5_000);
+    session.handle.dispose();
+  });
+
+  it("rejects a STALE-revision upsert and accepts the next fresh one", () => {
+    // Ablation: drop the `record.revision <= held.revision` guard and the
+    // replayed frame below reinstates "Old title" - a rename that undoes itself
+    // whenever the transport redelivers, reorders or duplicates a delta.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([
+        record({ chatId: "c", title: "Current", revision: 5 }),
+      ]);
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "c", title: "Old title", revision: 4 }),
+    });
+    expect(store.getState().chats.byId.c.title).toBe("Current");
+
+    // Equal is stale too: revisions are per-chat monotonic, so "not newer" is
+    // the test, not "older".
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "c", title: "Same revision", revision: 5 }),
+    });
+    expect(store.getState().chats.byId.c.title).toBe("Current");
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "c", title: "Newer", revision: 6 }),
+    });
+    expect(store.getState().chats.byId.c.title).toBe("Newer");
+    session.handle.dispose();
+  });
+
+  it("removes the row - the sidebar's tree row goes with it - and records why", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "a" }), record({ chatId: "gone" })]);
+    expect(store.getState().tree.rootIds.slice().sort()).toEqual(["a", "gone"]);
+
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "gone",
+      reason: "revoked",
+    });
+
+    const state = store.getState();
+    expect(state.chats.allIds).toEqual(["a"]);
+    // What makes the sidebar row disappear: nothing in the sidebar is asked to
+    // do anything, the row simply stops being in the tree it renders from.
+    expect(state.tree.rootIds).toEqual(["a"]);
+    expect(state.tree.nodeById.gone).toBeUndefined();
+    expect(state.chatRetractions).toEqual({ gone: "revoked" });
+    session.handle.dispose();
+  });
+
+  it("keeps the retraction reason for a chat this session never held a record for", () => {
+    // The cross-host case: the tab was opened from the unified sidebar, so the
+    // record table never had the row, and the removal changes no slice at all.
+    // Ablation: gate `publishChatRecords` on `chatSlicesEq` alone and the open
+    // tab is never told - it keeps rendering a transcript it may no longer read.
+    const session = newSession(seedChats([]));
+    session.handle.store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "never-held",
+      reason: "deleted",
+    });
+    expect(session.handle.store.getState().chatRetractions).toEqual({
+      "never-held": "deleted",
+    });
+    session.handle.dispose();
+  });
+
+  it("is absorbing: neither a later upsert nor a stale poll resurrects the row", () => {
+    // Ablation: drop the retraction check from `applyChatRecords` and the
+    // in-flight poll below puts the chat straight back, seconds after its tab
+    // announced it was gone.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "gone", revision: 1 })]);
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "gone",
+      reason: "deleted",
+    });
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "gone", revision: 99 }),
+    });
+    expect(store.getState().chats.allIds).toEqual([]);
+
+    // An `epic.listChatRecords` answer issued BEFORE the removal, landing after.
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "gone", revision: 1 })]);
+    expect(store.getState().chats.allIds).toEqual([]);
+    expect(store.getState().chatRetractions).toEqual({ gone: "deleted" });
+    session.handle.dispose();
+  });
+
+  it("is idempotent on a redelivered removal", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecords([record({ chatId: "a", revision: 2 })]);
+    const before = store.getState().chats;
+
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "b",
+      reason: "deleted",
+    });
+    // The FIRST removal re-projects even though it changed no row - that is the
+    // deliberate gate bypass that lets a cross-host tab hear about its own
+    // retraction. Same content, new identity.
+    const afterFirstRemove = store.getState().chats;
+    expect(afterFirstRemove).toEqual(before);
+
+    // The redelivered one is a no-op end to end: same reason, row already gone.
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "b",
+      reason: "deleted",
+    });
+    expect(store.getState().chats).toBe(afterFirstRemove);
+
+    // And an unchanged poll answer still writes nothing, as it always has.
+    store.getState().applyChatRecords([record({ chatId: "a", revision: 2 })]);
+    expect(store.getState().chats).toBe(afterFirstRemove);
     session.handle.dispose();
   });
 });

@@ -1,7 +1,13 @@
 import { z } from "zod";
+import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
+
+const textFrameFields = {
+  hasBinaryPayload: z.literal(false),
+} as const;
 
 /**
- * The epic's chat RECORDS, as its owning host's chat registry holds them.
+ * The epic's chat RECORDS, as its serving host's chat registry holds them.
  *
  * ## Why this method exists at all
  *
@@ -30,13 +36,21 @@ import { z } from "zod";
  * is all the row holds; the full run-settings tuple lives in the chat's own
  * stream, not in a list read.
  *
- * ## Scope: the VIEWER'S own chats
+ * ## Scope: everything this host may show the viewer, own AND foreign
  *
- * Chats are private to their owners, so the response carries only rows owned by
- * the calling identity. That is the same boundary the projector already applies
- * client-side, moved to where it belongs, and it is what keeps this from being
- * an enumeration oracle: an epic the caller cannot see and an epic in which they
- * own no chats answer identically.
+ * Originally the viewer's OWN rows only, because the host's registry held
+ * nothing else. With the record layer's two-way SQLite <-> cloud sync it also
+ * holds FOREIGN rows - replicas of chats owned by other hosts (or other
+ * identities) that the server delivered into this host's per-viewer inbox. So
+ * the response is the complete, ALREADY-AUTHORIZATION-FILTERED list, and
+ * `origin` is what tells the two populations apart.
+ *
+ * The authorization decision is not made here and never was. Own rows are the
+ * caller's by construction; foreign rows are in the local store only because
+ * the server put them in this viewer's change feed, and a revocation removes
+ * them through the same feed. The enumeration-oracle property therefore holds
+ * unchanged: an epic the caller cannot see and an epic in which nothing is
+ * visible to them answer identically.
  *
  * ## Optional, with a degrade story
  *
@@ -55,15 +69,57 @@ export type ListChatRecordsRequest = z.infer<
 >;
 
 /**
- * One chat, as the owning host's registry knows it.
+ * Row origin, from the SERVING host's point of view.
  *
- * `archivedAt` rather than an `isArchived` flag: the renderer's projection
- * carries the timestamp (a record written before the field existed reads as
- * `null` = active), and collapsing it to a boolean here would force the client
- * to invent a timestamp on the way back into that shape.
+ * - `own`     - this host is the row's authoritative writer. It minted the
+ *   chat, its registry row is the source of truth for every host-authoritative
+ *   field, and its outbox is what replicates them outward.
+ * - `foreign` - a READ-ONLY REPLICA this host pulled from its per-viewer
+ *   change feed. Every host-authoritative field on it is a copy of another
+ *   host's state, and a mutation aimed at it has to go to the owning host.
+ *
+ * Host-stated rather than client-derived. It is not
+ * `ownerUserId === signedInUserId`: a user's chat living on ANOTHER of their
+ * own hosts is FOREIGN here, because authority follows the chat-host binding,
+ * not the identity. Nor is it a comparison the client should make against
+ * `originHostId`, which names the MINTING host and answers a different
+ * question than "may this host write the row". The host knows which of its
+ * rows its outbox owns; that fact is what ships.
+ */
+export const chatRecordOriginSchema = z.enum(["own", "foreign"]);
+export type ChatRecordOrigin = z.infer<typeof chatRecordOriginSchema>;
+
+/**
+ * One chat, as the serving host's registry knows it.
+ *
+ * Archive state ships as BOTH `archived` (the boolean every row can answer,
+ * because it is what the cloud row stores) and `archivedAt` (the timestamp only
+ * an own row has, because it is what the host registry stores). Neither field
+ * subsumes the other: dropping the boolean would misread every foreign archived
+ * chat as active, and dropping the timestamp would force the renderer - whose
+ * projection has always carried one - to invent one on the way back.
+ *
+ * ONE row shape, shared by the list read below and by the delta stream's
+ * `upsert` frame, deliberately: the host applies its inbox to SQLite and then
+ * pushes the same rows to its clients, so a poll and a push that disagreed
+ * about the shape would be a bug with two places to fix. Both surfaces are
+ * unreleased today, so sharing costs nothing. Once EITHER ships, this const is
+ * frozen for that surface and the next field forks a versioned copy
+ * (`chatRecordSummarySchemaV11`, the `hostNotificationEntrySchemaV21` pattern)
+ * rather than being edited in place - a shared builder must never silently
+ * rewrite a released shape.
  */
 export const chatRecordSummarySchema = z.object({
   chatId: z.string().min(1),
+  /**
+   * IDENTITY-BEARING, not informational. `chatId` is host-minted and therefore
+   * NOT globally unique: server-side a chat is identified by the triple
+   * `(taskId, ownerUserId, chatId)`, and two users can legitimately hold the
+   * same `chatId` within one task. Anything that keys, caches, dedupes or
+   * unions these rows must key on the owner too - dropping it collapses two
+   * different people's chats into one entry, which is a privacy bug wearing a
+   * UI costume.
+   */
   ownerUserId: z.string(),
   /** The host that MINTED the chat - the registry's `originHostId`. */
   originHostId: z.string(),
@@ -72,7 +128,26 @@ export const chatRecordSummarySchema = z.object({
   parentChatId: z.string().nullable(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
-  /** Archive timestamp, or `null` for an active chat. */
+  /**
+   * Whether the chat is archived. THE RENDERING-AUTHORITATIVE FIELD, and the
+   * only one of this pair that every row can answer.
+   *
+   * It exists because the two planes disagree about the TYPE of this fact: the
+   * host registry stores an archive TIMESTAMP, the cloud row stores a BOOLEAN,
+   * and a foreign row is a replica of the cloud row. So a client that derived
+   * archived-ness from `archivedAt` would read every foreign archived chat as
+   * active. For an own row this is exactly `archivedAt !== null`; for a foreign
+   * row it is the only truth there is.
+   */
+  archived: z.boolean(),
+  /**
+   * WHEN the chat was archived, or `null`.
+   *
+   * `null` means one of two different things and cannot distinguish them:
+   * an active chat, or a FOREIGN archived chat whose timestamp never crossed
+   * the cloud row (which carries only the boolean). Read `archived` for the
+   * state; read this only to DISPLAY a time, and only when `archived` is true.
+   */
   archivedAt: z.number().int().nonnegative().nullable(),
   /**
    * The registry's run-settings SUMMARY: the harness id, or `null` when the
@@ -80,6 +155,38 @@ export const chatRecordSummarySchema = z.object({
    * settings tuple - the registry does not hold one.
    */
   runSettingsSummary: z.string().nullable(),
+  /**
+   * Per-chat MONOTONIC revision of this row's state.
+   *
+   * The record layer's staleness test, and the only ordering fact on the row.
+   * The owning host bumps it on every host-authoritative write and the server
+   * bumps it on every server-authoritative one; a consumer - the inbox
+   * applying a feed op, or a client applying a stream `upsert` - accepts a row
+   * only when its revision strictly exceeds the one already held, and drops it
+   * otherwise. That is what makes replayed, reordered and duplicated deltas
+   * harmless without any merge logic.
+   *
+   * Per CHAT, so revisions from two different chats are incomparable, and it
+   * is NOT a timestamp: host clocks skew, and `updatedAt` is display metadata
+   * that no ordering decision may read.
+   */
+  revision: z.number().int().nonnegative(),
+  /**
+   * Who may read the chat - SERVER-AUTHORITATIVE, replicated in.
+   *
+   * The same vocabulary the cloud row defines, reused rather than restated:
+   * this field IS that row's value, carried into the host's SQLite by the
+   * inbox, so a second enum here would be a seam where two spellings of one
+   * fact could drift apart. `private` is the owner alone; `task` is every
+   * collaborator holding a task permission.
+   *
+   * A host may never write it. A row that has not yet been published, or whose
+   * host has never heard from the server about it, reads `private` - the
+   * closed default, so an unsynced row is never rendered as shared.
+   */
+  visibility: cloudChatVisibilitySchema,
+  /** Whether the serving host owns this row or holds a read-only replica. */
+  origin: chatRecordOriginSchema,
 });
 export type ChatRecordSummary = z.infer<typeof chatRecordSummarySchema>;
 
@@ -89,3 +196,142 @@ export const listChatRecordsResponseSchema = z.object({
 export type ListChatRecordsResponse = z.infer<
   typeof listChatRecordsResponseSchema
 >;
+
+/**
+ * `host.chatRecords.subscribe@1.0` - the record-change PUSH stream, the
+ * freshness half of the read above.
+ *
+ * ## Why host-scoped and not per-epic
+ *
+ * One subscription per client, for every epic that host has open, plus its own
+ * rows regardless of which epic they belong to. A per-epic stream would need a
+ * socket per open epic to say the same things, and it could not carry own-row
+ * changes at all: the outbox drains whether or not the epic it belongs to is
+ * open, so those deltas exist outside any epic subscription's lifetime. Frames
+ * therefore NAME their epic and per-epic filtering is the client's, exactly as
+ * `host.notifications.feed.subscribe` and `agent.activity.subscribe` are
+ * host-scoped for the same reason.
+ *
+ * ## Two ops, and they are the same two the cloud feed speaks
+ *
+ * `upsert` and `remove`, end to end: the host pulls its per-viewer change feed
+ * from the cloud in this grammar, applies it to SQLite, and re-emits in this
+ * grammar to its clients. A thin client is a host client, never a feed client -
+ * it holds no cursor, contacts no cloud, and learns one delta language.
+ *
+ * `remove` exists because the transitions it carries are INEXPRESSIBLE as
+ * state for the affected viewer: unshare, shared -> private, epic-membership
+ * loss, deletion. A row that left the viewer's entitlement cannot announce its
+ * own departure through an updated copy of itself, which is precisely why the
+ * plane below this one is a change feed and not a filtered snapshot.
+ *
+ * ## No snapshot frame, no resume cursor - deliberately, at 1.0
+ *
+ * `epic.listChatRecords` IS the snapshot, and the client already polls it. So
+ * the stream carries deltas only, and (re)connect means: re-read the list,
+ * then apply what arrives. Deltas are self-describing and revision-guarded, so
+ * a client that missed some while disconnected converges on its next poll
+ * rather than on a replay this host would have to retain a log to serve.
+ *
+ * A cursor is exactly the kind of thing a later ADDITIVE MINOR can add to the
+ * open request once a delta log exists to resume from; shipping the field now,
+ * against a host with nothing to seek in, would be a promise the wire made and
+ * the implementation could not keep.
+ *
+ * ## Ordering and staleness
+ *
+ * `revision` is per-chat monotonic and the only ordering fact: apply an
+ * `upsert` when its revision strictly exceeds the one held for that chat, drop
+ * it otherwise. `remove` carries no revision because it needs none - removal is
+ * TERMINAL AND ABSORBING, the one lifecycle rule in this design, so it applies
+ * unconditionally and idempotently and no later `upsert` resurrects the row on
+ * this client.
+ *
+ * ## Optional, with a degrade story
+ *
+ * Post-v1.0.0 stream method, so it is implicitly optional: the `/stream`
+ * handshake checks compatibility per method at subscribe time, a host that
+ * predates it never advertises it, and the client's subscription resolves to
+ * `onMethodSupport(method, "unsupported")`. The contract for that arm is that
+ * the client KEEPS THE POLL and loses nothing but latency - `epic.listChatRecords`
+ * (and, on a host older still, its own doc-only degrade) already produces the
+ * whole record table. Never add this name to the unary released floor
+ * (`released-floor.ts`), which is fail-closed on the name set.
+ */
+export const hostChatRecordsSubscribeOpenRequestSchemaV10 = z.object({});
+export type HostChatRecordsSubscribeOpenRequestV10 = z.infer<
+  typeof hostChatRecordsSubscribeOpenRequestSchemaV10
+>;
+
+/**
+ * WHY a row stopped being visible to this viewer.
+ *
+ * - `deleted` - the chat is gone for everyone. Terminal everywhere.
+ * - `revoked` - the chat still exists; this viewer may no longer see it
+ *   (unshared, flipped back to private, or removed from the epic).
+ *
+ * The distinction is not bookkeeping: it is the difference between the two
+ * honest things an OPEN tab can say when its record disappears underneath it -
+ * "this chat was deleted" versus "this chat is no longer shared with you" -
+ * and a client handed only "gone" would have to guess which.
+ *
+ * CLOSED enum. A reason this contract version cannot represent would leave a
+ * client unable to render the end state at all, so widening it is a NEW MINOR,
+ * never a silent addition.
+ */
+export const chatRecordRemovalReasonSchema = z.enum(["deleted", "revoked"]);
+export type ChatRecordRemovalReason = z.infer<
+  typeof chatRecordRemovalReasonSchema
+>;
+
+/**
+ * `epicId` / `chatId` / `revision` are the ENVELOPE - what the delta addresses
+ * and where it sits in that chat's order - and every frame carries the parts it
+ * can. `remove` has no row to put them in; `upsert` repeats its row's own
+ * `revision` at the envelope so both frame kinds are addressed and ordered the
+ * same way. INVARIANT: on an `upsert`, `revision` equals `record.revision`.
+ */
+export const hostChatRecordsSubscribeServerFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("upsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: chatRecordSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("remove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+export type HostChatRecordsSubscribeServerFrameV10 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV10
+>;
+
+export const hostChatRecordsSubscribeClientFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      ...textFrameFields,
+    }),
+  ]);
+export type HostChatRecordsSubscribeClientFrameV10 = z.infer<
+  typeof hostChatRecordsSubscribeClientFrameSchemaV10
+>;
+
+export const hostChatRecordsSubscribeV10 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV10,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});

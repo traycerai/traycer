@@ -619,6 +619,19 @@ function projectChatsSlice(
  * "settings not known here" until its own `chat.subscribe` stream supplies
  * them. A chat that ALSO has a frozen doc entry keeps that entry's settings -
  * see {@link unionChatsSlice}.
+ *
+ * ## `archivedAt` is derived from `archived`, not copied
+ *
+ * The renderer has exactly one archived-ness carrier - `archivedAt !== null` is
+ * the predicate the sidebar, the tree filter, the quote targets and the comm
+ * graph all read - while the two sync planes disagree about the TYPE of that
+ * fact: the host registry stores a TIMESTAMP, the cloud row stores a BOOLEAN,
+ * and a FOREIGN row is a replica of the cloud row. So copying `archivedAt`
+ * straight through would read every foreign archived chat as active, which is
+ * the one way this projection can silently lie about state rather than merely
+ * lack detail. `archived` is the rendering-authoritative field per the
+ * contract; the timestamp is display detail, and `updatedAt` stands in when the
+ * plane that answered never carried one.
  */
 export function chatProjectionFromRecord(
   record: ChatRecordSummary,
@@ -635,7 +648,9 @@ export function chatProjectionFromRecord(
     hostId: record.originHostId,
     isTitleEditedByUser: record.isTitleEditedByUser,
     settings: null,
-    archivedAt: record.archivedAt,
+    archivedAt: record.archived
+      ? (record.archivedAt ?? record.updatedAt)
+      : null,
   };
 }
 
@@ -718,6 +733,18 @@ export function unionChatsSlice(
     // when the account switched) must not reach a slice this user reads.
     // Redundant against a correct host - the resolver is viewer-scoped - and a
     // boundary that only holds while the other side behaves is not one.
+    //
+    // It also has a SECOND job now that the record layer serves FOREIGN rows.
+    // A foreign row on another of the viewer's OWN hosts passes here and lands
+    // in the table, which is what makes cross-host chats renderable from one
+    // read path. A COLLABORATOR's row (task-visibility, a different owner) does
+    // not, and must not until this slice is re-keyed: `byId` is keyed on
+    // `chatId` ALONE, while a chat is only identified server-side by the triple
+    // `(taskId, ownerUserId, chatId)` - two users can legitimately hold the
+    // same host-minted `chatId` in one task. Admitting other owners here would
+    // collapse two people's chats into one entry. That re-keying is the real
+    // precondition for retiring the sidebar's `epic.listCloudChats` arm, which
+    // is where collaborators' chats are served from today.
     if (!isChatVisibleToUser(record.userId, currentUserId)) continue;
     if (!Object.hasOwn(byId, id)) {
       byId[id] = record;

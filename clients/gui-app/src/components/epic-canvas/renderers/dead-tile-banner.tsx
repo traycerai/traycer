@@ -343,9 +343,19 @@ export function ChatHostStartingBanner(
  *   ANSWERED; the chat is what is missing. The clone it offers also lands on
  *   this same machine, so the "stays bound to <label>" disclosure the other
  *   two carry has nothing left to disclose.
+ * - `chat-no-longer-shared` - the record plane RETRACTED this chat from this
+ *   viewer (`remove` with reason `revoked`: unshared, flipped back to private,
+ *   or epic-membership loss). The one member of this taxonomy that is not about
+ *   a host at all - the chat exists, its host is fine, and it is the VIEWER's
+ *   entitlement that changed. It is also the only one with nothing to offer:
+ *   the other three all end in "clone it and carry on", which needs read access
+ *   to a transcript this viewer no longer has.
  */
 export type ChatDeadTileBannerReason =
-  "host-offline" | "chat-not-visible" | "chat-not-on-this-host";
+  | "host-offline"
+  | "chat-not-visible"
+  | "chat-not-on-this-host"
+  | "chat-no-longer-shared";
 
 export interface ChatDeadTileBannerProps {
   readonly hostLabel: string;
@@ -362,6 +372,16 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     readonly message: (hostLabel: string) => ReactNode;
     readonly reportTitle: string;
     readonly reportMessage: string;
+    /**
+     * Whether this reason ends in an action the reader can actually take.
+     *
+     * Three of the four do: the transcript is readable (as a published copy or
+     * from the owner host) and cloning carries it onto a live host. `revoked`
+     * does not - the clone would have to read bytes the server just stopped
+     * serving this viewer, so offering the button would be an invitation to a
+     * failure. Same reasoning `ChatHostStartingBanner` withholds it under.
+     */
+    readonly offersClone: boolean;
   }
 > = {
   "host-offline": {
@@ -374,6 +394,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     ),
     reportTitle: "Agent host is offline",
     reportMessage: "The agent's bound host is offline.",
+    offersClone: true,
   },
   "chat-not-visible": {
     message: (hostLabel) => (
@@ -385,6 +406,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     ),
     reportTitle: "Agent history unavailable",
     reportMessage: "The agent's history could not be found on its bound host.",
+    offersClone: true,
   },
   // Deliberately names no host: the one it would name is the machine the
   // reader is looking at, and every label this device could print for it
@@ -400,6 +422,24 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     reportTitle: "Agent history missing on this host",
     reportMessage:
       "The connected host answered that it no longer has this agent's history.",
+    offersClone: true,
+  },
+  // Names no host on purpose, like the arm above it, but for the opposite
+  // reason: there is nothing wrong with any host here. Saying "on <label>"
+  // would invite the reader to go looking at a machine that is working
+  // perfectly. Nor does it say WHICH revocation happened (unshared vs
+  // shared->private vs removed from the epic) - the feed does not tell this
+  // client, and guessing would be worse than the fact itself.
+  "chat-no-longer-shared": {
+    message: () => (
+      <>
+        This agent is no longer shared with you. Its transcript is no longer
+        available here.
+      </>
+    ),
+    reportTitle: "Agent is no longer shared",
+    reportMessage: "Access to this agent was revoked while its tab was open.",
+    offersClone: false,
   },
 };
 
@@ -422,15 +462,17 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       )}
     >
       <span className="min-w-0 flex-1">{copy.message(props.hostLabel)}</span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={props.cloning}
-        onClick={props.onClone}
-      >
-        Clone agent
-      </Button>
+      {copy.offersClone ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.cloning}
+          onClick={props.onClone}
+        >
+          Clone agent
+        </Button>
+      ) : null}
       <ReportIssueAction
         context={createReportIssueContext({
           title: copy.reportTitle,

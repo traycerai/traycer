@@ -9,12 +9,16 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
+import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
-import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
+import {
+  ChatDeadTileBanner,
+  type ChatDeadTileBannerReason,
+} from "@/components/epic-canvas/renderers/dead-tile-banner";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useHostClient } from "@/lib/host";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
@@ -33,6 +37,7 @@ import {
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
+  useEpicChatRetraction,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
   type EpicArtifactProjection,
@@ -580,6 +585,14 @@ const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
  * swap it for is exactly what it does not have, so it keeps its live
  * generic-error surface).
  */
+/**
+ * The revoked banner's clone handler. Module-level so it is reference-stable,
+ * and a no-op because that banner declares `offersClone: false` and therefore
+ * never renders a control that could call it - the prop exists only because
+ * `ChatDeadTileBanner` is shared with the three reasons that DO offer it.
+ */
+const noopClone = (): void => undefined;
+
 interface ChatFallbackDecision {
   readonly substitute: boolean;
   readonly reason: ChatDeadTileBannerReason;
@@ -767,6 +780,25 @@ function usePublishedChatFallbackRef(args: {
   };
 }
 
+/**
+ * WHY this tab's chat record left, when the push stream said so.
+ *
+ * The record table alone reports only that a row is GONE, and the two
+ * departures need opposite surfaces: a DELETED chat is a node that no longer
+ * exists (the deleted-node body, with its Close), a REVOKED one still exists
+ * and is simply not this viewer's to read any more.
+ *
+ * Non-chat tabs answer `null` without the store ever being asked about them.
+ * Extracted from `ActiveTabBody` rather than inlined for the same reason
+ * `resolveChatFallbackDecision` is - that function mixes hook calls with
+ * branching and sits one conditional under this repo's lint ceiling.
+ */
+function useChatTabRetraction(
+  activeTab: EpicCanvasTileRef,
+): ChatRecordRemovalReason | null {
+  return useEpicChatRetraction(activeTab.type === "chat" ? activeTab.id : null);
+}
+
 function ActiveTabBody(props: ActiveTabBodyProps) {
   const { activeTab, epicId, groupId, tabId } = props;
   const navigateNested = useEpicNestedFocusNavigation();
@@ -781,6 +813,8 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // `computeIsRemoteDeleted`). This is canvas machinery at epic-view
   // altitude, not a chat tab - the tab-scoped host rule doesn't apply here.
   const activeHostIdForRecordGate = useReactiveActiveHostId();
+  const chatRetraction = useChatTabRetraction(activeTab);
+  const isRetractedAsRevoked = chatRetraction === "revoked";
   const {
     fallbackRef: publishedFallbackRef,
     ownerHostLabel,
@@ -826,6 +860,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           isPendingCreate,
           projectionHostId: activeHostIdForRecordGate,
           isCloudKnown,
+          retractedAsDeleted: chatRetraction === "deleted",
         });
   const isActive = role !== null && props.selected && props.globallyActive;
 
@@ -869,7 +904,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     // parallel one so membership has ONE inline-takeover input.
     reportChatRemoteDeletionState(
       activeTab.instanceId,
-      isRemoteDeleted || publishedFallbackRef !== null,
+      isRemoteDeleted || publishedFallbackRef !== null || isRetractedAsRevoked,
     );
     return () => {
       reportChatRemoteDeletionState(activeTab.instanceId, false);
@@ -878,6 +913,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     activeTab.type,
     activeTab.instanceId,
     isRemoteDeleted,
+    isRetractedAsRevoked,
     publishedFallbackRef,
   ]);
 
@@ -894,6 +930,26 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           );
         }}
       />
+    );
+  }
+
+  // Ahead of the published-copy substitution on purpose: that branch's whole
+  // premise is that there is a readable copy to show under the banner, and a
+  // revocation is precisely the loss of permission to read one. Rendering the
+  // banner ALONE is the honest end state - no transcript, and (per
+  // `offersClone`) no clone offer that would fail on the first read.
+  if (isRetractedAsRevoked) {
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <ChatDeadTileBanner
+          hostLabel={ownerHostLabel}
+          reason="chat-no-longer-shared"
+          onClone={noopClone}
+          cloning={false}
+          className={undefined}
+          testId={`chat-dead-tile-${activeTab.id}`}
+        />
+      </div>
     );
   }
 
@@ -996,6 +1052,11 @@ interface ComputeIsRemoteDeletedArgs {
    * substitution ref so the two never disagree).
    */
   readonly isCloudKnown: boolean;
+  /**
+   * The record plane said this chat was DELETED (a `remove` delta whose reason
+   * is `deleted`), as opposed to merely absent from a projection.
+   */
+  readonly retractedAsDeleted: boolean;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -1007,9 +1068,18 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
     isPendingCreate,
     projectionHostId,
     isCloudKnown,
+    retractedAsDeleted,
   } = args;
   if (!snapshotLoaded) return false;
   if (leafArtifact === null) return false;
+  // POSITIVE evidence, so it outranks every exemption below - each of those
+  // exists because a missing projection is not proof of deletion, and this is
+  // the one signal that IS proof. In particular it outranks the cross-host
+  // exemption (a chat on another host is invisible to this projection, but a
+  // delete the host announced is not an inference) and the cloud-known
+  // exemption (a published copy outliving the chat is exactly the ghost row
+  // the record plane's tombstones exist to retract).
+  if (leafArtifact.type === "chat" && retractedAsDeleted) return true;
   // A CHAT ref bound to another host is invisible to this device's
   // projection by construction - chat records are host-authoritative, so a
   // cross-host live tab (reachable owner opened from the unified sidebar)
