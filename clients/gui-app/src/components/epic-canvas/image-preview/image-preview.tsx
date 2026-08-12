@@ -859,27 +859,15 @@ function ImageStageImg(props: {
   readonly className: string;
 }): ReactNode {
   // Skeleton -> image cross-fade (UI polish requirement #4): opacity-only,
-  // <=150ms, and SKIPPED for an already-cached URL.
-  //
-  // `loaded` seeds from `servedFromCache` in the `useState` INITIALIZER, not
-  // via an effect (ticket 07 closing E2E item, round 2): a `useLayoutEffect`
-  // correction still runs after the FIRST commit has already painted - or,
-  // pre-paint, after some OTHER layout effect in this tree (RZPP's own
-  // mount-time measurement, the stage's `getBoundingClientRect` reads) has
-  // forced the browser to resolve a style pass while this element still
-  // read `opacity-0`. A CSS transition fires on any resolved-style CHANGE
-  // between two style passes, paint or not - so a same-commit correction
-  // still animated 0 -> 100 on a live trace. Seeding the initial state
-  // itself means the FIRST commit's className is already `opacity-100` for
-  // a cache hit; there is no `opacity-0` value ever exposed to a style pass
-  // to transition away from.
-  //
-  // `img.complete` (checked below, in the layout effect) stays as a second,
-  // independent signal: it catches a genuinely fast decode on the SAME
-  // `<img>` element within this session - relevant to a same-instance prop
-  // update that isn't a cache hit at mount - but can never itself seed the
-  // mount-time value, since browser decode state lives on the ELEMENT (not
-  // yet attached at `useState` initializer time), not the URL.
+  // <=150ms, skipped for a cache hit. `loaded` seeds from `servedFromCache`
+  // in the `useState` INITIALIZER, not an effect: a CSS transition fires on
+  // any resolved-style change between two style passes regardless of paint
+  // timing, so an effect-based correction can still animate 0 -> 100 if
+  // some OTHER layout effect forces a style pass in between. Seeding the
+  // initial value means the first commit's className is already
+  // `opacity-100` for a cache hit - no `opacity-0` value is ever exposed to
+  // transition away from. `img.complete` (below) is a second, independent
+  // signal for a same-instance fast decode that isn't itself a cache hit.
   const { setImgRef, onNaturalSize, servedFromCache } = props;
   const [loaded, setLoaded] = useState(servedFromCache);
   const localImgRef = useRef<HTMLImageElement | null>(null);
@@ -914,18 +902,8 @@ function ImageStageImg(props: {
       onLoad={handleLoad}
       onError={props.onDecodeError}
       className={cn(
-        "image-preview-outline block",
-        // A cache hit never has an `opacity-0` value to transition away
-        // from (it's seeded straight to `opacity-100`, see `loaded` above)
-        // - the transition class itself is omitted for that mount, not
-        // just left inert, so a pathological forced style pass elsewhere
-        // in this tree has no transitionable property to catch.
-        servedFromCache
-          ? "opacity-100"
-          : cn(
-              "transition-opacity duration-150 ease-out",
-              loaded ? "opacity-100" : "opacity-0",
-            ),
+        "image-preview-outline block transition-opacity duration-150 ease-out",
+        loaded ? "opacity-100" : "opacity-0",
         props.className,
       )}
     />
