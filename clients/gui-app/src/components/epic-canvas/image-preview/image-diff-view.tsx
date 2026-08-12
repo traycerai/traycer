@@ -31,10 +31,9 @@ import {
 } from "./image-preview-transform";
 
 /**
- * A side's own current scale and interactive bounds (round-1 review finding
- * #3/#7) - populated straight from that side's OWN reported
- * {@link ImagePreviewTransformReport}, published at init (round-2 review
- * finding #4: RZPP applies its initial transform without firing
+ * A side's own current scale and interactive bounds - populated straight
+ * from that side's OWN reported {@link ImagePreviewTransformReport},
+ * published at init (RZPP applies its initial transform without firing
  * `onTransform`, so waiting for a transform event would leave this at the
  * default) and on every subsequent transform. Never derived from the OTHER
  * side's numbers.
@@ -50,13 +49,13 @@ const DEFAULT_SIDE_BOUNDS: SideBounds = {
 };
 
 /**
- * Round-1 review finding #3: an ACTIVE side blocks the shared zoom-out
- * button once it's at ITS OWN floor (finding #7: that floor can be below
- * the constant `MIN_SCALE`). `active` means "has a currently mounted,
- * reporting `ImagePreview`" (round-3 review finding #1) - NOT "the git
- * stage exists": a non-image side or one that's fallen back to
- * `BinaryPlaceholder` never mounts one and must never contribute its
- * (now-reset-to-default) bounds.
+ * An ACTIVE side blocks the shared zoom-out button once it's at ITS OWN
+ * floor (that floor can be below the constant `MIN_SCALE`). `active` means
+ * "has a currently mounted, reporting `ImagePreview`" - NOT "the git stage
+ * exists": a non-image side or one that's fallen back to `BinaryPlaceholder`
+ * never mounts one, so the `active &&` short-circuit below keeps its bounds
+ * (whatever they last held, possibly stale from an earlier activation) from
+ * ever being read.
  */
 function sideAtMin(active: boolean, bounds: SideBounds): boolean {
   return active && bounds.scale <= bounds.minScale + SCALE_EPSILON;
@@ -71,9 +70,9 @@ function sideAtMax(active: boolean, bounds: SideBounds): boolean {
 }
 
 /**
- * A side's own derived Fit/Actual-size mode (round-2 review finding #3) -
- * reported by that side's `ImagePreview` instance (which already computes
- * this correctly for itself), never re-derived or manually toggled here.
+ * A side's own derived Fit/Actual-size mode - reported by that side's
+ * `ImagePreview` instance (which already computes this correctly for
+ * itself), never re-derived or manually toggled here.
  */
 interface SideMode {
   readonly isFitted: boolean;
@@ -83,21 +82,20 @@ interface SideMode {
 const DEFAULT_SIDE_MODE: SideMode = { isFitted: true, isActualSize: false };
 
 /**
- * The shared toolbar's pressed state (round-2 review finding #3): pressed
- * iff every ACTIVE side reports itself in that mode. `active`, not
- * `exists` (round-3 review finding #1) - a missing (Added/Deleted) side
- * correctly never blocks the derivation, but neither may a side that
+ * The shared toolbar's pressed state: pressed iff every ACTIVE side reports
+ * itself in that mode. `active`, not `exists` - a missing (Added/Deleted)
+ * side correctly never blocks the derivation, but neither may a side that
  * exists as a git stage yet never mounts an `ImagePreview` (a non-image
  * side, or one that's failed to `BinaryPlaceholder`) - its stale/default
  * mode would otherwise permanently block the SURVIVING side's own pressed
  * state from ever showing.
  *
- * When NEITHER side is active (round-4 review P2), the "every active side
- * agrees" quantifier is vacuously true for BOTH `isFitted` and
- * `isActualSize` at once - Fit and Actual-size would show pressed
- * simultaneously with no image on screen to justify either. Falls back to
- * `DEFAULT_SIDE_MODE` explicitly instead, the same "nothing is happening"
- * baseline already used everywhere else in this file.
+ * When NEITHER side is active, the "every active side agrees" quantifier is
+ * vacuously true for BOTH `isFitted` and `isActualSize` at once - Fit and
+ * Actual-size would show pressed simultaneously with no image on screen to
+ * justify either. Falls back to `DEFAULT_SIDE_MODE` explicitly instead, the
+ * same "nothing is happening" baseline already used everywhere else in this
+ * file.
  */
 function combinedMode(
   oldActive: boolean,
@@ -145,15 +143,14 @@ export interface ImageDiffViewProps {
  * - A GESTURE on either side (drag, pinch, ctrl+wheel) instead mirrors that
  *   side's raw `{scale, positionX, positionY}` onto the peer via
  *   `setTransform` - exact for same-dimension sides. `setTransform` calls
- *   the library's `setState` directly and bypasses `limitToBounds` entirely
- *   (review finding #5), so for mismatched dimensions the mirrored position
- *   is clamped against the peer's OWN live bounds first - sane containment
- *   only (ticket 07: "do not over-engineer sub-pixel alignment for
- *   mismatched dimensions"), never a reimplementation of the library's
- *   padding-aware bounds engine.
+ *   the library's `setState` directly and bypasses `limitToBounds` entirely,
+ *   so for mismatched dimensions the mirrored position is clamped against
+ *   the peer's OWN live bounds first - sane containment only (ticket 07: "do
+ *   not over-engineer sub-pixel alignment for mismatched dimensions"), never
+ *   a reimplementation of the library's padding-aware bounds engine.
  * - A PROGRAMMATIC transform (this side's own resize-refit, or a
- *   double-click - review finding #3) is never mirrored at all: each side
- *   recomputes its own fit/actual-size independently instead.
+ *   double-click) is never mirrored at all: each side recomputes its own
+ *   fit/actual-size independently instead.
  * Compact (bundle) variant: static fit only, no toolbar, no gestures -
  * matches decision #18's affordance-free intent.
  */
@@ -169,22 +166,20 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // callback assumption always holds here.
   const oldPendingSyncRef = useRef(0);
   const newPendingSyncRef = useRef(0);
-  // Per-side, never a single shared value, and never manually toggled
-  // (round-2 review finding #3 - this component previously kept its OWN
-  // `isFitted`/`isActualSize` booleans, unconditionally cleared by every
-  // gesture callback, which could drift from the real transforms: a pinch
-  // that lands exactly at scale 1, or back at the fit transform, left the
-  // matching button unpressed). Each side's `ImagePreview` already derives
-  // its own mode correctly - these just mirror what it reports, and the
-  // toolbar's actual pressed state below is COMPUTED from them, never
-  // stored.
+  // Per-side, never a single shared value, and never manually toggled - this
+  // component previously kept its OWN `isFitted`/`isActualSize` booleans,
+  // unconditionally cleared by every gesture callback, which could drift
+  // from the real transforms: a pinch that lands exactly at scale 1, or back
+  // at the fit transform, left the matching button unpressed. Each side's
+  // `ImagePreview` already derives its own mode correctly - these just
+  // mirror what it reports, and the toolbar's actual pressed state below is
+  // COMPUTED from them, never stored.
   const [oldMode, setOldMode] = useState<SideMode>(DEFAULT_SIDE_MODE);
   const [newMode, setNewMode] = useState<SideMode>(DEFAULT_SIDE_MODE);
-  // Per-side, never a single shared value (round-1 review finding #3): each
-  // side can have its own natural size and therefore its own fit/
-  // interactive floor (finding #7), so the shared zoom buttons must disable
-  // when EITHER side is at ITS OWN boundary, not some averaged/last-writer
-  // value.
+  // Per-side, never a single shared value: each side can have its own
+  // natural size and therefore its own fit/interactive floor, so the shared
+  // zoom buttons must disable when EITHER side is at ITS OWN boundary, not
+  // some averaged/last-writer value.
   const [oldBounds, setOldBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
   const [newBounds, setNewBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
 
@@ -240,9 +235,9 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldAsset = useImageAsset(oldRequest);
   const newAsset = useImageAsset(newRequest);
 
-  // Round-3 review finding #1: "the git stage is non-null" (`oldSideExists`
-  // above) is NOT "this side currently has a mounted, reporting
-  // `ImagePreview`" - a non-image side (renders `BinaryPlaceholder`, e.g.
+  // "The git stage is non-null" (`oldSideExists` above) is NOT "this side
+  // currently has a mounted, reporting `ImagePreview`" - a non-image side
+  // (renders `BinaryPlaceholder`, e.g.
   // `old.txt -> new.png`) or a side that fails to `fallback` never mounts
   // one, so its default `isActualSize: false`/default bounds would
   // otherwise permanently block the SURVIVING side's pressed state and
@@ -261,8 +256,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // tracking run UNCONDITIONALLY though - even a programmatic refit
   // changes this side's own current scale/floor/fitted-ness, and the
   // shared toolbar/zoom-boundary state must reflect that regardless of
-  // origin. Fires once at init too (round-2 review finding #4), which is
-  // exactly how `oldBounds`/`newBounds`/`oldMode`/`newMode` learn a side's
+  // origin. Fires once at init too, which is exactly how
+  // `oldBounds`/`newBounds`/`oldMode`/`newMode` learn a side's
   // TRUE starting values instead of sitting at the defaults.
   const handleOldTransform = useCallback(
     (report: ImagePreviewTransformReport): void => {
@@ -313,8 +308,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   // ALSO mirror one side's raw numbers onto the other - only incremented
   // once the ref is confirmed present, so a not-yet-mounted side can never
   // leave a stuck count blocking a later genuine gesture. Neither handler
-  // below manually sets fit/actual-size mode (round-2 review finding #3) -
-  // each side's own `onTransform` firing synchronously as part of this call
+  // below manually sets fit/actual-size mode - each side's own
+  // `onTransform` firing synchronously as part of this call
   // reports its TRUE resulting mode back through `handleOldTransform`/
   // `handleNewTransform` above.
   const dualDispatch = useCallback(
@@ -340,13 +335,12 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
 
   // Matches the shared toolbar's own instant dual-dispatch (image-preview
   // decision log) rather than letting one side's internal handler run solo
-  // - review finding #3: that would mirror a raw fit/actual transform
-  // computed for THIS side's size onto the differently-sized peer instead
-  // of the peer computing its own.
-  // Derived, never stored (round-2 review finding #3). Gated on `oldActive`/
-  // `newActive` (round-3 review finding #1), never `oldSideExists`/
-  // `newSideExists` - a non-image or failed side must never count toward
-  // "every side agrees".
+  // - that would mirror a raw fit/actual transform computed for THIS side's
+  // size onto the differently-sized peer instead of the peer computing its
+  // own.
+  // Derived, never stored. Gated on `oldActive`/`newActive`, never
+  // `oldSideExists`/`newSideExists` - a non-image or failed side must never
+  // count toward "every side agrees".
   const { isFitted, isActualSize } = combinedMode(
     oldActive,
     oldMode,
@@ -364,13 +358,11 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
 
   const zoomDisabled =
     oldAsset.status !== "ready" && newAsset.status !== "ready";
-  // Disable when EITHER ACTIVE side is at ITS OWN boundary (round-1 review
-  // finding #3, gate corrected by round-3 finding #1) - each side's
-  // `minScale` already reflects its own fit floor (finding #7), so this
-  // stays correct even when the two sides' floors differ; a non-image or
-  // failed side's default bounds never contribute (its state was also just
-  // reset to the default above, so this is belt-and-suspenders, not load-
-  // bearing on its own).
+  // Disable when EITHER ACTIVE side is at ITS OWN boundary - each side's
+  // `minScale` already reflects its own fit floor, so this stays correct
+  // even when the two sides' floors differ; a non-image or failed side never
+  // contributes since `sideAtMin`/`sideAtMax` gate on `active` before
+  // reading its bounds at all.
   const zoomOutDisabled =
     zoomDisabled ||
     sideAtMin(oldActive, oldBounds) ||
@@ -507,10 +499,9 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
 
 /**
  * Calls `action` on `ref`'s resolved instance, incrementing `pendingRef`
- * FIRST - but only once the ref is confirmed present (round-2 review
- * finding #2), so a not-yet-mounted side can never leave a stuck pending
- * count that would block a later genuine gesture from ever mirroring
- * again.
+ * FIRST - but only once the ref is confirmed present, so a not-yet-mounted
+ * side can never leave a stuck pending count that would block a later
+ * genuine gesture from ever mirroring again.
  */
 function dispatchToSide(
   ref: RefObject<ReactZoomPanPinchRef | null>,
@@ -539,23 +530,22 @@ function fitInstance(instance: ReactZoomPanPinchRef): void {
 }
 
 /**
- * Mirrors `state` onto `peerRef`, clamped to the peer's OWN live bounds
- * (review finding #5) - `setTransform` calls the library's `setState`
- * directly, bypassing `limitToBounds` entirely (verified against installed
- * v4.0.4), so an unclamped mirror onto a smaller peer could push its
- * content wholly offscreen OR past its own interactive zoom range. Scale
- * clamps to the peer's OWN `setup.minScale`/`maxScale` FIRST (round-2
- * thermo review: two grossly mismatched sides can have different bounds,
- * and `setTransform` would otherwise happily apply a scale the peer could
- * never reach through its own toolbar/gestures) - position bounds are then
- * computed at that CLAMPED scale, not the raw mirrored one, so they
- * describe the transform actually being applied. Sane containment only,
- * not a reimplementation of the library's padding-aware bounds engine
- * (ticket 07: "do not over-engineer sub-pixel alignment for mismatched
- * dimensions"). Increments the PEER's own pending count (round-2 review
- * finding #2), never a shared synchronous bracket - the peer's
- * `onTransform` consuming it is what suppresses the echo, correct however
- * long delivery takes.
+ * Mirrors `state` onto `peerRef`, clamped to the peer's OWN live bounds -
+ * `setTransform` calls the library's `setState` directly, bypassing
+ * `limitToBounds` entirely (verified against installed v4.0.4), so an
+ * unclamped mirror onto a smaller peer could push its content wholly
+ * offscreen OR past its own interactive zoom range. Scale clamps to the
+ * peer's OWN `setup.minScale`/`maxScale` FIRST (two grossly mismatched sides
+ * can have different bounds, and `setTransform` would otherwise happily
+ * apply a scale the peer could never reach through its own toolbar/
+ * gestures) - position bounds are then computed at that CLAMPED scale, not
+ * the raw mirrored one, so they describe the transform actually being
+ * applied. Sane containment only, not a reimplementation of the library's
+ * padding-aware bounds engine (ticket 07: "do not over-engineer sub-pixel
+ * alignment for mismatched dimensions"). Increments the PEER's own pending
+ * count, never a shared synchronous bracket - the peer's `onTransform`
+ * consuming it is what suppresses the echo, correct however long delivery
+ * takes.
  */
 function mirrorTransform(
   peerPendingRef: { current: number },
@@ -657,8 +647,8 @@ function ImageDiffSide(props: {
       gesturesEnabled={!props.compact}
       // One motion language within the diff view (ticket 07, better-ui
       // audit): double-click is intercepted entirely by
-      // `doubleClickOverride` (review finding #3) - it drives the shared
-      // toolbar's own dual-dispatch instead of this instance's internal
+      // `doubleClickOverride` - it drives the shared toolbar's own
+      // dual-dispatch instead of this instance's internal
       // fit/actual handler, so both sides move together and each computes
       // its own fit, matching the toolbar exactly rather than mirroring one
       // side's raw numbers onto the other.

@@ -100,12 +100,14 @@ export interface GitImageDiffRouting {
  * check too (`old.svg -> new.txt` is text to git on the rename). A
  * conflicted file is exempted from the `isBinary` check entirely (live E2E
  * finding, ticket 06): the host's bulk `listChangedFiles` numstat pipeline
- * has no `MERGE_HEAD`-aware fallback for unmerged paths, so a real two-sided
- * binary conflict can report `isBinary: false` here even though decision
- * #10 routes every conflicted image unconditionally - the extension gate
- * alone is the correct signal for this one state. Shared between the
- * single-file diff tile (which also drives a per-tile SVG source/image
- * toggle from `isSvg`) and bundle sections (which only need the boolean).
+ * now resolves a `MERGE_HEAD`/`CHERRY_PICK_HEAD` peer ref for conflicted
+ * paths (`resolveConflictedIsBinary`, ticket 08), but falls back to leaving
+ * `isBinary: false` unchanged when no such peer ref can be found - decision
+ * #10 routes every conflicted image unconditionally regardless, so the
+ * extension gate stays the correct signal for that residual gap. Shared
+ * between the single-file diff tile (which also drives a per-tile SVG
+ * source/image toggle from `isSvg`) and bundle sections (which only need
+ * the boolean).
  */
 export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
   const isImage = isImageAssetPath(file.path);
