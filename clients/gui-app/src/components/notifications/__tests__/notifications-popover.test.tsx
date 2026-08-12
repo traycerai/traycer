@@ -25,6 +25,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import {
   __resetAppLocalNotificationsStoreForTests,
+  emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 import {
@@ -806,6 +807,103 @@ describe("NotificationsPopover", () => {
     expect(hostRequestMock).toHaveBeenCalledWith(
       "host.notifications.cloudFeed.markRead",
       { entryId: "entry-cloud" },
+    );
+  });
+
+  it("shows and opens the exact renderer-local terminal failure in cloud mode", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    useAppLocalNotificationsStore.getState().activateIdentity("user-popover");
+    const canvasStore = useEpicCanvasStore.getState();
+    const tabId = canvasStore.openEpicTab("epic-terminal", "Terminal epic");
+    canvasStore.openTileInTab(tabId, {
+      id: "terminal-build",
+      instanceId: "terminal-build-instance",
+      type: "terminal",
+      name: "Build terminal",
+      titleSource: "manual",
+      hostId: mockLocalHostEntry.hostId,
+      cwd: "/repo",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected terminal canvas");
+    }
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-build-instance",
+      hostId: mockLocalHostEntry.hostId,
+      terminalName: "Build terminal",
+      target: {
+        kind: "terminal",
+        epicId: "epic-terminal",
+        terminalId: "terminal-build",
+        tabId,
+        paneId: canvas.activePaneId,
+        tileInstanceId: "terminal-build-instance",
+      },
+      cause: "exit",
+    });
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    expect(
+      await screen.findByText("Build terminal exited unexpectedly."),
+    ).toBeDefined();
+    const row = screen.getByTestId("notification-entry");
+    expect(row.dataset.notificationId).toMatch(/^app-local:terminal\.crashed:/);
+    fireEvent.click(activateButtonFor(row));
+
+    await waitFor(() => {
+      expect(captured).toMatchObject({ epicId: "epic-terminal", tabId });
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(0);
+    });
+  });
+
+  it("clears renderer-local failures while the cloud feed is reconnecting", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    seedUnreadAppLocal("terminal-reconnecting");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const markAll = await screen.findByTestId<HTMLButtonElement>(
+      "notifications-mark-all-read",
+    );
+    expect(markAll.disabled).toBe(false);
+    expect(
+      screen.getByTestId<HTMLButtonElement>("notifications-clear-all").disabled,
+    ).toBe(true);
+    fireEvent.click(markAll);
+
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(0);
+    });
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.markAllRead",
+      expect.anything(),
     );
   });
 

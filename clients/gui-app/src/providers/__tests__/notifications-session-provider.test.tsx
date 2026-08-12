@@ -668,7 +668,7 @@ describe("<NotificationsSessionProvider />", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the dedicated host-selected activity stream while cloud relay owns notification rows", async () => {
+  it("keeps renderer-local failures while cloud relay owns replicated notification rows", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
@@ -680,6 +680,7 @@ describe("<NotificationsSessionProvider />", () => {
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-cloud",
       hostId: "host-a",
+      terminalName: "Terminal before cloud",
       target: {
         kind: "terminal",
         epicId: "epic-1",
@@ -709,7 +710,9 @@ describe("<NotificationsSessionProvider />", () => {
         "agent.activity.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
-      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
+        1,
+      );
       expect(useNotificationsStore.getState().entryIds).toEqual([]);
     });
 
@@ -1392,6 +1395,7 @@ describe("<NotificationsSessionProvider />", () => {
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-user-switch",
       hostId: "host-a",
+      terminalName: "Terminal before user switch",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -1478,6 +1482,7 @@ describe("<NotificationsSessionProvider />", () => {
     emitTerminalCrashedNotification({
       instanceId: "terminal-user-a",
       hostId: "host-a",
+      terminalName: "User A terminal",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -1567,6 +1572,7 @@ describe("<NotificationsSessionProvider />", () => {
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-host-switch",
       hostId: "host-a",
+      terminalName: "Terminal before host switch",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -1893,6 +1899,7 @@ describe("<NotificationsSessionProvider />", () => {
     emitTerminalCrashedNotification({
       instanceId: "disconnect-system",
       hostId: "host-a",
+      terminalName: "Disconnected terminal",
       target: {
         kind: "terminal",
         epicId: "epic-alpha",
@@ -2543,6 +2550,7 @@ describe("<NotificationsSessionProvider />", () => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-a-instance",
         hostId: mockLocalHostEntry.hostId,
+        terminalName: "Terminal A",
         target: {
           kind: "terminal",
           epicId: "epic-a",
@@ -2582,6 +2590,7 @@ describe("<NotificationsSessionProvider />", () => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-a-on-host-b",
         hostId: "host-b",
+        terminalName: "Terminal A on host B",
         target: {
           kind: "terminal",
           epicId: "epic-a",
@@ -2619,6 +2628,7 @@ describe("<NotificationsSessionProvider />", () => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-b-instance",
         hostId: "host-b",
+        terminalName: "Terminal B",
         target: {
           kind: "terminal",
           epicId: "epic-a",

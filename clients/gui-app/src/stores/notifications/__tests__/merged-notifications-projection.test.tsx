@@ -612,7 +612,7 @@ describe("cloud feed projection authority", () => {
     useCloudNotificationsStore.getState().reset();
   });
 
-  it("uses only the cloud snapshot when retained local replicas still contain rows", () => {
+  it("merges renderer-local failures with the cloud snapshot while excluding superseded replicas", () => {
     applyHostSnapshot([hostDone("local-host", 100, null)], {
       unreadCount: 1,
       attentionCount: 0,
@@ -635,11 +635,12 @@ describe("cloud feed projection authority", () => {
     }));
 
     expect(result.current.ids).toEqual([
+      appLocalFeedId("local-app"),
       cloudNotificationFeedId(cloud.entryId),
     ]);
     expect(result.current.row?.sourceId).toBe("entry-cloud");
-    expect(result.current.unreadCount).toBe(1);
-    expect(result.current.bell).toEqual({ kind: "quietDot" });
+    expect(result.current.unreadCount).toBe(2);
+    expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
     expect(result.current.hostState.isPartial).toBe(false);
   });
 
