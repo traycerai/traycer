@@ -2352,67 +2352,81 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             ...base,
             // Bound owner rows have no set-primary RPC.
             canChangePrimary: false,
-            onLocate: () => {
-              // Locate REPLACes only after ≥1 DISTINCT add succeeds — never
-              // delete-first (empty pick / all-adds-fail would drop the entry).
-              // Cancel and zero-success leave the binding untouched.
-              void (async (): Promise<void> => {
-                const result = await folderActions.pickAndPrepareFolders();
-                const outcome = await locateReplaceBoundFolder({
-                  absentPath: ws.workspacePath,
-                  pick: result,
-                  add: async (workspacePath) => {
-                    try {
-                      await addFolderMutation.mutateAsync({
-                        epicId: surface.epicId,
-                        ownerId: surface.ownerId,
-                        ownerKind,
-                        workspacePath,
-                      });
-                      pendingDefaultPathsRef.current?.add(workspacePath);
-                      return true;
-                    } catch {
-                      return false;
+            // An absent row is still a BOUND row: Locate adds and removes
+            // binding entries exactly like the normal controls, so it takes
+            // the same active-run lock. Without this the one row that mutates
+            // the binding hardest stayed live while an owner turn was running,
+            // and `unresolvedWorkspaceRunItem`'s `removeDisabled: false` came
+            // through the spread untouched. The lock clears with the turn and
+            // the row is retryable again - nothing about it is one-shot.
+            removeDisabled: activeRunLocksBinding || removePending,
+            removeDisabledReason: removeDisabledReasonFor(
+              activeRunLocksBinding,
+              activeRunNotice,
+            ),
+            onLocate: activeRunLocksBinding
+              ? null
+              : () => {
+                  // Locate REPLACes only after ≥1 DISTINCT add succeeds — never
+                  // delete-first (empty pick / all-adds-fail would drop the entry).
+                  // Cancel and zero-success leave the binding untouched.
+                  void (async (): Promise<void> => {
+                    const result = await folderActions.pickAndPrepareFolders();
+                    const outcome = await locateReplaceBoundFolder({
+                      absentPath: ws.workspacePath,
+                      pick: result,
+                      add: async (workspacePath) => {
+                        try {
+                          await addFolderMutation.mutateAsync({
+                            epicId: surface.epicId,
+                            ownerId: surface.ownerId,
+                            ownerKind,
+                            workspacePath,
+                          });
+                          pendingDefaultPathsRef.current?.add(workspacePath);
+                          return true;
+                        } catch {
+                          return false;
+                        }
+                      },
+                      remove: async (workspacePath) => {
+                        try {
+                          await removeBindingEntryMutation.mutateAsync({
+                            epicId: surface.epicId,
+                            ownerId: surface.ownerId,
+                            ownerKind,
+                            workspacePath,
+                          });
+                          pendingDefaultPathsRef.current?.delete(workspacePath);
+                          unstageWorktreeEntry(stagedKey, workspacePath);
+                          return true;
+                        } catch {
+                          return false;
+                        }
+                      },
+                    });
+                    if (
+                      outcome.kind !== "replaced" &&
+                      outcome.kind !== "replaced-stale-entry"
+                    ) {
+                      return;
                     }
-                  },
-                  remove: async (workspacePath) => {
-                    try {
-                      await removeBindingEntryMutation.mutateAsync({
-                        epicId: surface.epicId,
-                        ownerId: surface.ownerId,
-                        ownerKind,
-                        workspacePath,
-                      });
-                      pendingDefaultPathsRef.current?.delete(workspacePath);
-                      unstageWorktreeEntry(stagedKey, workspacePath);
-                      return true;
-                    } catch {
-                      return false;
+                    // A retained path is still bound, so it is not "touched" by a
+                    // commit that did not move it - the absent row stays put and
+                    // stays retryable. The adds are real either way.
+                    const touchedPaths =
+                      outcome.kind === "replaced"
+                        ? [outcome.removedPath, ...outcome.addedPaths]
+                        : [...outcome.addedPaths];
+                    if (surface.kind === "terminal-agent") {
+                      markBindingDirtyWithoutResume(touchedPaths);
+                    } else {
+                      handleBindingCommitted(touchedPaths);
                     }
-                  },
-                });
-                if (
-                  outcome.kind !== "replaced" &&
-                  outcome.kind !== "replaced-stale-entry"
-                ) {
-                  return;
-                }
-                // A retained path is still bound, so it is not "touched" by a
-                // commit that did not move it - the absent row stays put and
-                // stays retryable. The adds are real either way.
-                const touchedPaths =
-                  outcome.kind === "replaced"
-                    ? [outcome.removedPath, ...outcome.addedPaths]
-                    : [...outcome.addedPaths];
-                if (surface.kind === "terminal-agent") {
-                  markBindingDirtyWithoutResume(touchedPaths);
-                } else {
-                  handleBindingCommitted(touchedPaths);
-                }
-              })();
-            },
+                  })();
+                },
             onRemove: () => {
-              if (removePending) return;
+              if (activeRunLocksBinding || removePending) return;
               removeBindingEntryMutation.mutate(
                 {
                   epicId: surface.epicId,
