@@ -4,6 +4,7 @@ import type { EpicMentionSuggestion } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostBinding } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import type {
   EpicMentionMethod,
   MentionEpicRequest,
@@ -55,10 +56,23 @@ export function useEpicMentionEntries(
         query.dataUpdatedAt > 0 ? [query.dataUpdatedAt] : [],
       ),
     ),
+    // A rejected refresh is REPORTED, because a user asked for this one.
+    //
+    // `refetch()` resolves with a failed result rather than rejecting, so
+    // without this the button spins for its round-trip and stops exactly as it
+    // does on success - a refresh that never reached the host, presented as
+    // one that found nothing new. The picker has no inline surface to say it
+    // in either: `useMentionItems` publishes `loadFailed: false` outright.
+    //
+    // Same split as the GitHub catalog's two lanes: the manual lane speaks up,
+    // automatic ones degrade in place and leave the cached rows on screen.
     refetch: () =>
-      Promise.all(queries.map((query) => query.refetch())).then(
-        () => undefined,
-      ),
+      Promise.all(queries.map((query) => query.refetch())).then((results) => {
+        const failure =
+          results.find((result) => result.error !== null)?.error ?? null;
+        if (failure === null) return;
+        toastFromHostError(failure, "Could not refresh artifacts");
+      }),
     error: queries.find((query) => query.error !== null)?.error ?? null,
   };
 }

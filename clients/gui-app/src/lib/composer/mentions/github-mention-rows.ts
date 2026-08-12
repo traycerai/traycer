@@ -466,30 +466,54 @@ export function parseGithubReferenceQuery(
   if (query.length === 0) return null;
 
   const bare = BARE_NUMBER_REFERENCE.exec(query);
-  if (bare !== null) return { kind: "number", number: Number(bare[1]) };
+  if (bare !== null) {
+    const number = referenceNumber(bare[1]);
+    return number === null ? null : { kind: "number", number };
+  }
 
   const repository = REPOSITORY_REFERENCE.exec(query);
   if (repository !== null) {
-    return {
-      kind: "repository",
-      owner: repository[1],
-      repo: repository[2],
-      number: Number(repository[3]),
-    };
+    const number = referenceNumber(repository[3]);
+    return number === null
+      ? null
+      : {
+          kind: "repository",
+          owner: repository[1],
+          repo: repository[2],
+          number,
+        };
   }
 
   const url = URL_REFERENCE.exec(query);
   if (url !== null) {
-    return {
-      kind: "url",
-      githubHost: url[1],
-      owner: url[2],
-      repo: url[3],
-      number: Number(url[5]),
-      section: url[4] === "pull" ? "pull-requests" : "issues",
-    };
+    const number = referenceNumber(url[5]);
+    return number === null
+      ? null
+      : {
+          kind: "url",
+          githubHost: url[1],
+          owner: url[2],
+          repo: url[3],
+          number,
+          section: url[4] === "pull" ? "pull-requests" : "issues",
+        };
   }
   return null;
+}
+
+/**
+ * The number a reference names, or `null` when it cannot name anything.
+ *
+ * The patterns above match `\d{1,7}`, which accepts `0` and `000`, while the
+ * wire row schema requires a positive number. Without this, `@#0` classifies
+ * as a resolvable reference: it suppresses root's zero-match auto-close and
+ * offers `Resolve in Pull requests…` for an identity that no catalog or search
+ * response can ever contain, so the menu stays open on a promise it cannot
+ * keep. Treating it as ordinary prose is the honest answer.
+ */
+function referenceNumber(raw: string): number | null {
+  const parsed = Number(raw);
+  return parsed > 0 ? parsed : null;
 }
 
 function referenceMatchesRow(

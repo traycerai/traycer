@@ -14,8 +14,8 @@ import type { GithubMentionScope } from "@/hooks/composer/use-github-mention-cat
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
- * The stale follow-up is ONE `refresh: "auto"` per (scope, section) per menu
- * session, and the guard that enforces it has exactly one reset edge: the
+ * The stale follow-up is ONE `refresh: "auto"` per (host, scope, section) per
+ * menu session, and the guard that enforces it has exactly one reset edge: the
  * picker closing.
  *
  * The narrower flags cannot own that lifetime. `allowStaleFollowUp` goes false
@@ -27,8 +27,14 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 const request = vi.fn();
 
+/** Mutable so a test can swap the bound host without remounting the hook. */
+const readiness = vi.hoisted(() => ({ hostId: "host-1" }));
+
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: () => ({ hostId: "host-1", isReady: true }),
+  useReactiveHostReadiness: () => ({
+    hostId: readiness.hostId,
+    isReady: true,
+  }),
 }));
 
 // `HostClient` is a class with ~40 private fields, so a structural stand-in
@@ -127,6 +133,7 @@ afterEach(() => {
   cleanup();
   request.mockReset();
   catalogRequests.length = 0;
+  readiness.hostId = "host-1";
 });
 
 describe("useGithubMentionCatalog stale follow-up guard", () => {
@@ -190,6 +197,22 @@ describe("useGithubMentionCatalog stale follow-up guard", () => {
       ...IN_SECTION,
       scope: { epicId: "epic-1", workspacePaths: ["/repo-b"] },
     });
+
+    await waitFor(() => expect(autoSweepCount()).toBe(2));
+  });
+
+  it("sweeps again for a different HOST at the same scope and section", async () => {
+    alwaysStale();
+
+    const { rerender } = renderCatalog(IN_SECTION);
+    await waitFor(() => expect(autoSweepCount()).toBe(1));
+
+    // An app-wide composer rebinds to another host that advertises the same
+    // epic and the same workspace paths, so every other term in the guard key
+    // is unchanged. Keyed without the host, the second host's `stale: true`
+    // catalog reads as a sweep that already ran.
+    readiness.hostId = "host-2";
+    rerender(IN_SECTION);
 
     await waitFor(() => expect(autoSweepCount()).toBe(2));
   });

@@ -364,6 +364,30 @@ describe("parseGithubReferenceQuery", () => {
     expect(parseGithubReferenceQuery("")).toBeNull();
     expect(parseGithubReferenceQuery("   ")).toBeNull();
   });
+
+  it("rejects a zero-valued number in every reference shape", () => {
+    // `\d{1,7}` matches these, but the wire row schema requires a positive
+    // number - so classifying them as references suppresses root's zero-match
+    // auto-close and offers a Resolve row for an item that cannot exist.
+    expect(parseGithubReferenceQuery("#0")).toBeNull();
+    expect(parseGithubReferenceQuery("#000")).toBeNull();
+    expect(parseGithubReferenceQuery("org/repo#0")).toBeNull();
+    expect(
+      parseGithubReferenceQuery("https://github.com/org/repo/pull/0"),
+    ).toBeNull();
+    expect(
+      parseGithubReferenceQuery("https://github.com/org/repo/issues/0"),
+    ).toBeNull();
+  });
+
+  it("still accepts the smallest real reference", () => {
+    // The control: a positivity guard that rejected everything would pass the
+    // case above on its own.
+    expect(parseGithubReferenceQuery("#1")).toEqual({
+      kind: "number",
+      number: 1,
+    });
+  });
 });
 
 describe("githubMentionMatchScore", () => {

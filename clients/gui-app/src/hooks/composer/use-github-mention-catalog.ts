@@ -212,16 +212,23 @@ export function useGithubMentionCatalog(
 
   const { mutateAsync } = refreshMutation;
 
-  // One automatic follow-up per (scope, section) per menu session. The ref is
-  // what keeps a re-render, or the response arriving still `stale`, from
-  // turning "fetch once because the cache is old" into a fetch loop.
+  // One automatic follow-up per (host, scope, section) per menu session. The
+  // ref is what keeps a re-render, or the response arriving still `stale`,
+  // from turning "fetch once because the cache is old" into a fetch loop.
   //
-  // It is CLEARED on exactly one edge - the picker closing - and the scope and
-  // section live in the stored value instead, so a change to either fails the
-  // comparison below without anything having to notice the transition. See
-  // `pickerActive` for why the two narrower flags cannot own this lifetime.
+  // It is CLEARED on exactly one edge - the picker closing - and the host,
+  // scope and section live in the stored value instead, so a change to any of
+  // them fails the comparison below without anything having to notice the
+  // transition. See `pickerActive` for why the two narrower flags cannot own
+  // this lifetime.
+  //
+  // The host is in the key for the same reason it is in `cacheKey` above: it
+  // changes under an app-wide composer, and two hosts can advertise the same
+  // epic and the same workspace paths. Keyed without it, the second host's
+  // `stale: true` catalog reads as a sweep that already ran, and that host
+  // never gets the one refresh a session owes it.
   const autoFollowedRef = useRef<string | null>(null);
-  const followKey = `${scope.epicId ?? ""}\x1f${[...scope.workspacePaths].toSorted().join("\x1f")}\x1f${section}`;
+  const followKey = `${readiness.hostId ?? ""}\x1f${scope.epicId ?? ""}\x1f${[...scope.workspacePaths].toSorted().join("\x1f")}\x1f${section}`;
   useEffect(() => {
     if (!pickerActive) {
       autoFollowedRef.current = null;
