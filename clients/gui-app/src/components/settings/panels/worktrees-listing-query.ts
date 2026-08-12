@@ -234,7 +234,13 @@ export function useWorktreeListing(
       // rejected promise is swallowed by useRefreshSpinner.
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh worktrees."),
-      mutationFn: (input) =>
+      // Annotated to the version this panel reads, exactly as
+      // `fetchWorktreeListPage` above is. The client always returns the
+      // CANONICAL response, which is now a superset of this one; without the
+      // annotation the inferred wider type flows into `UseMutationOptions`,
+      // which is invariant in its data parameter through `onSuccess`, and the
+      // options object stops matching the declared generic.
+      mutationFn: (input): Promise<WorktreeListAllForHostResponseV14> =>
         withHostQueryErrorBoundary("worktree.listAllForHost", () =>
           input.client.request("worktree.listAllForHost", {
             includeActivity: false,

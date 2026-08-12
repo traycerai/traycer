@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CancelledError,
   useQueryClient,
@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { worktreeListByWorkspacePathsParams } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -45,6 +45,21 @@ export interface WorktreeWorkspacesRefresh {
   readonly checkedAt: number | null;
   /** False with no bound host or no folders: the affordance has nothing to do. */
   readonly canRefresh: boolean;
+  /**
+   * True when the last user-driven refresh settled with a non-cancelled
+   * error. The footer renders "Couldn't verify — Retry" instead of the idle
+   * stamp; cleared on the next refresh attempt. Coordinator cancellations
+   * (host swap) never set this — but a real failure of the one-hop
+   * post-swap force does.
+   */
+  readonly verifyFailed: boolean;
+  /**
+   * Monotonic counter bumped at the start of every user-driven `refresh()`
+   * (and the one-hop post-swap force). The footer keys its 30s deadline to
+   * this so a Retry after timeout starts a fresh deadline rather than
+   * inheriting the previous attempt's expired timer.
+   */
+  readonly refreshGeneration: number;
 }
 
 /**
@@ -78,10 +93,16 @@ export function useWorktreeWorkspacesRefresh(args: {
    */
   readonly workspacePaths: ReadonlyArray<string>;
   /** The summaries currently on screen, for the "Checked …" stamp. */
-  readonly summaries: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
+  readonly summaries: ReadonlyArray<WorktreeWorkspaceSummaryV15>;
 }): WorktreeWorkspacesRefresh {
   const queryClient = useQueryClient();
   const { client, workspacePaths, summaries } = args;
+  // Footer failure state: set on a real (non-cancelled) settle error; cleared
+  // when the user retries. Distinct from the toast path, which still fires.
+  const [verifyFailed, setVerifyFailed] = useState(false);
+  // Bumped per user-driven attempt so the footer can key its deadline to the
+  // attempt identity rather than the bare isPending boolean.
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
   // The scope as of the latest COMMIT, for comparison against the scope a
   // completing request captured - see `onSuccess`. Synced in an effect rather
   // than during render (refs are not render state); the comparison happens when
@@ -132,10 +153,20 @@ export function useWorktreeWorkspacesRefresh(args: {
       }
       // Its own `onError` owns the failure toast; rethrowing here would make
       // the outer mutation reject and toast the SAME failure a second time.
-      await forceAgain({
-        workspacePaths: [...latestPaths],
-        isHostFollowUp: true,
-      }).catch(() => undefined);
+      // A real (non-cancelled) failure of THIS hop must still set the footer
+      // failure state — the outer refresh() already returned on CancelledError
+      // without marking verifyFailed, so toast-only would leave the footer idle.
+      setRefreshGeneration((generation) => generation + 1);
+      try {
+        await forceAgain({
+          workspacePaths: [...latestPaths],
+          isHostFollowUp: true,
+        });
+      } catch (error) {
+        if (!(error instanceof CancelledError)) {
+          setVerifyFailed(true);
+        }
+      }
       return true;
     },
     [client],
@@ -238,9 +269,9 @@ export function useWorktreeWorkspacesRefresh(args: {
           // mode can settle STALE, and the response above landed only in the
           // captured key. The forced derive DID install fresh per-path host
           // entries, so a re-read of the current key pulls them through - no
-          // second force needed. AWAITED for the same reason as the branch list
-          // below: a Refresh that reports completion must mean the label on
-          // screen is current, not that it will be shortly.
+          // second force needed. AWAITED so a Refresh that reports completion
+          // means the folder labels on screen are current, not that they will
+          // be shortly.
           await queryClient.invalidateQueries({
             queryKey: workspacesQueryKey(context.hostId, latestPaths),
             refetchType: "active",
@@ -248,23 +279,29 @@ export function useWorktreeWorkspacesRefresh(args: {
         }
         // The branch LIST is a separate cache with its own host-side read, so
         // the summary refresh alone leaves a branch that was deleted outside
-        // Traycer sitting in the new-worktree source picker. `refetchType:
-        // "all"` for the same reason the binding invalidations use it: this
-        // list is usually unmounted (it lives inside a nested form) and the
-        // app's query defaults skip refetch-on-focus, so a plain invalidate
-        // would serve the deleted branch until it next remounted.
+        // Traycer sitting in the new-worktree source picker until the list
+        // refetches.
         //
-        // AWAITED, so the mutation - and the spinner reading `isPending` -
-        // completes only once both facts are current. `NewWorktreeForm` builds
-        // its selectable rows from `branchesQuery.data` and passes only
-        // `isLoading`, so a refresh that "finished" while this was still
-        // fetching would let the user pick the branch they just deleted.
+        // AWAITED, but `refetchType: "active"` only - and the two halves of
+        // that are what D3 got half right. Its concern was real: awaiting
+        // INACTIVE entries (the list usually lives in an unmounted nested
+        // form) held "Checking…" open across serial relay round-trips nobody
+        // was looking at. But the fix it reached for was dropping the await
+        // entirely, and an active-only invalidation never fetches an inactive
+        // entry in the first place - so the cost D3 avoided was already gone
+        // and not awaiting bought nothing for it.
+        //
+        // What it cost instead was the VISIBLE list. Refresh reported done
+        // while the mounted picker still showed cached branches, so the very
+        // thing that sends someone to Refresh - a branch deleted outside
+        // Traycer - was still on screen and still selectable at the moment the
+        // spinner cleared.
         await queryClient.invalidateQueries({
           queryKey: queryKeys.hostMethodScope(
             context.hostId,
             "worktree.listBranches",
           ),
-          refetchType: "all",
+          refetchType: "active",
         });
       },
     },
@@ -280,6 +317,8 @@ export function useWorktreeWorkspacesRefresh(args: {
     // host into a `hostClientUnavailableError` toast on a surface whose own
     // affordance was sitting disabled the whole time.
     if (client === null || workspacePaths.length === 0) return;
+    setVerifyFailed(false);
+    setRefreshGeneration((generation) => generation + 1);
     try {
       await mutateAsync({
         workspacePaths: [...workspacePaths],
@@ -291,8 +330,13 @@ export function useWorktreeWorkspacesRefresh(args: {
       // `mutateAsync` rejects all the same, so without this every caller sees
       // an ordinary host switch as a failed refresh - and the intent-edge
       // callers that fire this without awaiting would raise an unhandled
-      // rejection. Real failures still reject, having toasted.
-      if (!(error instanceof CancelledError)) throw error;
+      // rejection. Real failures still reject, having toasted, and mark the
+      // footer failure state so the idle stamp does not silently return.
+      // A one-hop force that then fails sets verifyFailed inside
+      // `forceAgainstLiveHost` — do not clear it here on CancelledError.
+      if (error instanceof CancelledError) return;
+      setVerifyFailed(true);
+      throw error;
     }
   }, [client, mutateAsync, workspacePaths]);
   const checkedAt = useMemo(
@@ -304,6 +348,8 @@ export function useWorktreeWorkspacesRefresh(args: {
     isRefreshing: refreshMutation.isPending,
     checkedAt,
     canRefresh: client !== null && workspacePaths.length > 0,
+    verifyFailed,
+    refreshGeneration,
   };
 }
 

@@ -82,8 +82,8 @@ export function parseStoredAuthTokens(value: unknown): StoredAuthTokens {
 
 /**
  * Parses the `{ id, email, name }` identity block the renderer hands to
- * `tokenStore.signIn`. The main store stamps `authnBaseUrl` + `savedAt`, so only
- * the user identity crosses here. Fail-closed on any non-string field.
+ * `tokenStore.signIn`. The main store stamps `savedAt`, so only the user
+ * identity crosses here. Fail-closed on any non-string field.
  */
 /**
  * Parses the delegated host-credential mint request. `hostId` is required (the

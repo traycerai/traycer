@@ -631,6 +631,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         // Remote Host Support: host-registry read (§7) and version-policy
         // write (§13, T16) run in main for the renderer-origin CORS reason.
+        RunnerHostInvoke.deregisterHostFromAccount,
         RunnerHostInvoke.listRegisteredHosts,
         RunnerHostInvoke.updateHostVersionPolicy,
         RunnerHostInvoke.listUserSessions,
@@ -770,6 +771,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileDropCopyTemporary,
         RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
+        RunnerHostInvoke.clipboardWriteImage,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
         RunnerHostInvoke.logLevelsGet,

@@ -193,6 +193,49 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(true);
   });
 
+  it("with refetchActive: true, does not refetch a cloud epic-tasks key while still refetching an ordinary host key", async () => {
+    // The bind-path force-refetch is the broadest host-scope sweep; force-
+    // refetching the cloud epic-tasks history drops optimistically-inserted
+    // local-first epics (cloud-query-keys.ts). This pin is the bind-path
+    // enforcement of that documented invariant.
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+
+    const epicTasksKey = queryKeys.cloudEpicTasks(HOST_ID, "fingerprint-1", {
+      limit: 20,
+      filters: null,
+      sort: "recent",
+      extensionPhaseVersion: "1.0.0",
+      extensionEpicVersion: "1.0.0",
+    });
+    const epicTasks = mountCountedQuery(queryClient, epicTasksKey, {
+      staleTime: Infinity,
+      impl: () =>
+        Promise.resolve({
+          tasks: [],
+          nextCursor: undefined,
+          hasMore: false,
+        }),
+    });
+    const control = mountCountedQuery(queryClient, controlKey, {
+      staleTime: 0,
+      impl: () => Promise.resolve({ capabilities: [] }),
+    });
+    stops.push(epicTasks.stop, control.stop);
+
+    await waitUntil(() => epicTasks.fetches.count === 1);
+    await waitUntil(() => control.fetches.count === 1);
+
+    invalidator.invalidateHostScope(HOST_ID, { refetchActive: true });
+
+    await waitUntil(() => control.fetches.count === 2);
+    expect(control.fetches.count).toBe(2);
+
+    await settle(20);
+    expect(epicTasks.fetches.count).toBe(1);
+    expect(queryClient.getQueryState(epicTasksKey)?.isInvalidated).toBe(false);
+  });
+
   it("does not auto-refetch an errored catalog on refetchActive: true; intent edge recovers it", async () => {
     // Accepted trade-off for the same-host transport-rebind edge (also
     // refetchActive: true): an error-state catalog is marked stale without a

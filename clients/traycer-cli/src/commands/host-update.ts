@@ -20,7 +20,7 @@ import type { ProgressInfo } from "../runner/output";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { withCliLock } from "../store/cli-lock";
 
-// `traycer host update [--force]` - the composite (Host Update Layer
+// `traycer host update [--version X] [--force]` - the composite (Host Update Layer
 // Redesign Tech Plan, "New/changed commands" > `host update`, D6): stage
 // whatever `latest` requires (reusing an existing stage, explicit-
 // incomparable policy - a `local-*` install proceeds), then promote it.
@@ -51,6 +51,8 @@ import { withCliLock } from "../store/cli-lock";
 // Desktop's `host update` invocation is deleted (post ticket-4 cleanup).
 export interface HostUpdateArgs {
   readonly force: boolean;
+  /** `null` stages the latest registry version; an explicit value is a pin. */
+  readonly versionRequest?: string | null;
 }
 
 export interface LegacyHostUpdateServiceLifecycle {
@@ -93,7 +95,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
 
     const downloadOutcome = await downloadAndStageHost({
       environment,
-      versionRequest: null,
+      versionRequest: args.versionRequest ?? null,
       automatic: false,
       onProgress: (info) => ctx.progress(info),
       registryClient: null,

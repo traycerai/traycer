@@ -92,7 +92,7 @@ export function buildHostScopeOptions(
     const isLocalMachine = hostId === input.localHostId;
     return {
       hostId,
-      name: resolveHostName(hostId, entry, item, isLocalMachine),
+      name: resolveHostName(hostId, entry, item),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
       connectable: isAdministrableRoute(entry, input.remoteHostsPlanRestricted),
@@ -173,33 +173,36 @@ function isPlanRestrictedRoute(
 
 /**
  * A name a person recognizes, in descending order of how deliberate it is:
- * the registry display name (which is what "Edit name" writes), then the
- * directory label, then the raw id as a last resort.
+ * the registry display name, then the directory label, then the raw id as a
+ * last resort.
  *
- * THIS MACHINE is the exception, and it has to be. Renaming the local host
- * writes the local name file and reloads the desktop snapshot immediately, so
- * its directory label is correct the moment the rename returns — while the
- * registry's `displayName` only catches up after a cloud check-in and the next
- * ~15s registry poll. Preferring the registry there meant the summary card
- * showed the new name while the sidebar picker, reading this, kept showing the
- * old one for tens of seconds after a rename the user had just watched succeed.
+ * This is the UNREACHABLE-host half of the naming rule. The host itself is the
+ * master copy — `host.identity.get` answers `effectiveName`, and a surface with
+ * a live route to the host reads that (see the Overview panel). What makes the
+ * two halves agree is a settled host-side invariant rather than a coincidence:
+ * `effectiveName` (`customName ?? hostLabel ?? systemName`, folded in ONE place)
+ * is the value the presence heartbeat publishes, which is the value authn writes
+ * to the registry's `displayName`. So a host named over RPC and the same host
+ * named from this list are the same string, and this function is simply what is
+ * left when there is no route to ask.
  *
- * This is safe while the local host is DOWN, too: the directory then carries
- * `bootingLocalEntry`, whose label is copied from the registry twin, so the
- * local branch resolves to the registry name anyway rather than to nothing.
+ * The local machine used to be special-cased here, preferring its directory
+ * label. That existed because renaming wrote a local file the registry only
+ * learned about at register/adopt time — it never learned about a rename at all,
+ * so the registry name went stale for good and the fresher directory label was
+ * the only honest answer. The comment that used to sit here claimed the registry
+ * `displayName` "is what Edit name writes"; that path never existed. Now that the
+ * heartbeat carries the name, the registry is kept fresh for every host, the two
+ * sources agree, and the exception would only reintroduce a way for them not to.
  */
 function resolveHostName(
   hostId: string,
   entry: HostDirectoryEntry | null,
   item: HostListItem | null,
-  isLocalMachine: boolean,
 ): string {
-  const directoryLabel =
-    entry !== null && entry.label.length > 0 ? entry.label : null;
-  if (isLocalMachine && directoryLabel !== null) return directoryLabel;
   const registryName = item?.displayName ?? null;
   if (registryName !== null && registryName.length > 0) return registryName;
-  if (directoryLabel !== null) return directoryLabel;
+  if (entry !== null && entry.label.length > 0) return entry.label;
   return hostId;
 }
 
@@ -294,6 +297,46 @@ export function transientClientEntry(
 ): HostDirectoryEntry | null {
   if (isFollowing || host === null || !host.connectable) return null;
   return host.entry;
+}
+
+/** Why a config surface is reading this computer's disk instead of a host RPC. */
+export type LocalConfigFallbackReason = "host-stopped" | "host-outdated";
+
+/**
+ * Whether a config surface may honestly read the on-disk store through the
+ * local CLI bridge instead of over the host's own RPC — and if so, why.
+ *
+ * One condition is non-negotiable: the row must be THIS machine
+ * (`isLocalMachine`, an id identity — see `buildHostScopeOptions`). The store
+ * the bridge reads is machine-OS-user-global, so for a local row it describes
+ * exactly the host being named; for any remote row it would be the substitution
+ * the whole scope model exists to prevent. A remote host that cannot answer has
+ * no local truth to fall back to and must say so instead.
+ *
+ * Given that, two states make the RPC path unusable, and both must fall back or
+ * a working page would go dark:
+ *
+ *   - **`host-stopped`** — no route to the process exists (`connectable`, the
+ *     same dialability rule `deriveHostScopeStatus` turns into `unreachable`).
+ *   - **`host-outdated`** — the process answered a handshake that did not carry
+ *     the config methods. This one matters most during a fleet update: the app
+ *     updates before the host it manages, and without this branch shell and
+ *     diagnostics editing would disappear for exactly that window even though
+ *     the on-disk store is right here and the host reads it on start.
+ *
+ * `methodsSupported` is deliberately the TRI-STATE answer.  `null` means no
+ * handshake has completed yet — and the panel's own first RPC is what produces
+ * one — so treating it as absent would abandon the RPC path before it was ever
+ * tried, permanently, for a host that supports everything.
+ */
+export function localConfigFallbackReason(
+  host: HostScopeOption | null,
+  methodsSupported: boolean | null,
+): LocalConfigFallbackReason | null {
+  if (host === null || !host.isLocalMachine) return null;
+  if (!host.connectable) return "host-stopped";
+  if (methodsSupported === false) return "host-outdated";
+  return null;
 }
 
 export function findHostOption(

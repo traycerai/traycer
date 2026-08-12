@@ -31,7 +31,7 @@ describe("<NotificationIndicatorIcon />", () => {
         pendingFork: true,
         pendingApproval: true,
         pendingInterview: true,
-        unreadDone: true,
+        unreadDone: false,
       },
       "turn",
     );
@@ -149,6 +149,22 @@ describe("<NotificationIndicatorIcon />", () => {
       />,
     );
     expect(screen.getByTestId("default-icon")).toBeDefined();
+  });
+
+  it("keeps failure above a done tone retained from another descendant", () => {
+    renderIcon(
+      {
+        unreadFailure: true,
+        pendingFork: false,
+        pendingApproval: false,
+        pendingInterview: false,
+        unreadDone: true,
+      },
+      false,
+    );
+
+    expect(screen.getByTestId("indicator-failure-subject-1")).toBeDefined();
+    expect(screen.queryByTestId("indicator-done-subject-1")).toBeNull();
   });
 
   it("renders the background tier as a muted waiting chat distinct from the turn spinner", () => {

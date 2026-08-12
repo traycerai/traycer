@@ -14,6 +14,7 @@
     "./config": "./src/config/index.ts",
     "./config/*": "./src/config/*.ts",
     "./host": "./src/host/index.ts",
+    "./host/lifecycle": "./src/host/lifecycle/index.ts",
     "./host/*": "./src/host/*.ts",
     "./host-transport/mux": "./src/host-transport/mux.ts",
     "./host-transport/__tests__/chunk-reassembler-conformance": "./src/host-transport/__tests__/chunk-reassembler-conformance.ts",
@@ -72,6 +73,10 @@
       "./host": {
         "types": "./dist/src/host/index.d.ts",
         "import": "./dist/src/host/index.js"
+      },
+      "./host/lifecycle": {
+        "types": "./dist/src/host/lifecycle/index.d.ts",
+        "import": "./dist/src/host/lifecycle/index.js"
       },
       "./host/*": {
         "types": "./dist/src/host/*.d.ts",

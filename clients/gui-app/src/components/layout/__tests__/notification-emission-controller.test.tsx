@@ -799,6 +799,7 @@ describe("NotificationEmissionController", () => {
     act(() => {
       useAppLocalNotificationsStore.getState().upsert({
         id: "stream.transport.error:chat-1:lost",
+        originHostId: "host-b",
         updatedAt: 50,
         readAt: null,
         kind: "stream.transport.error",
@@ -821,10 +822,12 @@ describe("NotificationEmissionController", () => {
     expect(activate).toHaveBeenCalledTimes(1);
     const input = activate.mock.calls[0]?.[0] as {
       readonly feedId: string;
+      readonly originHostId: string | null;
       readonly payload: MergedNotificationRow["payload"];
       readonly onResult: ((outcome: "success" | "failure") => void) | null;
     };
     expect(input.feedId).toBe("app-local:stream.transport.error:chat-1:lost");
+    expect(input.originHostId).toBe("host-b");
     expect(input.payload).toEqual({ kind: "epic", epicId: "epic-1" });
     expect(markAsRead).not.toHaveBeenCalled();
 

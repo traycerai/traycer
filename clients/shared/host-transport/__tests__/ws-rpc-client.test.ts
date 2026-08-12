@@ -39,6 +39,10 @@ import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
 } from "../ws-rpc-client";
+import {
+  getNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "../negotiated-manifest-registry";
 import { createAuthAwareMessenger } from "../auth-aware-messenger";
 import { createRetryingMessenger } from "../retrying-messenger";
 import type {
@@ -2972,5 +2976,131 @@ describe("WsRpcClient", () => {
         });
       });
     });
+  });
+});
+
+describe("WsRpcClient negotiated-manifest publication", () => {
+  // The registry is module-level state shared by every consumer, so a stale
+  // entry from another suite would make these assertions meaningless.
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+  afterEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  /**
+   * The LOCAL half of the capability gate, which had no pin of its own.
+   *
+   * `useHostSupportsMethod` fails closed: with nothing recorded it answers
+   * `null` ("not known"), and every UI gate built on it treats that as "keep
+   * trying the RPC". So deleting this publication does not break a gate
+   * loudly - it silently downgrades every local host to "unknown forever",
+   * and each consumer then attempts methods an old host does not have instead
+   * of taking its documented fallback. The remote transport is pinned in
+   * `remote/__tests__/remote-session.test.ts`; this is its local twin.
+   */
+  it("publishes the MERGED floor + optional manifest for the dialled host", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-1",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    expect(getNegotiatedHostMethods(mockLocalHostEntry.hostId)).toBeNull();
+
+    const pending = client.request("host.echo", { message: "hi" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    await flush();
+    stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
+    await flush();
+
+    // `host.status` is floor, `host.echo` is optional: the gate needs BOTH, so
+    // publishing only one manifest would hide half the host's surface.
+    const methods = getNegotiatedHostMethods(mockLocalHostEntry.hostId);
+    expect(methods).not.toBeNull();
+    expect([...(methods ?? [])].sort()).toEqual(["host.echo", "host.status"]);
+
+    stub.fireMessage({
+      kind: "response",
+      requestId: "req-1",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "HI" });
+  });
+
+  /**
+   * The refresh leg. A host upgraded in place keeps its id and re-handshakes
+   * on the next unary call, so a LATER ack must overwrite the earlier record -
+   * otherwise a capability answer taken once would outlive the host that gave
+   * it, and a gate that latched "absent" could never recover.
+   */
+  it("overwrites an earlier record when the same host re-handshakes", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-1",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const first = client.request("host.status", {});
+    await flush();
+    const firstStub = sockets[0].socket;
+    firstStub.fireOpen();
+    await flush();
+    // An OLD host: floor only, no optional surface at all.
+    firstStub.fireMessage({
+      kind: "openAck",
+      manifest: { "host.status": { major: 1, minor: 0 } },
+      optionalManifest: {},
+    });
+    await flush();
+    firstStub.fireMessage({
+      kind: "response",
+      requestId: "req-1",
+      method: "host.status",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { ok: true },
+      error: null,
+    });
+    await first;
+
+    expect([
+      ...(getNegotiatedHostMethods(mockLocalHostEntry.hostId) ?? []),
+    ]).toEqual(["host.status"]);
+
+    // The host updates under the same id; the next call re-dials and re-acks.
+    const second = client.request("host.echo", { message: "hi" });
+    await flush();
+    const secondStub = sockets[1].socket;
+    secondStub.fireOpen();
+    await flush();
+    secondStub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
+    await flush();
+    secondStub.fireMessage({
+      kind: "response",
+      requestId: "req-1",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await second;
+
+    expect(
+      [...(getNegotiatedHostMethods(mockLocalHostEntry.hostId) ?? [])].sort(),
+    ).toEqual(["host.echo", "host.status"]);
   });
 });

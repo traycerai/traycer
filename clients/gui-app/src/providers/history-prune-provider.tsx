@@ -99,14 +99,14 @@ export function HistoryPruneProvider(
 
 /**
  * `true` while the router is mid-navigation — loading a match, committing a React
- * transition, or otherwise pending. Reading both signals (rather than just
+ * transition, or otherwise pending. Reading all three flags (rather than just
  * `status`) keeps the scheduler conservative: over-reporting in-flight only
  * defers a prune by a frame, while under-reporting would let a prune interleave
  * with an in-flight navigation (critique Blocker 1 / High 3).
  */
 function isRouterLoadInFlight(router: AppRouter): boolean {
   const state = router.state;
-  return state.isLoading || state.status === "pending";
+  return state.isLoading || state.isTransitioning || state.status === "pending";
 }
 
 /**

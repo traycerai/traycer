@@ -528,9 +528,10 @@ function TabLeadingIcon(props: {
   readonly tabId: string;
   readonly epicId: string | null;
 }) {
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId ?? props.tabId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: props.epicId ?? props.tabId },
+    null,
+  );
   let defaultIcon: React.ReactNode = null;
   if (props.titleGenerationPending) {
     defaultIcon = (

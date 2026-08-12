@@ -84,6 +84,7 @@ function providerState(args: {
       mcp: null,
       plugins: null,
       skills: null,
+      modelProviders: null,
     },
     profiles: [],
     managedInstallState: null,

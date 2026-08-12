@@ -1,0 +1,33 @@
+export {
+  hostDoctorV10,
+  hostGetInstallationInfoV10,
+  hostUpdateCheckV10,
+  hostUpdateInstallV10,
+} from "./contracts";
+
+export {
+  RPC_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
+  LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
+  doctorTriviallyGreenIssueCodesForVantage,
+  hostAvailableManifestSchema,
+  hostDoctorIssueSchema,
+  hostDoctorRequestSchema,
+  hostDoctorResponseSchema,
+  hostGetInstallationInfoRequestSchema,
+  hostGetInstallationInfoResponseSchema,
+  hostUpdateCheckRequestSchema,
+  hostUpdateCheckResponseSchema,
+  hostUpdateInstallRequestSchema,
+  hostUpdateInstallResponseSchema,
+  type HostAvailableManifest,
+  type HostDoctorIssue,
+  type DoctorTransportVantage,
+  type HostDoctorRequest,
+  type HostDoctorResponse,
+  type HostGetInstallationInfoRequest,
+  type HostGetInstallationInfoResponse,
+  type HostUpdateCheckRequest,
+  type HostUpdateCheckResponse,
+  type HostUpdateInstallRequest,
+  type HostUpdateInstallResponse,
+} from "./schemas";

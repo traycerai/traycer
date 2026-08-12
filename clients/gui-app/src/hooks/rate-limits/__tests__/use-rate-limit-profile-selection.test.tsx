@@ -95,6 +95,7 @@ function registerChatSession(): ChatSessionStoreHandle {
     "test:epic-1:chat-1",
     (epicId, chatId) =>
       createChatSessionStore({
+        hostId: "host-a",
         epicId,
         chatId,
         userId: null,

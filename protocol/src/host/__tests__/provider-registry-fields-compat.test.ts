@@ -6,6 +6,7 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  providersListResponseSchemaV70,
   downgradeProviderCliStateToV10,
   providerAdvisoryKindSchema,
   providerAdvisorySchema,
@@ -138,7 +139,10 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
         hostRpcRegistry["providers.list"],
         7,
         target,
-        { providers: [state], native: null },
+        providersListResponseSchemaV70.parse({
+          providers: [state],
+          native: null,
+        }),
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) continue;
@@ -331,7 +335,10 @@ describe("old-client behavior on the error arm", () => {
         hostRpcRegistry["providers.list"],
         7,
         targetMajor,
-        { providers: [erroredState], native: null },
+        providersListResponseSchemaV70.parse({
+          providers: [erroredState],
+          native: null,
+        }),
       );
       expect(downgraded.ok).toBe(true);
       if (!downgraded.ok) return;
@@ -523,7 +530,10 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       hostRpcRegistry["providers.list"],
       7,
       2,
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -539,7 +549,10 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       hostRpcRegistry["providers.list"],
       7,
       3,
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -632,19 +645,26 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
 });
 
 describe("providers.list v6.0 is frozen against the registry fields", () => {
-  it("v6.0 does not model them, so a v7.0 -> v6.0 downgrade strips them", () => {
+  it("v6.0 does not model them, so a latest -> v6.0 downgrade strips them", () => {
     // `cli-v1.1.9` shipped v6.0 while the registry fields were still growing
     // it - the same defect `cli-v1.1.8` exposed on v5.0, one version later.
     // v6.0 now pins the frozen v4.0 base shape, so a field added to the LIVE
     // base shape cannot reach a client that negotiated v6.0.
+    //
+    // Driven from the LATEST major, not from 7, because only the latest
+    // major's `downgradePathsFromLatest` table is reachable in negotiation -
+    // an older major's table is kept for the record, not consulted.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       7,
       6,
       // `native` is required here and absent from the major-6 cases above
-      // because v7.0 is the live response shape, which carries it - v6.0 froze
-      // before it existed. Same reason the registry fields only ride v7.0.
-      { providers: [stateWithRegistryFields], native: null },
+      // because the live response shape carries it - v6.0 froze before it
+      // existed. Same reason the registry fields only ride v7.0 and up.
+      providersListResponseSchemaV70.parse({
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -682,7 +702,10 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
       hostRpcRegistry["providers.list"],
       7,
       5,
-      { providers: [stateWithRegistryFields], native: null },
+      providersListResponseSchemaV70.parse({
+        providers: [stateWithRegistryFields],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -881,7 +904,7 @@ describe("providers.list v6->v7 fills terminalLogin for an old host", () => {
     //
     // Two mechanisms currently produce it: the bridge's explicit
     // `upgradeLoginCapabilityFromV40` call, and the live re-parse inside
-    // `upgradeProviderCliStateListToLatest` (which exists for
+    // `upgradeProviderCliStateListToV70` (which exists for
     // `nativeCapabilities` and incidentally runs `.catch(null)`). This test
     // asserts the OUTCOME, so it stays green while either survives and goes
     // red only if both go - which is the contract worth pinning. Do not read
