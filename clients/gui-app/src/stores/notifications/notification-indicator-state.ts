@@ -16,6 +16,7 @@ import {
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
+  readonly pendingFork: boolean;
   readonly pendingApproval: boolean;
   readonly pendingInterview: boolean;
   readonly unreadDone: boolean;
@@ -23,6 +24,7 @@ export interface NotificationIndicatorState {
 
 export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadFailure: false,
+  pendingFork: false,
   pendingApproval: false,
   pendingInterview: false,
   unreadDone: false,
@@ -51,6 +53,7 @@ export function selectNotificationIndicatorState(
   }
   return {
     unreadFailure: unreadLocalFailure || hostState.unreadFailure,
+    pendingFork: hostState.pendingFork,
     pendingApproval: hostState.pendingApproval,
     pendingInterview: hostState.pendingInterview,
     unreadDone: hostState.unreadDone,
@@ -79,7 +82,9 @@ export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResp
  * connected one. Ported verbatim from
  * `hostNotificationsGetIndicatorState`: an epic aggregates all of its rows
  * including its chats', a chat aggregates only its own, and pending is
- * `resolvedAt === null` on the two request kinds.
+ * `resolvedAt === null` on the two request kinds. `pendingFork` is always
+ * false here: fork truth is host-local and is merged from the host response
+ * after this feed-row derivation, never inferred from a retained cloud row.
  *
  * Sparse on purpose: an entity with nothing lit is omitted, which
  * `selectNotificationIndicatorState`'s `?? EMPTY` lookup reads identically to
@@ -127,7 +132,13 @@ function indicatorContribution(
   if (!pendingApproval && !pendingInterview && !unreadFailure && !unreadDone) {
     return null;
   }
-  return { pendingApproval, pendingInterview, unreadFailure, unreadDone };
+  return {
+    pendingApproval,
+    pendingInterview,
+    pendingFork: false,
+    unreadFailure,
+    unreadDone,
+  };
 }
 
 /** The host's `MAX(CASE WHEN ...)` aggregate: any contributing row lights the
@@ -140,7 +151,32 @@ function mergeIndicatorFlags(
   return {
     pendingApproval: current.pendingApproval || next.pendingApproval,
     pendingInterview: current.pendingInterview || next.pendingInterview,
+    pendingFork: current.pendingFork || next.pendingFork,
     unreadFailure: current.unreadFailure || next.unreadFailure,
     unreadDone: current.unreadDone || next.unreadDone,
   };
+}
+
+/**
+ * Cloud mode has two deliberately separate authorities: feed rows own the
+ * read/unread and approval/interview flags across hosts, while the connected
+ * host's fork notice board owns `pendingFork`. Merge only that one host-local
+ * bit so local SQLite read markers can never override the cloud feed view.
+ */
+export function mergeHostPendingForkIntoCloudIndicators(
+  cloud: HostNotificationsIndicatorStateResponse,
+  host: HostNotificationsIndicatorStateResponse,
+): HostNotificationsIndicatorStateResponse {
+  const pendingChats = Object.entries(host.chats).filter(
+    ([, state]) => state.pendingFork,
+  );
+  if (pendingChats.length === 0) return cloud;
+  const chats = { ...cloud.chats };
+  for (const [chatId] of pendingChats) {
+    chats[chatId] = {
+      ...(chats[chatId] ?? EMPTY_NOTIFICATION_INDICATOR_STATE),
+      pendingFork: true,
+    };
+  }
+  return { epics: cloud.epics, chats };
 }

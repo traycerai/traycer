@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
@@ -65,6 +66,13 @@ interface TestState {
   canvasRoot: TileLayoutNode | null;
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
   records: ReadonlyArray<{ readonly id: string }>;
+  /** Chat ids the `useCloudChatList` mock answers as present
+   * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
+  cloudChatIds: ReadonlySet<string>;
+  /** Chat ids the mock answers as present but owned by a COLLABORATOR
+   * (`isOwnedByViewer: false`) - rows the sweep's liveness set must ignore,
+   * because the substitution resolver refuses to serve them. */
+  cloudCollaboratorChatIds: ReadonlySet<string>;
   canvasStore: CanvasStoreSlice;
   openEpicState: {
     readonly setLastFocusedArtifactId: Mock;
@@ -82,6 +90,8 @@ const testState = vi.hoisted<TestState>(() => ({
   canvasRoot: null,
   canvasTiles: {},
   records: [],
+  cloudChatIds: new Set<string>(),
+  cloudCollaboratorChatIds: new Set<string>(),
   canvasStore: {
     renameTab: vi.fn(),
     openTileInTab: vi.fn(),
@@ -151,6 +161,90 @@ vi.mock("@/lib/epic-auto-open", () => ({
   resolveAutoOpenTarget: () => testState.autoOpenTarget,
 }));
 
+// The reap effect's same-host cloud-known exemption (chat-sync-v2 ticket
+// 36) reads these two - stubbed at the hook boundary, same reason as every
+// other seam in this provider-less suite.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
+
+// A SETTLED, successful list - the sweep under test refuses to run until the
+// cloud list has produced an answer that can AUTHORIZE it (success,
+// `E_HOST_UNSUPPORTED`, or a disabled query), because an in-flight or
+// transiently failed list reads every cloud row as absent and would reap the
+// never-adopted same-host chat the exemption exists for. A stub that enumerates only the flags its
+// consumer read when it was written answers `undefined` for `isSuccess`, which
+// that gate takes as "still in flight" - the sweep then never runs at all and
+// every assertion about it times out instead of failing on its subject. Rows
+// are whole `CloudChatSummary` values for the same reason: the next field a
+// consumer starts reading fails `compile` here rather than silently reading
+// `undefined`.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
+  const cloudRow = (
+    chatId: string,
+    isOwnedByViewer: boolean,
+  ): CloudChatSummary => ({
+    identity: {
+      taskId: EPIC_ID,
+      chatId,
+      ownerUserId: isOwnedByViewer ? "user-1" : "collaborator-1",
+    },
+    ownerHostId: "owner-host",
+    createdAt: 1,
+    visibility: "task",
+    title: null,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 1,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer,
+  });
+  return {
+    useCloudChatList: () => ({
+      data: {
+        chats: [
+          ...[...testState.cloudChatIds].map((chatId) =>
+            cloudRow(chatId, true),
+          ),
+          ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
+            cloudRow(chatId, false),
+          ),
+        ],
+      },
+      // `isEnabled` too: the sweep asks `cloudChatListAuthorizesRecordSweep`,
+      // which reads a DISABLED query as authorizing (nothing will answer it).
+      // A stub omitting this answers `undefined`, which that predicate reads
+      // as disabled - the gate would then be open in every test whatever the
+      // other flags said.
+      isEnabled: true,
+      isSuccess: true,
+      isError: false,
+      isPending: false,
+      isFetching: false,
+      error: null,
+    }),
+    isCloudChatListSettled: (query: {
+      readonly isEnabled: boolean;
+      readonly isSuccess: boolean;
+      readonly isError: boolean;
+    }) => !query.isEnabled || query.isSuccess || query.isError,
+    cloudChatListAuthorizesRecordSweep: (query: {
+      readonly isEnabled: boolean;
+      readonly isSuccess: boolean;
+      readonly isError: boolean;
+      readonly error: { readonly code: string } | null;
+    }) =>
+      !query.isEnabled ||
+      query.isSuccess ||
+      (query.isError && query.error?.code === "E_HOST_UNSUPPORTED"),
+  };
+});
+
 const EPIC_ID = "route-sync-epic";
 const TAB_ID = "route-sync-tab";
 const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
@@ -197,6 +291,8 @@ function resetStores(): void {
   testState.canvasRoot = null;
   testState.canvasTiles = {};
   testState.records = [];
+  testState.cloudChatIds = new Set();
+  testState.cloudCollaboratorChatIds = new Set();
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   vi.mocked(testState.canvasStore.openTileInTab).mockClear();
   vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
@@ -911,6 +1007,151 @@ describe("useEpicRouteSynchronization", () => {
       TAB_ID,
       "group-1",
       "removed-chat",
+    );
+  });
+
+  // chat-sync-v2 ticket 36: a chat with no local record but still known to
+  // `epic.listCloudChats` must NOT be reaped - a leased identity that never
+  // adopted this chat's rows, not a genuine deletion.
+  it("does not close a record-less chat tile that is still cloud-known", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudChatIds = new Set(["cloud-known-chat"]);
+    const cloudKnownChat: EpicCanvasTileRef = {
+      id: "cloud-known-chat",
+      instanceId: "inst-cloud-known-chat",
+      type: "chat",
+      name: "Cloud-known chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [cloudKnownChat.instanceId],
+      activeTabId: cloudKnownChat.instanceId,
+      previewTabId: null,
+      activationHistory: [cloudKnownChat.instanceId],
+    };
+    // The POSITIVE control, in the same pane: a chat that is neither
+    // record-backed nor cloud-known, which the sweep must close. Waiting for
+    // THAT close is what proves the sweep ran at all - `not.toHaveBeenCalled()`
+    // on its own is satisfied by the first poll and passes just as happily when
+    // `snapshotLoaded` or the cloud-list gate left the effect switched off,
+    // which is the failure this suite's own mock comment warns about.
+    const reapedChat: EpicCanvasTileRef = {
+      id: "unknown-chat",
+      instanceId: "inst-unknown-chat",
+      type: "chat",
+      name: "Neither local nor cloud-known",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [cloudKnownChat.instanceId, reapedChat.instanceId],
+      activeTabId: cloudKnownChat.instanceId,
+      previewTabId: null,
+      activationHistory: [cloudKnownChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [cloudKnownChat.instanceId]: cloudKnownChat,
+      [reapedChat.instanceId]: reapedChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        reapedChat.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      cloudKnownChat.instanceId,
+    );
+  });
+
+  // A COLLABORATOR's row with the same host-minted chatId is not evidence the
+  // viewer's tab is alive: the substitution resolver refuses to serve rows the
+  // viewer does not own, so keeping the tab open on that row's strength would
+  // leave it permanently loading. The liveness set filters by viewer
+  // ownership, same as the resolver.
+  it("closes a record-less chat tile whose only cloud row belongs to a collaborator", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudChatIds = new Set(["viewer-kept-chat"]);
+    testState.cloudCollaboratorChatIds = new Set(["collaborator-only-chat"]);
+    const keptChat: EpicCanvasTileRef = {
+      id: "viewer-kept-chat",
+      instanceId: "inst-viewer-kept-chat",
+      type: "chat",
+      name: "Viewer's cloud-known chat",
+      hostId: "host-1",
+    };
+    const collaboratorOnlyChat: EpicCanvasTileRef = {
+      id: "collaborator-only-chat",
+      instanceId: "inst-collaborator-only-chat",
+      type: "chat",
+      name: "Collaborator's row only",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [keptChat.instanceId, collaboratorOnlyChat.instanceId],
+      activeTabId: keptChat.instanceId,
+      previewTabId: null,
+      activationHistory: [keptChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [keptChat.instanceId]: keptChat,
+      [collaboratorOnlyChat.instanceId]: collaboratorOnlyChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        collaboratorOnlyChat.instanceId,
+      );
+    });
+    // The viewer's own row keeps its tab, in the same sweep - the positive
+    // control proving ownership is what made the difference.
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      keptChat.instanceId,
     );
   });
 

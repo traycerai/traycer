@@ -31,6 +31,20 @@ export interface HostPidMetadata {
    * field shipped lacks it - and must never be read as "guaranteed".
    */
   readonly layer0: HostLayer0Record | null;
+  /**
+   * The SLOT home's Layer 0 verdict, present only on a dev identity-pool
+   * host, which takes TWO locks - slot home and identity home - where every
+   * other host takes one.
+   *
+   * `null` on every ordinary host and on every pid.json written before the
+   * field shipped. Absence is "there was no second lock, or it was not
+   * recorded" and, exactly like {@link layer0}, must never be read as
+   * "guaranteed": until the host started writing this, a slot lock that
+   * degraded WITHOUT holding was discarded before any record existed, so
+   * {@link layer0}'s clean `acquired` was the only thing published and it
+   * described the other home.
+   */
+  readonly layer0Slot: HostLayer0Record | null;
 }
 
 /**
@@ -128,6 +142,9 @@ export async function readHostPidMetadata(
       ? obj.processStartIdentity
       : null,
     layer0: decodeLayer0Record(obj.layer0),
+    // Same decoder, same fail-open-on-shape contract. An old record simply
+    // has no such key and decodes to `null`.
+    layer0Slot: decodeLayer0Record(obj.layer0Slot),
   };
 }
 

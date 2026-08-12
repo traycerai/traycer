@@ -98,6 +98,47 @@ function installFetch(handler: FetchHandler): () => void {
   };
 }
 
+/**
+ * A `caches` global that records which stores were dropped.
+ *
+ * jsdom has no Cache API, so the sign-out's clear is a silent no-op here unless
+ * one is installed - which would make an assertion about it pass for the wrong
+ * reason. Installed the same way `installFetch` installs a fetch, and the
+ * recorder is what the sign-out test observes.
+ */
+function installCacheStorage(): {
+  readonly names: string[];
+  restore(): void;
+} {
+  const names: string[] = [];
+  const original: unknown = (globalThis as { caches?: unknown }).caches;
+  Object.defineProperty(globalThis, "caches", {
+    configurable: true,
+    writable: true,
+    value: {
+      open: () =>
+        Promise.resolve({
+          match: () => Promise.resolve(undefined),
+          put: () => Promise.resolve(),
+        }),
+      delete: (name: string) => {
+        names.push(name);
+        return Promise.resolve(true);
+      },
+    },
+  });
+  return {
+    names,
+    restore: () => {
+      Object.defineProperty(globalThis, "caches", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    },
+  };
+}
+
 function createDeferredResponse(): DeferredResponse {
   const state: { resolve: (response: Response) => void } = {
     resolve: () => undefined,
@@ -2512,6 +2553,51 @@ describe("AuthService", () => {
 
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(await host.tokenStore.get()).toBeNull();
+    });
+
+    it("explicit signOut drops the cached chat parts", async () => {
+      const { service, host } = makeService();
+      const deleted = installCacheStorage();
+      try {
+        await service.start();
+        await deviceSignIn(service, host, "live-token");
+        // The injected observation point, checked BEFORE the act: nothing has
+        // dropped a cache yet, so the assertion after cannot be satisfied by a
+        // recorder that was already non-empty.
+        expect(deleted.names).toEqual([]);
+
+        await service.signOut();
+
+        // Leaving the account means leaving the content. The part store is
+        // shared across every viewer on the installation, which is sound while
+        // they are signed in and is not sound as a residue.
+        await vi.waitFor(() =>
+          expect(deleted.names).toEqual(["traycer-chat-parts-v1"]),
+        );
+      } finally {
+        deleted.restore();
+      }
+    });
+
+    it("keeps the cached chat parts when signOut's delete fails", async () => {
+      const { service, host } = makeService();
+      const deleted = installCacheStorage();
+      try {
+        await service.start();
+        await deviceSignIn(service, host, "sticky-token");
+        host.tokenStore.delete = (): Promise<void> =>
+          Promise.reject(new Error("EACCES: credentials locked"));
+
+        await service.signOut();
+
+        // Still signed in, so the content is still theirs. The clear rides the
+        // path AFTER the delete lands, not the attempt - a failed sign-out that
+        // wiped the cache would cost a cold read for a session that never ended.
+        expect(useAuthStore.getState().status).toBe("signed-in");
+        expect(deleted.names).toEqual([]);
+      } finally {
+        deleted.restore();
+      }
     });
 
     it("stays signed in when signOut's delete rejects", async () => {

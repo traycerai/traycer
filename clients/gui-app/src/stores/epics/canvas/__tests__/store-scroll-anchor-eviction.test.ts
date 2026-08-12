@@ -55,6 +55,8 @@ import {
   restoreChatTurnMinimapActiveEntry,
   saveChatTurnMinimapActiveEntry,
 } from "@/stores/chats/chat-turn-minimap-active-entry-store";
+import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
+import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import { CHAT_A, SPEC_A } from "./canvas-test-fixtures";
 
 const EMPTY_TILE_FIND_CAPABILITIES: ReadonlySet<TileFindCapability> = new Set();
@@ -291,6 +293,58 @@ describe("canvas store scroll-anchor sweep", () => {
       readExactReadingPosition(identity, "native", isTileScrollAnchor),
     ).toBeNull();
     expect(readReadingPosition(identity, "native", isTileScrollAnchor)).toEqual(
+      ANCHOR,
+    );
+  });
+
+  it("keys a published copy WITHOUT the host that happened to serve it", () => {
+    // The whole reason this kind is keyed by cloud identity: the same published
+    // transcript reopened while a different host is serving must find the
+    // position it was left at. `recordMatches` compares the record's `hostId`
+    // with the request's, so a durable identity that kept the reading host made
+    // the host-free content key unreachable - the record was rejected and then
+    // removed, silently.
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-published", "Published");
+    const readThroughHostA: PublishedChatTileRef = {
+      id: "published:task-p:user-p:chat-p",
+      instanceId: "inst-published-a",
+      type: TILE_KIND_PUBLISHED_CHAT,
+      name: "A published agent",
+      hostId: "host-a",
+      taskId: "task-p",
+      chatId: "chat-p",
+      ownerUserId: "user-p",
+      ownerHostId: "owner-host",
+    };
+    store.openTileInTab(tabId, readThroughHostA);
+    // A SECOND tab on the same epic, standing in for the later reopen: opening
+    // the same content id into one tab reveals the tile that is already there,
+    // so the two serving hosts can only be observed side by side.
+    const secondTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-published", "Published again");
+    const throughHostB: PublishedChatTileRef = {
+      ...readThroughHostA,
+      instanceId: "inst-published-b",
+      hostId: "host-b",
+    };
+    useEpicCanvasStore.getState().openTileInTab(secondTabId, throughHostB);
+
+    const identityA = readingPositionIdentityForTileInstance(
+      readThroughHostA.instanceId,
+    );
+    const identityB = readingPositionIdentityForTileInstance(
+      throughHostB.instanceId,
+    );
+
+    expect(identityA.hostId).toBeNull();
+    // Same content key AND same host scope, so the position one reading host
+    // saved is the position the other restores.
+    expect(identityB.contentKey).toBe(identityA.contentKey);
+    expect(identityB.hostId).toBe(identityA.hostId);
+    saveReadingPosition(identityA, "chat", ANCHOR);
+    expect(readReadingPosition(identityB, "chat", isTileScrollAnchor)).toEqual(
       ANCHOR,
     );
   });

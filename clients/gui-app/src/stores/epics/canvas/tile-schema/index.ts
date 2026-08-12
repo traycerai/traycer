@@ -21,6 +21,7 @@ import { gitDiffTileSchema } from "./git-diff-tile";
 import { snapshotDiffTileSchema } from "./snapshot-diff-tile";
 import { managedCommandOutputTileSchema } from "./managed-command-output-tile";
 import { commGraphTileSchema } from "./comm-graph-tile";
+import { publishedChatTileSchema } from "./published-chat-tile";
 import { prDetailTileSchema } from "./pr-detail-tile";
 import { prDiffTileSchema } from "./pr-diff-tile";
 import { blankTileSchema } from "./blank-tile";
@@ -48,6 +49,7 @@ const TILE_SCHEMAS: TileSchemaRegistry = {
   "snapshot-diff": snapshotDiffTileSchema,
   "managed-command-output": managedCommandOutputTileSchema,
   "comm-graph": commGraphTileSchema,
+  "published-chat": publishedChatTileSchema,
   "pr-detail": prDetailTileSchema,
   "pr-diff": prDiffTileSchema,
   blank: blankTileSchema,

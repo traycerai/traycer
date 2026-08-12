@@ -261,6 +261,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         worktreeIntent,
         initialMessage: null,
         forkSource: {
+          boundary: "assistantMessage",
           sourceChatId: target.sourceChatId,
           assistantMessageId: target.assistantMessageId,
           interviewBlockId: target.interviewBlockId,

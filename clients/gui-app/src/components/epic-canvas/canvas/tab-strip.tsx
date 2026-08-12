@@ -14,6 +14,7 @@ import {
   FileDiff,
   FilePlus,
   GitPullRequest,
+  Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -57,6 +58,7 @@ import type {
 import {
   isBlankTileRef,
   isCommGraphTileRef,
+  isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
@@ -67,6 +69,8 @@ import {
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { useChatUsageDialogStore } from "@/stores/chats/chat-usage-dialog-store";
@@ -988,6 +992,11 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
+  // Unconditional so hook order holds across tab kinds; the placeholder
+  // answers "reachable", which keeps every non-chat tab on its normal glyph.
+  const boundHostReachability = useHostReachability(
+    props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
   if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }
@@ -1004,6 +1013,27 @@ function TabIcon(props: {
   }
   if (isCommGraphTileRef(props.tab)) {
     return <CommGraphTileIcon className="size-3.5" />;
+  }
+  // A published copy carries the lock rather than a chat glyph: the tab is
+  // readable but cannot be steered, and that is the one thing about it that
+  // differs from the chat tab beside it.
+  if (isPublishedChatTileRef(props.tab)) {
+    return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  // A live chat tab whose bound host is unreachable renders the published
+  // copy (see tab-group-view's fallback), so its strip icon must say the same
+  // thing the surface does: locked, not steerable, exactly like a copy tab.
+  // Flips back to the chat glyph reactively when the host returns.
+  if (
+    props.tab.type === "chat" &&
+    boundHostReachability.status === "unreachable"
+  ) {
+    return (
+      <Lock
+        className="size-3.5 shrink-0 text-muted-foreground"
+        data-testid={`tab-live-chat-lock-${props.tab.instanceId}`}
+      />
+    );
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win
