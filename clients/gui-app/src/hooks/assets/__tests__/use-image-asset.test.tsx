@@ -202,19 +202,6 @@ function emitBytes(session: MockStreamSession, bytes: readonly number[]): void {
   session.emitFrame({ kind: "assetComplete", hasBinaryPayload: false }, null);
 }
 
-function emitLengthMismatchAfterHeader(session: MockStreamSession): void {
-  session.emitFrame(
-    {
-      kind: "assetChunk",
-      hasBinaryPayload: true,
-      index: 0,
-      byteLength: 1,
-    },
-    new Uint8Array([1]),
-  );
-  session.emitFrame({ kind: "assetComplete", hasBinaryPayload: false }, null);
-}
-
 function emitFailure(
   session: MockStreamSession,
   reason: AssetStreamFailureReason,
@@ -298,12 +285,15 @@ async function flushPromises(): Promise<void> {
   });
 }
 
+// One row per DISTINCT plumbing path through `emitFailure` below - not one
+// per `AssetStreamFailureReason` value. `unsupported-method` is covered by
+// its own dedicated test in asset-stream-client.test.ts; the other five
+// `assetError`-reason values (not-image, mismatch, too-large, too-many-
+// pixels, read-failed) share the exact same `case "assetError"` plumbing as
+// `not-found` below and only differ in a `FAILURE_MESSAGES` string, which
+// `Record<AssetStreamFailureReason, string>` already makes exhaustive at
+// compile time.
 const FALLBACK_CASES = [
-  {
-    reason: "unsupported-method",
-    expected: "This host does not support image previews yet.",
-    totalBytes: null,
-  },
   {
     reason: "fatal",
     expected: "This image could not be loaded.",
@@ -322,31 +312,6 @@ const FALLBACK_CASES = [
   {
     reason: "not-found",
     expected: "This file could not be found.",
-    totalBytes: null,
-  },
-  {
-    reason: "not-image",
-    expected: "This file is not one of the supported image formats.",
-    totalBytes: null,
-  },
-  {
-    reason: "mismatch",
-    expected: "This file's contents do not match its extension.",
-    totalBytes: null,
-  },
-  {
-    reason: "too-large",
-    expected: "This image is too large to preview.",
-    totalBytes: null,
-  },
-  {
-    reason: "too-many-pixels",
-    expected: "This image's dimensions are too large to preview.",
-    totalBytes: null,
-  },
-  {
-    reason: "read-failed",
-    expected: "This image could not be read.",
     totalBytes: null,
   },
 ] satisfies readonly {
@@ -446,7 +411,6 @@ describe("useImageAsset", () => {
         height: 80,
       },
       reason: null,
-      receivedBytes: 0,
       totalBytes: 3,
       servedFromCache: false,
     });
@@ -475,7 +439,6 @@ describe("useImageAsset", () => {
     expect(result.current.status).toBe("ready");
 
     expect(result.current.url).toBe("blob:image/1");
-    expect(result.current.receivedBytes).toBe(3);
     unmount();
   });
 
@@ -699,7 +662,14 @@ describe("useImageAsset", () => {
     const secondSession = mockWsStreamClient.sessions[1];
     act(() => {
       emitHeader(secondSession, "retryable-identity", 3);
-      emitLengthMismatchAfterHeader(firstSession);
+      firstSession.emitFrame(
+        { kind: "assetChunk", hasBinaryPayload: true, index: 0, byteLength: 1 },
+        new Uint8Array([1]),
+      );
+      firstSession.emitFrame(
+        { kind: "assetComplete", hasBinaryPayload: false },
+        null,
+      );
     });
     await flushPromises();
 

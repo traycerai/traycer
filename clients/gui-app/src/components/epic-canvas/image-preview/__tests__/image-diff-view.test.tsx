@@ -40,7 +40,6 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
         url: null,
         meta: null,
         reason: "This image could not be decoded.",
-        receivedBytes: 0,
         totalBytes: null,
         servedFromCache: false,
       };
@@ -89,7 +88,6 @@ beforeEach(() => {
       height: 3,
     },
     reason: null,
-    receivedBytes: 12,
     totalBytes: 12,
     servedFromCache: false,
   };
@@ -103,7 +101,6 @@ beforeEach(() => {
       height: 5,
     },
     reason: null,
-    receivedBytes: 18,
     totalBytes: 18,
     servedFromCache: false,
   };
@@ -165,7 +162,6 @@ describe("<ImageDiffView />", () => {
       url: null,
       meta: null,
       reason: "This image could not be loaded.",
-      receivedBytes: 0,
       totalBytes: null,
       servedFromCache: false,
     };
@@ -184,7 +180,6 @@ describe("<ImageDiffView />", () => {
       url: null,
       meta: null,
       reason: "This image could not be loaded.",
-      receivedBytes: 0,
       totalBytes: null,
       servedFromCache: false,
     };

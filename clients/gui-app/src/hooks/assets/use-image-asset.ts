@@ -39,8 +39,7 @@ export interface ImageAssetState {
   readonly meta: ImageAssetMeta | null;
   /** Human-readable one-liner, set only at `status === "fallback"`. */
   readonly reason: string | null;
-  /** Byte progress ticket 04 may render; `totalBytes` is `null` until the header arrives. */
-  readonly receivedBytes: number;
+  /** `null` until the header arrives. */
   readonly totalBytes: number | null;
   /**
    * Meaningful only at `status === "ready"`: whether `url` resolved from the
@@ -92,7 +91,6 @@ const LOADING_STATE: ImageAssetState = {
   url: null,
   meta: null,
   reason: null,
-  receivedBytes: 0,
   totalBytes: null,
   servedFromCache: false,
 };
@@ -332,7 +330,6 @@ export function useImageAsset(
         url: null,
         meta: null,
         reason: DECODE_FAILURE_REASON,
-        receivedBytes: 0,
         totalBytes: null,
         servedFromCache: false,
       },
@@ -397,7 +394,6 @@ export function useImageAsset(
             url: null,
             meta,
             reason: null,
-            receivedBytes: 0,
             totalBytes: header.sizeBytes,
             servedFromCache: false,
           },
@@ -465,7 +461,6 @@ export function useImageAsset(
                 url,
                 meta,
                 reason: null,
-                receivedBytes: header.sizeBytes,
                 totalBytes: header.sizeBytes,
                 // `usedForFetch` is exactly "did the fetcher run" - false
                 // means `imageBlobCache.acquire` resolved this lease from
@@ -484,7 +479,6 @@ export function useImageAsset(
                 meta: null,
                 reason:
                   pendingFailureMessage ?? "This image could not be loaded.",
-                receivedBytes: 0,
                 totalBytes: header.sizeBytes,
                 servedFromCache: false,
               },
@@ -513,7 +507,6 @@ export function useImageAsset(
             url: null,
             meta: null,
             reason: describeFailure(failure),
-            receivedBytes: 0,
             totalBytes: null,
             servedFromCache: false,
           },

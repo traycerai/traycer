@@ -369,7 +369,6 @@ function readyAsset(url: string): UseImageAssetResult {
     url,
     meta: META,
     reason: null,
-    receivedBytes: 2048,
     totalBytes: 2048,
     servedFromCache: false,
     reportDecodeFailure: vi.fn(),

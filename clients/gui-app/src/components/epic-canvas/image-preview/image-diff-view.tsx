@@ -158,37 +158,13 @@ export interface ImageDiffViewProps {
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const newTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
-  // Per-side PENDING COUNT (round-2 review finding #2 - the same fix shape
-  // as `ImagePreview`'s own `pendingProgrammaticCountRef`, applied here to
-  // this component's echo guard): incremented BEFORE this side is told to
-  // change - by `dualDispatch` (a toolbar action) or `mirrorTransform` (a
-  // peer echo) - and decremented when THAT side's own `onTransform`
-  // actually arrives and is consumed. A synchronous true/then/false bracket
-  // only suppresses the echo if the callback happens to fire within that
-  // exact synchronous window.
-  //
-  // A COUNT, not a per-call identity - round-3 review finding #2 proved
-  // this still misattributes origin under INTERLEAVING (a genuine gesture
-  // on a side consumes the slot meant for that side's own queued mirror
-  // callback, so the mirror callback then arrives at count zero and reads
-  // as a fresh gesture, rebounding back onto its origin). The ruling was
-  // NOT to build call-matching machinery: `react-zoom-pan-pinch` is PINNED
-  // to exactly 4.0.4 (package.json - no caret) specifically because this
-  // guard relies on `onTransform` for a `0`-duration transform firing
-  // synchronously, same tick, before the issuing call returns - on a
-  // single thread that makes interleaving between issuing and consuming
-  // impossible, so a plain count is correct as-is. See the sync-delivery
-  // contract test against the real library, the tripwire that must fail
-  // loudly before a version bump could silently reintroduce this.
-  //
-  // Same NARROWER LIMIT as `ImagePreview`'s own `pendingProgrammaticCountRef`
-  // (round-4 review, discovered not ruled-on): a `0`ms transform's
-  // `onTransform` fires exactly once per issued call, so a single pending
-  // slot is enough - a NONZERO `animationMs` would invoke the callback once
-  // per animation frame from ONE issued call, and only the first frame
-  // would consume the slot. Never reachable here: both `ImageDiffSide`
-  // instances are ALWAYS mounted with `animationMs={0}`, pinned by its own
-  // test - this file has no code path that ever passes anything else.
+  // Per-side pending count, same shape and same constraints as
+  // `ImagePreview`'s own `pendingProgrammaticCountRef` (see its comment) -
+  // incremented before this side is told to change (by `dualDispatch` or a
+  // peer's `mirrorTransform`), decremented when that side's own
+  // `onTransform` is consumed. Both `ImageDiffSide` instances are ALWAYS
+  // mounted with `animationMs={0}` below, so the single-synchronous-
+  // callback assumption always holds here.
   const oldPendingSyncRef = useRef(0);
   const newPendingSyncRef = useRef(0);
   // Per-side, never a single shared value, and never manually toggled

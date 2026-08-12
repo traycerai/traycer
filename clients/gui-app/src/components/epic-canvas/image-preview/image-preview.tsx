@@ -171,43 +171,15 @@ export function ImagePreview(props: ImagePreviewProps) {
   const setImgRef = useCallback((el: HTMLImageElement | null): void => {
     imgRef.current = el;
   }, []);
-  // Incremented BEFORE every transform WE issue ourselves - Fit/Actual-
-  // size/zoom, or the autonomous resize-refit effect below - and decremented
-  // when its OWN `onTransform` callback actually arrives and is "consumed"
-  // (round-2 review finding #2). A synchronous set-true/call/set-false
-  // bracket only reports the right origin if the callback happens to fire
-  // within that exact synchronous window.
-  //
-  // This is a COUNT, not a per-call identity - round-3 review finding #2
-  // proved a count alone still misattributes origin if a DIFFERENT
-  // programmatic call's callback consumes a slot meant for an earlier one
-  // (or a gesture interleaves between issuing and its own delivery). The
-  // ruling was NOT to build call-matching machinery for this: with
-  // `react-zoom-pan-pinch` PINNED to exactly 4.0.4 (package.json - no
-  // caret), `onTransform` for a `0`-duration transform fires synchronously,
-  // in the same tick, before the issuing call returns - interleaving is
-  // impossible on a single thread, so a plain count is correct as-is. See
-  // the sync-delivery contract test against the real library; a version
-  // bump that ever breaks that assumption must fail that test loudly
-  // before this mechanism can silently reopen a ping-pong echo.
-  //
-  // KNOWN NARROWER LIMIT (round-4 review, discovered not ruled-on): the
-  // "increment once, decrement on next callback" shape only correctly
-  // tags ONE `onTransform` firing as programmatic. It assumes `0`ms,
-  // single-callback delivery per issued call - true for every consumer
-  // TODAY (the diff view always passes `animationMs={0}` to both linked
-  // sides, pinned by its own test). It is NOT true for a nonzero
-  // `animationMs`: the library's own animation loop invokes `onTransform`
-  // once per animation frame for a SINGLE issued call (`animate()` calls
-  // its step callback on every `requestAnimationFrame` tick until the
-  // duration elapses), so only the FIRST of those N frames consumes the
-  // pending slot - frames 2..N misreport `"gesture"`. Inert today because
-  // the standalone workspace tile (the only caller that uses a nonzero
-  // `animationMs`) never passes `onTransformChange` at all, so no one
-  // reads the misreported origin. Deliberately NOT building consume-
-  // until-complete machinery for a configuration that doesn't exist
-  // (YAGNI) - if a future caller ever links instances at a nonzero
-  // `animationMs`, this comment is the tripwire to revisit.
+  // Incremented before every transform this component issues itself,
+  // decremented when its own `onTransform` callback is consumed - a COUNT,
+  // not a per-call identity, so it's correct only when each issued call
+  // delivers exactly one synchronous callback: true at `animationMs=0`
+  // against the pinned `react-zoom-pan-pinch` 4.0.4 (proved by the
+  // sync-delivery contract test), NOT true for a nonzero `animationMs`
+  // (the library calls `onTransform` once per animation frame, so only the
+  // first frame consumes the slot) - inert today since the only nonzero-
+  // `animationMs` caller never reads `onTransformChange`.
   const pendingProgrammaticCountRef = useRef(0);
   const [isPanning, setIsPanning] = useState(false);
   // The single source of truth for "where is this image right now" -

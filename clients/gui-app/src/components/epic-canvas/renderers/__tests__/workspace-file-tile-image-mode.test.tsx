@@ -36,7 +36,6 @@ const state = vi.hoisted(() => ({
     url: "blob:image" as string | null,
     meta: null as ImageAssetMeta | null,
     reason: null as string | null,
-    receivedBytes: 0,
     totalBytes: null as number | null,
     servedFromCache: false,
   } satisfies ImageAssetState,
@@ -84,7 +83,6 @@ vi.mock("@/hooks/assets/use-image-asset", () => ({
         url: null,
         meta: null,
         reason: "This image could not be decoded.",
-        receivedBytes: 0,
         totalBytes: null,
         servedFromCache: false,
       };
@@ -261,7 +259,6 @@ function resetState(): void {
     url: "blob:image",
     meta: null,
     reason: null,
-    receivedBytes: 0,
     totalBytes: null,
     servedFromCache: false,
   };
@@ -377,7 +374,6 @@ describe("<WorkspaceFileTile /> image mode", () => {
         url: null,
         meta: null,
         reason,
-        receivedBytes: 0,
         totalBytes: 42,
         servedFromCache: false,
       };
@@ -416,7 +412,6 @@ describe("<WorkspaceFileTile /> image mode", () => {
       url: "blob:image-new",
       meta: null,
       reason: null,
-      receivedBytes: 0,
       totalBytes: null,
       servedFromCache: false,
     };
