@@ -310,6 +310,8 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    deregisterHostFromAccount: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),

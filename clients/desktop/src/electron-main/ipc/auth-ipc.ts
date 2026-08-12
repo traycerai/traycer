@@ -14,6 +14,7 @@ import {
 import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/auth/auth-validation";
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { updateHostVersionPolicyViaHttp } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import { deregisterHostViaHttp } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 import {
   assertString,
@@ -164,6 +165,21 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         hostId,
         parseUpdateHostVersionPolicyInput(input),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.deregisterHostFromAccount,
+    async (_event, bearerToken: unknown, hostId: unknown) => {
+      assertString(bearerToken, "deregisterHostFromAccount.bearerToken");
+      assertString(hostId, "deregisterHostFromAccount.hostId");
+      // Run in main so renderer-origin CORS does not block authn-v3's
+      // `POST /api/v3/hosts/:hostId/deregister`, exactly as above.
+      return deregisterHostViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        hostId,
       );
     },
   );

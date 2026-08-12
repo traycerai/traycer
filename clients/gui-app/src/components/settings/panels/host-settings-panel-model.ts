@@ -2,7 +2,6 @@ import type {
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
-  HostNameSettings,
   HostRegistryUpdateState,
   LocalHostSnapshot,
   MutationKind,
@@ -17,9 +16,36 @@ export const VERSION_LIST_PREVIEW = 10;
 // renders, unchanged in shape from `MutationLaneStatus`.
 export type HostProgressState = MutationLaneStatus;
 
+/**
+ * The name triple, as either source states it.
+ *
+ * `HostNameSettings` (the local CLI bridge) and `HostIdentity` (the host's own
+ * `host.identity.get`) are the same three fields, which is not a coincidence —
+ * the host took over the file the bridge used to own. Naming the shape lets one
+ * edit form serve both the RPC page and the recovery console instead of
+ * cloning it per transport.
+ */
+export interface HostDisplayIdentity {
+  readonly systemName: string;
+  readonly customName: string | null;
+  readonly effectiveName: string;
+}
+
+/**
+ * The BRIDGE path's draft rule, used only by the recovery console.
+ *
+ * Typing the machine's own name means "clear the override", which is correct
+ * here and only here: the bridge writes this computer's name file, and a
+ * desktop host on this computer registers under `os.hostname()` — so clearing
+ * lands back on exactly the string that was typed.
+ *
+ * The RPC path deliberately does NOT share this rule — see
+ * `customNameFromIdentityDraft`, which explains what breaks when a host was
+ * started with a registration label that is not its hostname.
+ */
 export function customNameFromDraft(
   draftName: string,
-  settings: HostNameSettings | undefined,
+  settings: HostDisplayIdentity | undefined,
 ): string | null {
   const normalized = draftName.trim().replace(/\s+/g, " ");
   if (normalized.length === 0) return null;

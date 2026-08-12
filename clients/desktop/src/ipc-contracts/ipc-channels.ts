@@ -53,6 +53,11 @@ export const RunnerHostInvoke = {
   // now" / auto-policy toggle / "Apply now — ends N sessions". Same CORS
   // reason as `listRegisteredHosts`.
   updateHostVersionPolicy: "runnerHost:hosts:updateVersionPolicy",
+  // "Remove from account": `POST /api/v3/hosts/:hostId/deregister`. Same CORS
+  // reason as the two above — and, like them, a registry-only write that needs
+  // no route to the machine, which is why it does not live on the host-
+  // management bridge next to the OS-service verbs it must not be confused with.
+  deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",

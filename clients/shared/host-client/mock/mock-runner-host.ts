@@ -68,6 +68,10 @@ import {
   type UpdateHostVersionPolicyFetchResult,
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
+import {
+  deregisterHostViaHttp,
+  type DeregisterHostFetchResult,
+} from "../host-deregister-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -356,6 +360,14 @@ export class MockRunnerHost implements IRunnerHost {
       hostId,
       input,
     );
+  }
+
+  deregisterHostFromAccount(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return deregisterHostViaHttp(this.authnBaseUrl, bearerToken, hostId);
   }
 
   async openExternalLink(url: string): Promise<void> {
