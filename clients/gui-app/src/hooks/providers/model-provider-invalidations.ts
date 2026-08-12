@@ -29,7 +29,9 @@ export async function invalidateAfterModelProviderMutation(args: {
   readonly hostId: string | null;
 }): Promise<void> {
   if (args.hostId === null) return;
-  const listScope = { queryKey: modelProvidersQueryKeys.listScope(args.hostId) };
+  const listScope = {
+    queryKey: modelProvidersQueryKeys.listScope(args.hostId),
+  };
   const catalogScope = {
     queryKey: modelProvidersQueryKeys.modelCatalogScope(args.hostId),
   };
