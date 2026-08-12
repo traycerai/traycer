@@ -29,6 +29,20 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
+// The hook reads readiness directly, to build the placeholder lane out of the
+// same host id `useHostQuery` keys the cache by. Mocking `useHostQuery` alone
+// no longer covers that read, and this suite's client is a bare stand-in with
+// no `getActiveHostId`. The lane is not what these cases are about - it has
+// its own suite in `use-github-mention-search-scope.test.tsx`, which drives
+// the real readiness path.
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({
+    hostId: "host-1",
+    requestContextUserId: "user-1",
+    isReady: true,
+  }),
+}));
+
 import { useGithubMentionSearch } from "../use-github-mention-search";
 
 const fakeClient = {} as HostClient<HostRpcRegistry>;
