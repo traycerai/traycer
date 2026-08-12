@@ -972,8 +972,18 @@ function ImageStageImg(props: {
       onLoad={handleLoad}
       onError={props.onDecodeError}
       className={cn(
-        "image-preview-outline block transition-opacity duration-150 ease-out",
-        loaded ? "opacity-100" : "opacity-0",
+        "image-preview-outline block",
+        // A cache hit never has an `opacity-0` value to transition away
+        // from (it's seeded straight to `opacity-100`, see `loaded` above)
+        // - the transition class itself is omitted for that mount, not
+        // just left inert, so a pathological forced style pass elsewhere
+        // in this tree has no transitionable property to catch.
+        servedFromCache
+          ? "opacity-100"
+          : cn(
+              "transition-opacity duration-150 ease-out",
+              loaded ? "opacity-100" : "opacity-0",
+            ),
         props.className,
       )}
     />
