@@ -98,7 +98,11 @@ export function useBridgeShellConfigController(props: {
       if (rename.oldKey.length === 0) return;
       await traycerCli.envOverrideDelete({ key: rename.oldKey });
     },
-    onSuccess: () => {
+    // SETTLED, not success. A rename is two writes: if the set lands and the
+    // delete rejects, the store now holds BOTH keys while the editor still
+    // shows neither change - invalidating only on success leaves that stale
+    // view sitting over a config the host will actually read.
+    onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.traycerEnvOverrideList(traycerCli),
       });

@@ -1085,3 +1085,51 @@ describe("<ShellSettingsPanel /> env rename survives unmount", () => {
     });
   });
 });
+
+describe("<ShellSettingsPanel /> partially failed rename refreshes the editor", () => {
+  /**
+   * A rename is two writes, so it has a THIRD outcome besides success and
+   * failure: the set lands and the delete rejects, leaving both keys on the
+   * host. Invalidating only in `onSuccess` skips that path entirely, so the
+   * editor keeps rendering the pre-rename list over a config the host will
+   * actually read. Both controllers invalidate on SETTLEMENT for this reason.
+   */
+  it("shows the new key after the delete half fails, on the RPC path", async () => {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    cli.envOverrides = [{ key: "OLD_NAME", value: "keep-me" }];
+
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: {
+        "config.env.delete": () =>
+          Promise.reject(new Error("delete refused by the host")),
+      },
+    });
+
+    const nameInput = await screen.findByRole("textbox", {
+      name: "Name for OLD_NAME",
+    });
+    fireEvent.change(nameInput, { target: { value: "NEW_NAME" } });
+    fireEvent.blur(nameInput);
+
+    // The set landed, so the store holds BOTH keys; the editor must refetch
+    // and show that rather than sitting on its pre-rename snapshot.
+    expect(
+      await screen.findByRole("textbox", { name: "Name for NEW_NAME" }),
+    ).toBeTruthy();
+    expect(cli.envOverrides.map((row) => row.key)).toContain("OLD_NAME");
+  });
+
+  // NOTE: there is deliberately no bridge-path twin of this test. One was
+  // written and PROVED VACUOUS - it passed with the invalidation reverted to
+  // `onSuccess`-only, because something else on that path refreshes the list
+  // before the assertion runs. The bridge controller still invalidates on
+  // settlement, for symmetry with the RPC twin above and because the failure
+  // mode is identical; it is simply not pinned here rather than pinned by a
+  // test that cannot fail. Do not re-add one in this shape.
+});
