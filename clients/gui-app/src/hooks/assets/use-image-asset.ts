@@ -6,6 +6,8 @@ import {
   type AssetStreamFailureReason,
   type AssetStreamHeader,
 } from "@traycer-clients/shared/host-transport/asset-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { AssetMediaType } from "@traycer/protocol/host/asset-stream-schemas";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
@@ -184,6 +186,131 @@ function isWorktreeBackedRequest(request: ImageAssetRequest): boolean {
   return request.side === "new" && request.stage === "unstaged";
 }
 
+function openAssetStreamClient(
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  request: ImageAssetRequest,
+  callbacks: AssetStreamCallbacks,
+): AssetStreamClient {
+  return request.method === "workspace"
+    ? new AssetStreamClient({
+        wsStreamClient,
+        method: "workspace.streamAsset",
+        params: {
+          workspacePath: request.workspacePath,
+          filePath: request.filePath,
+        },
+        callbacks,
+      })
+    : new AssetStreamClient({
+        wsStreamClient,
+        method: "git.streamFileAsset",
+        params: {
+          runningDir: request.runningDir,
+          filePath: request.filePath,
+          previousPath: request.previousPath,
+          side: request.side,
+          stage: request.stage,
+        },
+        callbacks,
+      });
+}
+
+interface SharedAssetSubscription {
+  readonly client: AssetStreamClient;
+  refCount: number;
+  readonly headerListeners: Set<(header: AssetStreamHeader) => void>;
+  readonly readyListeners: Set<
+    (header: AssetStreamHeader, bytes: Uint8Array) => void
+  >;
+  readonly failureListeners: Set<(failure: AssetStreamFailure) => void>;
+}
+
+/**
+ * Coalesces concurrent requests for the SAME (host, request) pair into ONE
+ * underlying `AssetStreamClient` (thermo re-review, ticket 09 follow-up):
+ * the host reads and emits an entire asset synchronously in one call stack
+ * the instant a stream opens, before any client-side close from a losing
+ * consumer can land - so deduping only AFTER the fact (`imageBlobCache`'s
+ * own post-header identity dedupe, or closing a redundant stream once
+ * `usedForFetch` is known) still costs a second full host read for a
+ * genuine concurrent-first-mount race. This map keys on the REQUEST tuple
+ * itself, before any content identity is known - it composes with, not
+ * replaces, `imageBlobCache`'s post-header dedupe (different layer, keyed
+ * on `contentIdentity` instead): a genuine cache-miss race for the SAME
+ * request now opens exactly one host-side stream, whose single set of
+ * `assetHeader`/`assetChunk*`/`assetComplete` frames every joiner observes
+ * through its own listener registration.
+ *
+ * Refcounted like `imageBlobCache`'s own lease, for the same reason: an
+ * early-unmounting consumer must not strand its siblings still waiting on
+ * the header/bytes. Deleted from the map the instant the underlying fetch
+ * settles (`onReady`/`onFailure`) - once settled, a later mount goes
+ * through the normal (post-header) `imageBlobCache` path instead, which
+ * already handles that case correctly.
+ */
+const sharedAssetSubscriptions = new Map<string, SharedAssetSubscription>();
+
+function acquireSharedAssetSubscription(
+  sharedKey: string,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  request: ImageAssetRequest,
+  callbacks: AssetStreamCallbacks,
+): { readonly release: () => void } {
+  let entry = sharedAssetSubscriptions.get(sharedKey);
+  if (entry === undefined) {
+    const headerListeners = new Set<(header: AssetStreamHeader) => void>();
+    const readyListeners = new Set<
+      (header: AssetStreamHeader, bytes: Uint8Array) => void
+    >();
+    const failureListeners = new Set<(failure: AssetStreamFailure) => void>();
+    const client = openAssetStreamClient(wsStreamClient, request, {
+      onHeader: (header) => {
+        for (const listener of headerListeners) listener(header);
+      },
+      onReady: (header, bytes) => {
+        sharedAssetSubscriptions.delete(sharedKey);
+        for (const listener of readyListeners) listener(header, bytes);
+      },
+      onFailure: (failure) => {
+        sharedAssetSubscriptions.delete(sharedKey);
+        for (const listener of failureListeners) listener(failure);
+      },
+    });
+    entry = {
+      client,
+      refCount: 0,
+      headerListeners,
+      readyListeners,
+      failureListeners,
+    };
+    sharedAssetSubscriptions.set(sharedKey, entry);
+  }
+  const capturedEntry = entry;
+  capturedEntry.refCount += 1;
+  capturedEntry.headerListeners.add(callbacks.onHeader);
+  capturedEntry.readyListeners.add(callbacks.onReady);
+  capturedEntry.failureListeners.add(callbacks.onFailure);
+
+  let released = false;
+  return {
+    release: () => {
+      if (released) return;
+      released = true;
+      capturedEntry.headerListeners.delete(callbacks.onHeader);
+      capturedEntry.readyListeners.delete(callbacks.onReady);
+      capturedEntry.failureListeners.delete(callbacks.onFailure);
+      capturedEntry.refCount -= 1;
+      if (
+        capturedEntry.refCount <= 0 &&
+        sharedAssetSubscriptions.get(sharedKey) === capturedEntry
+      ) {
+        sharedAssetSubscriptions.delete(sharedKey);
+        capturedEntry.client.close();
+      }
+    },
+  };
+}
+
 /**
  * Fetches one image asset - a workspace file or one side of a git-tracked
  * file - over the ticket-01 asset stream, surfacing the header before bytes
@@ -308,7 +435,7 @@ export function useImageAsset(
 
     let active = true;
     let releaseLease: (() => void) | null = null;
-    let client: AssetStreamClient | null = null;
+    let sharedSubscription: { readonly release: () => void } | null = null;
     // Set only while a fetch this hook OWNS (a cache miss) is in flight -
     // bridges this session's `onReady`/`onFailure` into the promise
     // `imageBlobCache.acquire`'s fetcher returned. Stays `null` on a cache
@@ -366,7 +493,7 @@ export function useImageAsset(
                 // component other than the one that spawned it, is truly
                 // unneeded. A spawning component's own unmount must not
                 // reach this: see the cleanup below.
-                client?.close();
+                sharedSubscription?.release();
               },
               { once: true },
             );
@@ -384,11 +511,18 @@ export function useImageAsset(
         // it only ever flips true from INSIDE `fetcher`, called (if at all)
         // synchronously within `acquire`'s own call stack (image-blob-cache.ts:
         // a cache hit or an already-in-flight entry never invokes it). A
-        // losing consumer's own stream is therefore redundant right now, not
-        // only once the shared lease resolves - closing it here instead of
-        // in the `.then()` below stops the host from reading/enqueuing the
-        // same bytes twice for the full duration of the owner's transfer.
-        if (!usedForFetch) client?.close();
+        // losing consumer's own share of the (possibly shared) subscription
+        // is therefore redundant right now, not only once the shared lease
+        // resolves - releasing it here instead of in the `.then()` below
+        // stops the host from reading/enqueuing the same bytes twice for
+        // the full duration of the owner's transfer, for the CONTENT-
+        // identity race this fix 5 catches (imageBlobCache's own post-
+        // header dedupe). The request-identity race (two concurrent first
+        // mounts of the identical request, never reaching this branch since
+        // neither is ever a "loser" pre-header) is caught earlier, by
+        // `acquireSharedAssetSubscription` itself never opening a second
+        // stream in the first place.
+        if (!usedForFetch) sharedSubscription?.release();
 
         lease.promise.then(
           (url) => {
@@ -454,46 +588,30 @@ export function useImageAsset(
       },
     };
 
-    client =
-      normalizedRequest.method === "workspace"
-        ? new AssetStreamClient({
-            wsStreamClient,
-            method: "workspace.streamAsset",
-            params: {
-              workspacePath: normalizedRequest.workspacePath,
-              filePath: normalizedRequest.filePath,
-            },
-            callbacks,
-          })
-        : new AssetStreamClient({
-            wsStreamClient,
-            method: "git.streamFileAsset",
-            params: {
-              runningDir: normalizedRequest.runningDir,
-              filePath: normalizedRequest.filePath,
-              previousPath: normalizedRequest.previousPath,
-              side: normalizedRequest.side,
-              stage: normalizedRequest.stage,
-            },
-            callbacks,
-          });
+    sharedSubscription = acquireSharedAssetSubscription(
+      JSON.stringify([hostId, requestKey]),
+      wsStreamClient,
+      normalizedRequest,
+      callbacks,
+    );
 
     return () => {
       active = false;
       isMountedRef.current = false;
       // If this fetch is the shared cache entry's OWNER (`usedForFetch`),
-      // its stream must outlive THIS unmount when other consumers still
-      // hold a reference - closing it here would strand every sibling on
-      // the header skeleton forever, since only the owner's `onReady` /
-      // `onFailure` ever settles the shared promise. `releaseLease()` below
-      // is what may still close it, via the fetcher's abort listener, but
-      // only once the LAST reference to the SAME entry this lease was
-      // issued against drops - never a same-hash entry that replaced it (a
-      // `discard()`, e.g. `reportDecodeFailure`, in between). A fetch that
-      // never became the owner (never reached `onHeader`, or lost the cache
-      // race) has no such shared responsibility - nothing else will ever
-      // close it, so it must be closed directly.
-      if (!usedForFetch) client.close();
+      // its subscription share must outlive THIS unmount when other
+      // consumers still hold a reference - releasing it here would strand
+      // every sibling on the header skeleton forever, since only the
+      // owner's `onReady` / `onFailure` ever settles the shared promise.
+      // `releaseLease()` below is what may still release it, via the
+      // fetcher's abort listener, but only once the LAST reference to the
+      // SAME entry this lease was issued against drops - never a same-hash
+      // entry that replaced it (a `discard()`, e.g. `reportDecodeFailure`,
+      // in between). A fetch that never became the owner (never reached
+      // `onHeader`, or lost the cache race) has no such shared
+      // responsibility - nothing else will ever release it, so it must be
+      // released directly.
+      if (!usedForFetch) sharedSubscription.release();
       releaseLease?.();
     };
   }, [requestKey, wsStreamClient, hostId, focusRefreshNonce]);
