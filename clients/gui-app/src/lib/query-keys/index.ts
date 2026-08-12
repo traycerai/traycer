@@ -22,6 +22,8 @@ export {
   runnerQueryKeys,
   supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
+export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
+export { hostMaintenanceMutationKeys } from "@/lib/query-keys/host-maintenance-mutation-keys";
 export { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 export { migrationMutationKeys } from "@/lib/query-keys/migration-mutation-keys";
 export {

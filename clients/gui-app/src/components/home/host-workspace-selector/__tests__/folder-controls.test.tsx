@@ -637,11 +637,24 @@ describe("FolderRow", () => {
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
-  it("offers both Locate and Remove on an Unavailable row", () => {
+  it("offers both Locate and Remove on a not-available row", () => {
     const onLocate = vi.fn();
     const onRemove = vi.fn();
-    renderRow({ unresolved: true, onLocate, onRemove }, NOOP);
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    renderRow(
+      {
+        unresolved: true,
+        branchLabel: "Not available on Staging VM",
+        onLocate,
+        onRemove,
+      },
+      NOOP,
+    );
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on Staging VM");
+    expect(screen.getByTestId("folder-row-locate").textContent).toContain(
+      "Locate on this host",
+    );
 
     fireEvent.click(screen.getByTestId("folder-row-locate"));
     expect(onLocate).toHaveBeenCalledTimes(1);
@@ -650,11 +663,16 @@ describe("FolderRow", () => {
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
-  it("hides both actions on a read-only Unavailable row", () => {
+  it("hides both actions on a read-only not-available row", () => {
     render(
       <TooltipProvider>
         <FolderRow
-          item={item({ unresolved: true, onLocate: NOOP, onRemove: NOOP })}
+          item={item({
+            unresolved: true,
+            branchLabel: "Not available on Staging VM",
+            onLocate: NOOP,
+            onRemove: NOOP,
+          })}
           onEditEnvironment={NOOP}
           uncommittedByPath={EMPTY_COUNTS}
           boundaryEl={null}
@@ -662,7 +680,9 @@ describe("FolderRow", () => {
         />
       </TooltipProvider>,
     );
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(
+      screen.getByTestId("folder-row-not-available").textContent,
+    ).toContain("Not available on Staging VM");
     expect(screen.queryByTestId("folder-row-locate")).toBeNull();
     expect(screen.queryByTestId("folder-remove")).toBeNull();
   });

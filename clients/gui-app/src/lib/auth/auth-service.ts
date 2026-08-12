@@ -28,6 +28,7 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -1684,6 +1685,25 @@ export class AuthService {
       this.currentBearer,
       hostId,
       input,
+    );
+  }
+
+  /**
+   * "Remove from account": `POST /api/v3/hosts/:hostId/deregister` via the
+   * runner host (run in Electron main for CORS, mirroring
+   * {@link fetchRegisteredHosts}). Throws on signed-out for the same reason
+   * {@link updateHostVersionPolicy} does — a mutation issued with no bearer is
+   * a caller bug, not a state to render.
+   */
+  async deregisterHostFromAccount(
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult> {
+    if (this.currentBearer === null) {
+      throw new Error("Sign in to remove this host.");
+    }
+    return this.runnerHost.deregisterHostFromAccount(
+      this.currentBearer,
+      hostId,
     );
   }
 

@@ -1,4 +1,6 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
+import { readStoredCliInstallManifestAtPath } from "@traycer/protocol/config/installation";
+import { ZodError } from "zod";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
@@ -94,26 +96,6 @@ export const PACKAGE_MANAGER_UPGRADE_HINT: Record<
   rpm: "Run 'sudo dnf upgrade traycer-cli' (or 'yum upgrade').",
 };
 
-const VALID_PENDING_REASONS: ReadonlySet<CliPendingUpgradeReason> =
-  new Set<CliPendingUpgradeReason>([
-    "binary-locked",
-    "awaiting-service-restart",
-  ]);
-
-function isCliInstallSource(value: unknown): value is CliInstallSource {
-  return (
-    typeof value === "string" &&
-    VALID_CLI_INSTALL_SOURCES.has(value as CliInstallSource)
-  );
-}
-
-function isPendingReason(value: unknown): value is CliPendingUpgradeReason {
-  return (
-    typeof value === "string" &&
-    VALID_PENDING_REASONS.has(value as CliPendingUpgradeReason)
-  );
-}
-
 function currentProcessBinaryPath(): string {
   const argv1 = process.argv[1];
   return typeof argv1 === "string" && argv1.length > 0
@@ -125,60 +107,6 @@ function readDistributionInstallSourceFromEnv(): CliInstallSource | null {
   const value = process.env.TRAYCER_CLI_DISTRIBUTION;
   if (value === "npm") return "npm";
   return null;
-}
-
-function readPendingUpgrade(
-  value: unknown,
-  path: string,
-): CliPendingUpgrade | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'pendingUpgrade' must be an object or null`,
-      details: { value },
-      exitCode: 1,
-    });
-  }
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.version !== "string") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'pendingUpgrade.version' must be a string`,
-      details: { value: obj.version },
-      exitCode: 1,
-    });
-  }
-  if (typeof obj.stagedBinaryPath !== "string") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'pendingUpgrade.stagedBinaryPath' must be a string`,
-      details: { value: obj.stagedBinaryPath },
-      exitCode: 1,
-    });
-  }
-  if (typeof obj.stagedAt !== "string") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'pendingUpgrade.stagedAt' must be an ISO string`,
-      details: { value: obj.stagedAt },
-      exitCode: 1,
-    });
-  }
-  if (!isPendingReason(obj.reason)) {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'pendingUpgrade.reason' must be 'binary-locked' or 'awaiting-service-restart'`,
-      details: { value: obj.reason },
-      exitCode: 1,
-    });
-  }
-  return {
-    version: obj.version,
-    stagedBinaryPath: obj.stagedBinaryPath,
-    stagedAt: obj.stagedAt,
-    reason: obj.reason,
-  };
 }
 
 // System-wide install-source markers written by .deb / .rpm post-install
@@ -288,9 +216,10 @@ export async function readCliManifest(
     environment,
   });
   const path = cliManifestPath(environment);
-  let raw: string;
   try {
-    raw = await readFile(path, "utf8");
+    // Retain the historic absence/fallback branch below. The shared reader is
+    // then the sole parser of present persisted bytes.
+    await readFile(path, "utf8");
   } catch (err) {
     // Only a missing file means "no manifest"; a real fault (EACCES/EIO)
     // must surface rather than be misread as an absent install.
@@ -344,65 +273,26 @@ export async function readCliManifest(
       pendingUpgrade: null,
     };
   }
-  let parsed: unknown;
+  let manifest: CliInstallManifest | null;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
+    manifest = await readStoredCliInstallManifestAtPath(path);
+  } catch (err) {
+    // Only a parse failure means "invalid". The reader already turns ENOENT
+    // into null and rethrows every other I/O error, so swallowing those here
+    // reported a permissions or disk fault as a corrupt manifest and told the
+    // user to fix a file that is fine. Same narrowing as the sibling
+    // host-install reader.
+    if (!(err instanceof SyntaxError) && !(err instanceof ZodError)) throw err;
     throw cliError({
       code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path} is not valid JSON; refusing to overwrite`,
+      message: `CLI manifest ${path} is invalid; refusing to overwrite`,
       details: { path },
       exitCode: 1,
     });
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: top-level must be an object`,
-      details: { path },
-      exitCode: 1,
-    });
+  if (manifest === null) {
+    throw new Error(`CLI manifest ${path} disappeared while being read`);
   }
-  const obj = parsed as Record<string, unknown>;
-  if (typeof obj.version !== "string") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'version' must be a string`,
-      details: { path, value: obj.version },
-      exitCode: 1,
-    });
-  }
-  if (typeof obj.installedAt !== "string") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'installedAt' must be an ISO string`,
-      details: { path, value: obj.installedAt },
-      exitCode: 1,
-    });
-  }
-  if (typeof obj.binaryPath !== "string") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'binaryPath' must be a string`,
-      details: { path, value: obj.binaryPath },
-      exitCode: 1,
-    });
-  }
-  if (!isCliInstallSource(obj.source)) {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_MANIFEST_INVALID,
-      message: `CLI manifest ${path}: 'source' must be one of desktop|homebrew|npm|winget|scoop|apt|rpm|manual`,
-      details: { path, value: obj.source },
-      exitCode: 1,
-    });
-  }
-  const manifest = {
-    version: obj.version,
-    installedAt: obj.installedAt,
-    binaryPath: obj.binaryPath,
-    source: obj.source,
-    pendingUpgrade: readPendingUpgrade(obj.pendingUpgrade, path),
-  };
   logger.debug("CLI manifest read completed", {
     environment,
     hasVersion: manifest.version.length > 0,

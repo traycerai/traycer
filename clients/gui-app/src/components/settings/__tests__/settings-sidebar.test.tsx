@@ -23,11 +23,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The sidebar's host group is headed by the one host switcher, which composes
 // several host-runtime hooks. This suite is about NAVIGATION, so it mocks at
 // the scope boundary rather than standing up a host runtime.
+const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
+  current: { client: null },
+}));
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () => hostScopeFixture({ client: null }),
+    useHostScope: () => hostScopeFixture(scopeOverrides.current),
   };
 });
 
@@ -74,6 +77,7 @@ describe("<SettingsSidebar /> leader hints", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    scopeOverrides.current = { client: null };
   });
 
   // The machine console is labelled "Overview" now - it sits under the host
@@ -159,5 +163,46 @@ describe("<SettingsSidebar /> leader hints", () => {
       vi.advanceTimersByTime(1);
     });
     expect(screen.getByTestId("settings-section-digit-1")).toBeDefined();
+  });
+
+  // Guards the `requiresLocalHost` removal: Shell and Diagnostics used to be
+  // dimmed for a remote host (the on-disk config store the local CLI bridge
+  // read could only ever describe THIS computer). `config.*` / `diagnostics.*`
+  // made both sections work for whichever host the picker names, so a remote
+  // pick must render them identically to any other always-available section.
+  it("does not dim the Shell and Diagnostics rows while a remote host is scoped", async () => {
+    const { hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    scopeOverrides.current = {
+      client: null,
+      host: hostScopeOptionFixture({
+        hostId: "host-remote",
+        name: "Remote Box",
+        isLocalMachine: false,
+      }),
+    };
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    const shellLink = await screen.findByTestId("settings-sidebar-item-shell");
+    const diagnosticsLink = screen.getByTestId(
+      "settings-sidebar-item-diagnostics",
+    );
+    // Neither active (not the current route) - so an undimmed, inactive row
+    // is exactly the plain `text-foreground/70` class every other section's
+    // inactive row carries, not a dimmed variant of it.
+    for (const link of [shellLink, diagnosticsLink]) {
+      expect(link.className).not.toContain("text-foreground/40");
+      expect(link.className).toContain("text-foreground/70");
+    }
+    // Deliberately NOT `expect(shellLink.className).toBe(diagnosticsLink
+    // .className)`. The two assertions above already pin the property under
+    // test; whole-class-string equality additionally demands the two rows stay
+    // byte-identical forever, so any row-specific class either gains later
+    // would fail this test for a reason it does not care about.
   });
 });

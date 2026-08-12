@@ -14,6 +14,7 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
+import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -186,6 +187,24 @@ export interface IRunnerHost {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+
+  /**
+   * "Remove from account" — `POST /api/v3/hosts/:hostId/deregister` with the
+   * user bearer. Desktop shells run this in Electron main for the same CORS
+   * reason as `listRegisteredHosts` / `updateHostVersionPolicy`; browser/dev
+   * shells may call the shared `deregisterHostViaHttp` helper directly. Never
+   * throws: transport failures collapse into the discriminated result.
+   *
+   * This is a REGISTRY-only write, like the version policy above and unlike
+   * anything on `IHostManagement`: it needs no route to the machine, nothing on
+   * the machine changes, and the removal is not permanent — see
+   * `host-deregister-fetcher.ts` for exactly what the route does and why the
+   * confirmation copy has to say a live host comes back.
+   */
+  deregisterHostFromAccount(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 

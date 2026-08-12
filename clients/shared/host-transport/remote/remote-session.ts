@@ -31,6 +31,7 @@ import type {
 } from "../i-stream-session";
 import type { TimerHandle } from "../timer-handle";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
@@ -163,9 +164,18 @@ export interface IRemoteSession<
   start(): void;
   isClosed(): boolean;
   isReady(): boolean;
+  /**
+   * `abortSignal` is the CALLER's request authority (a cancelled TanStack
+   * read, a disposed host binding). It matters because `sendUnary` can now
+   * park waiting for the session to become ready: without it a cancelled read
+   * would still be dispatched at the ready boundary and would keep occupying
+   * the request coordinator's active slot for the whole dial. `null` for
+   * callers that own no authority.
+   */
   sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    abortSignal: AbortSignal | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -287,6 +297,23 @@ export class RemoteSession<
   private readonly restoredStreamIds = new Set<number>();
   private readonly closedListeners = new Set<() => void>();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
+  /**
+   * Callers parked inside `sendUnary` waiting for this session to become
+   * usable. Settled from exactly three places, which together are every exit
+   * a pre-ready session has: `handleOpenAck` (ready), `dropConnection` (this
+   * attach attempt is over), and `goTerminalFatal` / `close()` (never
+   * coming). A waiter that outlived all three would be a permanently parked
+   * query, so every phase transition out of pre-ready must keep settling
+   * this set.
+   */
+  private readonly readyWaiters = new Set<{
+    readonly requestId: string;
+    readonly method: string;
+    readonly resolve: () => void;
+    readonly reject: (error: HostRpcError) => void;
+    /** Detaches this waiter's abort listener. Called on EVERY settle path. */
+    readonly dispose: () => void;
+  }>();
   private nextStreamId = 1;
   private readyBoundaryGeneration: number | null = null;
   /**
@@ -360,7 +387,7 @@ export class RemoteSession<
   /** Kicks off the first connect if the session is idle. Idempotent. */
   start(): void {
     if (this.phase === "idle") {
-      void this.beginConnect();
+      this.beginConnectGuarded();
     }
   }
 
@@ -400,49 +427,77 @@ export class RemoteSession<
 
   /**
    * Issues a single unary RPC over the session (single-flight, no post-send
-   * auto-retry — local parity). Rejects with a `RetryableTransportError` only
-   * when the session is not yet ready AND can still get there (provably
-   * pre-send, safe to retry); any failure after the request frame is enqueued
-   * surfaces as a plain `HostRpcError`, since the host may already have begun
-   * applying it.
+   * auto-retry — local parity).
+   *
+   * **A session that is still on its way to ready is AWAITED, not rejected.**
+   * That is the contract change `createRetryingMessenger` and every
+   * pre-send-rejection reader (the Providers panel's recovery reasoning, the
+   * compat probe's failure classification) must be read against. Rejecting
+   * pre-send looked safe - the class carried the no-dispatch guarantee, so the
+   * caller could retry - but the caller's retry budget is a handful of
+   * attempts over a few seconds, while a FULL attach is bounded by its phases
+   * individually (dial 10s, attach-ack 10s, Noise 15s per round trip, openAck
+   * 15s — see `remote/config.ts`) and legitimately exceeds 50s on a slow link.
+   * So every consumer that raced a fresh session's first dial - which is every
+   * consumer, since the session is built on demand BY those consumers -
+   * exhausted its retries against "Remote session is not ready" and then had
+   * no automatic signal left. A remote host switch landed on a full-screen
+   * "Traycer Host is not responding" for a host that was seconds from ready.
+   *
+   * The wait is bounded by the session's OWN phase machine, deliberately
+   * without a second fixed cap: a disconnected ~20s ceiling would re-introduce
+   * exactly the mid-dial strand it was meant to prevent. It ends when the
+   * session reaches ready (send), when the attempt it is riding fails (reject
+   * `RetryableTransportError` — still provably pre-send, so the caller's
+   * retry license is intact and its budget now buys a whole fresh attach), or
+   * when the session goes terminal (reject `HostTransportFailureError`).
    *
    * A CLOSED session is not-ready too, but it is never going to become ready:
    * `close()` is terminal (a rejected credential, a plan restriction, an
    * incompatible handshake, or the reconnect cap), and `start()` above only
-   * re-dials from `idle`. Calling that "retryable" would be a lie with real
-   * consequences - `createRetryingMessenger` would burn its whole budget on a
-   * session that cannot answer, and a UI that reads the class as "still
-   * dialing" (the Providers panel) would park on a spinner waiting for a ready
-   * boundary no one will ever emit. So a terminal session degrades to the
-   * non-retryable `HostTransportFailureError`, exactly as
+   * re-dials from `idle`. Waiting on one would park forever, and calling it
+   * "retryable" would make `createRetryingMessenger` burn its whole budget on
+   * a session that cannot answer. So a terminal session rejects immediately
+   * with the non-retryable `HostTransportFailureError`, exactly as
    * `HostRequestAbortedError` does for a disposed request authority: still a
    * transport fault, no longer a promise that waiting will help.
+   *
+   * Any failure AFTER the request frame is enqueued still surfaces as a plain
+   * `HostRpcError` — the host may already have begun applying it.
    */
-  sendUnary<Method extends keyof RpcRegistry & string>(
+  async sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    abortSignal: AbortSignal | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
+    if (abortSignal !== null && abortSignal.aborted) {
+      throw abortedRequestError(requestId, method);
+    }
+    if (this.phase !== "ready" || this.connection === null) {
+      // Throws on a terminal session, a failed attach, or the caller's
+      // authority being aborted while parked; returns once this session is
+      // ready to carry the frame.
+      await this.awaitReadyBoundary(requestId, method, abortSignal);
+      // LOAD-BEARING, not belt-and-braces. The abort listener above cannot
+      // cover every ordering: an abort queued as a MICROTASK before
+      // `settleReadyWaiters` resolves this waiter runs before the
+      // continuation here, so the waiter is already settled "ready" by the
+      // time the signal flips and the listener has been disposed. Nothing
+      // else stands between that cancelled read and the wire - the enqueue is
+      // a few statements down.
+      if (abortSignal !== null && abortSignal.aborted) {
+        throw abortedRequestError(requestId, method);
+      }
+    }
     const connection = this.connection;
     if (this.phase !== "ready" || connection === null) {
-      const notReady = {
-        code: "RPC_ERROR" as const,
-        message: this.isClosed()
-          ? "Remote session is closed"
-          : "Remote session is not ready",
-        requestId,
-        method,
-        // A terminally-closed session carries its verdict so the surface that
-        // shows the failure can say WHY (plan restriction vs incompatible
-        // protocol vs revoked credential), not just "closed".
-        fatalDetails: this.isClosed() ? this.terminalFatalDetails : null,
-      };
-      return Promise.reject(
-        this.isClosed()
-          ? new HostTransportFailureError(notReady)
-          : new RetryableTransportError(notReady),
-      );
+      // The wait resolved on a ready boundary that has already been lost
+      // again (a drop landing in the same tick). Nothing was sent, so this
+      // keeps the pre-send retry license rather than pretending to be a
+      // host-originated failure.
+      throw this.notReadyRejection(requestId, method);
     }
     if (!connection.hostAttached) {
       // Relay said `host_detached`: the scheduler is paused and nothing will
@@ -508,6 +563,114 @@ export class RemoteSession<
       params,
       requestId,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  }
+
+  /**
+   * Parks until this session can carry a frame, or until it provably cannot.
+   *
+   * Resolves at the ready boundary; rejects `RetryableTransportError` when the
+   * attach attempt this call is riding fails (pre-send, so the caller may
+   * retry into a fresh attempt) and `HostTransportFailureError` when the
+   * session goes terminal. There is deliberately NO timer here - the phases
+   * are individually bounded and a failed phase lands in `dropConnection`,
+   * which settles this waiter; adding a second, shorter ceiling on top would
+   * re-create the mid-dial strand this exists to remove.
+   */
+  private awaitReadyBoundary(
+    requestId: string,
+    method: string,
+    abortSignal: AbortSignal | null,
+  ): Promise<void> {
+    if (this.isClosed()) {
+      return Promise.reject(this.notReadyRejection(requestId, method));
+    }
+    // A parked waiter carries NO timer of its own, so it is settled only by a
+    // later transition reaching `settleReadyWaiters` - `handleOpenAck`,
+    // `dropConnection`, `goTerminalFatal` or `close`. `sendUnary` calls
+    // `start()` before parking, so an attempt always owns the loop.
+    //
+    // The one path worth naming: `handleUnauthorizedSessionFatal` calls
+    // `dropConnection` and then `revalidateThenReconnect`, which can return
+    // without calling `scheduleReconnect` when `phase !== "reconnecting"` or
+    // `connection !== null`. Both conditions mean another attempt already owns
+    // the loop, so a waiter created in that window is still settled by that
+    // attempt - safety that lives in a guard in a different method, exactly
+    // like the incidental case documented on `beginConnectGuarded`. An edit
+    // that relaxes either condition has to re-check this.
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        requestId,
+        method,
+        resolve,
+        reject,
+        dispose: (): void => {
+          if (abortSignal === null) return;
+          abortSignal.removeEventListener("abort", onAbort);
+        },
+      };
+      // Named rather than inline so `dispose` can remove exactly this
+      // listener. A waiter that settles normally must not leave a listener on
+      // a signal that can outlive it (a request context's signal lives as
+      // long as the sign-in session), which is a leak per parked call.
+      const onAbort = (): void => {
+        if (!this.readyWaiters.delete(waiter)) return;
+        waiter.dispose();
+        reject(abortedRequestError(requestId, method));
+      };
+      if (abortSignal !== null) {
+        abortSignal.addEventListener("abort", onAbort);
+      }
+      this.readyWaiters.add(waiter);
+    });
+  }
+
+  /**
+   * Settles every parked `sendUnary` caller.
+   *
+   * The failure path re-derives its class per waiter at settle time, so one
+   * call site covers both endings correctly: a drop leaves the session able to
+   * reach ready again (`RetryableTransportError`), while a terminal fatal or
+   * `close()` has already set `phase = "closed"` and therefore yields the
+   * non-retryable `HostTransportFailureError` carrying the verdict.
+   */
+  private settleReadyWaiters(ready: boolean): void {
+    if (this.readyWaiters.size === 0) {
+      return;
+    }
+    const waiters = Array.from(this.readyWaiters);
+    this.readyWaiters.clear();
+    for (const waiter of waiters) {
+      waiter.dispose();
+      if (ready) {
+        waiter.resolve();
+        continue;
+      }
+      waiter.reject(this.notReadyRejection(waiter.requestId, waiter.method));
+    }
+  }
+
+  /**
+   * The pre-send failure for a session that is not carrying frames. Retryable
+   * while the session can still reach ready; a terminal one carries its
+   * verdict so the surface showing the failure can say WHY (plan restriction
+   * vs incompatible protocol vs revoked credential), not just "closed".
+   */
+  private notReadyRejection(
+    requestId: string,
+    method: string,
+  ): HostTransportFailureError {
+    const notReady = {
+      code: "RPC_ERROR" as const,
+      message: this.isClosed()
+        ? "Remote session is closed"
+        : "Remote session is not ready",
+      requestId,
+      method,
+      fatalDetails: this.isClosed() ? this.terminalFatalDetails : null,
+    };
+    return this.isClosed()
+      ? new HostTransportFailureError(notReady)
+      : new RetryableTransportError(notReady);
   }
 
   /**
@@ -687,6 +850,7 @@ export class RemoteSession<
         fatalDetails: null,
       }),
     );
+    this.settleReadyWaiters(false);
     this.emitClosed();
   }
 
@@ -770,6 +934,10 @@ export class RemoteSession<
     }
     if (provision.kind === "unavailable") {
       // No grant (signed out / revoked / transient CS failure): stay in backoff.
+      // This attach attempt is over before it dialed, so parked `sendUnary`
+      // callers settle here rather than riding an unbounded number of further
+      // mint attempts inside one call.
+      this.settleReadyWaiters(false);
       const retryInMs = this.scheduleReconnect();
       this.dialFailures.recordFailure({
         cause: `could not mint an attach grant: ${provision.detail}`,
@@ -1133,6 +1301,9 @@ export class RemoteSession<
     this.startReauthLoop();
     this.armStandingTimer();
     this.maybeReachReadyBoundary();
+    // The session can carry frames from here: release every `sendUnary`
+    // caller parked through this attach.
+    this.settleReadyWaiters(true);
   }
 
   private openSubscription(
@@ -1319,6 +1490,10 @@ export class RemoteSession<
         fatalDetails: null,
       }),
     );
+    // Callers parked awaiting THIS attach are still pre-send, so they keep
+    // their retry license - but they must be released rather than left to
+    // ride an unbounded number of further attempts inside one call.
+    this.settleReadyWaiters(false);
     this.markStreamsReconnecting();
   }
 
@@ -1516,6 +1691,9 @@ export class RemoteSession<
         fatalDetails: details,
       }),
     );
+    // Phase is already "closed", so parked callers settle as NON-retryable
+    // and carry this verdict - waiting cannot help a terminal session.
+    this.settleReadyWaiters(false);
     this.emitClosed();
   }
 
@@ -1539,9 +1717,65 @@ export class RemoteSession<
     this.reconnectAttempt += 1;
     this.backoffTimer = setTimeout(() => {
       this.backoffTimer = null;
-      void this.beginConnect();
+      this.beginConnectGuarded();
     }, delay);
     return delay;
+  }
+
+  /**
+   * `beginConnect` with its pre-connection failure modes routed back into the
+   * state machine.
+   *
+   * Everything it awaits before a `RelaySocket` exists - the grant provider,
+   * `NoiseChannel.begin` - can reject, and a bare `void beginConnect()` sent
+   * that rejection nowhere: the phase stayed `connecting`, no backoff was
+   * armed, and the session simply never dialed again for the life of the
+   * page. That was survivable while every `sendUnary` failed fast; it is not
+   * survivable now that callers PARK on the phase machine (see
+   * `awaitReadyBoundary`), because a phase that never transitions again is a
+   * query that never settles. `dropConnection` is the right landing: it
+   * settles the parked callers as retryable (nothing was sent) and hands the
+   * loop back to the normal backoff.
+   */
+  private beginConnectGuarded(): void {
+    // `beginConnect` allocates its generation SYNCHRONOUSLY, before its first
+    // await, so reading the counter immediately after the call names the
+    // generation this attempt owns - not the one it superseded.
+    //
+    // With ONE exception: the `phase === "closed"` early return never reaches
+    // the increment, so this captures the PREVIOUS generation. That is inert
+    // today because the same early return resolves rather than rejects, so
+    // the `catch` below never runs for it - a stale value nothing reads. If
+    // `beginConnect` ever learns to reject before incrementing, this capture
+    // stops naming this attempt and the guard silently compares against
+    // someone else's generation.
+    const attempt = this.beginConnect();
+    const generation = this.connectGeneration;
+    void attempt.catch((cause: unknown) => {
+      // The same generation guard every other callback here takes, and it is
+      // deliberately NOT load-bearing today: a rejection can only arrive while
+      // this attempt is still pre-connection, `dropConnection` nulls
+      // `this.connection`, and `isCurrent` requires a non-null one - so
+      // `requestSessionReconnect` and every `handleConnectionLost` caller are
+      // no-ops for exactly as long as an attempt is parked, and no newer
+      // generation can exist to be dropped. That safety is incidental to
+      // another method's null check, one refactor deep (a force-redial that
+      // does not tear down first, or an `isCurrent` that stops requiring a
+      // connection, reintroduces it). Stated here so a superseded attempt
+      // owning nothing is a property of THIS code rather than a coincidence.
+      if (this.phase === "closed" || generation !== this.connectGeneration) {
+        return;
+      }
+      this.dropConnection("connect-path-threw");
+      const retryInMs = this.scheduleReconnect();
+      this.dialFailures.recordFailure({
+        cause: `the connect path threw before dialing: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+        context: "",
+        retryInMs,
+      });
+    });
   }
 
   // ---- Re-auth loop + host-standing watchdog (R4-D2) --------------------- //
@@ -1900,6 +2134,24 @@ function describeSocketClose(
     return `${base} before attach_ack - a DNS failure, a refused/blocked connection, and a relay-rejected upgrade (bad or wrong-environment grant) all look exactly like this`;
   }
   return base;
+}
+
+/**
+ * The caller's own authority was aborted (a cancelled query, a replaced host
+ * binding). Never retryable: the request was not dispatched, and the context
+ * that would have owned the answer is gone. Mirrors what the local transport
+ * raises for a disposed authority, so `isTransientHostRpcFailure` and the
+ * retry wrapper classify both transports identically.
+ */
+function abortedRequestError(
+  requestId: string,
+  method: string,
+): HostRequestAbortedError {
+  return new HostRequestAbortedError({
+    message: "Remote unary was aborted before it was sent",
+    requestId,
+    method,
+  });
 }
 
 function unaryTimeoutError(requestId: string, method: string): HostRpcError {

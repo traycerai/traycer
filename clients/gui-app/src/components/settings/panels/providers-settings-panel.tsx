@@ -518,9 +518,11 @@ function ProvidersPanelBody({
     // owes no boundary either, and would strand this spinner just as badly.
     // That case never PERSISTS here, enforced at two layers. New requests:
     // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
-    // `HostTransportFailureError`, so the class keeps meaning "still dialing"
-    // at this branch. The query that already CACHED a retryable error from
-    // racing the dial (the retry budget is shorter than a full attach):
+    // `HostTransportFailureError` - and, since it now AWAITS a session that is
+    // merely dialing, a retryable error reaching this branch means a whole
+    // attach attempt failed with another already armed on backoff. Either way
+    // the class keeps meaning "still dialing" here. The query that already
+    // CACHED a retryable error from racing the dial:
     // `RuntimeHostMessenger` records the terminal verdict, fires one
     // host-scope invalidation, and rejects the resulting refetch with the
     // verdict instead of transparently redialing - without that, the refetch

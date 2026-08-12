@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronsUpDown, X } from "lucide-react";
-import type { TraycerDetectedShell } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  ConfigDetectedShell,
+  ConfigShellProbeResponse,
+} from "@traycer/protocol/host/config/index";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import {
-  traycerShellProbeQueryOptions,
-  useRunnerTraycerShellProbeQuery,
-} from "@/hooks/runner/use-runner-traycer-shell-probe-query";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import type { ShellProbeSource } from "@/components/settings/panels/shell/shell-config-controller";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +38,28 @@ function isAbsolutePath(path: string): boolean {
 }
 
 /**
+ * One options builder for both probe callers — the live status line's query and
+ * the imperative `fetchQuery` after a Browse pick — so the two can never land on
+ * different cache slots for the same path. The key comes from the source, not
+ * from here: a local-bridge answer and a per-host RPC answer are different
+ * facts about different machines.
+ */
+function shellProbeQueryOptions(
+  source: ShellProbeSource,
+  path: string,
+  enabled: boolean,
+) {
+  return queryOptions<ConfigShellProbeResponse>({
+    queryKey: source.queryKeyFor(path),
+    queryFn: ({ signal }) => source.probe(path, signal),
+    enabled,
+    // A given path's existence/executability doesn't change under the user's
+    // feet mid-session, so cache the answer and never refetch on focus.
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/**
  * The concrete rows below "System default": detected ∪ added, plus a transient
  * row for a `value` that is neither (e.g. set via the CLI by hand) so the picker
  * never shows an unrepresented choice. Sorted purely alphabetically - the
@@ -47,10 +68,10 @@ function isAbsolutePath(path: string): boolean {
  * pins to.
  */
 function buildEntryList(
-  shells: readonly TraycerDetectedShell[],
+  shells: readonly ConfigDetectedShell[],
   value: string,
-): { entries: TraycerDetectedShell[]; matched: TraycerDetectedShell | null } {
-  const entries: TraycerDetectedShell[] = [...shells];
+): { entries: ConfigDetectedShell[]; matched: ConfigDetectedShell | null } {
+  const entries: ConfigDetectedShell[] = [...shells];
   if (!entries.some((entry) => samePath(entry.path, value))) {
     entries.push({
       name: basenameOf(value),
@@ -86,8 +107,13 @@ function buildEntryList(
 export function ShellProgramCombobox(props: {
   readonly value: string;
   readonly synthesised: boolean;
-  readonly shells: readonly TraycerDetectedShell[];
+  readonly shells: readonly ConfigDetectedShell[];
   readonly disabled: boolean;
+  /**
+   * Where "does this path exist and can it run?" is asked — the machine being
+   * configured, which is not necessarily this one. See `ShellProbeSource`.
+   */
+  readonly probeSource: ShellProbeSource;
   readonly onSelect: (path: string) => void;
   readonly onAdd: (path: string) => void;
   readonly onRemove: (path: string) => void;
@@ -98,14 +124,13 @@ export function ShellProgramCombobox(props: {
     synthesised,
     shells,
     disabled,
+    probeSource,
     onSelect,
     onAdd,
     onRemove,
     onUseSystemDefault,
   } = props;
-  const runnerHost = useRunnerHost();
-  const traycerCli = runnerHost.traycerCli;
-  const pickProgramFile = traycerCli?.pickShellProgramFile ?? null;
+  const pickProgramFile = probeSource.pickProgramFile;
   const queryClient = useQueryClient();
 
   const [open, setOpen] = useState(false);
@@ -130,10 +155,13 @@ export function ShellProgramCombobox(props: {
   const trimmedInput = input.trim();
   const inputIsAbsolute =
     trimmedInput.length > 0 && isAbsolutePath(trimmedInput);
-  const probeQuery = useRunnerTraycerShellProbeQuery({
-    path: debounced,
-    enabled: open && debounced.length > 0 && isAbsolutePath(debounced),
-  });
+  const probeQuery = useQuery(
+    shellProbeQueryOptions(
+      probeSource,
+      debounced,
+      open && debounced.length > 0 && isAbsolutePath(debounced),
+    ),
+  );
   // Only trust the probe result when it describes the value currently typed,
   // so a stale (pre-debounce) result never colours the status line.
   const probe =
@@ -175,7 +203,7 @@ export function ShellProgramCombobox(props: {
       // Same gate as a typed path: only an executable file is added outright; a
       // non-executable pick is left in the input so its amber status explains why.
       const result = await queryClient.fetchQuery(
-        traycerShellProbeQueryOptions(traycerCli, picked, true),
+        shellProbeQueryOptions(probeSource, picked, true),
       );
       if (result.exists && result.executable) commitAdd(picked);
     } catch (error) {
@@ -330,8 +358,8 @@ export function ShellProgramCombobox(props: {
 function TriggerLabel(props: {
   readonly synthesised: boolean;
   readonly value: string;
-  readonly matched: TraycerDetectedShell | null;
-  readonly defaultEntry: TraycerDetectedShell | null;
+  readonly matched: ConfigDetectedShell | null;
+  readonly defaultEntry: ConfigDetectedShell | null;
 }) {
   const { synthesised, value, matched, defaultEntry } = props;
   const storedName = matched !== null ? matched.name : basenameOf(value);

@@ -29,6 +29,8 @@ import {
   worktreeListAllForHostResponseSchemaV13,
   worktreeListAllForHostRequestSchemaV14,
   worktreeListAllForHostResponseSchemaV14,
+  worktreeListAllForHostRequestSchemaV15,
+  worktreeListAllForHostResponseSchemaV15,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
   worktreeListByWorkspacePathsRequestSchemaV11,
@@ -38,6 +40,9 @@ import {
   worktreeListByWorkspacePathsResponseSchemaV13,
   worktreeListByWorkspacePathsRequestSchemaV14,
   worktreeListByWorkspacePathsResponseSchemaV14,
+  worktreeListByWorkspacePathsRequestSchemaV15,
+  worktreeListByWorkspacePathsResponseSchemaV15,
+  workspacePresenceSchema,
   repoBranchPrefixStateSchema,
   worktreeSetRepoBranchPrefixRequestSchema,
   worktreeSetRepoBranchPrefixResponseSchema,
@@ -52,6 +57,7 @@ const V11 = { major: 1, minor: 1 } as const;
 const V12 = { major: 1, minor: 2 } as const;
 const V13 = { major: 1, minor: 3 } as const;
 const V14 = { major: 1, minor: 4 } as const;
+const V15 = { major: 1, minor: 5 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
 const listByWorkspacePathsRegistry =
@@ -892,15 +898,89 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  it("exposes v1.4 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(4);
+  it("exposes v1.5 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(5);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
       "2",
       "3",
       "4",
+      "5",
     ]);
+  });
+
+  it("upgrades v1.4 to v1.5 stamping presence present for every worktree", () => {
+    const request = {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    };
+    // Request shape is unchanged from v1.4 - pass-through both ways.
+    expect(
+      upgradeRequestToVersion(listAllForHostRegistry, V14, V15, request),
+    ).toEqual(request);
+    expect(worktreeListAllForHostRequestSchemaV15.parse(request)).toEqual(
+      request,
+    );
+
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+          resolvedAt: 1_700_000_000_000,
+        },
+        {
+          ...v10Entry,
+          worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-y",
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+          resolvedAt: null,
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V14,
+      V15,
+      response,
+    );
+    // NEW CLIENT + OLD HOST: a v1.4 host never sends `presence`; the bridge
+    // stamps `"present"` so previously authoritative rows keep reading as
+    // available rather than being mistaken for missing remote directories.
+    expect(upgraded.worktrees[0].presence).toBe("present");
+    expect(upgraded.worktrees[1].presence).toBe("present");
+    expect(worktreeListAllForHostResponseSchemaV15.parse(upgraded)).toEqual(
+      upgraded,
+    );
+    // A current host can also emit an explicit `"absent"` presence fact.
+    const absentRow = {
+      ...response.worktrees[0],
+      presence: "absent" as const,
+    };
+    expect(
+      worktreeListAllForHostResponseSchemaV15.parse({
+        worktrees: [absentRow],
+        nextCursor: null,
+      }).worktrees[0].presence,
+    ).toBe("absent");
+    // OLD CLIENT + NEW HOST: a v1.4 caller strips the field it never knew.
+    expect(
+      worktreeListAllForHostResponseSchemaV14.parse(upgraded).worktrees[0],
+    ).not.toHaveProperty("presence");
   });
 });
 
@@ -998,11 +1078,11 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  it("exposes v1.4 as the latest installed minor of major 1", () => {
-    expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(4);
+  it("exposes v1.5 as the latest installed minor of major 1", () => {
+    expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(5);
     expect(
       Object.keys(listByWorkspacePathsRegistry[1].versions).sort(),
-    ).toEqual(["0", "1", "2", "3", "4"]);
+    ).toEqual(["0", "1", "2", "3", "4", "5"]);
   });
 
   it("upgrades v1.3 to v1.4 stamping repoBranchPrefix absent for every workspace", () => {
@@ -1065,6 +1145,88 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
       worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded)
         .workspaces[0],
     ).not.toHaveProperty("repoBranchPrefix");
+  });
+
+  it("upgrades v1.4 to v1.5 stamping presence present for every workspace", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web", "/Users/dev/acme/api"],
+      scriptRefs: [],
+      forceRefresh: false,
+    };
+    // Request shape is unchanged from v1.4 - pass-through both ways.
+    expect(
+      upgradeRequestToVersion(listByWorkspacePathsRegistry, V14, V15, request),
+    ).toEqual(request);
+    expect(worktreeListByWorkspacePathsRequestSchemaV15.parse(request)).toEqual(
+      request,
+    );
+
+    const response = {
+      workspaces: [
+        {
+          workspacePath: "/Users/dev/acme/web",
+          isGitRepo: true,
+          repoIdentifier: { owner: "acme", repo: "web" },
+          mainBranch: "main",
+          worktrees: [],
+          scripts: null,
+          resolvedAt: 1_700_000_000_000,
+          repoBranchPrefix: { status: "absent" as const },
+        },
+        {
+          workspacePath: "/Users/dev/acme/api",
+          isGitRepo: false,
+          repoIdentifier: null,
+          mainBranch: null,
+          worktrees: [],
+          scripts: null,
+          resolvedAt: null,
+          repoBranchPrefix: { status: "absent" as const },
+        },
+      ],
+      scriptsAtRefs: [],
+    };
+    const upgraded = upgradeResponseToVersion(
+      listByWorkspacePathsRegistry,
+      V14,
+      V15,
+      response,
+    );
+    // NEW CLIENT + OLD HOST: a v1.4 host never sends `presence`; the bridge
+    // stamps `"present"` so previously authoritative rows keep reading as
+    // available rather than being mistaken for missing remote directories.
+    expect(upgraded.workspaces[0].presence).toBe("present");
+    expect(upgraded.workspaces[1].presence).toBe("present");
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV15.parse(upgraded),
+    ).toEqual(upgraded);
+    // A current host can also emit an explicit `"absent"` presence fact.
+    const absentWorkspace = {
+      ...response.workspaces[1],
+      presence: "absent" as const,
+      resolvedAt: 1_700_000_000_000,
+    };
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV15.parse({
+        workspaces: [absentWorkspace],
+        scriptsAtRefs: [],
+      }).workspaces[0].presence,
+    ).toBe("absent");
+    // OLD CLIENT + NEW HOST: a v1.4 caller strips the field it never knew.
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV14.parse(upgraded)
+        .workspaces[0],
+    ).not.toHaveProperty("presence");
+  });
+});
+
+describe("workspacePresenceSchema", () => {
+  it("accepts only the two wire values present and absent", () => {
+    expect(workspacePresenceSchema.parse("present")).toBe("present");
+    expect(workspacePresenceSchema.parse("absent")).toBe("absent");
+    // `"unknown"` is an internal probe outcome, never a wire value: unresolved
+    // rows stay pending via `resolvedAt: null` while keeping presence present.
+    expect(() => workspacePresenceSchema.parse("unknown")).toThrow();
   });
 });
 

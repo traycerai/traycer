@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
@@ -63,7 +63,7 @@ function folderAt(path: string): ResolvedFolder {
   return { ...RESOLVED_FOLDER, path, name: path };
 }
 
-const SUMMARY: WorktreeWorkspaceSummaryV14 = {
+const SUMMARY: WorktreeWorkspaceSummaryV15 = {
   workspacePath: WORKSPACE_PATH,
   isGitRepo: true,
   repoIdentifier: { owner: "acme", repo: "app" },
@@ -80,6 +80,7 @@ const SUMMARY: WorktreeWorkspaceSummaryV14 = {
   scripts: null,
   repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
+  presence: "present",
 };
 
 // ONE object for the lifetime of the suite, as in production: `bind()` mutates

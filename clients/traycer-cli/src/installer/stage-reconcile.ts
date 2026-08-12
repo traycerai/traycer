@@ -2,12 +2,10 @@ import { access, readFile, rm, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
+import type { HostInstallRecord } from "@traycer/protocol/config/installation";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, type ILogger } from "../logger";
-import {
-  readHostInstallRecord,
-  type HostInstallRecord,
-} from "../manifest/host-install";
+import { readHostInstallRecord } from "../manifest/host-install";
 import {
   readHostStagedRecord,
   readHostStagedRecordAt,

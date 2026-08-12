@@ -1,6 +1,11 @@
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -59,7 +64,8 @@ vi.mock("@/components/layout/header/app-header", () => ({
 }));
 
 const PRESENTATION: DefaultHostReadinessPresentation = {
-  localTarget: true,
+  targetKind: "local",
+  localBootIntent: true,
   localHostState: "unknown",
   stage: "loading",
   progress: null,
@@ -73,6 +79,10 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   forceProvisioning: () => undefined,
   reinstall: () => undefined,
   configureShell: () => undefined,
+  refreshDirectory: () => undefined,
+  openHostPicker: () => undefined,
+  openSettings: () => undefined,
+  anyHostDialable: false,
   requestRespawn: () => undefined,
   respawnPending: false,
   compatibility: {
@@ -96,10 +106,18 @@ function controllerFor(
   };
 }
 
+interface GateHarness {
+  readonly view: RenderResult;
+  readonly setReadiness: (
+    readiness: SurfaceReadiness,
+    presentation: DefaultHostReadinessPresentation,
+  ) => void;
+}
+
 function renderGate(
   readiness: SurfaceReadiness,
   presentation: DefaultHostReadinessPresentation,
-): void {
+): GateHarness {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -112,23 +130,62 @@ function renderGate(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const children: ReactNode = <main>app</main>;
-  render(
+  // Providers are stable across readiness flips so the gate's latch (per-
+  // window state, set once the first `ready` renders) survives re-renders -
+  // remounting the gate would reset it and the post-latch pins would pass
+  // vacuously against a gate that still blocks.
+  const view = render(
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HostReadinessControllerContext.Provider
           value={controllerFor(readiness, presentation)}
         >
-          <HostReadyGate>{children}</HostReadyGate>
+          <HostReadyGate>
+            <main>app</main>
+          </HostReadyGate>
         </HostReadinessControllerContext.Provider>
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
+  return {
+    view,
+    setReadiness: (next, nextPresentation) => {
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <HostReadinessControllerContext.Provider
+              value={controllerFor(next, nextPresentation)}
+            >
+              <HostReadyGate>
+                <main>app</main>
+              </HostReadyGate>
+            </HostReadinessControllerContext.Provider>
+          </RunnerHostProvider>
+        </QueryClientProvider>,
+      );
+    },
+  };
+}
+
+/**
+ * The presentation each post-latch kind needs to render its own surface: the
+ * provisioning-error card only exists while a converge error is live, and the
+ * slow-local-host card only while the local host has actually gone
+ * unavailable. Everything else is the plain fixture.
+ */
+function presentationForPostLatchKind(
+  kind: SurfaceReadiness["kind"],
+): DefaultHostReadinessPresentation {
+  if (kind === "provisioning-error") {
+    return { ...PRESENTATION, provisioningError: new Error("boom") };
+  }
+  if (kind === "unavailable-host") return SLOW_PRESENTATION;
+  return PRESENTATION;
 }
 
 const SLOW_PRESENTATION: DefaultHostReadinessPresentation = {
   ...PRESENTATION,
-  localTarget: true,
+  targetKind: "local",
   localHostState: "unavailable",
   stage: "slow",
 };
@@ -156,15 +213,56 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 
-  it("replaces the whole app - not just a surface - while the host is not ready", () => {
-    // The regression this pins: with only per-surface fallbacks the shell
-    // stayed mounted, so the tab strip and every host-dependent affordance in
-    // it remained reachable during setup.
+  it("replaces the whole app - not just a surface - on a cold start before the host is ready", () => {
+    // Cold-start only (D1). Before the gate has ever seen `ready` it still
+    // replaces the shell: with only per-surface fallbacks the tab strip and
+    // every host-dependent affordance in it stayed reachable during setup.
+    // Post-latch behaviour is covered below - this pin must not be loosened
+    // into "never blocks".
     renderGate({ kind: "loading-host" }, PRESENTATION);
     expect(screen.queryByRole("main")).toBeNull();
     const gate = screen.getByTestId("host-ready-gate");
     expect(gate.dataset.readiness).toBe("loading-host");
     expect(screen.getByRole("banner").dataset.variant).toBe("host-loading");
+  });
+
+  it("keeps the app mounted after latching for every non-splash non-ready kind", () => {
+    // D1 post-latch table: once the window has been ready, non-ready kinds
+    // must NOT unmount the shell. That unmount is what made every host switch
+    // (and every transient probe failure on a host that was already running)
+    // throw away editors, terminals, scroll, and popovers.
+    const postLatchKinds: ReadonlyArray<SurfaceReadiness["kind"]> = [
+      "loading-host",
+      "compatibility-checking",
+      "unavailable-host",
+      "provisioning-error",
+      "compatibility-error",
+      "incompatible-host",
+      "removed-host",
+      "restoring-request-context",
+    ];
+    const harness = renderGate({ kind: "ready" }, PRESENTATION);
+    expect(screen.getByRole("main")).toBeTruthy();
+    expect(screen.queryByTestId("host-ready-gate")).toBeNull();
+
+    for (const kind of postLatchKinds) {
+      harness.setReadiness({ kind }, presentationForPostLatchKind(kind));
+      expect(screen.getByRole("main")).toBeTruthy();
+      expect(screen.queryByTestId("host-ready-gate")).toBeNull();
+    }
+  });
+
+  it("still full-screens mobile-no-host after the gate has latched", () => {
+    // The one post-latch splash exception: a mobile shell with no host at all
+    // has no app worth keeping mounted, and is not reachable via a desktop
+    // host switch.
+    const harness = renderGate({ kind: "ready" }, PRESENTATION);
+    expect(screen.getByRole("main")).toBeTruthy();
+    harness.setReadiness({ kind: "mobile-no-host" }, PRESENTATION);
+    expect(screen.queryByRole("main")).toBeNull();
+    expect(screen.getByTestId("host-ready-gate").dataset.readiness).toBe(
+      "mobile-no-host",
+    );
   });
 
   it("lets /settings through even while the host is not ready", () => {
@@ -221,7 +319,7 @@ describe("<HostReadyGate />", () => {
     // and must keep saying which wait it is.
     renderGate(
       { kind: "compatibility-checking" },
-      { ...PRESENTATION, localTarget: false },
+      { ...PRESENTATION, targetKind: "remote" },
     );
     expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
     expect(
@@ -352,5 +450,128 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByRole("main")).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByText("boom")).toBeTruthy();
+  });
+
+  it("names the zero-dialable default-host card without calling the app a tab", () => {
+    // D7 zero-dialable arm: default-host reaches unavailable-host only when
+    // nothing is dialable. The tab wording mislabelled the whole app; the
+    // slow-local branch (localHostState unavailable + stage slow) is a
+    // different card and must not be taken here.
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+      },
+    );
+    expect(screen.getByText("Traycer Host is unavailable")).toBeTruthy();
+    expect(screen.queryByText("This tab's host is unavailable.")).toBeNull();
+    // Must not have been routed to the slow-local startup card.
+    expect(screen.queryByTestId("local-host-retry")).toBeNull();
+  });
+
+  it("offers retry, switch host, open settings, and report-issue on the zero-dialable card", () => {
+    // Pins the four affordances that ship with the zero-dialable card: re-read
+    // the registry, open the picker, open settings, and report. Each used to
+    // be missing (`actions: []`, `footer: null`) behind a full-screen block.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const refreshDirectory = vi.fn();
+    const openHostPicker = vi.fn();
+    const openSettings = vi.fn();
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+        anyHostDialable: false,
+        refreshDirectory,
+        openHostPicker,
+        openSettings,
+      },
+    );
+
+    fireEvent.click(screen.getByTestId("host-unavailable-retry"));
+    fireEvent.click(screen.getByTestId("host-unavailable-switch-host"));
+    fireEvent.click(screen.getByTestId("host-unavailable-open-settings"));
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+    expect(openHostPicker).toHaveBeenCalledTimes(1);
+    expect(openSettings).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+  });
+
+  it("files HOST_NONE_DIALABLE when no host in the directory is dialable", () => {
+    // Pins the report family chosen by a fact (`anyHostDialable`), not by
+    // readiness kind alone - collapsing distinct causes into one code is the
+    // triage failure these families exist to end.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+        anyHostDialable: false,
+      },
+    );
+
+    expect(
+      screen.getByText(
+        "Traycer can't reach this host right now, and no other host in the directory is reachable either.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Traycer can't reach this host right now. Another host is available - switch to it, or retry.",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(context?.code).toBe("HOST_NONE_DIALABLE");
+    expect(context?.source).toBe("Host connection");
+  });
+
+  it("files HOST_SELECTED_UNREACHABLE when another host in the directory is dialable", () => {
+    // Counterpart family: selected host dead but something else is reachable
+    // (two-read wait before failover, or this machine booting while a remote
+    // is listed). Detail copy must not silently converge with the zero-dialable
+    // arm.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        targetKind: "remote",
+        localBootIntent: false,
+        localHostState: "unavailable",
+        stage: "loading",
+        anyHostDialable: true,
+      },
+    );
+
+    expect(
+      screen.getByText(
+        "Traycer can't reach this host right now. Another host is available - switch to it, or retry.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Traycer can't reach this host right now, and no other host in the directory is reachable either.",
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(context?.code).toBe("HOST_SELECTED_UNREACHABLE");
+    expect(context?.source).toBe("Host connection");
   });
 });

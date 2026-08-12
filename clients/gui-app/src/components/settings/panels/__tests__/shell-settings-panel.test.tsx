@@ -2,13 +2,31 @@
 // selected host's own config), so it reads `useHostScope`. Mock at that
 // boundary: these suites render the panel bare, without the host runtime and
 // query providers the real hook needs.
+const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
+  current: {},
+}));
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () => hostScopeFixture({}),
+    useHostScope: () => hostScopeFixture(scopeOverrides.current),
   };
 });
+
+// `useScopedHostBinding` (and the panel's own direct `useHostBinding()?.hostClient`
+// reads) go through this module. Panel suites mock it wholesale rather than
+// standing up a real `<HostRuntimeProvider>` - see `providers-settings-panel.test.tsx`
+// and `provider-mcp-tab.test.tsx` for the same partial-object pattern.
+const hostBindingMock = vi.hoisted(
+  (): { current: { readonly hostClient: unknown } | null } => ({
+    current: null,
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => hostBindingMock.current };
+});
+
 import {
   act,
   cleanup,
@@ -28,11 +46,25 @@ import {
   MockRunnerHost,
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
+import {
+  ALL_CONFIG_RPC_METHODS,
+  CONFIG_SHELL_METHODS,
+  buildConfigHostFixture,
+  type ConfigHostFixture,
+} from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
+  scopeOverrides.current = {};
+  hostBindingMock.current = null;
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -47,10 +79,101 @@ const CAT = {
 
 const SAVED_FLASH_MS = 1600;
 
-function renderPanel(configure: (cli: MockTraycerCli) => void): MockTraycerCli {
+/**
+ * The panel over the config RPC path - the production path for every
+ * reachable host, local or remote. Wires a real `HostClient` (over an
+ * in-memory messenger delegating to a `MockTraycerCli`) as the SCOPED host's
+ * client, so writes exercise the real `useHostQuery`/`useHostMutation` wiring
+ * rather than a bridge stub.
+ */
+function renderShellPanelOverRpc(options: {
+  readonly configure?: (cli: MockTraycerCli) => void;
+  readonly hostId?: string;
+  readonly isLocalMachine?: boolean;
+  readonly connectable?: boolean;
+  /**
+   * Recorded via `recordNegotiatedHostMethods`. Defaults to the full shell
+   * family (a host that has handshaked and supports everything); pass `null`
+   * to record NOTHING for this host id — the "no handshake yet" tri-state,
+   * distinct from a recorded-but-empty manifest.
+   */
+  readonly methods?: readonly string[] | null;
+}): ConfigHostFixture {
+  const hostId = options.hostId ?? "host-a";
+  const isLocalMachine = options.isLocalMachine ?? true;
   const cli = new MockTraycerCli();
-  configure(cli);
-  const host: IRunnerHost = new MockRunnerHost({
+  options.configure?.(cli);
+  const fixture = buildConfigHostFixture({ hostId, isLocalMachine, cli });
+  if (options.methods !== null) {
+    recordNegotiatedHostMethods(
+      hostId,
+      options.methods ?? CONFIG_SHELL_METHODS,
+    );
+  }
+
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId,
+      isLocalMachine,
+      connectable: options.connectable ?? true,
+    }),
+    hostId,
+    status: "ready",
+    client: fixture.client,
+  };
+  hostBindingMock.current = { hostClient: fixture.client };
+
+  const runnerHost: IRunnerHost = new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <ShellSettingsPanel />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+  return fixture;
+}
+
+/**
+ * This computer's host, unable to answer for itself: the panel falls back to
+ * the CLI bridge. Covers BOTH `localConfigFallbackReason` outcomes for a local
+ * host - `connectable: false` ("host-stopped", the default) or a connectable
+ * host whose recorded manifest omits `config.shell.get` ("host-outdated").
+ */
+function renderShellPanelStoppedLocal(options: {
+  readonly configure: (cli: MockTraycerCli) => void;
+  readonly connectable?: boolean;
+  /** Recorded via `recordNegotiatedHostMethods` when given; omitted otherwise (no handshake yet). */
+  readonly methods?: readonly string[];
+}): MockTraycerCli {
+  const hostId = "host-a";
+  const cli = new MockTraycerCli();
+  options.configure(cli);
+  if (options.methods !== undefined) {
+    recordNegotiatedHostMethods(hostId, options.methods);
+  }
+  const connectable = options.connectable ?? false;
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId,
+      isLocalMachine: true,
+      connectable,
+    }),
+    hostId,
+    status: connectable ? "ready" : "unreachable",
+  };
+  const runnerHost: IRunnerHost = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
     localHost: null,
@@ -64,12 +187,19 @@ function renderPanel(configure: (cli: MockTraycerCli) => void): MockTraycerCli {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={host}>
+      <RunnerHostProvider runnerHost={runnerHost}>
         <ShellSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
   return cli;
+}
+
+// Kept as a thin wrapper so the existing hierarchy/flags-row suites below stay
+// unchanged apart from the transport underneath them.
+function renderPanel(configure: (cli: MockTraycerCli) => void): MockTraycerCli {
+  const fixture = renderShellPanelOverRpc({ configure });
+  return fixture.cli;
 }
 
 function statusTexts(): string[] {
@@ -390,5 +520,413 @@ describe("<ShellSettingsPanel /> flags row", () => {
         .getByRole("button", { name: "Restore default flags" })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+});
+
+describe("<ShellSettingsPanel /> remote host over RPC", () => {
+  it("renders the full editor for a remote, connectable host and writes go out as config.shell.* RPCs to that host's client", async () => {
+    const fixture = renderShellPanelOverRpc({
+      hostId: "host-remote",
+      isLocalMachine: false,
+      configure: (cli) => {
+        cli.shellConfig = {
+          path: "/bin/zsh",
+          args: ["-i", "-l"],
+          synthesised: true,
+        };
+      },
+    });
+
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+    expect(screen.getByTestId("terminal-shell-settings")).toBeTruthy();
+    expect(screen.getByTestId("host-environment-settings")).toBeTruthy();
+    expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
+    expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+
+    const addFlag = screen.getByRole("button", { name: "＋ flag" });
+    fireEvent.click(addFlag);
+    const flagInput = screen.getByRole("textbox", { name: "New shell flag" });
+    fireEvent.change(flagInput, { target: { value: "-x" } });
+    fireEvent.keyDown(flagInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getByText("-x")).toBeTruthy();
+    });
+    // The write actually reached this host's mock CLI-backed handler — the
+    // config.shell.set RPC delegates to it, so a value change here proves the
+    // request was dispatched (and answered) rather than merely rendered.
+    expect(fixture.cli.shellConfig.args).toContain("-x");
+  });
+
+  it("hides the native Browse affordance for a remote host (typed-path degrade)", async () => {
+    renderShellPanelOverRpc({
+      hostId: "host-remote",
+      isLocalMachine: false,
+      configure: (cli) => {
+        cli.shellConfig = {
+          path: "/bin/zsh",
+          args: ["-i", "-l"],
+          synthesised: true,
+        };
+      },
+    });
+
+    const trigger = (await screen.findByText("System default")).closest(
+      "button",
+    );
+    if (trigger === null) throw new Error("no picker trigger");
+    fireEvent.click(trigger);
+
+    expect(await screen.findByLabelText("Add a shell by path")).toBeTruthy();
+    expect(screen.queryByText("Browse…")).toBeNull();
+  });
+});
+
+describe("<ShellSettingsPanel /> host-config-unsupported degrade", () => {
+  it("shows the unsupported notice, without crashing, for a REMOTE host handshaked without config.shell.get", async () => {
+    renderShellPanelOverRpc({
+      hostId: "host-old",
+      isLocalMachine: false,
+      // Handshaked WITHOUT the shell family — an old host.
+      methods: ["host.status"],
+      configure: (cli) => {
+        cli.shellConfig = { path: "/bin/zsh", args: [], synthesised: true };
+      },
+    });
+
+    const notice = await screen.findByTestId("host-config-unsupported-notice");
+    expect(notice.textContent).toContain("running an older version");
+    expect(screen.queryByTestId("terminal-shell-settings")).toBeNull();
+    expect(screen.queryByText("Startup flags for zsh")).toBeNull();
+    // A remote host has no local truth to fall back to — it never takes the
+    // bridge notice, only the capability one.
+    expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
+  });
+});
+
+describe("<ShellSettingsPanel /> local host falls back to the CLI bridge", () => {
+  it('host-stopped: reads and writes through the CLI bridge, with data-reason="host-stopped"', async () => {
+    const cli = renderShellPanelStoppedLocal({
+      configure: (cli) => {
+        cli.shellConfig = {
+          path: "/bin/zsh",
+          args: ["-i", "-l"],
+          synthesised: true,
+        };
+      },
+      connectable: false,
+    });
+
+    const notice = await screen.findByTestId("local-config-fallback-notice");
+    expect(notice.getAttribute("data-reason")).toBe("host-stopped");
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+    expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+
+    const addFlag = screen.getByRole("button", { name: "＋ flag" });
+    fireEvent.click(addFlag);
+    const flagInput = screen.getByRole("textbox", { name: "New shell flag" });
+    fireEvent.change(flagInput, { target: { value: "-x" } });
+    fireEvent.keyDown(flagInput, { key: "Enter" });
+
+    // The write actually reached the local CLI bridge, not an RPC handler.
+    await waitFor(() => {
+      expect(cli.shellConfig.args).toContain("-x");
+    });
+    expect(await screen.findByText("-x")).toBeTruthy();
+  });
+
+  // The widened case: a RUNNING, connectable local host whose handshake did
+  // not carry `config.shell.get` (the fleet-update window — the app updated
+  // before the host it manages) still gets a working, bridge-backed page
+  // instead of the capability notice.
+  it('host-outdated: a connectable local host with an old manifest still uses the bridge, with data-reason="host-outdated"', async () => {
+    const cli = renderShellPanelStoppedLocal({
+      configure: (cli) => {
+        cli.shellConfig = {
+          path: "/bin/zsh",
+          args: ["-i", "-l"],
+          synthesised: true,
+        };
+      },
+      connectable: true,
+      methods: ["host.status"], // handshaked WITHOUT config.shell.get
+    });
+
+    const notice = await screen.findByTestId("local-config-fallback-notice");
+    expect(notice.getAttribute("data-reason")).toBe("host-outdated");
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+    expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+
+    const addFlag = screen.getByRole("button", { name: "＋ flag" });
+    fireEvent.click(addFlag);
+    const flagInput = screen.getByRole("textbox", { name: "New shell flag" });
+    fireEvent.change(flagInput, { target: { value: "-x" } });
+    fireEvent.keyDown(flagInput, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(cli.shellConfig.args).toContain("-x");
+    });
+    expect(await screen.findByText("-x")).toBeTruthy();
+  });
+
+  // The tri-state guard: a local, CONNECTABLE host with no recorded manifest
+  // at all ("not dialled yet", not "unsupported") must take the RPC path, not
+  // the bridge — collapsing the tri-state to a boolean would divert it here
+  // permanently, before its own first RPC ever produced an answer.
+  it("does not fall back for a connectable local host with no handshake recorded yet", async () => {
+    const fixture = renderShellPanelOverRpc({
+      hostId: "host-a",
+      isLocalMachine: true,
+      connectable: true,
+      methods: null,
+      configure: (cli) => {
+        cli.shellConfig = {
+          path: "/bin/zsh",
+          args: ["-i", "-l"],
+          synthesised: true,
+        };
+      },
+    });
+
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+    expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
+    expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+    // Loaded from the RPC-backed fixture client, not the bridge.
+    expect(fixture.cli.shellConfig.path).toBe("/bin/zsh");
+  });
+});
+
+// The negotiated-manifest registry never clears a stale `false` answer on its
+// own - `useHostCapabilityProbe` is what re-dials a parked host so a page that
+// promises "update the host and this fills in on its own" can keep that
+// promise. These pins prove the probe actually dispatched (not merely that
+// the panel changed state for some other reason), then prove the RPC path
+// resumes once a fresh handshake and a bumped incarnation land.
+describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
+  it("remote host: probes host.status while parked, then resumes the RPC editor once the host re-handshakes with the shell family", async () => {
+    const hostId = "host-old";
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    const fixture = buildConfigHostFixture({
+      hostId,
+      isLocalMachine: false,
+      cli,
+    });
+    // Handshaked WITHOUT the shell family - parks the panel on the unsupported notice.
+    recordNegotiatedHostMethods(hostId, ["host.status"]);
+
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: false,
+        connectable: true,
+        version: "1.5.0",
+      }),
+      hostId,
+      status: "ready",
+      client: fixture.client,
+    };
+    hostBindingMock.current = { hostClient: fixture.client };
+
+    const runnerHost: IRunnerHost = new MockRunnerHost({
+      signInUrl: "https://example.invalid/signin",
+      authnBaseUrl: "https://example.invalid",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <ShellSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByTestId("host-config-unsupported-notice"),
+    ).toBeTruthy();
+
+    // Non-vacuity discriminator: without the probe wired up, nothing would
+    // ever call host.status while parked.
+    await waitFor(() => {
+      expect(fixture.hostStatusCalls()).toBeGreaterThan(0);
+    });
+    const callsWhileParked = fixture.hostStatusCalls();
+
+    // Bump ONLY the incarnation, manifest still unhealed: this is the leg
+    // `cacheKeyIdentity` protects - a re-dial driven purely by the host's
+    // version changing, still while parked. Without a cache key keyed on the
+    // incarnation, this rerender would reuse the already-fetched query and
+    // never ask again.
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: false,
+        connectable: true,
+        version: "1.5.1",
+      }),
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <ShellSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(fixture.hostStatusCalls()).toBeGreaterThan(callsWhileParked);
+    });
+
+    // Now simulate the host updating in place: a fresh handshake carries the
+    // shell family, and the host's own incarnation bumps again.
+    recordNegotiatedHostMethods(hostId, ALL_CONFIG_RPC_METHODS);
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: false,
+        connectable: true,
+        version: "1.6.0",
+      }),
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <ShellSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+    expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+    expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
+  });
+
+  it("local, connectable, outdated host: probes host.status while parked on the bridge, then resumes the RPC editor once the host re-handshakes", async () => {
+    const hostId = "host-a";
+    const bridgeCli = new MockTraycerCli();
+    bridgeCli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    const rpcCli = new MockTraycerCli();
+    rpcCli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    // Backs the probe's client (and the eventual RPC editor) - independent of
+    // the local bridge's own MockTraycerCli, since a "host-outdated" host
+    // reads/writes through the bridge until it heals.
+    const fixture = buildConfigHostFixture({
+      hostId,
+      isLocalMachine: true,
+      cli: rpcCli,
+    });
+    // Handshaked WITHOUT the shell family - the fleet-update window.
+    recordNegotiatedHostMethods(hostId, ["host.status"]);
+
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: true,
+        connectable: true,
+        version: "1.5.0",
+      }),
+      hostId,
+      status: "ready",
+      client: fixture.client,
+    };
+    hostBindingMock.current = { hostClient: fixture.client };
+
+    const runnerHost: IRunnerHost = new MockRunnerHost({
+      signInUrl: "https://example.invalid/signin",
+      authnBaseUrl: "https://example.invalid",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: bridgeCli,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <ShellSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    const notice = await screen.findByTestId("local-config-fallback-notice");
+    expect(notice.getAttribute("data-reason")).toBe("host-outdated");
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+
+    // Non-vacuity discriminator: the probe dispatched over the scoped client
+    // even though the panel itself is reading/writing through the bridge.
+    await waitFor(() => {
+      expect(fixture.hostStatusCalls()).toBeGreaterThan(0);
+    });
+    const callsWhileParked = fixture.hostStatusCalls();
+
+    // Bump ONLY the incarnation, manifest still unhealed: this is the leg
+    // `cacheKeyIdentity` protects - a re-dial driven purely by the host's
+    // version changing, still while parked.
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: true,
+        connectable: true,
+        version: "1.5.1",
+      }),
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <ShellSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(fixture.hostStatusCalls()).toBeGreaterThan(callsWhileParked);
+    });
+
+    recordNegotiatedHostMethods(hostId, ALL_CONFIG_RPC_METHODS);
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: true,
+        connectable: true,
+        version: "1.6.0",
+      }),
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <ShellSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("local-config-fallback-notice")).toBeNull();
+    });
+    expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
+    expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
   });
 });

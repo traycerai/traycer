@@ -46,11 +46,27 @@ vi.mock("sonner", () => ({
 // This suite is about the SHARED update lane across two surfaces, not about
 // host scoping, so it mocks at the scope boundary rather than standing up a
 // host runtime for the Settings page's machine header.
+//
+// THIS COMPUTER'S HOST, NOT DIALABLE — the recovery console's state, which is
+// where the surface under test lives. The shared mutation lane is the LOCAL
+// controller's (`applyStaged` / `HostUpdateRegion`), and the Overview only
+// renders that console for a local host with no process to answer for itself.
+// A reachable host gets the RPC page instead, whose update affordances go
+// through `host.update.*` and are a different mechanism with a different lane.
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const { hostScopeFixture } =
+  const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () => hostScopeFixture({ client: null }),
+    useHostScope: () =>
+      hostScopeFixture({
+        host: hostScopeOptionFixture({
+          hostId: "host-a",
+          isLocalMachine: true,
+          connectable: false,
+        }),
+        status: "unreachable",
+        client: null,
+      }),
   };
 });
 

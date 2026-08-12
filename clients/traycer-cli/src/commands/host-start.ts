@@ -28,6 +28,7 @@ import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { withHostNodeOptions } from "../service/host-node-options";
 import {
+  RESTART_EXIT_CODE,
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
@@ -175,6 +176,25 @@ export const RELAUNCH_BACKOFF_MS: readonly number[] = [
  * would then relaunch forever. Only real uptime counts.
  */
 export const SUSTAINED_UPTIME_RESET_MS = 300_000;
+
+/**
+ * How briefly a child must have run for its REQUESTED restart to count as
+ * pathological rather than operator intent.
+ *
+ * An intentional restart deliberately skips the crash budget and the backoff -
+ * it is a hand-off, not a failure - but "skips the budget" cannot mean
+ * "unbounded". A host whose restart handshake fires during startup (a config
+ * it rejects, a migration that re-triggers `host.restart`) would otherwise
+ * spawn, exit 87, and respawn with no delay for the life of the supervisor.
+ *
+ * Deliberately far shorter than `SUSTAINED_UPTIME_RESET_MS`: a real operator
+ * restart follows a host that at least finished starting, so this floor bounds
+ * the pathological case without spending an allowance on ordinary use.
+ */
+export const IMMEDIATE_RESTART_FLOOR_MS = 10_000;
+
+/** How many restarts inside {@link IMMEDIATE_RESTART_FLOOR_MS} end the loop. */
+export const MAX_IMMEDIATE_RESTARTS = 5;
 
 /**
  * How long a child gets to honour a raced deliberate SIGTERM before the
@@ -677,6 +697,9 @@ export async function runHostStart(
   // should exist at all. Everything below is per-attempt.
   let attemptNumber = 0;
   let consecutiveRelaunches = 0;
+  // Separate from the crash budget on purpose: a requested restart is not a
+  // crash and must not consume crash allowance, but it still needs a bound.
+  let consecutiveImmediateRestarts = 0;
   let shuttingDown = false;
   let currentChild: ChildProcess | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
@@ -1494,6 +1517,88 @@ export async function runHostStart(
     // relaunch for the life of the machine.
     await deps.closeLogFd(logFd);
 
+    // `host.restart` is a deliberate process hand-off, not a crash. Its
+    // non-zero code tells outer service supervisors to relaunch if this CLI
+    // supervisor itself dies, while THIS supervisor replaces its child
+    // immediately. Do this before terminal-marker persistence: crash markers
+    // are diagnostic evidence and recording one here would make the doctor's
+    // recent-crash signal lie about an operator-requested restart.
+    if (ending.signal === null && ending.code === RESTART_EXIT_CODE) {
+      // This is not crash persistence, but it is still the end of an attempt.
+      // In particular, an adapter/grandchild can retain the old stderr pipe
+      // after the host exits. Carrying its data listener into the replacement
+      // would bleed old bytes into the new attempt's tee and retain one stream
+      // graph per requested restart. Finalize the bounded diagnostic resources
+      // and one-shot probe without writing crash evidence before relaunching.
+      await finalizeIntentionalRestartAttempt({
+        code: ending.code,
+        signal: ending.signal,
+        deps,
+        logger,
+        environment: opts.environment,
+        probeObservation,
+        stderrTee,
+        stderrEnded,
+      });
+      disposeAttemptStderr(child.stderr);
+      // Same forgiveness rule the abnormal path applies below, and it has to be
+      // applied HERE too because this branch never reaches it. A host that
+      // consumed part of the budget, then ran past `SUSTAINED_UPTIME_RESET_MS`,
+      // then was restarted on purpose would otherwise hand its replacement the
+      // stale crash history that the sustained run had already earned off - so
+      // an operator-requested restart would silently shorten the next real
+      // crash allowance. Only real uptime forgives; the restart itself is not a
+      // crash and neither consumes nor forgives anything on its own.
+      const restartRanForMs = childEndedAtMs - childSpawnedAtMs;
+      if (restartRanForMs >= SUSTAINED_UPTIME_RESET_MS) {
+        consecutiveRelaunches = 0;
+      }
+      // The bound this branch would otherwise lack. Exiting with the child's
+      // own 87 hands the decision to the service supervisor, which relaunches
+      // under ITS throttle - the same shape as the crash budget exiting with
+      // the child's code, and the only layer here that can space the attempts.
+      if (restartRanForMs >= IMMEDIATE_RESTART_FLOOR_MS) {
+        consecutiveImmediateRestarts = 0;
+      } else {
+        consecutiveImmediateRestarts += 1;
+        if (consecutiveImmediateRestarts >= MAX_IMMEDIATE_RESTARTS) {
+          logger.error(
+            "Host child requested restarts faster than it can start",
+            {
+              environment: opts.environment,
+              attemptId,
+              consecutiveImmediateRestarts,
+            },
+            null,
+          );
+          return exitSupervisor(RESTART_EXIT_CODE);
+        }
+      }
+      // SHUTDOWN WINS over a requested restart, and this check has to be here
+      // because the `continue` below never reaches `decideRelaunch`, which is
+      // the only other place that consults the latch.
+      //
+      // The race is narrow but its consequence is not: a SIGTERM (or a raced
+      // stop intent) can land while the child is already exiting 87 for a
+      // `host.restart` it accepted moments earlier. Relaunching then starts a
+      // replacement that the one-shot signal has already been spent on, so an
+      // explicit stop leaves the service running.
+      if (shuttingDown) {
+        logger.info("Ignoring a requested restart during shutdown", {
+          environment: opts.environment,
+          exitCode: RESTART_EXIT_CODE,
+          attemptId,
+        });
+        return exitSupervisor(0);
+      }
+      logger.info("Host child requested an intentional restart", {
+        environment: opts.environment,
+        exitCode: RESTART_EXIT_CODE,
+        attemptId,
+      });
+      continue;
+    }
+
     const outcome = await persistChildExit({
       code: ending.code,
       signal: ending.signal,
@@ -1522,15 +1627,7 @@ export async function runHostStart(
     //
     // Best-effort and deliberately last: the marker and the capture have both
     // already been written from this stream by the time we get here.
-    const attemptStderr = child.stderr;
-    if (attemptStderr !== null && attemptStderr !== undefined) {
-      attemptStderr.removeAllListeners("data");
-      try {
-        attemptStderr.destroy();
-      } catch {
-        // A stream that is already closed must not end the supervisor.
-      }
-    }
+    disposeAttemptStderr(child.stderr);
 
     // A clean exit is the host standing down on purpose - never relaunch it.
     // This is `KeepAlive{SuccessfulExit: false}` and `Restart=on-failure`
@@ -1546,6 +1643,14 @@ export async function runHostStart(
     const ranForMs = childEndedAtMs - childSpawnedAtMs;
     if (ranForMs >= SUSTAINED_UPTIME_RESET_MS) {
       consecutiveRelaunches = 0;
+      // The immediate-restart budget is forgiven by the same evidence, and by
+      // the same argument: a run that lasted this long PROVED the restart
+      // storm ended, whatever it eventually died of. Resetting only the crash
+      // counter here let a stale `consecutiveImmediateRestarts` survive a
+      // healthy run and then terminate the supervisor on the FIRST short
+      // requested restart afterwards - punishing a new episode with an old
+      // one's history.
+      consecutiveImmediateRestarts = 0;
     }
 
     const decision = await decideRelaunch({
@@ -1759,6 +1864,106 @@ async function persistAsyncChildSpawnFailure(input: {
   );
 }
 
+/**
+ * Finalizes the non-crash state of an intentional host replacement.
+ *
+ * Exit 87 deliberately skips crash classification and crash markers, but it
+ * cannot skip attempt cleanup: the supervisor keeps running and may otherwise
+ * retain a grandchild-held stderr pipe and an unresolved first-attempt probe
+ * across every requested restart. The stderr waits are bounded by the same
+ * limits as the crash path, while the probe's framed read owns its own 3s
+ * bound. A restart therefore remains intentional without leaking per-attempt
+ * resources or abandoning an attested probe verdict.
+ */
+async function finalizeIntentionalRestartAttempt(input: {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly probeObservation: Promise<ProbeObservation> | null;
+  readonly stderrTee: StderrTee;
+  readonly stderrEnded: Promise<void>;
+}): Promise<void> {
+  await finalizeAttemptProbe({
+    code: input.code,
+    signal: input.signal,
+    deps: input.deps,
+    logger: input.logger,
+    environment: input.environment,
+    probeObservation: input.probeObservation,
+  });
+  await flushAttemptStderr({
+    stderrEnded: input.stderrEnded,
+    stderrTee: input.stderrTee,
+  });
+}
+
+async function finalizeAttemptProbe(input: {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly probeObservation: Promise<ProbeObservation> | null;
+}): Promise<void> {
+  if (input.probeObservation === null) return;
+  try {
+    const observation = await input.probeObservation;
+    if (
+      observation.marker !== null &&
+      observation.marker.outcome.kind === "awaiting-readiness"
+    ) {
+      await input.deps.writeProbeMarker(input.environment, {
+        ...observation.marker,
+        outcome: {
+          kind: "terminal",
+          reason:
+            input.signal === null
+              ? `child-exit-${input.code ?? 0}`
+              : `child-signal-${input.signal}`,
+        },
+      });
+    }
+  } catch (error) {
+    input.logger.warn("Host probe marker finalization failed", {
+      environment: input.environment,
+      errorName: errorFromUnknown(error).name,
+      errorMessage: errorFromUnknown(error).message,
+    });
+  }
+}
+
+/**
+ * Wait for the child pipe and its path-addressed tee exactly once per attempt.
+ * Both calls are bounded: an inherited stderr descriptor must not make a
+ * restart (or a crash exit) wait forever.
+ */
+async function flushAttemptStderr(input: {
+  readonly stderrEnded: Promise<void>;
+  readonly stderrTee: StderrTee;
+}): Promise<void> {
+  await withDeadline(input.stderrEnded, STDERR_END_WAIT_TIMEOUT_MS);
+  await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
+}
+
+/**
+ * Detaches the tee callback before destroying the attempt's pipe. Other
+ * listeners settle the already-awaited end wait; removing `data` is what
+ * releases this attempt's tee/capture from a grandchild-held pipe.
+ */
+function disposeAttemptStderr(
+  attemptStderr: Readable | null | undefined,
+): void {
+  if (attemptStderr === null || attemptStderr === undefined) return;
+  attemptStderr.removeAllListeners("data");
+  try {
+    attemptStderr.destroy();
+  } catch {
+    // A stream that is already closed must not end the supervisor.
+  }
+}
+
 async function persistChildExit(input: {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -1775,32 +1980,14 @@ async function persistChildExit(input: {
   readonly crashReportsDirPath: string;
   readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<ChildExitOutcome> {
-  if (input.probeObservation !== null) {
-    try {
-      const observation = await input.probeObservation;
-      if (
-        observation.marker !== null &&
-        observation.marker.outcome.kind === "awaiting-readiness"
-      ) {
-        await input.deps.writeProbeMarker(input.environment, {
-          ...observation.marker,
-          outcome: {
-            kind: "terminal",
-            reason:
-              input.signal === null
-                ? `child-exit-${input.code ?? 0}`
-                : `child-signal-${input.signal}`,
-          },
-        });
-      }
-    } catch (error) {
-      input.logger.warn("Host probe marker finalization failed", {
-        environment: input.environment,
-        errorName: errorFromUnknown(error).name,
-        errorMessage: errorFromUnknown(error).message,
-      });
-    }
-  }
+  await finalizeAttemptProbe({
+    code: input.code,
+    signal: input.signal,
+    deps: input.deps,
+    logger: input.logger,
+    environment: input.environment,
+    probeObservation: input.probeObservation,
+  });
 
   const {
     code,
@@ -1812,15 +1999,10 @@ async function persistChildExit(input: {
     bundle,
     deps,
   } = input;
-  // TWO waits, and they are not interchangeable. First: let the stderr pipe
-  // reach `end` - `exit` does not imply drained pipes, so without this the
-  // capture can be empty precisely when the child died hard. Second: drain
-  // the tee's queued `appendFile` writes, which `process.exit()` below would
-  // otherwise abandon. Both are bounded, because a grandchild holding the
-  // inherited stderr fd can keep the stream open indefinitely and a
-  // diagnostics path must never hang the supervisor's exit.
-  await withDeadline(input.stderrEnded, STDERR_END_WAIT_TIMEOUT_MS);
-  await input.stderrTee.flush(STDERR_FLUSH_TIMEOUT_MS);
+  await flushAttemptStderr({
+    stderrEnded: input.stderrEnded,
+    stderrTee: input.stderrTee,
+  });
   // `process.exit()` is synchronous. Terminal markers are therefore written
   // synchronously before exit rather than scheduling an append that the
   // process could abandon. Desktop uses these as fail-now readiness evidence.

@@ -6,6 +6,11 @@ export const authMutationKeys = {
   // different rows never share a pending state.
   updateHostVersionPolicy: (hostId: string) =>
     ["auth", "updateHostVersionPolicy", hostId] as const,
+  // "Remove from account" — per host for the same reason as the policy write
+  // above, and never named "deregister" outside the transport layer (the GUI
+  // uses that word for OS-service deregistration).
+  deregisterHostFromAccount: (hostId: string) =>
+    ["auth", "deregisterHostFromAccount", hostId] as const,
   revokeUserSession: (familyId: string) =>
     ["auth", "revokeUserSession", familyId] as const,
   revokeAllSessions: () => ["auth", "revokeAllSessions"] as const,
