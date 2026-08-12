@@ -278,7 +278,11 @@ export function useGithubMentionSections(
     section: openSection ?? "pull-requests",
     debouncedQuery,
     filter,
-    enabled: active && openSection !== null,
+    // `supported` belongs here as much as on the catalog reads: it is reactive
+    // to `hostId`, so a host swap - or an in-place downgrade that re-handshakes
+    // - can negotiate the method away while this section stays open. Without
+    // it, typing would keep calling a method the current host never declared.
+    enabled: supported && active && openSection !== null,
   });
 
   // The section's list: cached rows first (identity preserved), remote hits
@@ -321,10 +325,13 @@ export function useGithubMentionSections(
   const openRows = useHeldRowsDuringSearch({
     rows: localRows,
     searching: search.isSearching,
-    // Keyed so the hold is only ever a FILTER swap. A new query or a different
-    // section is a different question, and answering it with the previous
-    // question's rows would be the lie this exists to avoid.
-    key: `${openSection ?? ""}\x1f${query}`,
+    // Keyed so the hold is only ever a FILTER swap. A new query, a different
+    // section, or a different SCOPE is a different question, and answering it
+    // with the previous question's rows would be the lie this exists to avoid.
+    // The scope term is the load-bearing one: holding across a host, epic or
+    // roots change would offer rows the new scope cannot resolve, and the user
+    // could commit one as a mention.
+    key: `${scopeKey}\x1f${openSection ?? ""}\x1f${query}`,
   });
 
   // Root rows are cache-only and unfiltered: the funnel is the SECTION's

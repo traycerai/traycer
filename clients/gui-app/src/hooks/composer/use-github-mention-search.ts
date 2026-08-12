@@ -90,10 +90,17 @@ export function useGithubMentionSearch(
     },
   });
 
+  // Every field is gated on `wanted`, not just the rows. The observer is
+  // disabled - not discarded - when the query is cleared or the default filter
+  // comes back, and `keepPreviousData` keeps its last response readable. Left
+  // ungated, a `gh-unavailable` status or a rate-limit notice from a search
+  // that is no longer running would keep its banner on the section chrome with
+  // nothing behind it.
+  const answer = wanted ? searchQuery.data : undefined;
   return {
-    rows: wanted ? (searchQuery.data?.rows ?? EMPTY_ROWS) : EMPTY_ROWS,
-    sourceStatus: searchQuery.data?.sourceStatus ?? null,
-    notice: searchQuery.data?.notice ?? null,
+    rows: answer?.rows ?? EMPTY_ROWS,
+    sourceStatus: answer?.sourceStatus ?? null,
+    notice: answer?.notice ?? null,
     isSearching: wanted && searchQuery.isFetching,
   };
 }

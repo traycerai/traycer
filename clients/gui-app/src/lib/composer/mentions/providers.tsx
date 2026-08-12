@@ -993,12 +993,13 @@ class GithubMentionProvider extends ComposerMentionProvider {
   private referenceResolveEntries(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
-    // Same gate as `rootEntry`. Without it a folderless composer - where
-    // neither category is offered anywhere - still gets two rows for a
-    // reference query, each drilling into a section whose catalog query is
-    // disabled: a permanent "Not yet fetched" and a refresh button that can
-    // never fetch.
-    if (context.roots.length === 0) return EMPTY_MENU_ENTRIES;
+    // The same gate `rootEntry` applies, called rather than restated: an
+    // unsupported host and a folderless composer both leave these rows
+    // drilling into a section whose catalog query is disabled - a permanent
+    // "Not yet fetched" beside a refresh button that can never fetch. The sole
+    // caller already returns early when the provider is unavailable, so this
+    // is the contract holding for the next one.
+    if (!this.available(context)) return EMPTY_MENU_ENTRIES;
     const reference = parseGithubReferenceQuery(context.query);
     if (reference === null) return EMPTY_MENU_ENTRIES;
     // A pasted URL already says which section it belongs to; offering to
@@ -1031,6 +1032,12 @@ function githubRowEntry(
     label: row.title,
     detail: githubMentionRowTrailing(row, singleRepositoryScope, now),
     description: githubMentionReference(row),
+    // Null even though these rows DO have a last-activity clock: their age is
+    // already composed into `detail` alongside the repository (`acme/web ·
+    // 2h`), because the two only read correctly together. Filling the separate
+    // time slot as well would render the age twice on the same row.
+    updatedAt: null,
+    archived: false,
     icon: githubMentionRowIcon(row),
     action: {
       kind: "complete",
@@ -1040,7 +1047,7 @@ function githubRowEntry(
   };
 }
 
-/** True while the picker is inside either GitHub section. */
+/** The GitHub section this step belongs to, or `null` for any other step. */
 export function githubMentionSectionForStep(
   step: MentionFlowStep,
 ): GithubMentionSection | null {

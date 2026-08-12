@@ -611,9 +611,12 @@ describe("GitHub mention attachments across an HTML round-trip", () => {
   // The pasted chip used to be dropped entirely here: no attachment, a blank
   // node view, and silent omission from the submitted context.
   it("builds the same attachment when issueNumber came back from HTML as a string", () => {
-    expect(buildAttachmentsFromJSONContent(githubDoc("123"))).toEqual(
-      buildAttachmentsFromJSONContent(githubDoc(123)),
-    );
+    // Pinned non-empty first: the equality alone would hold just as well if
+    // BOTH forms went back to producing nothing, which is the exact regression
+    // this test exists to catch.
+    const fromString = buildAttachmentsFromJSONContent(githubDoc("123"));
+    expect(fromString).toHaveLength(1);
+    expect(fromString).toEqual(buildAttachmentsFromJSONContent(githubDoc(123)));
   });
 
   it.each([["12abc"], ["1.5"], [""], ["-4"]])(

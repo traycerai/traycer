@@ -127,6 +127,23 @@ function navigateEntry(entry: MentionMenuEntry) {
   return entry.action.step;
 }
 
+/**
+ * Resolve a category by its label rather than its index. Root ordering is a
+ * separate assertion in this file; a positional lookup here means inserting a
+ * category silently re-points these tests at a different step instead of
+ * failing where the ordering actually changed.
+ */
+function entryByLabel(
+  entries: ReadonlyArray<MentionMenuEntry>,
+  label: string,
+): MentionMenuEntry {
+  const found = entries.find((entry) => entry.label === label);
+  if (found === undefined) {
+    throw new Error(`no entry labelled ${label}`);
+  }
+  return found;
+}
+
 function completeEntry(entry: MentionMenuEntry) {
   if (entry.action.kind !== "complete") {
     throw new Error(`expected complete entry: ${entry.label}`);
@@ -195,12 +212,24 @@ describe("mention provider registry", () => {
       },
     });
 
-    expect(
-      labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, unsupported)),
-    ).not.toContain("Resolve in Pull requests...");
-    expect(
-      labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, unsupported)),
-    ).not.toContain("Resolve in Issues...");
+    // Positive control first. Two absence assertions on their own stay green
+    // if the labels are renamed, or if `entries` stops returning anything at
+    // all for this query - so pin that a SUPPORTED host does produce exactly
+    // the rows whose absence is the claim below.
+    const supportedLabels = labels(
+      mentionProviderRegistry.entries(
+        ROOT_MENTION_STEP,
+        context({ query: "#123" }),
+      ),
+    );
+    expect(supportedLabels).toContain("Resolve in Pull requests...");
+    expect(supportedLabels).toContain("Resolve in Issues...");
+
+    const unsupportedLabels = labels(
+      mentionProviderRegistry.entries(ROOT_MENTION_STEP, unsupported),
+    );
+    expect(unsupportedLabels).not.toContain("Resolve in Pull requests...");
+    expect(unsupportedLabels).not.toContain("Resolve in Issues...");
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {
@@ -240,7 +269,7 @@ describe("mention provider registry", () => {
     ]);
 
     const agentRows = mentionProviderRegistry.entries(
-      navigateEntry(entries[7]),
+      navigateEntry(entryByLabel(entries, "Agents")),
       context({ currentEpicId: "epic-1", agentEntries }),
     );
 
@@ -252,9 +281,11 @@ describe("mention provider registry", () => {
       "Kickoff chat",
       "Codex run",
     ]);
-    expect(mentionProviderRegistry.menuCopy(navigateEntry(entries[7]))).toEqual(
-      { header: "Agents", empty: "No agents available" },
-    );
+    expect(
+      mentionProviderRegistry.menuCopy(
+        navigateEntry(entryByLabel(entries, "Agents")),
+      ),
+    ).toEqual({ header: "Agents", empty: "No agents available" });
 
     expect(completeEntry(agentRows[2])).toMatchObject({
       contextType: "chat",
@@ -290,7 +321,7 @@ describe("mention provider registry", () => {
       ROOT_MENTION_STEP,
       context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
     );
-    const terminalsStep = navigateEntry(entries[8]);
+    const terminalsStep = navigateEntry(entryByLabel(entries, "Terminals"));
 
     const rows = mentionProviderRegistry.entries(
       terminalsStep,

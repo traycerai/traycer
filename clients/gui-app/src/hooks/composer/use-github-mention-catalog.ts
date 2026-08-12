@@ -209,6 +209,11 @@ export function useGithubMentionCatalog(
       autoFollowedRef.current = null;
       return;
     }
+    // `keepPreviousData` hands over the PREVIOUS scope's response while the
+    // new scope's cache-only read is in flight. Following its `stale` flag
+    // would spend a GitHub request - and rate-limit budget - deciding for a
+    // scope this answer was never about, before that scope has said a word.
+    if (catalogQuery.isPlaceholderData) return;
     const data = catalogQuery.data;
     if (data === undefined || !data.stale) return;
     if (autoFollowedRef.current === followKey) return;
@@ -226,6 +231,7 @@ export function useGithubMentionCatalog(
   }, [
     allowStaleFollowUp,
     catalogQuery.data,
+    catalogQuery.isPlaceholderData,
     enabled,
     followKey,
     mutateAsync,
@@ -250,7 +256,15 @@ export function useGithubMentionCatalog(
   }, [mutateAsync, scope.epicId, scope.workspacePaths, section]);
 
   return {
-    ...catalogFacts(catalogQuery.data),
+    // A placeholder response belongs to the PREVIOUS scope, and its rows are
+    // selectable: left exposed, a user can commit a mention naming a pull
+    // request from the host, epic or roots they just left. Reported as the
+    // unanswered case instead - which is what this scope has actually said so
+    // far - so every derived fact (`scopeResolved`, the repositories, the
+    // notice) describes one scope rather than two.
+    ...catalogFacts(
+      catalogQuery.isPlaceholderData ? undefined : catalogQuery.data,
+    ),
     isPlaceholder: catalogQuery.isPlaceholderData,
     isLoading:
       enabled && catalogQuery.data === undefined && catalogQuery.isLoading,

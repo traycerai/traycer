@@ -11,7 +11,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GithubMentionFilterPopover } from "../github-mention-filter-popover";
-import { useGithubMentionFilterStore } from "@/stores/composer/github-mention-filter-store";
+import {
+  selectGithubMentionFilter,
+  useGithubMentionFilterStore,
+} from "@/stores/composer/github-mention-filter-store";
 
 /**
  * What this suite proves, stated precisely: the popover renders its radio
@@ -271,10 +274,14 @@ describe("GithubMentionFilterPopover", () => {
     await user.click(screen.getByRole("button", { name: "Filter" }));
     await user.click(await screen.findByRole("radio", { name: "Merged" }));
 
-    const stored =
-      useGithubMentionFilterStore.getState().filtersByKey[
-        "epic-1\x1fpull-requests"
-      ];
+    // Read back through the selector rather than reproducing the store's
+    // internal key format: a separator change would otherwise make this
+    // `undefined` and report the popover as broken.
+    const stored = selectGithubMentionFilter(
+      useGithubMentionFilterStore.getState(),
+      "epic-1",
+      "pull-requests",
+    );
     expect(stored).toEqual({
       state: "merged",
       involvement: "everyone",

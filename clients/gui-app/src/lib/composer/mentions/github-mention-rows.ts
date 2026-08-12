@@ -107,6 +107,29 @@ export function asIssueMentionFilter(
 }
 
 /**
+ * The section's coercion, chosen by section. The dispatch itself is the point:
+ * a filter is only ever valid FOR a section, so any code holding one that was
+ * not built for the section it is about to qualify goes through here.
+ */
+export function withGithubMentionSectionShape(
+  section: GithubMentionSection,
+  filter: GithubMentionFilter,
+): GithubMentionFilter {
+  const coerced =
+    section === "pull-requests"
+      ? asPullRequestMentionFilter(filter)
+      : asIssueMentionFilter(filter);
+  // Identity-preserving when there was nothing to coerce, which is every
+  // ordinary read. A store selector's result is compared by identity to decide
+  // whether to re-render, so handing back a fresh-but-equal object on each call
+  // is not a wasted allocation - it is an unbroken render loop.
+  return coerced.state === filter.state &&
+    coerced.involvement === filter.involvement
+    ? filter
+    : coerced;
+}
+
+/**
  * Replaces a repository selection. Written as an explicit per-section rebuild
  * for the same reason as the coercions above - spreading a union member does
  * not narrow, and the two arms must stay distinguishable.
@@ -477,7 +500,12 @@ function referenceMatchesRow(
   if (reference.kind === "number") return true;
   if (reference.owner.toLowerCase() !== row.owner.toLowerCase()) return false;
   if (reference.repo.toLowerCase() !== row.repo.toLowerCase()) return false;
-  if (reference.kind === "url") return reference.githubHost === row.githubHost;
+  // Case-folded like `owner` and `repo` above: hostnames are case-insensitive,
+  // so a pasted `https://GitHub.com/org/repo/pull/1` must still match the row
+  // it names rather than losing its exact-reference rank to text scoring.
+  if (reference.kind === "url") {
+    return reference.githubHost.toLowerCase() === row.githubHost.toLowerCase();
+  }
   return true;
 }
 

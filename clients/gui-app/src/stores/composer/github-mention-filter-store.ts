@@ -10,6 +10,7 @@ import {
   defaultGithubMentionFilter,
   isDefaultGithubMentionFilter,
   withGithubMentionRepository,
+  withGithubMentionSectionShape,
   type GithubMentionFilter,
 } from "@/lib/composer/mentions/github-mention-rows";
 import { basePersistOptions, githubMentionFiltersKey } from "@/lib/persist";
@@ -116,7 +117,13 @@ export function selectGithubMentionFilter(
   if (!Object.hasOwn(state.filtersByKey, key)) {
     return defaultGithubMentionFilter(section);
   }
-  return state.filtersByKey[key];
+  // Coerced on the way out, not trusted as stored. This bucket is persisted,
+  // so its contents outlive the build that wrote them: a `state` or
+  // `involvement` value that a later version renames or drops would otherwise
+  // reach `filterGithubMentionRows` as an unrecognized qualifier and quietly
+  // narrow the list to nothing. The coercions rebuild per section and carry
+  // `repository` across by reference, so a live selection survives untouched.
+  return withGithubMentionSectionShape(section, state.filtersByKey[key]);
 }
 
 /**

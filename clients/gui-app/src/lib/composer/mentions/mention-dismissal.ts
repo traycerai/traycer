@@ -20,8 +20,9 @@ export function isDismissedMentionQuery(
    * True while the picker is inside a PR/Issue section.
    *
    * The clause-punctuation rules are switched off there, and this is not a
-   * nicety: PR and issue titles are FULL of commas and colons -
-   * `fix(relay): stop the busy-loop, again` - so a user typing a real title
+   * nicety: PR and issue titles are FULL of the two characters this checks,
+   * commas and semicolons - `fix(relay): stop the busy-loop, again` - so a
+   * user typing a real title
    * would have the menu closed out from under them mid-word. Everything a
    * section title cannot contain still dismisses: a leading space, and a
    * double space. Escape always does.

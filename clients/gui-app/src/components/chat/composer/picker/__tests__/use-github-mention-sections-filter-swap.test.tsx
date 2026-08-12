@@ -152,6 +152,24 @@ function renderSections(query: string) {
   );
 }
 
+/** Same hook, but with the mention scope as the varying prop. */
+function renderSectionsForRoots(mentionRoots: ReadonlyArray<string>) {
+  return renderHook(
+    (props: { readonly mentionRoots: ReadonlyArray<string> }) =>
+      useGithubMentionSections({
+        client: {} as HostClient<HostRpcRegistry>,
+        active: true,
+        step: PR_STEP,
+        currentEpicId: "epic-1",
+        mentionRoots: props.mentionRoots,
+        query: "",
+        debouncedQuery: "",
+        limit: 20,
+      }),
+    { initialProps: { mentionRoots } },
+  );
+}
+
 function selectMergedState(): void {
   useGithubMentionFilterStore.getState().setFilter({
     epicId: "epic-1",
@@ -237,6 +255,23 @@ describe("useGithubMentionSections filter swap", () => {
     // holding here would show rows that visibly do not match what was typed.
     mocks.search.isSearching = true;
     rerender({ query: "nomatch" });
+
+    expect(result.current.context.pullRequests.rows).toEqual([]);
+  });
+
+  it("does not hold rows across a mention-scope change", () => {
+    mocks.pullRequests.rows = [pullRequest(1, "open")];
+
+    const { result, rerender } = renderSectionsForRoots(["/repo"]);
+    expect(prNumbers(result.current.context.pullRequests.rows)).toEqual([1]);
+
+    // The composer's roots changed, so these rows belong to a scope the user
+    // has left. Holding them through the replacement search is worse than a
+    // brief empty list: every held row is selectable, and committing one
+    // inserts a mention naming a repository this scope cannot resolve.
+    mocks.pullRequests.rows = [];
+    mocks.search.isSearching = true;
+    rerender({ mentionRoots: ["/other-repo"] });
 
     expect(result.current.context.pullRequests.rows).toEqual([]);
   });

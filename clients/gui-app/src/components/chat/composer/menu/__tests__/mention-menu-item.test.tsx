@@ -13,6 +13,7 @@ function entry(fields: {
 }): MentionMenuEntry {
   return {
     id: "chat:epic-1:c1",
+    labelPrefix: null,
     label: "Planning agent",
     detail: fields.detail,
     description: "",

@@ -121,20 +121,19 @@ describe("GitHub mention serialization", () => {
         issueNumber: number,
         url: `https://github.com/acme/widgets/${kind}/${number}`,
       };
-      expect(
-        jsonContentToMarkdown(mentionDoc(attrs), {
-          mentionFormat: "llm",
+      // Both markers, in both formats. Asserting only the one the entry cannot
+      // produce is the vacuous half of this check: `pr:42` maps to
+      // `{ exists: false }`, which only ever emits NOT FOUND, so testing it for
+      // DELETED proves nothing about the branch that renders it.
+      for (const mentionFormat of ["llm", "user"] as const) {
+        const markdown = jsonContentToMarkdown(mentionDoc(attrs), {
+          mentionFormat,
           platform: "POSIX",
           validationResults,
-        }),
-      ).not.toContain("NOT FOUND");
-      expect(
-        jsonContentToMarkdown(mentionDoc(attrs), {
-          mentionFormat: "user",
-          platform: "POSIX",
-          validationResults,
-        }),
-      ).not.toContain("DELETED");
+        });
+        expect(markdown).not.toContain("NOT FOUND");
+        expect(markdown).not.toContain("DELETED");
+      }
     }
   });
 });

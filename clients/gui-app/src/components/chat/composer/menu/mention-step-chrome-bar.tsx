@@ -12,7 +12,6 @@ import type {
   MentionStepChromeRefresh,
 } from "@/lib/composer/mentions";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import { cn } from "@/lib/utils";
 
 import { GithubMentionFilterPopover } from "./github-mention-filter-popover";
 
@@ -130,9 +129,15 @@ function RefreshButton(props: {
           }}
           onClick={spinner.trigger}
         >
-          <RefreshCwIcon
-            className={cn("size-3.5", spinner.refreshing && "animate-spin")}
-          />
+          {spinner.refreshing ? (
+            <AgentSpinningDots
+              testId={undefined}
+              variant="orbit"
+              className="text-muted-foreground/70"
+            />
+          ) : (
+            <RefreshCwIcon className="size-3.5" />
+          )}
         </Button>
       </span>
     </TooltipWrapper>

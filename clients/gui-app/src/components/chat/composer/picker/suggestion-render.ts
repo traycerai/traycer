@@ -160,9 +160,16 @@ export function createComposerSuggestionRender<
         latestProps = props;
         // A pasted "@ ..." or "@x, y" is already prose; never open for it,
         // and end the plugin session so a later `@` elsewhere can start over.
+        //
+        // `false`, not `inGithubMentionSection()`: a new occurrence always
+        // begins at the root step, but the store is not there yet. Tiptap
+        // fires this before the departing session's `onExit`, so the store can
+        // still hold that session's drilled PR/Issue step - and judging a
+        // fresh `@` by the section's punctuation rules would let `@x, y` open
+        // the menu instead of reading as prose.
         if (
           args.kind === "mention" &&
-          isDismissedMentionQuery(props.query, inGithubMentionSection())
+          isDismissedMentionQuery(props.query, false)
         ) {
           dismissed = true;
           exitPluginSession(props.editor);

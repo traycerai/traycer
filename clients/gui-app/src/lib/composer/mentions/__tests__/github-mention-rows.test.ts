@@ -15,6 +15,7 @@ import {
   mergeGithubMentionRows,
   parseGithubReferenceQuery,
   rankGithubMentionRows,
+  withGithubMentionSectionShape,
 } from "../github-mention-rows";
 
 function pullRequest(
@@ -391,6 +392,21 @@ describe("githubMentionMatchScore", () => {
     const row = pullRequest({ number: 812, title: "Magic link" });
     expect(githubMentionMatchScore(row, "#812")).toBe(0);
   });
+
+  it("matches a pasted URL whose host differs only in case", () => {
+    // Hostnames are case-insensitive, and `owner`/`repo` are already compared
+    // case-folded. A host compared exactly would drop this URL out of the
+    // exact-reference rank and leave it to score as ordinary text - so the row
+    // the user pasted the link for stops sitting first.
+    const row = pullRequest({ number: 4917, title: "Stop the busy-loop" });
+
+    expect(
+      githubMentionMatchScore(
+        row,
+        "https://GitHub.com/traycerai/traycer/pull/4917",
+      ),
+    ).toBe(0);
+  });
 });
 
 describe("filterGithubMentionRows", () => {
@@ -651,6 +667,36 @@ describe("filter coercion", () => {
         repository: null,
       }),
     ).toEqual(DEFAULT_ISSUE_MENTION_FILTER);
+  });
+
+  it("returns the SAME filter object when there is nothing to coerce", () => {
+    // Identity, not equality. This runs inside a store selector, whose result
+    // is compared by reference to decide whether to re-render: a fresh-but-
+    // equal object on every read is an unbroken render loop, not a wasted
+    // allocation. (It was exactly that, once.)
+    const valid = {
+      state: "merged",
+      involvement: "review-requested",
+      repository: REPOSITORY,
+    } as const;
+
+    expect(withGithubMentionSectionShape("pull-requests", valid)).toBe(valid);
+  });
+
+  it("rebuilds only when a stored value does not belong to the section", () => {
+    const crossSection = {
+      state: "merged",
+      involvement: "review-requested",
+      repository: REPOSITORY,
+    } as const;
+
+    const coerced = withGithubMentionSectionShape("issues", crossSection);
+
+    expect(coerced).not.toBe(crossSection);
+    expect(coerced.state).toBe(DEFAULT_ISSUE_MENTION_FILTER.state);
+    expect(coerced.involvement).toBe(DEFAULT_ISSUE_MENTION_FILTER.involvement);
+    // The selection survives the rebuild - it is section-independent.
+    expect(coerced.repository).toBe(REPOSITORY);
   });
 
   it("falls back to the default when the stored state belongs to the other section", () => {

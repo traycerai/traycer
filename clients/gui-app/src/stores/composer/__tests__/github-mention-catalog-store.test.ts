@@ -99,23 +99,6 @@ describe("github-mention-catalog-store repositories", () => {
     const persisted = selectGithubMentionScopeRepositories(state, SCOPE);
     expect(persisted).toEqual([ONE_REPO]);
     expect(persisted).toHaveLength(1);
-
-    // The fallback expression the sections hook uses when neither catalog
-    // query has answered. Store warm + query cold is the mislabel path:
-    // single-repo scope must still see one repository. (Production discrimination
-    // for that ternary lives on the sections-hook suite; here we pin the
-    // persisted half the fallback reads.)
-    const queryRepositories: ReadonlyArray<typeof ONE_REPO> = [];
-    const scopeRepositories = selectGithubMentionScopeRepositories(
-      state,
-      SCOPE,
-    );
-
-    expect(scopeRepositories).toEqual([ONE_REPO]);
-    expect(scopeRepositories).toHaveLength(1);
-    // Unconditional query path is the bug: cold query answers [].
-    expect(queryRepositories).toEqual([]);
-    expect(queryRepositories).not.toEqual(scopeRepositories);
   });
 
   it("returns empty repositories for an unknown scope", () => {
