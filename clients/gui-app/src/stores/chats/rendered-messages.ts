@@ -28,7 +28,10 @@ import {
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
-import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import {
+  isTransientLiveAssistantMessageId,
+  transientLiveAssistantMessageId,
+} from "@/lib/chat/transient-live-assistant-message-id";
 import type {
   AssistantTurnMeta,
   AssistantMarkdownImageResolution,
@@ -1884,10 +1887,22 @@ function addLiveAssistantImageProjection(
   acc: AssistantTurnAccumulator,
   liveAssistant: LiveAssistantMessage,
 ): void {
+  const liveResolutionMessageIds = new Set(
+    liveAssistant.imageResolutions.map((resolution) => resolution.messageId),
+  );
+  let ownerMessageId: string | null = acc.messageId;
+  if (isTransientLiveAssistantMessageId(acc.messageId)) {
+    const [onlyMessageId] = liveResolutionMessageIds;
+    ownerMessageId = liveResolutionMessageIds.size === 1 ? onlyMessageId : null;
+  }
   addAssistantImageProjection(
     acc,
     liveAssistant.blocks,
-    liveAssistant.imageResolutions,
+    ownerMessageId === null
+      ? []
+      : liveAssistant.imageResolutions.filter(
+          (resolution) => resolution.messageId === ownerMessageId,
+        ),
   );
 }
 

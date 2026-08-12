@@ -540,6 +540,56 @@ describe("useRenderedMessages image resolution stable-row identity", () => {
     ).toEqual(["hash-live-updated", "hash-live-updated"]);
   });
 
+  it("scopes merged live resolutions to the latest assistant message", () => {
+    const source = "/workspace/shared-live.png";
+    const first: Message = {
+      ...assistantMessage("turn-live-shared", 2000),
+      messageId: "assistant-first",
+      blocks: [textBlock("text-first", 2001, `![first](${source})`)],
+      imageResolutions: [resolvedEntry(source, "hash-first", {})],
+    };
+    const second: Message = {
+      ...assistantMessage("turn-live-shared", 3000),
+      messageId: "assistant-second",
+      blocks: [textBlock("text-second", 3001, `![second](${source})`)],
+      imageResolutions: [resolvedEntry(source, "hash-second", {})],
+    };
+    const live = {
+      turnId: "turn-live-shared",
+      sender: ASSISTANT_SENDER,
+      blocks: [textBlock("text-live", 4001, `![live](${source})`)],
+      startedAt: 2000,
+      blocksVersion: 1,
+      imageResolutions: [
+        {
+          messageId: "assistant-first",
+          entry: resolvedEntry(source, "hash-first-live", {}),
+        },
+        {
+          messageId: "assistant-second",
+          entry: resolvedEntry(source, "hash-second-live", {}),
+        },
+      ],
+      imageResolutionsVersion: 1,
+      timestamp: 4001,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [first, second],
+      liveAssistantMessage: live,
+      runStatus: "running",
+    });
+    const contexts = textSegmentContexts(result.current[0]?.segments ?? []);
+    expect(contexts.at(-1)?.resolutions).toEqual([
+      {
+        messageId: "assistant-second",
+        entry: resolvedEntry(source, "hash-second-live", {}),
+      },
+    ]);
+  });
+
   it("rebuilds only the assistant row whose imageResolutions record changed", () => {
     const turnA: Message = {
       ...assistantMessage("turn-a", 2000),
