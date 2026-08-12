@@ -59,6 +59,8 @@ import {
   buildConfigHostFixture,
   type ConfigHostFixture,
 } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
 
 afterEach(() => {
   cleanup();
@@ -88,6 +90,10 @@ const SAVED_FLASH_MS = 1600;
  */
 function renderShellPanelOverRpc(options: {
   readonly configure?: (cli: MockTraycerCli) => void;
+  /** Supply the CLI when a handler override needs to close over it. */
+  readonly cli?: MockTraycerCli;
+  /** Replaces individual RPC handlers - e.g. to hold one write pending. */
+  readonly overrideHandlers?: MockHandlerMap<HostRpcRegistry>;
   readonly hostId?: string;
   readonly isLocalMachine?: boolean;
   readonly connectable?: boolean;
@@ -101,9 +107,14 @@ function renderShellPanelOverRpc(options: {
 }): ConfigHostFixture {
   const hostId = options.hostId ?? "host-a";
   const isLocalMachine = options.isLocalMachine ?? true;
-  const cli = new MockTraycerCli();
+  const cli = options.cli ?? new MockTraycerCli();
   options.configure?.(cli);
-  const fixture = buildConfigHostFixture({ hostId, isLocalMachine, cli });
+  const fixture = buildConfigHostFixture({
+    hostId,
+    isLocalMachine,
+    cli,
+    overrideHandlers: options.overrideHandlers,
+  });
   if (options.methods !== null) {
     recordNegotiatedHostMethods(
       hostId,
@@ -928,5 +939,79 @@ describe("<ShellSettingsPanel /> capability-probe self-heal", () => {
     });
     expect(screen.queryByTestId("host-config-unsupported-notice")).toBeNull();
     expect(await screen.findByText("Startup flags for zsh")).toBeTruthy();
+  });
+});
+
+describe("<ShellSettingsPanel /> env rename survives unmount", () => {
+  /**
+   * The rename is ONE operation, and this pins the property the repair rests
+   * on: both writes live inside a single `mutationFn`, so neither half is
+   * carried by a per-`mutate` callback.
+   *
+   * The discriminating instant is the SET being in flight when the panel goes
+   * away - not the delete. In the defective shape (`setEnv(..., { onSuccess:
+   * () => deleteEnv(old) })`) a set that resolves while still mounted fires
+   * its callback normally and the delete goes out, so holding the DELETE
+   * pending proves nothing: both shapes pass. Hold the SET across the unmount
+   * and the shapes separate - TanStack drops the per-`mutate` callbacks of an
+   * observer that is gone, so the defective shape never dispatches the delete
+   * and the rename leaves TWO live variables, while the repaired one completes
+   * inside its own `mutationFn`.
+   */
+  it("drops the old key when the set is still in flight as the panel unmounts", async () => {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    cli.envOverrides = [{ key: "OLD_NAME", value: "keep-me" }];
+
+    let releaseSet: (() => void) | null = null;
+    const setInFlight = new Promise<void>((resolve) => {
+      releaseSet = resolve;
+    });
+    let setDispatched: (() => void) | null = null;
+    const setReached = new Promise<void>((resolve) => {
+      setDispatched = resolve;
+    });
+
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: {
+        "config.env.set": async (request) => {
+          setDispatched?.();
+          await setInFlight;
+          await cli.envOverrideSet(request);
+          return { key: request.key, value: request.value };
+        },
+      },
+    });
+
+    const nameInput = await screen.findByLabelText("Name for OLD_NAME");
+    fireEvent.change(nameInput, { target: { value: "NEW_NAME" } });
+    // Blur directly: the row commits in `onBlur`, and Enter only gets there by
+    // calling `.blur()` on the focused element - which jsdom no-ops when the
+    // input was never focused, so a keyDown alone commits nothing.
+    fireEvent.blur(nameInput);
+
+    // The rename is genuinely airborne before the panel goes away; without
+    // this the unmount could precede the request and prove nothing.
+    await act(async () => {
+      await setReached;
+    });
+
+    cleanup();
+
+    await act(async () => {
+      releaseSet?.();
+      await Promise.resolve();
+    });
+
+    // Terminal state of the store the host will read: renamed, not duplicated.
+    await waitFor(() => {
+      expect(cli.envOverrides.map((row) => row.key)).toContain("NEW_NAME");
+    });
+    expect(cli.envOverrides.map((row) => row.key)).not.toContain("OLD_NAME");
   });
 });
