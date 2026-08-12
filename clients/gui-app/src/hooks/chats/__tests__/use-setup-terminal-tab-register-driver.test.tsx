@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -35,6 +34,7 @@ const WORKTREE_ENTRY: WorktreeBindingEntry = {
 
 function createHandle() {
   return createChatSessionStore({
+    hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     userId: USER_ID,

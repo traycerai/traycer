@@ -90,6 +90,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
           setOpen(false);
         }}
         autoFocusSearch={false}
+        emptyMessage="No worktrees found."
       />
     </CompactWorkspaceSwitcher>
   );

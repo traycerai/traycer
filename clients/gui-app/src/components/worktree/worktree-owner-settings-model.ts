@@ -1,3 +1,7 @@
+import {
+  readableModelMatch,
+  resolveModelBySlug,
+} from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
@@ -20,9 +24,9 @@ import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-c
  * The resolved run-settings header shown atop the chat/terminal-agent hover
  * card. Every field is already display-ready: labels are resolved against the
  * live GUI harness catalog with a raw-slug fallback, so the view never needs
- * the catalog again. Terminal agents carry only `harness` + `model` (they have
- * no permission / reasoning / fast-mode / profile settings), so those fields
- * are always `null` for them.
+ * the catalog again. Chat-only permission/service-tier fields remain absent
+ * for terminal agents; their persisted reasoning, profile, and agent mode fill
+ * the equivalent identity slots instead.
  */
 export interface OwnerSettingsHeaderView {
   readonly harnessId: ProviderId;
@@ -54,6 +58,10 @@ export interface OwnerSettingsHeaderInput {
   readonly tuiHarnessId: ProviderId | null;
   /** Terminal agent's selected model slug, if any (`null` for GUI chats). */
   readonly tuiModel: string | null;
+  /** Terminal agent's persisted reasoning effort (`null` for GUI chats). */
+  readonly tuiReasoningEffort: string | null;
+  /** Terminal agent's persisted provider profile (`null` means ambient). */
+  readonly tuiProfileId: string | null;
   /** Live GUI harness catalog entries - the dynamic label source. Empty while
    *  the catalog is cold or the host is unreachable, which drives the
    *  raw-slug fallback. */
@@ -114,9 +122,14 @@ function deriveTerminalAgentHeader(
     harnessId,
     harnessName: entry?.label ?? harnessId,
     modelLabel: model === null ? input.tuiModel : modelDisplayLabel(model),
-    reasoningLabel: null,
+    reasoningLabel: resolveReasoningLabel(input.tuiReasoningEffort, model),
     fastMode: false,
-    profileAccentDot: null,
+    // Terminal `null` is the unbadged ambient identity. A tombstoned managed
+    // id also resolves to null below rather than leaking an opaque id.
+    profileAccentDot:
+      input.tuiProfileId === null
+        ? null
+        : resolveProfileAccentDot(input.tuiProfileId, input.profiles),
     permissionMode: null,
   };
 }
@@ -128,12 +141,14 @@ function findHarnessEntry(
   return harnesses.find((harness) => harness.id === harnessId) ?? null;
 }
 
+// Read-only: the row is only read for its label and reasoning options, so an
+// ambiguous alias match is fine here (see `readableModelMatch`).
 function findModel(
   entry: GuiHarnessCatalogEntry | null,
   slug: string,
 ): ModelOption | null {
   if (entry === null) return null;
-  return entry.models.find((model) => model.slug === slug) ?? null;
+  return readableModelMatch(resolveModelBySlug(entry.models, slug));
 }
 
 // `findReasoningLabel` falls back to the raw level when the model (or its
@@ -164,7 +179,7 @@ function resolveReasoningLabel(
 //     mark rather than silently reading as an unconfigured one.
 //   - An id matching nothing (cold provider cache, host unreachable, deleted
 //     profile) omits the badge rather than guessing a color from an opaque id.
-function resolveProfileAccentDot(
+export function resolveProfileAccentDot(
   profileId: string | null,
   profiles: ReadonlyArray<ProviderProfile>,
 ): ProfileAccentDotInput | null {

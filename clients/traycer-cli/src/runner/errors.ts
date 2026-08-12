@@ -27,6 +27,15 @@ export const CLI_ERROR_CODES = {
   // would mislead here).
   ROLE_FORBIDDEN: "E_ROLE_FORBIDDEN",
 
+  // --- Agent archive (`epic.setChatArchived`) ---
+  // The host folds both conditions below into a generic `RPC_ERROR` with a
+  // reason prefix on the message (`AGENT_BUSY:` / `RECORD_NOT_FOUND:`) rather
+  // than a typed wire code - see `epic-set-chat-archived-resolver.ts`. The CLI
+  // detects those prefixes and remaps them to these codes so callers can
+  // switch on `code` instead of parsing message text.
+  AGENT_ARCHIVE_BUSY: "E_AGENT_ARCHIVE_BUSY",
+  AGENT_RECORD_NOT_FOUND: "E_AGENT_RECORD_NOT_FOUND",
+
   // --- Auth ---
   AUTH_NO_CREDENTIALS: "E_AUTH_NO_CREDENTIALS",
   AUTH_REJECTED: "E_AUTH_REJECTED",
@@ -57,6 +66,14 @@ export const CLI_ERROR_CODES = {
   HOST_BUNDLE_MISSING: "E_HOST_BUNDLE_MISSING",
   HOST_SHELL_MISSING: "E_HOST_SHELL_MISSING",
   HOST_SPAWN_FAILED: "E_HOST_SPAWN_FAILED",
+  // A stop/restart/uninstall could not record its intent on disk, on a
+  // platform where that record is the ONLY thing telling the host supervisor
+  // the death was deliberate (win32: `schtasks /End` never signals the
+  // orphaned supervisor). The operation is REFUSED rather than performed,
+  // because performing it would kill a host the supervisor then relaunches
+  // while the command reports success. Retryable once the directory is
+  // writable.
+  HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
 
   // --- Host install + registry (NP-2 / NP-4) ---
   HOST_NOT_INSTALLED: "E_HOST_NOT_INSTALLED",
@@ -65,7 +82,20 @@ export const CLI_ERROR_CODES = {
   HOST_VERIFY_FAILED: "E_HOST_VERIFY_FAILED",
   HOST_SOURCE_MISSING: "E_HOST_SOURCE_MISSING",
   HOST_ALREADY_RUNNING: "E_HOST_ALREADY_RUNNING",
+  // `host update`'s post-swap local health probe (service/health-probe.ts)
+  // exhausted its retry budget - the new host never proved itself alive on
+  // its own loopback port. Distinct from HOST_INSTALL_FAILED (a
+  // stage/verify/extract/swap failure with the OLD host untouched): this
+  // fires AFTER a successful swap, so the command has already attempted a
+  // rollback to the previous version (or, with nothing to roll back to on
+  // a first-ever install, left the marker as `failed` without one).
+  HOST_UPDATE_HEALTH_CHECK_FAILED: "E_HOST_UPDATE_HEALTH_CHECK_FAILED",
   HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
+  // The selected host version declares a `requiredCliVersion` this CLI does
+  // not meet (or one it cannot parse). Distinct from HOST_INCOMPATIBLE, which
+  // is a RUNNING host answering a handshake: this fires before anything is
+  // downloaded, and the remedy is to update Traycer rather than the host.
+  HOST_CLIENT_FLOOR_UNMET: "E_HOST_CLIENT_FLOOR_UNMET",
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
   REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",

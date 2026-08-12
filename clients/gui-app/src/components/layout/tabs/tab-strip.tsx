@@ -35,7 +35,7 @@ import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   executeTabSplitCommand,
@@ -83,7 +83,7 @@ function TabStripBody() {
     () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
     [allTabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
@@ -250,7 +250,7 @@ function TabStripBody() {
   const canCloseOtherTabs = headerItemIds.length > 1;
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         role="tablist"
         aria-label="Open tabs"
@@ -273,6 +273,7 @@ function TabStripBody() {
                   memberOffset={memberOffsetBefore(layoutItems, index)}
                   isActive={itemId === activeItemId}
                   isNextActive={headerItemIds[index + 1] === activeItemId}
+                  nextIsSplit={layoutItems[index + 1]?.kind === "split"}
                   isLastItem={index === headerItemIds.length - 1}
                   showDropIndicatorBefore={dropIndicatorIndex === index}
                   showDropIndicatorAfter={
@@ -312,6 +313,7 @@ interface HeaderStripItemRendererProps {
   // index is a silent visual bug no type check can catch.
   readonly isActive: boolean;
   readonly isNextActive: boolean;
+  readonly nextIsSplit: boolean;
   readonly isLastItem: boolean;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
@@ -338,6 +340,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
   const {
     isActive,
     isNextActive,
+    nextIsSplit,
     isLastItem,
     showDropIndicatorBefore,
     showDropIndicatorAfter,
@@ -346,7 +349,9 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
   // Computed once, above the branch, because it applies to every strip item.
   // Restating it inside only the tab branch is what left a split group with no
   // trailing hairline, so the group-to-tab boundary rendered as a blank gap.
-  const showSeparatorAfter = !isLastItem && !isActive && !isNextActive;
+  const isSplitGroupBoundary = item.kind === "split" && nextIsSplit;
+  const showSeparatorAfter =
+    !isLastItem && (isSplitGroupBoundary || (!isActive && !isNextActive));
   if (item.kind === "split") {
     return (
       <SplitTabItem

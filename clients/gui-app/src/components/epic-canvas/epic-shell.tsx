@@ -9,6 +9,7 @@ import { useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
 import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skeleton";
@@ -39,7 +40,7 @@ export function EpicShell(props: EpicShellProps) {
 
   return (
     <div
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-r-lg bg-background"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
       data-testid="epic-shell"
       data-epic-shell-root="true"
       data-epic-id={epicId}
@@ -120,6 +121,7 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
     >
       {props.snapshotLoaded ? (
         <>
+          <EpicUsageEntryPoint epicId={props.epicId} />
           <EpicConnectionPill />
           <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
         </>
@@ -143,7 +145,7 @@ function CanvasColumn(props: {
 function LoadingTileCanvas() {
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden rounded-t-lg border border-canvas-border/70 bg-canvas text-canvas-foreground"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground"
       data-testid="tile-canvas-loading"
     >
       <CanvasSkeleton />

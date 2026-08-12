@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
@@ -6,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
 
 const DIRTY_CONTENT: JsonContent = {
@@ -36,7 +36,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
         props.editorRef.current = editorHandle();
       };
       testState.snapshot = () => {
-        props.onSnapshot(DIRTY_CONTENT, { from: 1, to: 1 });
+        props.onDocumentChange(DIRTY_CONTENT, { from: 1, to: 1 });
       };
       return React.createElement(
         React.Fragment,
@@ -189,6 +189,19 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
 }));
+vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
+  // Same treatment as `use-composer-dictation` above: a host-backed readiness
+  // hook stubbed to its "nothing to report" answer so these gate tests stay
+  // about the gate they name. `blocked: false` is also the hook's real
+  // fail-open answer before `providers.list` resolves.
+  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
+  useProviderPackGateForClient: () => ({
+    blocked: false,
+    hint: null,
+    preparing: null,
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
     dictationControl: null,
@@ -430,15 +443,20 @@ describe("LandingComposer direct submit gate", () => {
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => DIRTY_CONTENT,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,

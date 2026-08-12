@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -79,7 +78,14 @@ const STOPPED: ChatMessageStoppedInfo = {
   stoppedAt: 1_700_000_000_000,
   reason: "Stop requested by owner.",
   turnHadOutput: true,
-  turnReplyText: "Here is the answer.",
+  turnReplySegments: [
+    {
+      id: "seg-reply",
+      kind: "text",
+      markdown: "Here is the answer.",
+      isStreaming: false,
+    },
+  ],
 };
 
 // A content-less boundary row whose turn genuinely never produced anything -
@@ -87,7 +93,7 @@ const STOPPED: ChatMessageStoppedInfo = {
 const STOPPED_NO_OUTPUT: ChatMessageStoppedInfo = {
   ...STOPPED,
   turnHadOutput: false,
-  turnReplyText: "",
+  turnReplySegments: [],
 };
 
 const META: AssistantTurnMeta = {
@@ -243,7 +249,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
 
     const copyButton = screen.getByTestId("assistant-reply-copy");
     fireEvent.click(copyButton);
-    expect(clipboard.writeText).toHaveBeenCalledWith(STOPPED.turnReplyText);
+    expect(clipboard.writeText).toHaveBeenCalledWith("Here is the answer.");
   });
 
   it("renders nothing for an empty, non-stopped, ended turn (unchanged baseline)", () => {

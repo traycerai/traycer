@@ -6,6 +6,7 @@ import {
   listAgentsResponseSchemaV30,
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
+  listAgentsResponseSchemaV60,
 } from "@traycer/protocol/host/agent/shared";
 import {
   listGuiHarnessesResponseSchemaV10,
@@ -14,13 +15,18 @@ import {
   listGuiHarnessesResponseSchemaV30,
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
+  listGuiHarnessesResponseSchemaV60,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
+  providersListRequestSchemaBeforeV70,
+  providersListRequestSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -47,16 +53,27 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@3.0": listGuiHarnessesResponseSchemaV30,
   "agent.gui.listHarnesses@4.0": listGuiHarnessesResponseSchemaV40,
   "agent.gui.listHarnesses@5.0": listGuiHarnessesResponseSchemaV50,
+  "agent.gui.listHarnesses@6.0": listGuiHarnessesResponseSchemaV60,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
   "agent.list@4.0": listAgentsResponseSchemaV40,
   "agent.list@5.0": listAgentsResponseSchemaV50,
+  "agent.list@6.0": listAgentsResponseSchemaV60,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,
   "providers.list@4.0": providersListResponseSchemaV40,
   "providers.list@5.0": providersListResponseSchemaV50,
+  "providers.list@6.0": providersListResponseSchemaV60,
+  // v7.0 is pinned here while it is still the head line, so this row fails on
+  // the FIRST attempt to grow the live shape rather than on the release that
+  // ships the growth. The dump is deep, which is what covers the sub-schemas
+  // `providerCliStateBaseShapeV70` still references live - see the freeze
+  // comment on that shape for the list and for what to do when this goes red.
+  "providers.list@7.0": providersListResponseSchemaV70,
+  "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
+  "providers.list@7.0 request": providersListRequestSchemaV70,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

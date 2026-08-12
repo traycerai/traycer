@@ -8,7 +8,7 @@ import { createChatFindForceStore } from "@/stores/chats/chat-find-force-store-c
 
 describe("chat expansion stores", () => {
   it("tracks sent and received A2A open ids independently", () => {
-    const store = createA2AOpenStore();
+    const store = createA2AOpenStore(null);
 
     store.getState().setSentOpen("sent-1", true);
     store.getState().setReceivedOpen("received-1", true);

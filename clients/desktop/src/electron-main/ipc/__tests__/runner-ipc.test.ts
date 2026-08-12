@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import log from "electron-log";
@@ -47,6 +47,21 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+
+const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+const readFeatureSettingsMock = vi.hoisted(() =>
+  vi.fn(async () => ({ agentRoles: featureSettings.agentRoles })),
+);
+const setAgentRolesEnabledMock = vi.hoisted(() =>
+  vi.fn(async (enabled: boolean) => {
+    featureSettings.agentRoles = enabled;
+  }),
+);
+vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@traycer/protocol/config/store")>()),
+  readFeatureSettings: readFeatureSettingsMock,
+  setAgentRolesEnabled: setAgentRolesEnabledMock,
+}));
 
 /**
  * Runner-IPC bridge tests. We mock `electron` so the bridge can install its
@@ -156,7 +171,11 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   notifyRespawningCalls = 0;
   reloadSnapshotCalls = 0;
   ensureWatcherCalls = 0;
-  readonly pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
+  // Mutable so the identity-seed suite can point them at real files in a temp
+  // dir. Everything else keeps the unwritable defaults, which is what makes a
+  // handler that reads them without being asked to fail loudly.
+  pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
+  identityEnrollmentFile = "/tmp/fake-traycer-host/identity/enrollment.json";
   isDisposed = false;
 
   getSnapshot(): DesktopLocalHostSnapshot | null {
@@ -486,6 +505,13 @@ function bareEvent(): {
   return sender(0);
 }
 
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function readQuitRequestId(message: SentMessage | undefined): string {
   if (message === undefined) {
     throw new Error("quitRequested message missing");
@@ -560,6 +586,9 @@ beforeEach(() => {
   ipcMainState.syncListeners.clear();
   sentMessages.length = 0;
   vi.unstubAllGlobals();
+  featureSettings.agentRoles = false;
+  readFeatureSettingsMock.mockClear();
+  setAgentRolesEnabledMock.mockClear();
 });
 
 afterEach(() => {
@@ -600,12 +629,23 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        // Remote Host Support: host-registry read (§7) and version-policy
+        // write (§13, T16) run in main for the renderer-origin CORS reason.
+        RunnerHostInvoke.listRegisteredHosts,
+        RunnerHostInvoke.updateHostVersionPolicy,
+        RunnerHostInvoke.listUserSessions,
+        RunnerHostInvoke.revokeUserSession,
+        RunnerHostInvoke.revokeAllSessions,
+        RunnerHostInvoke.mintHostCredential,
+        RunnerHostInvoke.requestStepUpChallenge,
+        RunnerHostInvoke.verifyStepUpChallenge,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
         RunnerHostInvoke.requestMicrophoneAccess,
         RunnerHostInvoke.openMicrophoneSettings,
         RunnerHostInvoke.requestHostRespawn,
+        RunnerHostInvoke.lastKnownLocalHostId,
         RunnerHostInvoke.traySetIndicator,
         RunnerHostInvoke.traySetEpics,
         RunnerHostInvoke.setUnsyncedEditsSnapshot,
@@ -633,10 +673,16 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.perWindowStateClear,
         RunnerHostInvoke.authSessionGet,
         RunnerHostInvoke.authSessionSet,
-        RunnerHostInvoke.supportSnapshotGet,
+        RunnerHostInvoke.supportSaveDiagnosticBundle,
+        RunnerHostInvoke.supportDiscardFrozenEvidence,
+        RunnerHostInvoke.supportFreezeEvidence,
+        RunnerHostInvoke.supportReadFrozenLogTail,
+        RunnerHostInvoke.supportGetFingerprintOccurrence,
         RunnerHostInvoke.supportRevealLog,
-        RunnerHostInvoke.supportSubmitReport,
         RunnerHostInvoke.supportTailLog,
+        RunnerHostInvoke.supportBuildPublicDraft,
+        RunnerHostInvoke.supportSubmitReport,
+        RunnerHostInvoke.supportSnapshotGet,
         RunnerHostInvoke.powerSetSleepBlocked,
         // Legacy `runnerHost:service:*` install/uninstall/start/stop/restart/
         // upgrade/enableLinger/status/getLogTail channels have been removed
@@ -724,10 +770,13 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileDropCopyTemporary,
         RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
+        RunnerHostInvoke.clipboardWriteImage,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
         RunnerHostInvoke.logLevelsGet,
         RunnerHostInvoke.logLevelsSet,
+        RunnerHostInvoke.featureSettingsGet,
+        RunnerHostInvoke.agentRolesEnabledSet,
         RunnerHostInvoke.fontsList,
         RunnerHostInvoke.zoomGet,
         RunnerHostInvoke.zoomSet,
@@ -736,6 +785,47 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.zoomReset,
       ].sort(),
     );
+    bridge.dispose();
+  });
+
+  it("gets and sets agent roles through typed IPC, rejecting non-boolean payloads", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const getHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.featureSettingsGet,
+    );
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.agentRolesEnabledSet,
+    );
+    if (getHandler === undefined || setHandler === undefined) {
+      throw new Error("feature-settings IPC handlers were not registered");
+    }
+
+    await expect(getHandler(bareEvent())).resolves.toEqual({
+      agentRoles: false,
+    });
+    await expect(setHandler(bareEvent(), true)).resolves.toEqual({
+      agentRoles: true,
+    });
+    expect(setAgentRolesEnabledMock).toHaveBeenCalledWith(true);
+    await expect(getHandler(bareEvent())).resolves.toEqual({
+      agentRoles: true,
+    });
+    await expect(setHandler(bareEvent(), "yes")).rejects.toThrow(
+      "featureSettings:agentRoles:set requires a boolean",
+    );
+    expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 
@@ -2132,6 +2222,145 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("retains step-up credentials in main and returns only expiry metadata to the renderer", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/user/sessions/family-1")) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          "Bearer step-up-secret",
+        );
+        return jsonResponse(200, {
+          familyId: "family-1",
+          revoked: true,
+        });
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const revokeHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.revokeUserSession,
+    );
+    if (verifyHandler === undefined || revokeHandler === undefined) {
+      throw new Error("step-up handlers missing");
+    }
+
+    await expect(
+      verifyHandler(bareEvent(), "user-jwt", "123456"),
+    ).resolves.toEqual({
+      kind: "ok",
+      response: { expires_in: 900 },
+    });
+    await expect(
+      revokeHandler(bareEvent(), "user-jwt", "family-1", true),
+    ).resolves.toEqual({
+      kind: "ok",
+      response: { familyId: "family-1", revoked: true },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("mints a host credential with the caller's own bearer, never the retained step-up credential", async () => {
+    // Provisioning is not step-up gated: a retained step-up credential must
+    // never be substituted for the mint's Authorization header, even when one
+    // is sitting in main from a prior verify. This closes an exposure where
+    // an IPC caller could spend a step-up bearer for a mint no dialog ever
+    // authorized.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/hosts/token")) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          "Bearer user-jwt",
+        );
+        return jsonResponse(200, {
+          token: "host-access-jws",
+          refreshToken: "host-refresh-jwe",
+          familyId: "family-host-1",
+          hostId: "host-abc",
+          expiresIn: 900,
+          provisionedAt: "2026-07-08T12:00:00.000Z",
+        });
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const mintHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.mintHostCredential,
+    );
+    if (verifyHandler === undefined || mintHandler === undefined) {
+      throw new Error("mintHostCredential handlers missing");
+    }
+
+    // Establish a retained step-up credential in main first.
+    await verifyHandler(bareEvent(), "user-jwt", "123456");
+
+    const mintResult = await mintHandler(bareEvent(), "user-jwt", {
+      hostId: "host-abc",
+      hostLabel: "Mac",
+      platform: null,
+    });
+    expect(mintResult).toEqual({
+      kind: "ok",
+      response: {
+        token: "host-access-jws",
+        refreshToken: "host-refresh-jwe",
+        familyId: "family-host-1",
+        hostId: "host-abc",
+        expiresIn: 900,
+        provisionedAt: "2026-07-08T12:00:00.000Z",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
   it("awaits a terminal quit decision and defaults malformed payloads to proceed", async () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
@@ -2660,6 +2889,111 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  // The renderer's host directory seeds "which id is THIS machine" from this
+  // handler, and then persists the answer and neutralizes the matching registry
+  // row. A wrong answer therefore does not degrade - it neutralizes the wrong
+  // twin and leaves the real one remote-kind and relay-dialable, which is the
+  // local-provisioning lockout the seed exists to prevent.
+  describe("lastKnownLocalHostId identity seed", () => {
+    async function seedFrom(files: {
+      readonly enrollment: string | null;
+      readonly pid: string | null;
+    }): Promise<string | null> {
+      const dir = await mkdtemp(join(tmpdir(), "traycer-identity-seed-"));
+      try {
+        const host = new FakeHost();
+        host.identityEnrollmentFile = join(dir, "identity", "enrollment.json");
+        host.pidMetadataFile = join(dir, "pid.json");
+        if (files.enrollment !== null) {
+          await mkdir(join(dir, "identity"), { recursive: true });
+          await writeFile(host.identityEnrollmentFile, files.enrollment);
+        }
+        if (files.pid !== null) {
+          await writeFile(host.pidMetadataFile, files.pid);
+        }
+
+        const mod = await import("../register-runner-ipc");
+        const bridge = new mod.RunnerIpcBridge({
+          host,
+          hostController: new FakeHostController(),
+          authnBaseUrl: "http://localhost:5005",
+          authRedirectUri: null,
+          tray: null,
+          zoomController: undefined,
+          authTokenStore: undefined,
+          window: buildWindow(),
+        });
+        bridge.install();
+        const handler = ipcMainState.handlers.get(
+          RunnerHostInvoke.lastKnownLocalHostId,
+        );
+        if (handler === undefined) {
+          throw new Error("lastKnownLocalHostId handler missing");
+        }
+        const answer: unknown = await handler(bareEvent());
+        bridge.dispose();
+        return typeof answer === "string" ? answer : null;
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    function pidFile(hostId: string): string {
+      return JSON.stringify({
+        hostId,
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "1.2.3",
+        pid: 4242,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      });
+    }
+
+    it("prefers the durable enrollment over pid metadata left by an ungraceful stop", async () => {
+      // `readPidMetadata` accepts this file structurally - no liveness or
+      // reachability check - so a crash leftover names the PREVIOUS id long
+      // after a re-enrollment replaced it.
+      await expect(
+        seedFrom({
+          enrollment: JSON.stringify({ hostId: "enrolled-current" }),
+          pid: pidFile("stale-after-crash"),
+        }),
+      ).resolves.toBe("enrolled-current");
+    });
+
+    it("falls back to pid metadata for an install with no enrollment record", async () => {
+      // The other half. Without this the preference above would answer null on
+      // an older install and seed nothing at all.
+      await expect(
+        seedFrom({ enrollment: null, pid: pidFile("pid-only-host") }),
+      ).resolves.toBe("pid-only-host");
+    });
+
+    it("answers null - never pid metadata - when the enrollment record exists but is unusable", async () => {
+      // CodeRabbit (OSS #913): an unusable record is NOT the same fact as an
+      // absent one. The file existing proves this install enrolls, so a
+      // corrupt read must not hand the decision to the stale-prone source the
+      // enrollment-first ordering exists to outrank. Null lets the renderer
+      // keep its persisted value.
+      await expect(
+        seedFrom({
+          enrollment: "{ not json",
+          pid: pidFile("stale-after-crash"),
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        seedFrom({ enrollment: "{}", pid: pidFile("stale-after-crash") }),
+      ).resolves.toBeNull();
+    });
+
+    it("answers null when neither file identifies this machine", async () => {
+      // A shell with no local host at all. The directory keeps its persisted
+      // value rather than being told something wrong.
+      await expect(
+        seedFrom({ enrollment: null, pid: null }),
+      ).resolves.toBeNull();
+    });
+  });
+
   // Field RCA 2026-07-28: the takeover fallback's host-busy denial resolves
   // `deferred`, and the invoke must RESOLVE it as `declined` rather than
   // reject - a rejected invoke lands on the renderer's reportable error
@@ -2825,6 +3159,74 @@ describe("RunnerIpcBridge", () => {
       },
       { channel: RunnerHostEvent.zoomChange, payload: 100 },
     ]);
+    bridge.dispose();
+  });
+
+  it("relays a background renderer notification to the focused renderer only", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const focusedWindow = buildWindow();
+    const backgroundWindow = buildWindow();
+    registry.add("window-focused", 101, focusedWindow);
+    registry.add("window-background", 202, backgroundWindow);
+    focusedWindow.setFocused(true);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    const display = {
+      title: "Traycer",
+      body: "Background agent failed",
+      payload: null,
+      replaceKey: "app-local:host.error:failure-1",
+      deliveryKey: "user-1:host.error:failure-1:40",
+      feedSource: "app-local" as const,
+      foregroundAppLocal: {
+        userId: "user-1",
+        entry: { id: "host.error:failure-1", updatedAt: 40 },
+      },
+    };
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      true,
+    );
+
+    expect(focusedWindow.sentMessages).toEqual([
+      {
+        channel: RunnerHostEvent.notificationForegroundDisplay,
+        payload: display,
+      },
+    ]);
+    expect(backgroundWindow.sentMessages).toEqual([]);
+
+    expect(bridge.deliverForegroundNotificationDisplay(101, display)).toBe(
+      true,
+    );
+    expect(focusedWindow.sentMessages).toHaveLength(1);
+
+    focusedWindow.setFocused(false);
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+
+    const destroyedFocusedWindow = buildWindowWithDestroyed(true);
+    destroyedFocusedWindow.setFocused(true);
+    registry.add("window-destroyed", 303, destroyedFocusedWindow);
+
+    expect(bridge.deliverForegroundNotificationDisplay(202, display)).toBe(
+      false,
+    );
+    expect(destroyedFocusedWindow.sentMessages).toEqual([]);
     bridge.dispose();
   });
 

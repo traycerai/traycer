@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import type { KeyboardEvent, ReactNode } from "react";
 import {
   cleanup,
@@ -143,6 +142,10 @@ interface RenderDropdownInput {
     index: number,
   ) => ProfileDropdownShortcutHint | null;
   readonly onCloseAutoFocus: (() => void) | null;
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    { readonly disabled: boolean; readonly reason: string | null }
+  > | null;
 }
 
 function renderDropdown(input: RenderDropdownInput) {
@@ -159,24 +162,42 @@ function renderDropdown(input: RenderDropdownInput) {
       contentContainer={null}
       onCloseAutoFocus={input.onCloseAutoFocus}
       usagePresentation={null}
+      admissionByProfileId={input.admissionByProfileId}
     />,
   );
+}
+
+function baseDropdownInput(
+  overrides: Partial<RenderDropdownInput> & {
+    readonly onSelectProfile?: (profileId: string | null) => void;
+    readonly onCreateProfile?: () => void;
+  },
+): RenderDropdownInput {
+  return {
+    profiles: overrides.profiles ?? [AMBIENT, WORK],
+    activeProfileId:
+      overrides.activeProfileId === undefined
+        ? "work-profile"
+        : overrides.activeProfileId,
+    onSelectProfile: overrides.onSelectProfile ?? vi.fn(),
+    onCreateProfile: overrides.onCreateProfile ?? vi.fn(),
+    createProfileDisabled: overrides.createProfileDisabled ?? false,
+    createProfileDisabledReason: overrides.createProfileDisabledReason,
+    shortcutHintForIndex:
+      overrides.shortcutHintForIndex ?? stubShortcutHintForIndex,
+    onCloseAutoFocus: overrides.onCloseAutoFocus ?? null,
+    admissionByProfileId:
+      overrides.admissionByProfileId === undefined
+        ? null
+        : overrides.admissionByProfileId,
+  };
 }
 
 describe("<ProfileDropdown />", () => {
   afterEach(() => cleanup());
 
   it("shows the active profile's dot and name on the closed trigger", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({}));
 
     const trigger = screen.getByRole("button", {
       name: "Codex profile: Work",
@@ -190,16 +211,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("shows the Terminal badge on the closed trigger for the ambient profile", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: null,
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({ activeProfileId: null }));
 
     const trigger = screen.getByRole("button", {
       name: "Codex profile: Terminal account, Terminal",
@@ -212,16 +224,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("renders non-modal so nested picker clicks can dismiss only the profile menu", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({}));
 
     expect(screen.getByTestId("profile-dropdown-root").dataset.modal).toBe(
       "false",
@@ -231,16 +234,7 @@ describe("<ProfileDropdown />", () => {
   it("stops only menu-owned keys from bubbling beyond the dropdown", () => {
     const onDocumentKeyDown = vi.fn();
     document.addEventListener("keydown", onDocumentKeyDown);
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({}));
     const content = screen.getByTestId("profile-dropdown-content");
 
     ["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Escape"].forEach((key) =>
@@ -254,16 +248,11 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("lists every profile as a row, dimming a signed-out row with a status suffix", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK, PERSONAL_SIGNED_OUT],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [AMBIENT, WORK, PERSONAL_SIGNED_OUT],
+      }),
+    );
 
     expect(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -277,16 +266,7 @@ describe("<ProfileDropdown />", () => {
 
   it("commits the clicked row's commit id, using null for the ambient row", () => {
     const onSelectProfile = vi.fn();
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile,
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({ onSelectProfile }));
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -299,16 +279,7 @@ describe("<ProfileDropdown />", () => {
 
   it("shows the create-new-profile row last and invokes onCreateProfile", () => {
     const onCreateProfile = vi.fn();
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile,
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({ onCreateProfile }));
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -318,16 +289,16 @@ describe("<ProfileDropdown />", () => {
 
   it("can disable the create-new-profile row with a caller-provided reason", () => {
     const onCreateProfile = vi.fn();
-    renderDropdown({
-      profiles: [AMBIENT],
-      activeProfileId: null,
-      onSelectProfile: vi.fn(),
-      onCreateProfile,
-      createProfileDisabled: true,
-      createProfileDisabledReason: "Local sign-in required.",
-      shortcutHintForIndex: noShortcutHint,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [AMBIENT],
+        activeProfileId: null,
+        onCreateProfile,
+        createProfileDisabled: true,
+        createProfileDisabledReason: "Local sign-in required.",
+        shortcutHintForIndex: noShortcutHint,
+      }),
+    );
 
     const row = screen.getByRole("menuitem", { name: "Create new profile" });
     if (!(row instanceof HTMLButtonElement)) {
@@ -346,16 +317,7 @@ describe("<ProfileDropdown />", () => {
   // `shortcutHintForIndex` returns, per row, and nothing when it returns
   // `null` - `ProfileDropdown` itself owns no keybinding-formatting logic.
   it("renders each injected shortcut hint in the native Kbd component", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({}));
 
     const firstHint = screen.getByTestId("model-profile-digit-1");
     const secondHint = screen.getByTestId("model-profile-digit-2");
@@ -366,16 +328,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("hides shortcut hints when the caller (Settings) disables them", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: noShortcutHint,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({ shortcutHintForIndex: noShortcutHint }));
 
     expect(screen.queryByTestId("model-profile-digit-1")).toBeNull();
   });
@@ -386,16 +339,13 @@ describe("<ProfileDropdown />", () => {
       index: number,
     ): ProfileDropdownShortcutHint | null =>
       index === 0 ? { digit: "1", label: "Hint 1" } : null;
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: null,
-      onSelectProfile,
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: hintOnlyForFirstRow,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(
+      baseDropdownInput({
+        activeProfileId: null,
+        onSelectProfile,
+        shortcutHintForIndex: hintOnlyForFirstRow,
+      }),
+    );
 
     expect(screen.getByTestId("model-profile-digit-1")).toBeDefined();
     expect(screen.queryByTestId("model-profile-digit-2")).toBeNull();
@@ -404,16 +354,7 @@ describe("<ProfileDropdown />", () => {
   });
 
   it("marks the active row with aria-current and leaves inactive rows unmarked", () => {
-    renderDropdown({
-      profiles: [AMBIENT, WORK],
-      activeProfileId: "work-profile",
-      onSelectProfile: vi.fn(),
-      onCreateProfile: vi.fn(),
-      createProfileDisabled: false,
-      createProfileDisabledReason: undefined,
-      shortcutHintForIndex: stubShortcutHintForIndex,
-      onCloseAutoFocus: null,
-    });
+    renderDropdown(baseDropdownInput({}));
 
     expect(
       screen
@@ -425,5 +366,112 @@ describe("<ProfileDropdown />", () => {
         .getByRole("menuitem", { name: "Terminal account, Terminal" })
         .getAttribute("aria-current"),
     ).toBeNull();
+  });
+
+  it("disables an unadmitted profile row and blocks selection", () => {
+    const onSelectProfile = vi.fn();
+    const admissionByProfileId = new Map<
+      string | null,
+      { readonly disabled: boolean; readonly reason: string | null }
+    >([
+      [
+        "work-profile",
+        {
+          disabled: true,
+          reason: "This profile can't continue this session.",
+        },
+      ],
+    ]);
+    renderDropdown(
+      baseDropdownInput({
+        activeProfileId: null,
+        onSelectProfile,
+        admissionByProfileId,
+      }),
+    );
+
+    // The accessible label folds in the admission reason (amend-01 Fix 5) so
+    // a keyboard/AT user can perceive it without hovering the tooltip.
+    const blocked = screen.getByRole("menuitem", {
+      name: "Work, This profile can't continue this session.",
+    });
+    if (!(blocked instanceof HTMLButtonElement)) {
+      throw new Error("Expected Work row mock to render as a button.");
+    }
+    expect(blocked.disabled).toBe(true);
+    expect(blocked.className).toContain("opacity-60");
+    expect(tooltipTextNear(blocked)).toBe(
+      "This profile can't continue this session.",
+    );
+    fireEvent.click(blocked);
+    expect(onSelectProfile).not.toHaveBeenCalled();
+
+    // Ambient is not in the admission map - still selectable.
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
+    expect(onSelectProfile).toHaveBeenLastCalledWith(null);
+  });
+
+  it("disables the ambient row when admission keys null", () => {
+    const onSelectProfile = vi.fn();
+    const admissionByProfileId = new Map<
+      string | null,
+      { readonly disabled: boolean; readonly reason: string | null }
+    >([
+      [
+        null,
+        {
+          disabled: true,
+          reason: "Ambient can't continue this session.",
+        },
+      ],
+    ]);
+    renderDropdown(
+      baseDropdownInput({
+        onSelectProfile,
+        admissionByProfileId,
+      }),
+    );
+
+    // The accessible label folds in the admission reason (amend-01 Fix 5) so
+    // a keyboard/AT user can perceive it without hovering the tooltip.
+    const ambient = screen.getByRole("menuitem", {
+      name: "Terminal account, Terminal, Ambient can't continue this session.",
+    });
+    if (!(ambient instanceof HTMLButtonElement)) {
+      throw new Error("Expected ambient row mock to render as a button.");
+    }
+    expect(ambient.disabled).toBe(true);
+    expect(tooltipTextNear(ambient)).toBe(
+      "Ambient can't continue this session.",
+    );
+    fireEvent.click(ambient);
+    expect(onSelectProfile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    expect(onSelectProfile).toHaveBeenLastCalledWith("work-profile");
+  });
+
+  it("dims a disabled admission row even when reason is null (no tooltip)", () => {
+    const admissionByProfileId = new Map<
+      string | null,
+      { readonly disabled: boolean; readonly reason: string | null }
+    >([["work-profile", { disabled: true, reason: null }]]);
+    renderDropdown(
+      baseDropdownInput({
+        activeProfileId: null,
+        admissionByProfileId,
+      }),
+    );
+
+    const blocked = screen.getByRole("menuitem", { name: "Work" });
+    if (!(blocked instanceof HTMLButtonElement)) {
+      throw new Error("Expected Work row mock to render as a button.");
+    }
+    expect(blocked.disabled).toBe(true);
+    expect(blocked.className).toContain("opacity-60");
+    // No reason means no TooltipWrapper - native title also absent.
+    expect(tooltipTextNear(blocked)).toBeNull();
   });
 });

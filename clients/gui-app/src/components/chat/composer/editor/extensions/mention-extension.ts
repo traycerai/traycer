@@ -75,7 +75,11 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
       pluginKey: mentionSuggestionPluginKey,
       char: "@",
       allowSpaces: true,
-      allowedPrefixes: null,
+      // Word-boundary trigger only: `@` opens the menu at the start of a
+      // block or after a space, never mid-word - typing an email
+      // (`user@host.com`) must not pop the menu at `@host`. (`null` here
+      // means "trigger anywhere".)
+      allowedPrefixes: [" "],
       decorationTag: "span",
       decorationClass: "",
       items: () => [],
@@ -84,6 +88,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
         kind: "mention",
         slashTrigger: null,
         slashScopeForProps: null,
+        suggestionPluginKey: mentionSuggestionPluginKey,
       }),
       command: ({ editor, range, props }) => {
         const item = props as ComposerPickerItem;
@@ -109,10 +114,10 @@ function commitMentionInsertion(
   editor: Editor,
   range: { from: number; to: number },
   mention: MentionAttachment,
-): void {
+): boolean {
   const overrideSpace =
     editor.state.doc.textBetween(range.to, range.to + 1) === " ";
-  editor
+  return editor
     .chain()
     .focus()
     .insertContentAt(
@@ -123,4 +128,12 @@ function commitMentionInsertion(
       ],
     )
     .run();
+}
+
+export function insertMentionAttachmentCommand(
+  editor: Editor,
+  mention: MentionAttachment,
+): boolean {
+  const { from, to } = editor.state.selection;
+  return commitMentionInsertion(editor, { from, to }, mention);
 }

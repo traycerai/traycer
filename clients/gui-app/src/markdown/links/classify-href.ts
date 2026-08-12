@@ -28,7 +28,11 @@ const EXTERNAL_SCHEMES = new Set(["http", "https", "mailto"]);
 export function classifyHref(rawHref: string): ClassifiedHref {
   const href = rawHref.trim();
   // Empty or in-page anchors (`#heading`): this renderer only routes clicks
-  // that leave the current document/surface.
+  // that leave the current document/surface. `default` means "not ours" - the
+  // editor surface relies on it to let ProseMirror place the caret. Rendered
+  // anchors must never carry an empty href in the first place (it resolves to
+  // the current document, so a click reloads the SPA); `MarkdownAnchor` drops
+  // the attribute rather than classifying its way out of it.
   if (href.length === 0 || href.startsWith("#")) return { kind: "default" };
 
   const schemeMatch = SCHEME_PATTERN.exec(href);
@@ -54,47 +58,60 @@ const LINE_SUFFIX_PATTERN = /:(\d+)(?::(\d+))?$/;
 
 // Builds a `file` classification, splitting off a trailing `:line[:col]` target
 // so the bare path is what resolves to a file and the location travels in
-// `line`/`col`.
-function fileHref(path: string): ClassifiedHref {
-  const match = LINE_SUFFIX_PATTERN.exec(path);
-  if (match === null) {
-    // A location-less href with no path is degenerate (nothing to open).
-    // `ignore` - not `default` - so the anchor still `preventDefault`s the
-    // click rather than letting the browser navigate the bare href and unload
-    // the SPA.
-    return path.length === 0
-      ? { kind: "ignore" }
-      : { kind: "file", path, line: null, col: null };
-  }
-  const barePath = path.slice(0, match.index);
-  // A trailing location with no file in front of it (`:99`, `:0`) is degenerate.
-  // Reject it here rather than emitting an empty-path file link that a consumer
-  // would have to special-case.
+// `line`/`col`. The split runs on the ENCODED href (so a `%23` in a filename is
+// never mistaken for a fragment and a `%3A` never for a location), and only the
+// resulting bare path is decoded.
+function fileHref(encodedPath: string): ClassifiedHref {
+  const match = LINE_SUFFIX_PATTERN.exec(encodedPath);
+  const barePath =
+    match === null ? encodedPath : encodedPath.slice(0, match.index);
+  // Nothing to open: either a bare href with no path at all, or a trailing
+  // location with no file in front of it (`:99`, `:0`). `ignore` - not
+  // `default` - so the anchor still `preventDefault`s the click rather than
+  // letting the browser navigate the href and unload the SPA.
   if (barePath.length === 0) return { kind: "ignore" };
+  const path = decodePercentEncoding(barePath);
+  if (match === null) return { kind: "file", path, line: null, col: null };
   const line = Number.parseInt(match[1], 10);
   // A non-positive line is not a valid 1-based location. Drop the bogus target
   // and open the real file at the top instead of relying on a downstream clamp.
-  if (line < 1) return { kind: "file", path: barePath, line: null, col: null };
+  if (line < 1) return { kind: "file", path, line: null, col: null };
   // `.at()` is `string | undefined` (the col group is optional), unlike index
   // access which the lib types as a bare `string`.
   const colRaw = match.at(2);
   const col = colRaw === undefined ? null : Number.parseInt(colRaw, 10);
-  return { kind: "file", path: barePath, line, col };
+  return { kind: "file", path, line, col };
 }
 
 function fileUrlToPath(href: string): string {
   const withoutScheme = href.replace(/^file:\/\//i, "");
   // `file:///C:/x` → `/C:/x`; drop the leading slash before a drive letter so
   // the host sees a native Windows path.
-  const nativePath = /^\/[a-zA-Z]:/.test(withoutScheme)
+  return /^\/[a-zA-Z]:/.test(withoutScheme)
     ? withoutScheme.slice(1)
     : withoutScheme;
-  return decodeFileUrlPath(nativePath);
 }
 
-function decodeFileUrlPath(path: string): string {
+/**
+ * Every href reaching this module is percent-encoded - the markdown parser
+ * normalizes a link destination on the way to the DOM, so a path with a space
+ * or a Windows separator arrives as `…Traycer%20Dev%5Crepo…`. The surface
+ * policies resolve against a real filesystem, so they need the native form.
+ *
+ * This is the ONE decode on a file path's way to a surface policy - consumers
+ * (`resolveArtifactRelativeLinkPath`, the workspace-file candidates) take the
+ * native path as given. A second decode downstream would eat a literal percent
+ * escape in a real name (`my%20folder` authored as `my%2520folder`) and could
+ * turn `%252E%252E` into a `..` that walks out of the linked folder.
+ *
+ * `decodeURIComponent`, not `decodeURI`: the latter preserves the reserved set,
+ * so a filename's `%23` or `%3A` would reach the filesystem literally. Splitting
+ * the `:line[:col]` suffix off the ENCODED href (see {@link fileHref}) is what
+ * keeps those from being read as a fragment or a location in the first place.
+ */
+function decodePercentEncoding(path: string): string {
   try {
-    return decodeURI(path);
+    return decodeURIComponent(path);
   } catch {
     return path;
   }

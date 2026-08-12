@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  AUTH_FETCH_MAX_ATTEMPTS,
+  authRetryDelayMs,
+} from "@traycer-clients/shared/auth/auth-validation";
 import type {
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
   AuthService,
   type AuthSessionSnapshot,
+  type ExternalSession,
   AUTH_ERROR_DEVICE_DENIED,
   AUTH_ERROR_DEVICE_EXPIRED,
   AUTH_ERROR_LAUNCH_FAILED,
@@ -36,6 +42,7 @@ interface DeferredResponse {
 
 const VALIDATION_URL = "http://localhost:5005/api/v3/user";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
+const SESSIONS_URL = "http://localhost:5005/api/v3/user/sessions";
 
 // The default `/device/authorize` user code the `MockDeviceFlowHost` hands back,
 // and the pre-filled verification URL the controller asks the shell to open.
@@ -91,6 +98,47 @@ function installFetch(handler: FetchHandler): () => void {
   };
 }
 
+/**
+ * A `caches` global that records which stores were dropped.
+ *
+ * jsdom has no Cache API, so the sign-out's clear is a silent no-op here unless
+ * one is installed - which would make an assertion about it pass for the wrong
+ * reason. Installed the same way `installFetch` installs a fetch, and the
+ * recorder is what the sign-out test observes.
+ */
+function installCacheStorage(): {
+  readonly names: string[];
+  restore(): void;
+} {
+  const names: string[] = [];
+  const original: unknown = (globalThis as { caches?: unknown }).caches;
+  Object.defineProperty(globalThis, "caches", {
+    configurable: true,
+    writable: true,
+    value: {
+      open: () =>
+        Promise.resolve({
+          match: () => Promise.resolve(undefined),
+          put: () => Promise.resolve(),
+        }),
+      delete: (name: string) => {
+        names.push(name);
+        return Promise.resolve(true);
+      },
+    },
+  });
+  return {
+    names,
+    restore: () => {
+      Object.defineProperty(globalThis, "caches", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
+    },
+  };
+}
+
 function createDeferredResponse(): DeferredResponse {
   const state: { resolve: (response: Response) => void } = {
     resolve: () => undefined,
@@ -104,6 +152,14 @@ function createDeferredResponse(): DeferredResponse {
       state.resolve(response);
     },
   };
+}
+
+/**
+ * The signal a live TanStack query hands `fetchUserSessions`: never aborted, so
+ * these cases exercise the ordinary read rather than the cancellation path.
+ */
+function liveQuerySignal(): AbortSignal {
+  return new AbortController().signal;
 }
 
 function ok(): Promise<Response> {
@@ -210,8 +266,157 @@ function okWithRefreshToken(token: string): Promise<Response> {
   );
 }
 
+function okWithSessions(
+  sessions: readonly UserSessionListItem[],
+): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify({ sessions }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function externalSessionForUser(
+  userId: string,
+  token: string,
+): ExternalSession {
+  const now = new Date("2026-07-30T10:00:00.000Z");
+  return {
+    status: "signed-in",
+    token,
+    profile: {
+      userId,
+      userName: `${userId} display`,
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+    },
+    user: {
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: now,
+        updatedAt: now,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    },
+  };
+}
+
 function status(code: number): Promise<Response> {
   return Promise.resolve(new Response(null, { status: code }));
+}
+
+function refreshTokenFromRequest(
+  init:
+    | {
+        readonly body?: BodyInit | null;
+      }
+    | undefined,
+): string | null {
+  const body = init?.body;
+  if (typeof body !== "string") {
+    return null;
+  }
+  const marker = '"refreshToken":"';
+  const valueStart = body.indexOf(marker);
+  if (valueStart < 0) {
+    return null;
+  }
+  const start = valueStart + marker.length;
+  const end = body.indexOf('"', start);
+  return end < 0 ? null : body.slice(start, end);
+}
+
+function repairedSessionsFetch(
+  input: unknown,
+  init:
+    | {
+        readonly headers?: Record<string, string>;
+      }
+    | undefined,
+  repairedList: DeferredResponse,
+  seenSessionBearers: string[],
+): Promise<Response> | null {
+  const url = typeof input === "string" ? input : String(input);
+  if (url !== SESSIONS_URL) {
+    return null;
+  }
+  const bearer = init?.headers?.Authorization ?? "";
+  seenSessionBearers.push(bearer);
+  if (bearer === "Bearer account-a-token") {
+    return okWithSessions([]);
+  }
+  if (bearer === "Bearer account-a-rotated-token") {
+    return repairedList.promise;
+  }
+  throw new Error(`unexpected sessions bearer: ${bearer}`);
+}
+
+function repairedRaceFetch(
+  repairedList: DeferredResponse,
+  refreshResponse: DeferredResponse,
+  seenSessionBearers: string[],
+  seenRefreshTokens: string[],
+): FetchHandler {
+  return (input, init) => {
+    const url = typeof input === "string" ? input : String(input);
+    const sessionsResponse = repairedSessionsFetch(
+      input,
+      init,
+      repairedList,
+      seenSessionBearers,
+    );
+    if (sessionsResponse !== null) {
+      return sessionsResponse;
+    }
+    if (url === REFRESH_URL) {
+      const refreshToken = refreshTokenFromRequest(init);
+      if (refreshToken !== null) {
+        seenRefreshTokens.push(refreshToken);
+      }
+      return refreshResponse.promise;
+    }
+    if (
+      url === VALIDATION_URL &&
+      init?.headers?.Authorization === "Bearer account-b-token"
+    ) {
+      return okWithProfileForUser("user-2");
+    }
+    if (
+      url === VALIDATION_URL &&
+      (init?.headers?.Authorization === "Bearer account-a-token" ||
+        init?.headers?.Authorization === "Bearer account-a-rotated-token")
+    ) {
+      return okWithProfileForUser("user-1");
+    }
+    return status(500);
+  };
 }
 
 /**
@@ -265,7 +470,6 @@ function expectedStored(token: string, refreshToken: string) {
   return {
     token,
     refreshToken,
-    authnBaseUrl: "http://localhost:5005",
     // `expect.any(String)` is an `any`-typed matcher; type it as the field it
     // stands in for so the object literal stays free of unsafe `any` assignment.
     savedAt: expect.any(String) as string,
@@ -315,6 +519,329 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBe("persisted-token");
     expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-1");
     expect(seenAuthHeaders).toContain("Bearer persisted-token");
+  });
+
+  it("refreshes and refetches when a running desktop session predates tracking", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const seenSessionBearers: string[] = [];
+    const seenRefreshBodies: unknown[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        const bearer = init?.headers?.Authorization ?? "";
+        seenSessionBearers.push(bearer);
+        if (bearer === "Bearer legacy-token") {
+          return okWithSessions([]);
+        }
+        return okWithSessions([
+          {
+            familyId: "family-desktop",
+            clientKind: "desktop",
+            displayLabel: "Desktop app",
+            platform: "macOS",
+            appVersion: null,
+            location: null,
+            createdAt: "2026-07-30T10:00:00.000Z",
+            lastSeenAt: "2026-07-30T10:00:00.000Z",
+            revoked: false,
+            revokedAt: null,
+            revokedBy: null,
+            current: true,
+          },
+        ]);
+      }
+      if (url === REFRESH_URL) {
+        const body: unknown =
+          typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        seenRefreshBodies.push(body);
+        return okWithRefreshToken("tracked-token");
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const response = await service.fetchUserSessions(liveQuerySignal());
+
+    expect(response?.sessions).toEqual([
+      expect.objectContaining({
+        familyId: "family-desktop",
+        clientKind: "desktop",
+        current: true,
+      }),
+    ]);
+    expect(seenSessionBearers).toEqual([
+      "Bearer legacy-token",
+      "Bearer tracked-token",
+    ]);
+    expect(seenRefreshBodies).toEqual([
+      { refreshToken: "legacy-refresh", clientKind: "desktop" },
+    ]);
+  });
+
+  it("does not repeat the repair refresh on a later poll when the session still cannot be identified", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const seenSessionBearers: string[] = [];
+    const refreshCalls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        seenSessionBearers.push(init?.headers?.Authorization ?? "");
+        // Simulates a session that never becomes identifiable: every list,
+        // including one right after a repair refresh, comes back empty.
+        return okWithSessions([]);
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken(`repaired-${refreshCalls.length}`);
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    // First poll: repair is attempted once, then the unrepaired listing
+    // still surfaces the error so the caller/UI can report the problem.
+    await expect(service.fetchUserSessions(liveQuerySignal())).rejects.toThrow(
+      "Couldn't register this signed-in session yet.",
+    );
+    expect(refreshCalls).toHaveLength(1);
+
+    // A later poll (every 30s, or on window focus) with the SAME
+    // now-current bearer must not re-spend another refresh rotation or
+    // throw indefinitely; it returns the unidentified listing instead.
+    await expect(service.fetchUserSessions(liveQuerySignal())).resolves.toEqual(
+      {
+        sessions: [],
+      },
+    );
+    expect(refreshCalls).toHaveLength(1);
+    expect(seenSessionBearers).toEqual([
+      "Bearer legacy-token",
+      "Bearer repaired-1",
+      "Bearer repaired-1",
+    ]);
+  });
+
+  it("does not spend the repair refresh rotation for a read cancelled while the list is in flight", async () => {
+    // Identity fencing cannot cover this on its own: a revoke invalidating the
+    // panel query, an unmount, or a focus refetch superseding the 30s poll all
+    // leave the SAME account signed in, so every authority check still passes.
+    // Only the query's signal says nobody is waiting - and the repair below
+    // spends a single-use, cross-process refresh rotation.
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const listRequest = createDeferredResponse();
+    const refreshCalls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        return listRequest.promise;
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken("repaired-1");
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const controller = new AbortController();
+    const pending = service.fetchUserSessions(controller.signal);
+    controller.abort();
+
+    // The listing lands needing repair - an empty list for a pre-tracking
+    // credential is exactly the shape that would otherwise rotate.
+    listRequest.resolve(await okWithSessions([]));
+
+    await expect(pending).rejects.toThrow();
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it("rotates the live lease in place when a snapshot re-signs-in the SAME user", async () => {
+    // "Same user => same context object" is load-bearing beyond this file:
+    // the remote-session cache keys its auth epoch on the lease SOURCE, and
+    // stream owners do not rebuild transports on a same-user event. Minting a
+    // fresh context here would retire the epoch under every live remote
+    // session while its holders keep using it, then duplicate the physical
+    // connection on the next acquire. The cross-window snapshot projection is
+    // one of the two paths that used to sidestep the same-user rotate.
+    const { service, host } = makeService();
+    await service.start();
+    await deviceSignIn(service, host, "user-1-token");
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore).not.toBeNull();
+
+    // The desktop windows-bridge projection: a sibling window signed in and
+    // pushed its persisted snapshot. Same user, newer token.
+    await service.ingestProjectedSessionSnapshot({
+      status: "signed-in",
+      token: "user-1-newer-token",
+      profile: {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      contextMetadata: null,
+    });
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "user-1-newer-token",
+    );
+
+    // The SAME context object carries on with the rotated bearer - not an
+    // aborted predecessor plus a freshly-minted successor.
+    expect(provider.current()).toBe(contextBefore);
+  });
+
+  it("drops an account A session-list response that resolves after account B replaces it", async () => {
+    const { service, host } = makeService();
+    await service.start();
+    await deviceSignIn(service, host, "account-a-token");
+
+    const initialList = createDeferredResponse();
+    let initialListCalls = 0;
+    const seenSessionBearers: string[] = [];
+    const refreshCalls: string[] = [];
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        initialListCalls += 1;
+        seenSessionBearers.push(init?.headers?.Authorization ?? "");
+        return initialList.promise;
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken("unexpected-account-a-rotation");
+      }
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer account-b-token"
+      ) {
+        return okWithProfileForUser("user-2");
+      }
+      return status(500);
+    });
+
+    const staleList = service.fetchUserSessions(liveQuerySignal());
+    await vi.waitFor(() => {
+      expect(initialListCalls).toBe(1);
+    });
+
+    const generationBeforeProjection = service.getIdentityGeneration();
+    service.applyExternalSession(
+      externalSessionForUser("user-2", "account-b-token"),
+    );
+    expect(service.getIdentityGeneration()).toBe(generationBeforeProjection);
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-2");
+
+    initialList.resolve(await okWithSessions([]));
+
+    await expect(staleList).resolves.toBeNull();
+    expect(seenSessionBearers).toEqual(["Bearer account-a-token"]);
+    expect(refreshCalls).toEqual([]);
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    const stored = await host.tokenStore.get();
+    expect(stored?.token).toBe("account-a-token");
+    expect(stored?.user.id).toBe("user-1");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+  });
+
+  it("drops a repaired account A session-list response after account B replaces it", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "account-a-token", refreshToken: "account-a-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    const repairedList = createDeferredResponse();
+    const refreshResponse = createDeferredResponse();
+    const seenSessionBearers: string[] = [];
+    const seenRefreshTokens: string[] = [];
+    restoreFetch();
+    restoreFetch = installFetch(
+      repairedRaceFetch(
+        repairedList,
+        refreshResponse,
+        seenSessionBearers,
+        seenRefreshTokens,
+      ),
+    );
+
+    const staleList = service.fetchUserSessions(liveQuerySignal());
+    await vi.waitFor(() => {
+      expect(seenRefreshTokens).toEqual(["account-a-refresh"]);
+    });
+
+    refreshResponse.resolve(
+      await okWithRefreshToken("account-a-rotated-token"),
+    );
+    await vi.waitFor(() => {
+      expect(seenSessionBearers).toEqual([
+        "Bearer account-a-token",
+        "Bearer account-a-rotated-token",
+      ]);
+    });
+
+    await service.signOut();
+    await deviceSignIn(service, host, "account-b-token");
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-2");
+
+    repairedList.resolve(
+      await okWithSessions([
+        {
+          familyId: "account-a-family",
+          clientKind: "desktop",
+          displayLabel: "Account A desktop",
+          platform: "macOS",
+          appVersion: null,
+          location: null,
+          createdAt: "2026-07-30T10:00:00.000Z",
+          lastSeenAt: "2026-07-30T10:00:00.000Z",
+          revoked: false,
+          revokedAt: null,
+          revokedBy: null,
+          current: true,
+        },
+      ]),
+    );
+
+    await expect(staleList).resolves.toBeNull();
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    const stored = await host.tokenStore.get();
+    expect(stored?.token).toBe("account-b-token");
+    expect(stored?.user.id).toBe("user-2");
+    expect(useAuthStore.getState().status).toBe("signed-in");
   });
 
   it("does not drive auth transitions when disposed during startup validation", async () => {
@@ -553,6 +1080,12 @@ describe("AuthService", () => {
   });
 
   it("surfaces session-expired on refresh-rejected but keeps the credentials file", async () => {
+    // Startup validation gets a transient 5xx: NO verdict, so nothing is
+    // spent and no terminal error is claimed - the recovery loop waits for a
+    // real answer. Once validation actually REJECTS, the tick runs the locked
+    // rotate; its refresh 401 is the genuine session-expired.
+    // Virtualize so the auth-boundary retry budget is not real wall-clock.
+    vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
       { token: "stale-token", refreshToken: "stale-token-refresh" },
@@ -560,11 +1093,12 @@ describe("AuthService", () => {
     );
     restoreFetch();
     const calls: string[] = [];
+    let validationAnswers = false;
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
       if (url === VALIDATION_URL) {
-        return status(500);
+        return validationAnswers ? status(401) : status(500);
       }
       if (url === REFRESH_URL) {
         return status(401);
@@ -572,7 +1106,24 @@ describe("AuthService", () => {
       return status(500);
     });
 
-    await service.start();
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+
+    // No verdict yet: signed out but NOT expired, and zero refresh spends.
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getLastError()).toBeNull();
+    expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
+    expect(
+      calls.filter((call) => call === `GET ${VALIDATION_URL}`),
+    ).toHaveLength(AUTH_FETCH_MAX_ATTEMPTS);
+
+    // Validation comes back with a definitive 401: the recovery tick rotates,
+    // the refresh is rejected outright, and THAT is session-expired.
+    validationAnswers = true;
+    await vi.advanceTimersByTimeAsync(1_000);
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
@@ -581,10 +1132,9 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("stale-token", "stale-token-refresh"),
     );
-    expect(collapseConsecutiveCalls(calls)).toEqual([
-      `GET ${VALIDATION_URL}`,
-      `POST ${REFRESH_URL}`,
-    ]);
+    expect(calls.filter((call) => call === `POST ${REFRESH_URL}`)).toHaveLength(
+      1,
+    );
   });
 
   it("UI-only signs out with session-expired when validation rejects with 401 on start()", async () => {
@@ -672,6 +1222,7 @@ describe("AuthService", () => {
   it("UI-only signs out (file kept, no session-expired) when startup stays offline", async () => {
     // Transient refresh-network does not destroy the file and does not claim
     // a dead credential (H1 / §5).
+    vi.useFakeTimers();
     const { service, host } = makeService();
     await host.tokenStore.signIn(
       { token: "offline-token", refreshToken: "offline-token-refresh" },
@@ -686,15 +1237,447 @@ describe("AuthService", () => {
       return Promise.reject(new Error("offline"));
     });
 
-    await service.start();
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("offline-token", "offline-token-refresh"),
     );
-    // refresh-network is not a terminal authn reject.
     expect(service.getLastError()).toBeNull();
+    // Offline startup never reaches the refresh: a validation with NO verdict
+    // does not authorize a spend (only a REJECTED one does), so the whole
+    // offline window costs zero refresh generations.
+    expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
+
+    // The anti-latch: a transient startup failure arms the recovery loop
+    // rather than parking signed-out until an app restart. The next tick
+    // re-runs the validate cycle.
+    const callsBefore = calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    expect(calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("reconcile hands an expired-but-present file to the recovery loop, which rotates it in", async () => {
+    // A sibling wrote (or left) a file whose access token has expired past its
+    // 4h TTL while its 30d refresh token is perfectly good. The watcher-driven
+    // reconcile must not latch signed-out over it: it hands off to the
+    // recovery loop, whose locked rotate mints a fresh pair and signs in.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      const bearer = init?.headers?.Authorization ?? "";
+      if (url === VALIDATION_URL) {
+        return bearer === "Bearer rotated-fresh-token"
+          ? okWithProfile()
+          : status(401);
+      }
+      if (url === REFRESH_URL) {
+        return okWithRefreshToken("rotated-fresh-token");
+      }
+      return status(500);
+    });
+
+    // The sibling's write lands: file present, access token expired.
+    await host.tokenStore.signIn(
+      { token: "expired-file-token", refreshToken: "good-refresh-token" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    // Let the reconcile settle: validate 401 -> recovery scheduled.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // First recovery tick: validate 401 -> locked rotate -> fresh pair -> in.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe(
+      "rotated-fresh-token",
+    );
+    expect((await host.tokenStore.get())?.token).toBe("rotated-fresh-token");
+  });
+
+  it("recovers the stored session once authn becomes reachable again", async () => {
+    // The RCA headline case: the app boots while its authn is still coming up
+    // (or a sibling dev slot owns the file and this slot's backend lags). The
+    // transient failure must not latch - when authn answers, the recovery
+    // loop re-validates and signs back in with no user action.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "late-authn-token", refreshToken: "late-authn-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    let reachable = false;
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (!reachable) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    reachable = true;
+    // First recovery tick fires after the initial 1s backoff.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
+    expect(service.getLastError()).toBeNull();
+  });
+
+  it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {
+    // Another dev slot signs out. That deletes the SHARED file for the whole
+    // machine (by design), and it reaches this process through the watcher -
+    // which deliberately does not touch `identityGeneration`, and installs no
+    // bearer. So every fence a recovery tick holds is still "current" when its
+    // `/user` call returns valid (the token stays valid server-side for hours
+    // after the local file is gone). Without a file re-check the tick would
+    // sign the UI back in with no later event to correct it.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "doomed-token", refreshToken: "doomed-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    let reachable = false;
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (!reachable) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      if (url === VALIDATION_URL) {
+        // The delete lands while this very probe is in flight.
+        void host.tokenStore.delete();
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    reachable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // And it settles instead of spinning: the next tick reads an absent file.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+  });
+
+  it("does not burn refresh generations while identity validation is unreachable but refresh works", async () => {
+    // A half-reachable authn: /user unreachable, /auth/refresh alive. A
+    // validation with no verdict must NEVER authorize a spend - otherwise
+    // every recovery tick would rotate a fresh pair it can never validate,
+    // burning one refresh generation per backoff step.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "half-reach-token", refreshToken: "half-reach-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    let refreshCalls = 0;
+    let userReachable = false;
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshCalls += 1;
+        return okWithRefreshToken(`minted-${refreshCalls}`);
+      }
+      if (url === VALIDATION_URL && userReachable) {
+        return okWithProfile();
+      }
+      return Promise.reject(new Error("user probe down"));
+    });
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // Several recovery ticks with /user still down: zero refresh spends.
+    for (let tick = 0; tick < 4; tick += 1) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+        await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+      }
+    }
+    expect(refreshCalls).toBe(0);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // The probe recovers: the next tick adopts the stored pair AS-IS.
+    userReachable = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("half-reach-token");
+    expect(refreshCalls).toBe(0);
+  });
+
+  it("an in-flight recovery rotate stands down when the watcher adopts a newer session", async () => {
+    // While a recovery tick's locked rotate is in flight, another slot can
+    // sign a DIFFERENT user in; the watcher adopts that session without
+    // bumping the identity generation. The stale tick must stand down for the
+    // live bearer - never project its own outcome (here: session-expired)
+    // over user B's freshly-adopted session.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await service.start();
+
+    restoreFetch();
+    const deferredRefresh = createDeferredResponse();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      const bearer = init?.headers?.Authorization ?? "";
+      if (url === REFRESH_URL) {
+        return deferredRefresh.promise;
+      }
+      if (url === VALIDATION_URL) {
+        return bearer === "Bearer user-b-token"
+          ? okWithProfileForUser("user-b")
+          : status(401);
+      }
+      return status(500);
+    });
+
+    // A sibling leaves an expired user-a file; reconcile hands it to recovery.
+    await host.tokenStore.signIn(
+      { token: "expired-a-token", refreshToken: "user-a-refresh" },
+      { id: "user-a", email: "a@example.com", name: "A" },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    // Recovery tick: validate 401 -> locked rotate -> refresh HANGS in flight.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // While it hangs, another slot signs user B in; the watcher adopts it.
+    await host.tokenStore.signIn(
+      { token: "user-b-token", refreshToken: "user-b-refresh" },
+      { id: "user-b", email: "b@example.com", name: "B" },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("user-b-token");
+
+    // The stale tick's refresh finally answers - REJECTED. It must stand
+    // down for the live session, not surface session-expired over it.
+    deferredRefresh.resolve(new Response(null, { status: 401 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("user-b-token");
+    expect(service.getLastError()).toBeNull();
+  });
+
+  it("a store fault during a live rotate arms recovery and a later tick restores the session", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "live-token", refreshToken: "live-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-in");
+
+    // Virtualize after the signed-in subject exists (deviceless here, but the
+    // suite convention keeps real-timer setup out of fake time).
+    vi.useFakeTimers();
+    restoreFetch();
+    let healthy = false;
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL && healthy) {
+        return okWithProfile();
+      }
+      return status(401);
+    });
+    const rotateSpy = vi
+      .spyOn(host.tokenStore, "rotate")
+      .mockRejectedValue(new Error("EIO: credentials store unreadable"));
+
+    // Reactive revalidation: 401 -> locked rotate -> the STORE faults.
+    const outcome = await service.revalidateCurrentContext();
+    expect(outcome?.kind).toBe("rejected");
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
+
+    // The fault heals; the armed recovery tick re-reads the intact file and
+    // restores the session - clearing the stale store-unavailable error.
+    rotateSpy.mockRestore();
+    healthy = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("live-token");
+    expect(service.getLastError()).toBeNull();
+  });
+
+  it("a failed interactive attempt hands back to recovery when a stored session exists", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "recover-me-token", refreshToken: "recover-me-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-in");
+
+    vi.useFakeTimers();
+    const startSpy = vi
+      .spyOn(host.deviceFlow, "start")
+      .mockRejectedValue(new Error("device backend gone"));
+
+    // The attempt fails at launch: UI projects the failure (signed out), but
+    // the shared file still holds a perfectly valid session.
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
+
+    // The re-armed recovery loop adopts the stored session right back.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("recover-me-token");
+    expect(service.getLastError()).toBeNull();
+    startSpy.mockRestore();
+  });
+
+  it("a file event that cannot be validated while signed out still arms recovery", async () => {
+    // The watcher fires for an externally-written session exactly while authn
+    // is briefly unreachable. Authn recovering writes no new file event, so
+    // dropping this one would leave the app signed out forever - reconcile
+    // must hand the adoption to the recovery loop instead.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    restoreFetch();
+    let reachable = false;
+    restoreFetch = installFetch(() =>
+      reachable ? okWithProfile() : Promise.reject(new Error("authn down")),
+    );
+
+    await host.tokenStore.signIn(
+      { token: "appearing-token", refreshToken: "appearing-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    expect(useAuthStore.getState().status).toBe("signed-out");
+
+    reachable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("appearing-token");
+  });
+
+  it("keeps stored credentials when startup user lookup fails closed and refresh is transient", async () => {
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      {
+        token: "fail-closed-token",
+        refreshToken: "fail-closed-token-refresh",
+      },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return status(503);
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    await start;
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("fail-closed-token", "fail-closed-token-refresh"),
+    );
+    expect(service.getLastError()).toBeNull();
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
+
+    // Transient refresh (503) arms the recovery loop - the next tick retries
+    // the validate+rotate cycle instead of latching signed-out.
+    const callsBefore = calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("surfaces session-expired (file kept) when startup user lookup and refresh are genuinely rejected", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "rejected-token", refreshToken: "rejected-token-refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return status(401);
+      }
+      return status(500);
+    });
+
+    await service.start();
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    // `refresh-rejected` is terminal for the SESSION (session-expired copy),
+    // but only an explicit sign-out destroys the credentials file - so the
+    // pair survives for a later re-auth (H1 / §5).
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("rejected-token", "rejected-token-refresh"),
+    );
+    expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
     expect(collapseConsecutiveCalls(calls)).toEqual([
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
@@ -832,10 +1815,23 @@ describe("AuthService", () => {
   });
 
   it("surfaces sign-in-failed when a device-poll token validation hits a network error", async () => {
+    // Auth-boundary validation retries transient failures on a bounded
+    // exponential backoff. Drive those
+    // windows with fake timers so the suite does not sleep real wall-clock.
+    // Install before constructing the subject so any timer the service arms
+    // is already virtualized (suite afterEach restores real timers).
+    vi.useFakeTimers();
     const { service, host } = makeService();
     await service.start();
     restoreFetch();
-    restoreFetch = installFetch(() => Promise.reject(new Error("offline")));
+    const validationCalls: string[] = [];
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) {
+        validationCalls.push(url);
+      }
+      return Promise.reject(new Error("offline"));
+    });
 
     await service.signIn();
     host.deviceFlow.emitResult({
@@ -844,15 +1840,15 @@ describe("AuthService", () => {
       refreshToken: "net-fail-token-refresh",
     });
 
-    // The device-poll token validation now retries transient failures on a
-    // bounded backoff, so the surfaced error can arrive after the default 1s
-    // waitFor budget - allow for the full retry window.
-    await vi.waitFor(
-      () => {
-        expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
-      },
-      { timeout: 5000 },
-    );
+    // Advance only the retry delays — not the device_code TTL (~600s) that
+    // signIn arms as a backstop (runAllTimersAsync would fire that too).
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+
+    expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
+    // Exhausted the auth-boundary retry budget before the terminal failure.
+    expect(validationCalls).toHaveLength(AUTH_FETCH_MAX_ATTEMPTS);
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(await host.tokenStore.get()).toBeNull();
@@ -1242,13 +2238,73 @@ describe("AuthService", () => {
       await service.start();
       await deviceSignIn(service, host, "still-valid");
 
+      // Revalidation's access-only `/user` lookup retries transient 5xx on the
+      // same bounded schedule as sign-in validation. Virtualize
+      // after the signed-in subject exists so deviceSignIn's real-timer
+      // waitFor is unaffected; suite afterEach restores real timers.
+      vi.useFakeTimers();
       restoreFetch();
-      restoreFetch = installFetch(() => status(503));
+      const validationCalls: string[] = [];
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          validationCalls.push(url);
+        }
+        return status(503);
+      });
 
-      const outcome = await service.revalidateCurrentContext();
+      const pending = service.revalidateCurrentContext();
+      for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+        await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+      }
+      const outcome = await pending;
+
       expect(outcome?.kind).toBe("network-error");
+      expect(validationCalls).toHaveLength(AUTH_FETCH_MAX_ATTEMPTS);
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("still-valid");
+    });
+
+    it("preserves signed-in state when user lookup fails closed and refresh is transient", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "fail-closed-token");
+
+      vi.useFakeTimers();
+      restoreFetch();
+      const calls: string[] = [];
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer fail-closed-token"
+        ) {
+          return status(401);
+        }
+        if (
+          url === REFRESH_URL &&
+          init?.headers?.Authorization === "Bearer fail-closed-token"
+        ) {
+          return status(503);
+        }
+        return status(500);
+      });
+
+      const pending = service.revalidateCurrentContext();
+      await vi.runAllTimersAsync();
+      const outcome = await pending;
+
+      expect(outcome?.kind).toBe("network-error");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe(
+        "fail-closed-token",
+      );
+      expect(service.getLastError()).toBeNull();
+      expect(collapseConsecutiveCalls(calls)).toEqual([
+        `GET ${VALIDATION_URL}`,
+        `POST ${REFRESH_URL}`,
+      ]);
     });
 
     it("coalesces concurrent refresh revalidations so a spent sibling refresh token does not sign out", async () => {
@@ -1863,6 +2919,51 @@ describe("AuthService", () => {
       expect(await host.tokenStore.get()).toBeNull();
     });
 
+    it("explicit signOut drops the cached chat parts", async () => {
+      const { service, host } = makeService();
+      const deleted = installCacheStorage();
+      try {
+        await service.start();
+        await deviceSignIn(service, host, "live-token");
+        // The injected observation point, checked BEFORE the act: nothing has
+        // dropped a cache yet, so the assertion after cannot be satisfied by a
+        // recorder that was already non-empty.
+        expect(deleted.names).toEqual([]);
+
+        await service.signOut();
+
+        // Leaving the account means leaving the content. The part store is
+        // shared across every viewer on the installation, which is sound while
+        // they are signed in and is not sound as a residue.
+        await vi.waitFor(() =>
+          expect(deleted.names).toEqual(["traycer-chat-parts-v1"]),
+        );
+      } finally {
+        deleted.restore();
+      }
+    });
+
+    it("keeps the cached chat parts when signOut's delete fails", async () => {
+      const { service, host } = makeService();
+      const deleted = installCacheStorage();
+      try {
+        await service.start();
+        await deviceSignIn(service, host, "sticky-token");
+        host.tokenStore.delete = (): Promise<void> =>
+          Promise.reject(new Error("EACCES: credentials locked"));
+
+        await service.signOut();
+
+        // Still signed in, so the content is still theirs. The clear rides the
+        // path AFTER the delete lands, not the attempt - a failed sign-out that
+        // wiped the cache would cost a cold read for a session that never ended.
+        expect(useAuthStore.getState().status).toBe("signed-in");
+        expect(deleted.names).toEqual([]);
+      } finally {
+        deleted.restore();
+      }
+    });
+
     it("stays signed in when signOut's delete rejects", async () => {
       const { service, host } = makeService();
       await service.start();
@@ -2020,7 +3121,6 @@ describe("AuthService", () => {
           pair: {
             token: "foreign-token",
             refreshToken: "foreign-refresh",
-            authnBaseUrl: "http://localhost:5005",
             savedAt: new Date().toISOString(),
             user: {
               id: "other-user",
@@ -2069,7 +3169,6 @@ describe("AuthService", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "external-rotated",
         refreshToken: "external-rotated-refresh",
-        authnBaseUrl: "http://localhost:5005",
         savedAt: new Date().toISOString(),
         user: {
           id: "user-1",
@@ -2127,7 +3226,6 @@ describe("AuthService", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "stale-external",
         refreshToken: "stale-external-refresh",
-        authnBaseUrl: "http://localhost:5005",
         savedAt: new Date().toISOString(),
         user: {
           id: "user-1",
@@ -2236,7 +3334,6 @@ describe("AuthService", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "file-newer-token",
         refreshToken: "file-newer-token-refresh",
-        authnBaseUrl: "http://localhost:5005",
         savedAt: new Date().toISOString(),
         user: {
           id: "user-1",

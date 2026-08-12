@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { renderHook, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
@@ -9,11 +8,21 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import * as TabNav from "@/lib/tab-navigation";
+import type { HeaderTab } from "@/stores/tabs/types";
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
 const navigateSpy = vi.hoisted(() => vi.fn());
+const requestCloseWindowSpy = vi.hoisted(() =>
+  vi.fn((_windowId: string) => Promise.resolve()),
+);
+const windowsBridgeState = vi.hoisted(() => ({
+  bridge: null as {
+    readonly windowId: string;
+    readonly requestClose: typeof requestCloseWindowSpy;
+  } | null,
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateSpy,
@@ -33,6 +42,10 @@ vi.mock("@tanstack/react-router", () => ({
   }) => select({ location: { pathname: routerState.pathname } }),
 }));
 
+vi.mock("@/providers/windows-bridge-context", () => ({
+  useWindowsBridge: () => windowsBridgeState.bridge,
+}));
+
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   epicHasUnsyncedEdits: () => false,
   releaseOpenEpicSessionIfUnused: () => undefined,
@@ -48,10 +61,24 @@ function resetStores(): void {
   });
 }
 
+function draftHeaderTab(draftId: string): HeaderTab {
+  return {
+    kind: "draft",
+    id: draftId,
+    route: `/draft/${draftId}`,
+    name: "Start Page",
+    icon: null,
+    canDuplicate: false,
+    canOpenInNewWindow: false,
+  };
+}
+
 describe("useCloseTabFlow", () => {
   beforeEach(() => {
     routerState.pathname = "/";
     navigateSpy.mockReset();
+    requestCloseWindowSpy.mockClear();
+    windowsBridgeState.bridge = null;
     resetStores();
   });
   afterEach(() => {
@@ -79,6 +106,122 @@ describe("useCloseTabFlow", () => {
       tabId: a,
       epicId: "epic-a",
     });
+  });
+
+  it("closes the desktop window instead of removing its only blank Start Page", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    routerState.pathname = `/draft/${draftId}`;
+    windowsBridgeState.bridge = {
+      windowId: "window-b",
+      requestClose: requestCloseWindowSpy,
+    };
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(draftHeaderTab(draftId));
+    });
+
+    expect(requestCloseWindowSpy).toHaveBeenCalledExactlyOnceWith("window-b");
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the recreate-Start-Page flow for a lone non-empty draft", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(
+      draftId,
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "Keep me" }] },
+        ],
+      },
+      null,
+    );
+    routerState.pathname = `/draft/${draftId}`;
+    windowsBridgeState.bridge = {
+      windowId: "window-b",
+      requestClose: requestCloseWindowSpy,
+    };
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(draftHeaderTab(draftId));
+    });
+
+    expect(requestCloseWindowSpy).not.toHaveBeenCalled();
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
+    expect(navigateSpy).toHaveBeenCalledWith({ to: "/" });
+  });
+
+  it("does not mistake an image-only draft for a blank Start Page", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(
+      draftId,
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "image-1",
+                  fileName: "reference.png",
+                  hash: "image-hash",
+                  mimeType: "image/png",
+                  size: 42,
+                },
+              },
+            ],
+          },
+        ],
+      },
+      null,
+    );
+    routerState.pathname = `/draft/${draftId}`;
+    windowsBridgeState.bridge = {
+      windowId: "window-b",
+      requestClose: requestCloseWindowSpy,
+    };
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.requestCloseTab(draftHeaderTab(draftId));
+    });
+
+    expect(requestCloseWindowSpy).not.toHaveBeenCalled();
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
+    expect(navigateSpy).toHaveBeenCalledWith({ to: "/" });
+  });
+
+  it("closes a recreated blank Start Page on the next close gesture", () => {
+    const epicId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-only", "Only task");
+    routerState.pathname = `/epics/epic-only/${epicId}`;
+    windowsBridgeState.bridge = {
+      windowId: "window-b",
+      requestClose: requestCloseWindowSpy,
+    };
+    const { result, rerender } = renderHook(() => useCloseTabFlow());
+
+    act(() => {
+      result.current.closeActiveTab();
+    });
+    expect(requestCloseWindowSpy).not.toHaveBeenCalled();
+    expect(navigateSpy).toHaveBeenCalledWith({ to: "/" });
+
+    const recreatedDraftId = useLandingDraftStore.getState().createDraft(null);
+    routerState.pathname = `/draft/${recreatedDraftId}`;
+    rerender();
+    act(() => {
+      result.current.closeActiveTab();
+    });
+
+    expect(requestCloseWindowSpy).toHaveBeenCalledExactlyOnceWith("window-b");
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
   });
 
   it("closes the route-backed tab when a split focuses its fillable half", () => {

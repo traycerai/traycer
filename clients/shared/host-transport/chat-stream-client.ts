@@ -10,7 +10,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for a `chat.subscribe@1.1` session. The GUI chat store binds
@@ -116,6 +116,12 @@ export interface ChatStreamCallbacks {
       { readonly kind: "worktreeStateChanged" }
     >,
   ) => void;
+  readonly onManagedCommandsChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "managedCommandsChanged" }
+    >,
+  ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -123,7 +129,7 @@ export interface ChatStreamCallbacks {
 }
 
 export interface ChatStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly chatId: string;
   readonly callbacks: ChatStreamCallbacks;
@@ -139,12 +145,10 @@ export interface ChatStreamClientOptions {
 export class ChatStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ChatStreamCallbacks;
-  private readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
   private closed: boolean;
 
   constructor(options: ChatStreamClientOptions) {
     this.callbacks = options.callbacks;
-    this.wsStreamClient = options.wsStreamClient;
     this.closed = false;
     this.session = options.wsStreamClient.subscribe("chat.subscribe", {
       epicId: options.epicId,
@@ -173,8 +177,14 @@ export class ChatStreamClient {
    * `TerminalStreamClient`'s per-frame version read.
    */
   sameTurnSteeringProtocolSupported(): boolean {
-    const version =
-      this.wsStreamClient.getMethodSchemaVersion("chat.subscribe");
+    // THIS session's negotiated version, not the client-wide one. Every open
+    // chat tab is its own `chat.subscribe` session, and the client-wide
+    // accessor reports whichever of them reconciliation reached first - so a
+    // tab talking to a <=1.4 host could be told steering is supported because a
+    // sibling tab negotiated 1.5. That gates a SEND, not a parse: the message
+    // would be injected into a host that predates the ordering policy, which is
+    // the exact failure this guard exists to prevent.
+    const version = this.session.getNegotiatedSchemaVersion();
     return version !== null && version.major === 1 && version.minor >= 5;
   }
 
@@ -270,6 +280,10 @@ export class ChatStreamClient {
       }
       case "worktreeStateChanged": {
         this.callbacks.onWorktreeStateChanged(frame);
+        return;
+      }
+      case "managedCommandsChanged": {
+        this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
       case "pong": {

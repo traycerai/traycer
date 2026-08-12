@@ -22,9 +22,9 @@ interface SteerSettingsConflictDialogProps {
  * turn-start-baked change (model / reasoning / service tier / agent mode) that
  * the running turn can't absorb. Confirming ends the current turn and re-sends
  * the prompt under the new settings (the host resumes or forks per harness);
- * Cancel leaves the prompt queued and the turn running. Native dialog/button
- * keyboard behavior owns Enter/Esc. No in-dialog pending state - the queue/turn
- * reflects the result.
+ * Cancel leaves the prompt queued and the turn running. Enter confirms and Esc
+ * cancels, keeping the steer flow keyboard-only. No in-dialog pending state -
+ * the queue/turn reflects the result.
  */
 export function SteerSettingsConflictDialog(
   props: SteerSettingsConflictDialogProps,
@@ -38,6 +38,19 @@ export function SteerSettingsConflictDialog(
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="steer-settings-conflict-dialog"
+        onKeyDown={(event) => {
+          // Prefer nativeEvent.isComposing: React's KeyboardEvent typing in this
+          // package does not expose isComposing on the synthetic event.
+          if (
+            event.key !== "Enter" ||
+            event.repeat ||
+            event.nativeEvent.isComposing
+          ) {
+            return;
+          }
+          event.preventDefault();
+          onRestart();
+        }}
       >
         <DialogHeader className="space-y-1 px-6 pt-6 pb-2">
           <DialogTitle className="text-base font-semibold">
@@ -67,7 +80,8 @@ export function SteerSettingsConflictDialog(
             onClick={onRestart}
             data-testid="steer-settings-conflict-confirm"
           >
-            End turn &amp; send
+            End turn &amp; send{" "}
+            <span className="text-primary-foreground/70">(enter)</span>
           </Button>
         </DialogFooter>
       </DialogContent>

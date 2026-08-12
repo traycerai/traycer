@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
+import { guiAgentModelCapabilitiesSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
 interface HarnessModelPickerItemProps {
   readonly idPrefix: string;
@@ -36,17 +37,18 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
   // no notice), so the badge never renders without the tooltip behind it.
   const hasDeprecationNotice =
     row.deprecationNotice !== null && row.deprecationNotice.length > 0;
+  const supportsImageGeneration = modelSupportsImageGeneration(row);
+  const tooltipLabel = modelRowTooltipLabel(
+    row.deprecationNotice,
+    supportsImageGeneration,
+  );
 
   return (
-    // Anchored to the row button itself (not the inner Badge) so the notice is
-    // reachable by keyboard: the button is natively focusable and Radix merges
-    // the tooltip's hover/focus handlers with the button's own via `asChild`,
-    // whereas a span nested inside it never receives Tab focus. `label={null}`
-    // for non-deprecated rows makes this a transparent pass-through (see
-    // TooltipWrapper) - never add tabIndex to the Badge to "fix" this instead,
-    // that nests a focusable element inside the button, which is invalid.
+    // Anchored to the row button so capability/deprecation details are reachable
+    // by hover and keyboard focus. Radix merges the tooltip handlers with the
+    // button via `asChild`; `label={null}` is a transparent pass-through.
     <TooltipWrapper
-      label={row.deprecationNotice}
+      label={tooltipLabel}
       side="top"
       sideOffset={6}
       align="center"
@@ -101,6 +103,28 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
       </button>
     </TooltipWrapper>
   );
+}
+
+function modelSupportsImageGeneration(row: HarnessModelRow): boolean {
+  const parsed = guiAgentModelCapabilitiesSchema.safeParse(
+    row.model.metadata.capabilities,
+  );
+  return parsed.success && parsed.data.imageGeneration;
+}
+
+function modelRowTooltipLabel(
+  deprecationNotice: string | null,
+  supportsImageGeneration: boolean,
+): string | null {
+  const imageLabel = supportsImageGeneration
+    ? "Supports image generation"
+    : null;
+  if (deprecationNotice === null || deprecationNotice.length === 0) {
+    return imageLabel;
+  }
+  return imageLabel === null
+    ? deprecationNotice
+    : `${deprecationNotice} · ${imageLabel}`;
 }
 
 function modelRowElementId(idPrefix: string, rowId: string): string {

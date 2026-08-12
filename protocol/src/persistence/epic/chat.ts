@@ -5,6 +5,7 @@ import {
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
+  messageSchemaPreImage,
   messageSchemaPreInReplyTo,
 } from "@traycer/protocol/persistence/epic/messages";
 import { activeSessionChainSchema } from "@traycer/protocol/persistence/epic/senders";
@@ -28,8 +29,24 @@ export const claudePendingWakeSchema = z.object({
   scheduledFor: z.number(),
   prompt: z.string(),
   reason: z.string(),
+  retryDeadlineStartedAt: z.number().nullable().optional(),
+  // A due wake can be parked behind a detached interview while a later
+  // history rewrite temporarily clears the chat's active chain. Preserve the
+  // validated chain with the wake so host hydration can restore it instead of
+  // pruning the wake after a restart during that handoff.
+  heldChain: activeSessionChainSchema.nullable().optional(),
 });
 export type ClaudePendingWake = z.infer<typeof claudePendingWakeSchema>;
+
+// `claudePendingWakeSchema` is persisted state. The chat.subscribe snapshots
+// below are frozen wire contracts, so they retain this pre-deadline shape.
+const claudePendingWakeSchemaPreRetryDeadline = z.object({
+  sessionId: z.string(),
+  toolUseId: z.string(),
+  scheduledFor: z.number(),
+  prompt: z.string(),
+  reason: z.string(),
+});
 
 /**
  * Top-level chat record. On disk, `messages` is a yjs-backed Y.Array;
@@ -68,6 +85,34 @@ export const chatSchema = z.object({
    * before archiving existed parse unchanged.
    */
   archivedAt: z.number().nullable().default(null),
+  /**
+   * The user-facing provider handle, pinned once and rendered from this
+   * record forever (see the prompt-freeze decision log). Tristate, and the
+   * two "unset" states are NOT equivalent: ABSENT (the raw persisted key is
+   * missing - records written before this field existed) means "not pinned
+   * yet", read lazily and pinned on the next prompt build; an explicit
+   * `null` means "resolve failed at creation" and is final - render no
+   * handle sentence for this agent, permanently, never retried. A fork
+   * copies the source record's value rather than re-resolving. Defaulted
+   * (not just nullable) so an absent key still parses.
+   */
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  /**
+   * Digest cursor for the role-registry delivery channel (see
+   * roles-snapshot-delivery): the hash of the canonically-serialized claims
+   * last delivered to this agent. Unlike `pinnedUserProviderHandle`, an
+   * absent key and an explicit `null` are equivalent here - both read as
+   * "never delivered" (a brand-new agent, or a record persisted before this
+   * field existed). Compared against the current registry's digest to
+   * decide whether the next prompt pull owes a fresh snapshot. A third
+   * value is possible: the host may stamp a reserved sentinel string that
+   * can never equal a real content digest, meaning "a push was attempted
+   * but not confirmed delivered" - the next pull must treat the cursor as
+   * behind and deliver a fresh truth snapshot before stamping a clean
+   * digest again. The sentinel's literal value is host-owned, not part of
+   * this contract.
+   */
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
 
@@ -87,7 +132,9 @@ export const chatSchemaPreInReplyTo = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
   messages: z.array(messageSchemaPreInReplyTo),
   events: z.array(chatEventSchemaPreInReplyTo).default([]),
 });
@@ -108,7 +155,72 @@ export const chatSchemaV14 = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
-  messages: z.array(messageSchema),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
+  // Pre-image freeze (see `messageSchemaPreImage`): this released line must
+  // never observe `imageResults`/the image resolution record, which the live
+  // `messageSchema` would otherwise silently gain.
+  messages: z.array(messageSchemaPreImage),
   events: z.array(chatEventSchema).default([]),
+});
+
+// Wire-freeze copy with `archivedAt` (the field `1.5` shipped) but without
+// `pinnedUserProviderHandle` / `lastDeliveredRolesDigest`, bound to
+// `chat.subscribe@1.5`'s snapshot serverFrame so that released line stays
+// verbatim. Hand-frozen (every other field reuses the live sub-schemas); NOT
+// derived from the live shape - see `chatSchemaV14`'s comment for why a
+// released line must not follow `chatSchema` by reference.
+export const chatSchemaV15 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
+  // Pre-image freeze (see `messageSchemaPreImage`): this released line must
+  // never observe `imageResults`/the image resolution record, which the live
+  // `messageSchema` would otherwise silently gain.
+  messages: z.array(messageSchemaPreImage),
+  events: z.array(chatEventSchema).default([]),
+  archivedAt: z.number().nullable().default(null),
+});
+
+// Wire-freeze copy of the live `chatSchema` from before image support
+// existed, with `messages` swapped for the frozen `messageSchemaPreImage`.
+// Bound to `chat.subscribe@1.6`'s snapshot serverFrame (the released line
+// that currently binds the live `chatSchema` by reference - see
+// `chatSubscribeV16` in `subscribe.ts`) so that shipped line stays verbatim.
+// Every other field reuses the live shape as of today - `1.6` shipped bound
+// directly to `chatSchema`, so `pinnedUserProviderHandle` and
+// `lastDeliveredRolesDigest` are already on its released wire and must be
+// preserved here, unlike `chatSchemaV14`/`chatSchemaV15` which predate them.
+// Hand-frozen, NOT derived from the live shape, so a future field added to
+// `chatSchema` cannot silently leak onto this frozen line.
+export const chatSchemaPreImage = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
+  messages: z.array(messageSchemaPreImage),
+  events: z.array(chatEventSchema).default([]),
+  archivedAt: z.number().nullable().default(null),
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
 });

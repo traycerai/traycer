@@ -12,7 +12,6 @@
  * a genuine activate -> onResult path runs, then forces unrelated
  * re-renders to prove the guard holds.
  */
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -32,7 +31,12 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
@@ -107,6 +111,28 @@ vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
+
+function hostDoneEntry(id: string): HostNotificationEntry {
+  return {
+    id,
+    updatedAt: 20,
+    readAt: null,
+    kind: "agent.stopped",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Agent",
+      taskTitle: "Task",
+      outcome: "completed",
+    },
+  };
+}
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -212,6 +238,22 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     });
     useNotificationEventsStore.getState().clear();
     useNotificationsPopoverStore.getState().setOpen(false);
+    // The activation path issues mark-read only from a correlated store row
+    // (a stale/absent row must route without mutating) - seed the rows the
+    // replay clicks reference, like the sibling suite does.
+    __resetHostNotificationsStoreForTests();
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostDoneEntry("n-replay"),
+          hostDoneEntry("n-1"),
+          hostDoneEntry("n-2"),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 3, attentionCount: 0 },
+    });
   });
 
   afterEach(() => {

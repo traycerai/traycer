@@ -9,7 +9,6 @@
  * the acknowledgment write, and the toast surface are spied, because those
  * are the observable effects whose ORDER relative to the bind is the point.
  */
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -185,7 +184,9 @@ async function mountBridge(options: {
   let remoteHosts = options.remoteHosts;
   const directory = new HostDirectoryService({
     runnerHost,
-    remoteFetcher: () => Promise.resolve(remoteHosts),
+    remoteFetcher: () =>
+      Promise.resolve({ kind: "hosts" as const, entries: remoteHosts }),
+    localHostIdSeeder: null,
   });
   await directory.start();
 
@@ -269,6 +270,11 @@ async function mountBridge(options: {
     refreshRemoteHosts: async (hosts) => {
       remoteHosts = hosts;
       await act(async () => {
+        // The activation path fires a coalesced background `refresh()`
+        // (T20/T21): a call landing while that fetch is in flight JOINS it and
+        // observes the pre-change host list. Drain any in-flight refresh
+        // first, then fetch again so this helper's outcome reflects `hosts`.
+        await directory.refresh();
         await directory.refresh();
       });
     },

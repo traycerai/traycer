@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,7 +8,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
@@ -37,6 +35,7 @@ import {
   __setChatStreamClientFactoryForTests,
 } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { installLegendListViewportMetrics } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
@@ -121,6 +120,10 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
+  // No stream client means nothing has been negotiated yet, which is what
+  // `null` says - the tile's Shells menu reads this and stays quiet.
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -273,6 +276,8 @@ function emitChatSnapshot(
         createdAt: 0,
         updatedAt: 0,
         archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
         isTitleEditedByUser: false,
         settings: QUEUED_SETTINGS,
         activeSessionChain: null,
@@ -308,12 +313,12 @@ function emitChatSnapshot(
       queue: { status: "idle", items: [...queueItems] },
       runStatus: "running",
       activeTurn: {
+        agentMode: "regular",
         sameTurnSteeringSupported: true,
         turnId: "turn-1",
         status: "running",
         harnessId: QUEUED_SETTINGS.harnessId,
         model: QUEUED_SETTINGS.model,
-        agentMode: QUEUED_SETTINGS.agentMode,
         profileId: null,
         userMessageId: "message-active",
         startedAt: 1,
@@ -345,11 +350,13 @@ function emitChatSnapshot(
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
+      managedCommands: [],
     },
   });
 }
 
 beforeEach(() => {
+  installLegendListViewportMetrics();
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
@@ -390,6 +397,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt",
         queueItemId: "queue-steer-edit",
         messageId: "message-queue-steer-edit",
         message: {
@@ -466,6 +474,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
+        kind: "prompt",
         queueItemId: "queue-edit",
         messageId: "message-queue-edit",
         message: {
@@ -527,37 +536,33 @@ function renderChatTile(): void {
   });
   render(
     <TestRouterProvider>
-      <VirtuosoMessageListTestingContext.Provider
-        value={{ itemHeight: 120, viewportHeight: 900 }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <RunnerHostProvider
-            runnerHost={
-              new MockRunnerHost({
-                signInUrl: "https://example.com",
-                authnBaseUrl: "https://auth.example.com",
-                localHost: null,
-                hosts: [],
-                workspaceFolderPickerPaths: undefined,
-                hasLocalHost: undefined,
-                traycerCli: undefined,
-              })
-            }
-          >
-            <TooltipProvider>
-              <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  <ChatTile
-                    node={CHAT_ARTIFACT}
-                    viewTabId="tab-queue-edit-steer"
-                    isActive
-                  />
-                </TabHostProvider>
-              </TestEpicSessionWrapper>
-            </TooltipProvider>
-          </RunnerHostProvider>
-        </QueryClientProvider>
-      </VirtuosoMessageListTestingContext.Provider>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={
+            new MockRunnerHost({
+              signInUrl: "https://example.com",
+              authnBaseUrl: "https://auth.example.com",
+              localHost: null,
+              hosts: [],
+              workspaceFolderPickerPaths: undefined,
+              hasLocalHost: undefined,
+              traycerCli: undefined,
+            })
+          }
+        >
+          <TooltipProvider>
+            <TestEpicSessionWrapper epicId={EPIC_ID}>
+              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                <ChatTile
+                  node={CHAT_ARTIFACT}
+                  viewTabId="tab-queue-edit-steer"
+                  isActive
+                />
+              </TabHostProvider>
+            </TestEpicSessionWrapper>
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
     </TestRouterProvider>,
   );
 }

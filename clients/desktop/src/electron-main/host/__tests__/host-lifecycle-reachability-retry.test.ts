@@ -58,6 +58,7 @@ function layoutIn(dir: string): HostFsLayout {
   return {
     rootDir: dir,
     pidMetadataFile: join(dir, "pid.json"),
+    identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
     logFile: join(dir, "host.log"),
     installDir: join(dir, "install"),
     installRecordFile: join(dir, "install", "install.json"),
@@ -119,7 +120,7 @@ describe("HostLifecycle reachability retry ladder", () => {
 
       try {
         // The incident's opening state: app boots while the host is down.
-        await lifecycle.bootstrap();
+        await lifecycle.bootstrap({ hostInstalled: true });
         expect(errors).toEqual([{ code: "HOST_NOT_READY" }]);
         expect(lifecycle.getSnapshot()).toBeNull();
 
@@ -179,7 +180,7 @@ describe("HostLifecycle reachability retry ladder", () => {
       // previous version left the probe reachable, so no ladder ever armed and
       // deleting the clear would not have failed it).
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
-      await lifecycle.bootstrap();
+      await lifecycle.bootstrap({ hostInstalled: true });
       expect(lifecycle.getSnapshot()).toBeNull();
       await waitUntil(() => probeCalls >= 2, 5_000);
 

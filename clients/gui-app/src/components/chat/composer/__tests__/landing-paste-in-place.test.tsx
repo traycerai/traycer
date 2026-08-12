@@ -6,7 +6,6 @@
  * and failed ingest (remove node + toast + reconcile). Fake only idb-keyval;
  * putImage / rewrite-by-id run for real.
  */
-import "../../../../../__tests__/test-browser-apis";
 import { fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
@@ -49,10 +48,10 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
   return {
     ...actual,
     scheduleLandingImageReconcile: mocks.scheduleLandingImageReconcile,
-    // Budget always allows paste fixtures (store tests cover real budget).
-    reserveLandingImageBudget: () => true,
   };
 });
+// Paste fixtures are tiny (well under 64 MiB); use the real
+// `reserveLandingImageBudget` so this stays an integration test of admission.
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 

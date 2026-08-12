@@ -181,6 +181,8 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
       { kind: "info" },
       null,
       "delivery-1",
+      "host",
+      null,
     );
 
     expect(host.tray.indicator).toBe("attention");
@@ -192,6 +194,8 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
         payload: { kind: "info" },
         replaceKey: null,
         deliveryKey: "delivery-1",
+        feedSource: "host",
+        foregroundAppLocal: null,
       },
     ]);
     expect(traySelection).not.toHaveBeenCalled();
@@ -283,10 +287,12 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
       { token: "foo", refreshToken: "foo-refresh" },
       { id: "u1", email: "u1@example.com", name: "U One" },
     );
+    // No `authnBaseUrl`: the stored session carries only the token pair and the
+    // cached identity. The origin lives on the runner host's own config (the
+    // `authnBaseUrl` option above), which is what the refresh closes over.
     await expect(host.tokenStore.get()).resolves.toEqual({
       token: "foo",
       refreshToken: "foo-refresh",
-      authnBaseUrl: "http://localhost:5005",
       savedAt: expect.any(String),
       user: { id: "u1", email: "u1@example.com", name: "U One" },
     });

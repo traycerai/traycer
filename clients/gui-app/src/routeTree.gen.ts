@@ -19,6 +19,7 @@ import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
@@ -27,6 +28,7 @@ import { Route as SettingsNotificationsRouteImport } from "./routes/settings.not
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
+import { Route as SettingsUsageRouteImport } from "./routes/settings.usage";
 import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
 
@@ -80,6 +82,11 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   path: "/appearance",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
+  id: "/devices",
+  path: "/devices",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
   id: "/diagnostics",
   path: "/diagnostics",
@@ -120,6 +127,11 @@ const SettingsShellRoute = SettingsShellRouteImport.update({
   path: "/shell",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsUsageRoute = SettingsUsageRouteImport.update({
+  id: "/usage",
+  path: "/usage",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsWorktreesRoute = SettingsWorktreesRouteImport.update({
   id: "/worktrees",
   path: "/worktrees",
@@ -140,6 +152,7 @@ export interface FileRoutesByFullPath {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
@@ -148,6 +161,7 @@ export interface FileRoutesByFullPath {
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
   "/settings/": typeof SettingsIndexRoute;
@@ -160,6 +174,7 @@ export interface FileRoutesByTo {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
@@ -168,6 +183,7 @@ export interface FileRoutesByTo {
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics": typeof EpicsIndexRoute;
   "/settings": typeof SettingsIndexRoute;
@@ -183,6 +199,7 @@ export interface FileRoutesById {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
@@ -191,6 +208,7 @@ export interface FileRoutesById {
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
   "/settings/": typeof SettingsIndexRoute;
@@ -207,6 +225,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/appearance"
+    | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
@@ -215,6 +234,7 @@ export interface FileRouteTypes {
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
     | "/settings/"
@@ -227,6 +247,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/appearance"
+    | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
@@ -235,6 +256,7 @@ export interface FileRouteTypes {
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/usage"
     | "/settings/worktrees"
     | "/epics"
     | "/settings"
@@ -249,6 +271,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/appearance"
+    | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
@@ -257,6 +280,7 @@ export interface FileRouteTypes {
     | "/settings/providers"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
     | "/settings/"
@@ -344,6 +368,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/devices": {
+      id: "/settings/devices";
+      path: "/devices";
+      fullPath: "/settings/devices";
+      preLoaderRoute: typeof SettingsDevicesRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/diagnostics": {
       id: "/settings/diagnostics";
       path: "/diagnostics";
@@ -400,6 +431,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsShellRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/usage": {
+      id: "/settings/usage";
+      path: "/usage";
+      fullPath: "/settings/usage";
+      preLoaderRoute: typeof SettingsUsageRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/worktrees": {
       id: "/settings/worktrees";
       path: "/worktrees";
@@ -432,6 +470,7 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 interface SettingsRouteChildren {
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
@@ -440,6 +479,7 @@ interface SettingsRouteChildren {
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
+  SettingsUsageRoute: typeof SettingsUsageRoute;
   SettingsWorktreesRoute: typeof SettingsWorktreesRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
 }
@@ -447,6 +487,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
@@ -455,6 +496,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
+  SettingsUsageRoute: SettingsUsageRoute,
   SettingsWorktreesRoute: SettingsWorktreesRoute,
   SettingsIndexRoute: SettingsIndexRoute,
 };

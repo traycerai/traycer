@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -228,6 +227,16 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -290,6 +299,7 @@ function seedLiveForkWorkspace(): void {
     path: "/repo/lifecycle",
     name: "lifecycle",
     repoIdentifier: null,
+    hostId: null,
   };
   useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
     folders: [folder.path],
@@ -340,6 +350,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     expect(request).toEqual(
       expect.objectContaining({
         forkSource: {
+          boundary: "assistantMessage",
           sourceChatId: "source-chat",
           assistantMessageId: "assistant-message-1",
           interviewBlockId: "question-tool:interview",
@@ -358,6 +369,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
       path: "/repo/added-after-open",
       name: "added-after-open",
       repoIdentifier: null,
+      hostId: null,
     };
     const stagedEntry = {
       kind: "worktree" as const,

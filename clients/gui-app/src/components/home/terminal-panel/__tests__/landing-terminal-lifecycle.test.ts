@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfo,
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import {
+  landingTerminalLayoutFor,
   parsePersistedLandingTerminalState,
   terminalSessionKey,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
-import { reconcileLandingTerminalTabs } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
+import {
+  reconcileLandingTerminalTabs,
+  resolveLandingTerminalSyncedTitle,
+  resolveLandingTerminalTitleCwd,
+} from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
 import {
   resolveLandingTerminalLaunchCwd,
@@ -16,6 +24,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 
 const HOST_A = "host-a";
 const HOST_B = "host-b";
+const LANDING_PAGE_ID = "landing-page";
 
 function tab(input: {
   readonly instanceId: string;
@@ -54,6 +63,18 @@ function session(input: {
   };
 }
 
+function liveSession(input: {
+  readonly sessionId: string;
+  readonly currentCwd: string;
+  readonly activeProcessName: string | null;
+}): CanonicalTerminalSessionInfoWithCurrentCwd {
+  return {
+    ...session({ sessionId: input.sessionId, status: "running" }),
+    currentCwd: input.currentCwd,
+    activeProcessName: input.activeProcessName,
+  };
+}
+
 describe("landing terminal lifecycle", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -89,13 +110,90 @@ describe("landing terminal lifecycle", () => {
     useLandingTerminalStore
       .getState()
       .addTab(tab({ instanceId: "a", sessionId: "session-a", hostId: HOST_A }));
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
 
     expect(resolveLandingTerminalAvailability(null, undefined, null)).toBe(
       "no-active-host",
     );
     expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+    expect(
+      landingTerminalLayoutFor(
+        useLandingTerminalStore.getState(),
+        LANDING_PAGE_ID,
+      ).panelOpen,
+    ).toBe(true);
+  });
+
+  it("restores collapse, width, and fullscreen independently by landing page", () => {
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      layoutsByLandingPageId: {
+        "draft-a": {
+          panelOpen: false,
+          panelWidthFraction: 0.3,
+          maximized: false,
+        },
+        "draft-b": {
+          panelOpen: true,
+          panelWidthFraction: 0.48,
+          maximized: true,
+        },
+      },
+      pendingKills: [],
+    });
+
+    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+      panelOpen: false,
+      panelWidthFraction: 0.3,
+      maximized: false,
+    });
+    expect(landingTerminalLayoutFor(restored, "draft-b")).toEqual({
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      maximized: true,
+    });
+  });
+
+  it("collapses every open layout when the shared terminal set becomes empty", () => {
+    const store = useLandingTerminalStore.getState();
+    store.setPanelOpen("draft-a", true);
+    store.setPanelOpen("draft-b", true);
+    store.addTab(
+      tab({ instanceId: "only", sessionId: "s-only", hostId: HOST_A }),
+    );
+
+    store.closeTab("draft-b", "only");
+
+    const state = useLandingTerminalStore.getState();
+    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(false);
+    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(false);
+  });
+
+  it("preserves a v1 layout without coupling later page changes", () => {
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      pendingKills: [],
+    });
+    useLandingTerminalStore.setState(restored);
+
+    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+      panelOpen: true,
+      panelWidthFraction: 0.48,
+      maximized: false,
+    });
+
+    useLandingTerminalStore.getState().setPanelOpen("draft-a", false);
+
+    expect(
+      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-a"),
+    ).toMatchObject({ panelOpen: false, panelWidthFraction: 0.48 });
+    expect(
+      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-b"),
+    ).toMatchObject({ panelOpen: true, panelWidthFraction: 0.48 });
   });
 
   it("adopts a running host session before any auto-spawn decision", () => {
@@ -109,11 +207,14 @@ describe("landing terminal lifecycle", () => {
     });
 
     expect(result.tabs).toEqual([
-      tab({
-        instanceId: "adopted-instance",
-        sessionId: "orphan",
-        hostId: HOST_A,
-      }),
+      {
+        ...tab({
+          instanceId: "adopted-instance",
+          sessionId: "orphan",
+          hostId: HOST_A,
+        }),
+        name: "project · New Terminal",
+      },
     ]);
     expect(result.adoptedTabs).toHaveLength(1);
     // The panel uses this non-empty result to skip its final auto-spawn step.
@@ -128,14 +229,21 @@ describe("landing terminal lifecycle", () => {
         hostId: HOST_A,
       }),
     );
-    const closed = useLandingTerminalStore.getState().closeTab("closed");
+    const closed = useLandingTerminalStore
+      .getState()
+      .closeTab(LANDING_PAGE_ID, "closed");
     expect(closed?.sessionId).toBe("session-close");
 
     const restored = parsePersistedLandingTerminalState({
       tabs: [],
       activeInstanceId: null,
-      panelOpen: false,
-      panelWidthFraction: 0.36,
+      layoutsByLandingPageId: {
+        [LANDING_PAGE_ID]: {
+          panelOpen: false,
+          panelWidthFraction: 0.36,
+          maximized: false,
+        },
+      },
       pendingKills: [{ hostId: HOST_A, sessionId: "session-close" }],
     });
     const result = reconcileLandingTerminalTabs({
@@ -203,6 +311,138 @@ describe("landing terminal lifecycle", () => {
     ]);
     expect(result.activeInstanceId).toBe("dead-host");
   });
+
+  it("refreshes default titles from live metadata without overwriting manual names", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const manualTab = {
+      ...tab({
+        instanceId: "manual",
+        sessionId: "manual-session",
+        hostId: HOST_A,
+      }),
+      name: "Pinned name",
+      titleSource: "manual" as const,
+    };
+    useLandingTerminalStore.getState().addTab(defaultTab);
+    useLandingTerminalStore.getState().addTab(manualTab);
+
+    useLandingTerminalStore.getState().syncDefaultTitle("default", "gui · vim");
+    useLandingTerminalStore.getState().syncDefaultTitle("manual", "gui · vim");
+
+    expect(useLandingTerminalStore.getState().tabs).toEqual([
+      { ...defaultTab, name: "gui · vim" },
+      manualTab,
+    ]);
+  });
+
+  it("falls back only until the live cwd field has been reported", () => {
+    expect(
+      resolveLandingTerminalTitleCwd({
+        currentCwd: null,
+        currentCwdReported: false,
+        launchCwd: "/workspace/project",
+      }),
+    ).toBe("/workspace/project");
+    expect(
+      resolveLandingTerminalTitleCwd({
+        currentCwd: null,
+        currentCwdReported: true,
+        launchCwd: "/workspace/project",
+      }),
+    ).toBeNull();
+  });
+
+  it("waits for the first stream snapshot before syncing a default title", () => {
+    const streamState = {
+      title: null,
+      activeProcessName: "vim",
+      currentCwd: "/workspace/project/packages/gui",
+      currentCwdReported: true,
+      launchCwd: "/workspace/project",
+    };
+
+    expect(
+      resolveLandingTerminalSyncedTitle({
+        ...streamState,
+        snapshotLoaded: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveLandingTerminalSyncedTitle({
+        ...streamState,
+        snapshotLoaded: true,
+      }),
+    ).toBe("gui · vim");
+  });
+
+  it("reconciles default titles from the latest cwd and active process", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const manualTab = {
+      ...tab({
+        instanceId: "manual",
+        sessionId: "manual-session",
+        hostId: HOST_A,
+      }),
+      name: "Pinned name",
+      titleSource: "manual" as const,
+    };
+    const result = reconcileLandingTerminalTabs({
+      tabs: [defaultTab, manualTab],
+      activeInstanceId: "default",
+      activeHostId: HOST_A,
+      sessions: [
+        liveSession({
+          sessionId: "default-session",
+          currentCwd: "/workspace/project/packages/gui",
+          activeProcessName: "vim",
+        }),
+        liveSession({
+          sessionId: "manual-session",
+          currentCwd: "/workspace/project/packages/host",
+          activeProcessName: "bun",
+        }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(result.tabs).toEqual([
+      { ...defaultTab, name: "gui · vim" },
+      manualTab,
+    ]);
+  });
+
+  it("does not restore a launch-directory prefix for an explicit empty cwd", () => {
+    const defaultTab = tab({
+      instanceId: "default",
+      sessionId: "default-session",
+      hostId: HOST_A,
+    });
+    const result = reconcileLandingTerminalTabs({
+      tabs: [defaultTab],
+      activeInstanceId: "default",
+      activeHostId: HOST_A,
+      sessions: [
+        liveSession({
+          sessionId: "default-session",
+          currentCwd: "",
+          activeProcessName: "vim",
+        }),
+      ],
+      excludedSessionKeys: new Set(),
+      mintInstanceId: () => "unused",
+    });
+
+    expect(result.tabs).toEqual([{ ...defaultTab, name: "vim" }]);
+  });
 });
 
 describe("resolveLandingTerminalLaunchCwd", () => {
@@ -255,7 +495,9 @@ describe("closeAllTabs", () => {
     store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
     store.addTab(tab({ instanceId: "b", sessionId: "s-b", hostId: HOST_B }));
 
-    const closed = useLandingTerminalStore.getState().closeAllTabs();
+    const closed = useLandingTerminalStore
+      .getState()
+      .closeAllTabs(LANDING_PAGE_ID);
 
     // Tombstone-first durability: the refs are gone AND every session is
     // tombstoned by the time the caller gets them back to kill, so a reload
@@ -264,7 +506,9 @@ describe("closeAllTabs", () => {
     const state = useLandingTerminalStore.getState();
     expect(state.tabs).toEqual([]);
     expect(state.activeInstanceId).toBeNull();
-    expect(state.panelOpen).toBe(false);
+    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
+      false,
+    );
     expect(state.pendingKills).toEqual([
       { hostId: HOST_A, sessionId: "s-a" },
       { hostId: HOST_B, sessionId: "s-b" },
@@ -272,10 +516,17 @@ describe("closeAllTabs", () => {
   });
 
   it("is a no-op with no tabs open", () => {
-    useLandingTerminalStore.getState().setPanelOpen(true);
+    useLandingTerminalStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
 
-    expect(useLandingTerminalStore.getState().closeAllTabs()).toEqual([]);
+    expect(
+      useLandingTerminalStore.getState().closeAllTabs(LANDING_PAGE_ID),
+    ).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-    expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+    expect(
+      landingTerminalLayoutFor(
+        useLandingTerminalStore.getState(),
+        LANDING_PAGE_ID,
+      ).panelOpen,
+    ).toBe(true);
   });
 });

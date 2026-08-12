@@ -6,11 +6,28 @@ import type {
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
+  TokenRotateOutcome,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  ListUserSessionsResponse,
+  MintHostCredentialRequest,
+} from "@traycer/protocol/auth/devices-sessions";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
+import type {
+  MintHostCredentialFetchResult,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -33,6 +50,10 @@ import {
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
 import {
+  browserChatPartCacheStorage,
+  clearChatPartCache,
+} from "@/lib/chats/cloud-chat-part-cache";
+import {
   Analytics,
   AnalyticsEvent,
   type AnalyticsBlocker,
@@ -49,6 +70,10 @@ import { AuthTokenStore } from "./auth-token-store";
 // shared file, then wipes them.
 const LEGACY_ACCESS_TOKEN_KEY = "traycer.token";
 const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
+
+// Stored-session recovery backoff bounds (see `sessionRecoveryTimer`).
+const SESSION_RECOVERY_INITIAL_DELAY_MS = 1_000;
+const SESSION_RECOVERY_MAX_DELAY_MS = 30_000;
 
 export interface AuthServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -75,6 +100,19 @@ export interface AuthSessionSnapshot {
   readonly token: string | null;
   readonly profile: AuthProfile | null;
   readonly contextMetadata: AuthContextMetadata | null;
+}
+
+/**
+ * The identity and credential authority that started an account-scoped
+ * operation. `identityGeneration` alone cannot distinguish a projected or
+ * reconciled account replacement, so callers also retain the live credential
+ * object and bearer they are allowed to use.
+ */
+interface LiveSessionAuthority {
+  readonly credentials: OpenFrameBearerSource;
+  readonly userId: string;
+  readonly bearer: string;
+  readonly generation: number;
 }
 
 export type AuthSessionSnapshotListener = (
@@ -284,6 +322,13 @@ export class AuthService {
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
   private currentForceRefresh: Promise<void> | null = null;
+  private currentForceRefreshAuthority: LiveSessionAuthority | null = null;
+  // The bearer `fetchUserSessions()` already spent a repair refresh on without
+  // reaching an identified current session. Skips repeating that rotation on
+  // every 30s poll/focus refetch for an unchanging bearer; a bearer change
+  // (sign-in, sign-out, or any other rotation) naturally clears this by no
+  // longer matching.
+  private unrepairableSessionsBearer: string | null = null;
   // §4 reconcile worker: single-flight + trailing re-run so overlapping watcher
   // events never interleave applies. Never writes, never spends.
   private currentReconcile: Promise<void> | null = null;
@@ -340,6 +385,18 @@ export class AuthService {
   // so a stale token cannot resurrect signed-in state after a failure has
   // already projected signed-out.
   private authResolvedDuringStart: boolean = false;
+  // Background stored-session recovery - the anti-latch. Armed whenever an
+  // AUTOMATIC path lands on signed-out for a TRANSIENT reason (lock-busy, a
+  // refresh network blip, a sibling's still-landing spend, a store I/O fault)
+  // while the shared credentials file may still hold a refreshable session.
+  // Without it a single bad moment - authn still booting next to the app in a
+  // dev stack, a laptop waking - latched signed-out until an app restart,
+  // because `applySignedOut()` also stops the proactive scheduler. Exponential
+  // backoff; reset and disarmed by any settled state (signed in, terminal
+  // rejection, explicit sign-out, no file left to recover).
+  private sessionRecoveryTimer: number | null = null;
+  private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
+  private sessionRecoveryAttempt: number = 0;
 
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -552,13 +609,31 @@ export class AuthService {
         this.applySignedIn(stored.token, outcome.user, undefined);
         return;
       }
-      // The stored access token is invalid/expired. Run the locked rotate (the
-      // one spend) rather than clearing the file: only explicit sign-out
-      // destroys it, and a transient failure keeps it for a later retry (H1).
+      if (outcome.kind === "network-error") {
+        // No verdict (authn unreachable) is no reason to spend: the recovery
+        // loop re-validates on backoff, and only a REJECTED verdict ever
+        // authorizes the locked rotate. Rotating here instead would let a
+        // half-reachable authn (identity probe down, refresh up) burn one
+        // refresh generation per retry for pairs it can never validate.
+        appLogger.warn(
+          "[auth] stored session could not be validated at startup",
+          {},
+        );
+        this.scheduleSessionRecovery("startup:validate-network");
+        return;
+      }
+      // Invalid/expired: route to the locked rotate rather than clearing the
+      // file. The rotate's own outcome is the arbiter - its refresh either
+      // lands a fresh pair, fails as a transient the recovery loop retries,
+      // or returns the definitive rejection.
       appLogger.warn("[auth] stored session access token invalid at startup", {
         outcome: outcome.kind,
       });
-      await this.rotateStoredSessionAtStartup(stored, startGeneration);
+      await this.rotateStoredSession(
+        stored,
+        () => !this.shouldStopStartFlow(startGeneration),
+        "startup",
+      );
     } finally {
       this.starting = false;
     }
@@ -625,16 +700,29 @@ export class AuthService {
   }
 
   /**
-   * Startup adoption when the stored access token is invalid/expired: run the
-   * locked `rotate` (the one spend, refreshed under the file lock in main), then
-   * either mint a fresh signed-in session from the rotated/adopted pair or
-   * project a UI-only signed-out. The credentials file is NEVER deleted here -
-   * `refresh-rejected` keeps the file (a sibling rotation can still recover it),
-   * and only explicit sign-out destroys it (settled decision / H1).
+   * The one spend-capable re-establishment path for a stored-but-stale session,
+   * shared by startup rehydration, the background recovery loop, and the §4
+   * reconcile (via recovery) when the file's access token no longer validates.
+   * Runs the locked `rotate` (the one spend, under the file lock in main), then
+   * either mints a fresh signed-in session from the rotated/adopted pair or
+   * projects a UI-only signed-out. TERMINAL outcomes (a genuine refresh
+   * rejection, a standing sign-out, an account switch) settle the recovery
+   * loop; TRANSIENT ones (lock-busy, a sibling's still-landing spend, network,
+   * a store fault) schedule a backoff retry so no blip ever latches
+   * signed-out. The credentials file is NEVER deleted here - only explicit
+   * sign-out destroys it (settled decision / H1).
+   *
+   * Stand-down invariant: every caller enters with NO live bearer, so a
+   * bearer observed after any await means a competing path (the §4 watcher
+   * adopting an externally-written session mid-flight) already established a
+   * session - one that may belong to a DIFFERENT user and does not bump the
+   * identity generation the `stillWanted` fences watch. Applying or clearing
+   * anything past that point would clobber it, so every gate checks both.
    */
-  private async rotateStoredSessionAtStartup(
+  private async rotateStoredSession(
     stored: StoredCredentials,
-    startGeneration: number,
+    stillWanted: () => boolean,
+    trigger: string,
   ): Promise<void> {
     let rotated: TokenRotateResult;
     try {
@@ -643,12 +731,19 @@ export class AuthService {
         token: stored.token,
       });
     } catch (error) {
-      this.markStoreUnavailable("start.rotate", error);
+      if (!stillWanted() || this.hasLiveBearer()) {
+        return;
+      }
+      this.markStoreUnavailable(`${trigger}.rotate`, error);
       return;
     }
-    if (this.shouldStopStartFlow(startGeneration)) {
+    if (!stillWanted() || this.hasLiveBearer()) {
       return;
     }
+    appLogger.info("[auth] stored-session rotate outcome", {
+      trigger,
+      outcome: rotated.outcome,
+    });
     const pair = rotatedLivePair(rotated);
     // `commit-failed` can surface a process-wide pending continuation for a
     // *different* user (one main-process store shared across windows). Never
@@ -657,20 +752,220 @@ export class AuthService {
       // The rotated pair carries only the cached identity; re-validate it
       // (access-only) to mint the full `AuthenticatedUser` the context needs.
       const revalidated = await this.validateToken(pair.token);
-      if (this.shouldStopStartFlow(startGeneration)) {
+      if (!stillWanted() || this.hasLiveBearer()) {
         return;
       }
       if (revalidated.kind === "valid") {
+        // Same deletion race as the recovery path: our locked rotate committed
+        // this pair, but an explicit sign-out can land (and delete the file)
+        // while the identity probe is in flight.
+        if (!(await this.storedSessionStillOnDisk(pair.token))) {
+          this.scheduleSessionRecovery(`${trigger}:rotated-pair-superseded`);
+          return;
+        }
+        if (!stillWanted() || this.hasLiveBearer()) {
+          return;
+        }
+        this.settleSessionRecovery("recovered");
         this.applySignedIn(pair.token, revalidated.user, undefined);
         return;
       }
-    }
-    // `refresh-rejected` shows the "session expired" copy; every other terminal
-    // or transient outcome projects a plain UI-only signed-out (file kept).
-    if (rotated.outcome === "refresh-rejected") {
+      if (revalidated.kind === "network-error") {
+        // The rotated pair is committed on disk; only the identity probe
+        // blipped. Signed-out UI for now - the retry re-validates without
+        // spending anything.
+        this.clearUiSessionIfSignedIn();
+        this.scheduleSessionRecovery(`${trigger}:post-rotate-network`);
+        return;
+      }
+      // A freshly-rotated pair the server rejects outright: terminal
+      // server-side state (epoch revoke / sign-out-everywhere).
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
+      this.clearUiSessionIfSignedIn();
+      this.settleSessionRecovery("rotated-pair-rejected");
+      return;
     }
-    this.applySignedOut();
+    this.applyUnadoptedStoredRotateOutcome(rotated.outcome, trigger);
+  }
+
+  /**
+   * Tail of {@link rotateStoredSession} for every outcome that did NOT yield
+   * an adoptable same-user pair: terminal ones settle the recovery loop,
+   * transient ones re-arm it.
+   */
+  private applyUnadoptedStoredRotateOutcome(
+    outcome: TokenRotateOutcome,
+    trigger: string,
+  ): void {
+    switch (outcome) {
+      case "refresh-rejected":
+        // Genuine dead credential: "session expired" copy, file kept.
+        this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
+        this.clearUiSessionIfSignedIn();
+        this.settleSessionRecovery("refresh-rejected");
+        return;
+      case "deleted":
+      case "tombstoned":
+      case "user-mismatch":
+        // A sign-out stands or the file changed accounts - both settled; the
+        // §4 watch projects any newer state when it lands.
+        this.clearUiSessionIfSignedIn();
+        this.settleSessionRecovery(outcome);
+        return;
+      case "lock-busy":
+      case "spend-pending":
+      case "refresh-network":
+      case "applied":
+      case "superseded":
+      case "commit-failed":
+        // Transient. (`applied`/`superseded`/`commit-failed` land here only
+        // when the adopt guard declined a null or foreign-user pair from the
+        // shared main-process store.)
+        this.clearUiSessionIfSignedIn();
+        this.scheduleSessionRecovery(`${trigger}:${outcome}`);
+        return;
+    }
+  }
+
+  /**
+   * Whether a live bearer is installed. A method (not a direct field read) so
+   * checks that straddle `await`s re-read the CURRENT value - TypeScript's
+   * narrowing of the mutable field would otherwise flag (and a reader would
+   * misjudge) the re-checks as tautological.
+   */
+  private hasLiveBearer(): boolean {
+    return this.currentBearer !== null;
+  }
+
+  /**
+   * Arm (or extend) the background recovery loop. One timer, exponential
+   * backoff, generation-fenced: a user sign-in/sign-out that lands while a
+   * tick is pending makes the tick a no-op via `isIdentityCurrent`.
+   */
+  private scheduleSessionRecovery(trigger: string): void {
+    if (this.disposed || this.sessionRecoveryTimer !== null) {
+      return;
+    }
+    const delayMs = this.sessionRecoveryDelayMs;
+    this.sessionRecoveryDelayMs = Math.min(
+      delayMs * 2,
+      SESSION_RECOVERY_MAX_DELAY_MS,
+    );
+    this.sessionRecoveryAttempt += 1;
+    appLogger.info("[auth] stored-session recovery scheduled", {
+      trigger,
+      delayMs,
+      attempt: this.sessionRecoveryAttempt,
+    });
+    const generation = this.identityGeneration;
+    this.sessionRecoveryTimer = AuthService.scheduleTimeout(() => {
+      this.sessionRecoveryTimer = null;
+      void this.runSessionRecovery(generation);
+    }, delayMs);
+  }
+
+  /** Disarm the loop and reset the backoff - the session state is settled. */
+  private settleSessionRecovery(reason: string): void {
+    if (this.sessionRecoveryTimer !== null) {
+      AuthService.cancelTimeout(this.sessionRecoveryTimer);
+      this.sessionRecoveryTimer = null;
+    }
+    if (this.sessionRecoveryAttempt > 0) {
+      appLogger.info("[auth] stored-session recovery settled", { reason });
+    }
+    this.sessionRecoveryDelayMs = SESSION_RECOVERY_INITIAL_DELAY_MS;
+    this.sessionRecoveryAttempt = 0;
+  }
+
+  /**
+   * One recovery tick: re-read the file, validate access-only, and either
+   * adopt, spend through the locked rotate, or re-arm. Stands down for a live
+   * session, an interactive attempt, or an emptied file.
+   */
+  private async runSessionRecovery(generation: number): Promise<void> {
+    if (!this.isIdentityCurrent(generation)) {
+      return;
+    }
+    if (this.hasLiveBearer()) {
+      this.settleSessionRecovery("already-signed-in");
+      return;
+    }
+    if (
+      this.activeAttempt !== null ||
+      useAuthStore.getState().status === "signing-in"
+    ) {
+      // Never race an interactive sign-in; its success settles the loop via
+      // `applySignedIn`, its failure leaves the next tick to try again.
+      this.scheduleSessionRecovery("recovery:interactive-attempt");
+      return;
+    }
+    let stored: StoredCredentials | null;
+    try {
+      stored = await this.tokenStore.get();
+    } catch (error) {
+      if (!this.isIdentityCurrent(generation)) {
+        return;
+      }
+      appLogger.warn("[auth] stored-session recovery could not read store", {
+        error: describeLogError(error),
+      });
+      this.scheduleSessionRecovery("recovery:store-unavailable");
+      return;
+    }
+    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+      return;
+    }
+    if (stored === null || stored.token.length === 0) {
+      this.settleSessionRecovery("no-stored-session");
+      return;
+    }
+    const outcome = await this.validateToken(stored.token);
+    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+      return;
+    }
+    if (outcome.kind === "valid") {
+      await this.adoptRecoveredStoredSession(stored, outcome.user, generation);
+      return;
+    }
+    if (outcome.kind === "network-error") {
+      // No verdict is no reason to spend: re-validate on the next tick. Only
+      // a REJECTED verdict authorizes the locked rotate - otherwise a
+      // half-reachable authn (identity probe down, refresh up) would rotate
+      // the freshly-committed pair again on every tick, burning one refresh
+      // generation per backoff step for pairs it can never validate.
+      this.scheduleSessionRecovery("recovery:validate-network");
+      return;
+    }
+    await this.rotateStoredSession(
+      stored,
+      () => this.isIdentityCurrent(generation),
+      "recovery",
+    );
+  }
+
+  /**
+   * Tail of {@link runSessionRecovery} for a stored session the server just
+   * called valid: confirm the file still holds it, then sign in. Extracted so
+   * the recovery tick stays under the complexity ceiling.
+   */
+  private async adoptRecoveredStoredSession(
+    stored: StoredCredentials,
+    user: AuthenticatedUser,
+    generation: number,
+  ): Promise<void> {
+    if (!(await this.storedSessionStillOnDisk(stored.token))) {
+      // A sign-out (or a sibling rotation) landed while `/user` was in flight.
+      // Re-arm rather than settle: if the file is gone the next tick reads null
+      // and settles on `no-stored-session`; if it was rotated the next tick
+      // adopts the CURRENT pair.
+      this.scheduleSessionRecovery("recovery:stored-session-superseded");
+      return;
+    }
+    if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+      return;
+    }
+    this.settleSessionRecovery("recovered");
+    this.applySignedIn(stored.token, user, undefined);
   }
 
   private shouldStopStartFlow(startGeneration: number): boolean {
@@ -696,6 +991,32 @@ export class AuthService {
     return !this.disposed && generation === this.identityGeneration;
   }
 
+  /**
+   * Re-read the file and confirm it still carries `token` before an AUTOMATIC
+   * path adopts it into a signed-in UI.
+   *
+   * The generation fences cannot cover this. `identityGeneration` moves only on
+   * a LOCAL `signIn`/`signOut`/`dispose`; an external mutation - most
+   * importantly another slot's explicit sign-out, which deletes the shared file
+   * for the whole machine by design - arrives through the watcher and reconcile,
+   * which deliberately leave it alone. So a deletion that lands while our
+   * `/user` probe is in flight leaves every fence intact: the UI is already
+   * signed out (nothing to clear, no bearer installed), and the stale token is
+   * still valid server-side for hours. Adopting it would resurrect a session
+   * the user explicitly ended, with no further file event to correct it.
+   *
+   * A read fault answers "not current": refusing to adopt is recoverable (the
+   * loop retries), adopting a session that is gone is not.
+   */
+  private async storedSessionStillOnDisk(token: string): Promise<boolean> {
+    try {
+      const latest = await this.tokenStore.get();
+      return latest !== null && latest.token === token;
+    } catch {
+      return false;
+    }
+  }
+
   private isExpectedBearerCurrent(expected: OpenFrameBearerSource): boolean {
     const current = this.contextProvider.current();
     return (
@@ -715,6 +1036,48 @@ export class AuthService {
     );
   }
 
+  private captureLiveSessionAuthority(): LiveSessionAuthority | null {
+    const ctx = this.contextProvider.current();
+    const bearer = this.currentBearer;
+    if (ctx === null || ctx.credentials.isReleased || bearer === null) {
+      return null;
+    }
+    return {
+      credentials: ctx.credentials,
+      userId: ctx.identity.userId,
+      bearer,
+      generation: this.identityGeneration,
+    };
+  }
+
+  private isLiveSessionAuthority(expected: LiveSessionAuthority): boolean {
+    const ctx = this.contextProvider.current();
+    return (
+      !this.disposed &&
+      this.identityGeneration === expected.generation &&
+      ctx !== null &&
+      ctx.identity.userId === expected.userId &&
+      ctx.credentials === expected.credentials &&
+      !ctx.credentials.isReleased &&
+      this.currentBearer === expected.bearer
+    );
+  }
+
+  private captureUpdatedSessionAuthority(
+    expected: LiveSessionAuthority,
+  ): LiveSessionAuthority | null {
+    const current = this.captureLiveSessionAuthority();
+    if (
+      current === null ||
+      current.generation !== expected.generation ||
+      current.userId !== expected.userId ||
+      current.credentials !== expected.credentials
+    ) {
+      return null;
+    }
+    return current;
+  }
+
   /**
    * Primary (and only) interactive sign-in: the OAuth 2.0 Device Authorization
    * Grant (RFC 8628). `beginAttempt` first supersedes any in-flight attempt (a
@@ -732,6 +1095,11 @@ export class AuthService {
       return;
     }
     this.identityGeneration += 1;
+    // Explicit user intent replaces the automatic loop: a pending recovery
+    // tick would only race the attempt (it stands down, but its timer would
+    // fire a stale no-op). A failed attempt re-arms recovery (applyFailure);
+    // a successful one settles it again (applySignedIn).
+    this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
     useAuthStore.getState().setSigningIn();
@@ -808,8 +1176,11 @@ export class AuthService {
     // and is now awaiting its token save - the sign-out wins.
     this.identityGeneration += 1;
     // Stop the proactive refresh timer up front so a timer firing during the
-    // delete can't race a `rotate` against the credential removal.
+    // delete can't race a `rotate` against the credential removal; the
+    // recovery loop stands down for the same reason (explicit intent settles
+    // it - nothing to recover after a deliberate sign-out).
     this.refreshScheduler.stop();
+    this.settleSessionRecovery("explicit-sign-out");
     this.clearPendingTimeout();
     // Tear down any in-flight attempt: abort it and cancel its main-process
     // device poll so no ~10-minute poll leaks.
@@ -836,6 +1207,25 @@ export class AuthService {
     }
     this.setLastError(null);
     this.applySignedOut();
+    // Published chat bytes do not survive leaving the account.
+    //
+    // The part store is shared across every viewer on the installation, which
+    // is sound while they are signed in - a part is named by the sha256 of its
+    // own bytes, so the only way to learn an address is to resolve a head the
+    // server authorized you for. It is not sound as a residue: "leave the
+    // account" reasonably means "leave the content", and the cost of honoring
+    // that is one cold read next time.
+    //
+    // HERE and not in `applySignedOut`, which also runs for the UI-only
+    // signed-out projection a dead credential produces (the file is kept, and
+    // the same user is one refresh from being back). This is the deliberate
+    // path, and it runs only after the delete actually landed.
+    //
+    // Not awaited into the sign-out's critical path and unable to fail it: the
+    // clear swallows its own errors by contract, and a sign-out that stalled on
+    // a storage quirk would be a worse outcome than a cache that outlives it by
+    // a moment.
+    void clearChatPartCache(browserChatPartCacheStorage());
     // Drop any in-flight reconcile that raced the delete chain (a superseded
     // finalization's signIn may have re-written the file and notified before
     // delete landed; its adopt must not resurrect signed-in after we cleared).
@@ -1076,6 +1466,227 @@ export class AuthService {
     throw new Error("Couldn't reach Traycer to load your subscription.");
   }
 
+  /**
+   * Fetches the signed-in user's host registry + live status via the runner
+   * host (`GET /api/v3/hosts`, run in Electron main for CORS). Mirrors
+   * {@link fetchAuthenticatedUser}: the raw bearer stays inside this service
+   * (the auth boundary), so the My Hosts query hook consumes the parsed
+   * envelope without ever touching the token.
+   *
+   *   - signed-out / no bearer → `null` (the panel renders its signed-out state).
+   *   - `unauthorized`         → `null` (a rare mid-rotation 401; the proactive
+   *                              refresh keeps the bearer fresh and the ~15s poll
+   *                              recovers on the next tick — no forced sign-out
+   *                              from a background list poll).
+   *   - `network-error`        → throws so TanStack Query surfaces a retriable
+   *                              error instead of a misleading empty list.
+   */
+  async fetchRegisteredHosts(): Promise<HostListResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listRegisteredHosts(
+      this.currentBearer,
+    );
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your hosts.");
+    }
+    return result.response;
+  }
+
+  /**
+   * Fetches the signed-in user's device/session list via authn-v3. The raw
+   * bearer remains inside this auth boundary; callers consume a parsed DTO from
+   * TanStack Query and render signed-out as an empty state.
+   *
+   * `signal` is the reading query's cancellation, and it is load-bearing for
+   * more than the request: the repair below spends a single-use refresh
+   * rotation. Identity fencing alone does not cover this, because the common
+   * cancellations - a revoke invalidating the list, a panel unmount, a poll
+   * superseded by a focus refetch - leave the SAME account live, so every
+   * authority check still passes while nobody is waiting for the answer.
+   * Aborting is therefore checked on entry and after each list await, and
+   * throws rather than returning `null`, so a cancelled read can never be
+   * mistaken for the signed-out empty state.
+   */
+  async fetchUserSessions(
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsResponse | null> {
+    signal.throwIfAborted();
+    const initialAuthority = this.captureLiveSessionAuthority();
+    if (initialAuthority === null) {
+      return null;
+    }
+    const initial = await this.runnerHost.listUserSessions(
+      initialAuthority.bearer,
+      signal,
+    );
+    // This is the fence that keeps a cancelled read out of the repair below:
+    // everything between here and the rotation is synchronous, so bailing here
+    // is the same as bailing there.
+    //
+    // Ordered before the authority check on purpose: an aborted read is a
+    // non-answer, not an account change, and the two shells disagree on how an
+    // aborted request surfaces (in-process `fetch` collapses it into
+    // `network-error`; the desktop bridge rejects). Checking here makes both
+    // reach the caller as the same cancellation.
+    signal.throwIfAborted();
+    if (!this.isLiveSessionAuthority(initialAuthority)) {
+      return null;
+    }
+    if (initial.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    if (
+      initial.kind === "ok" &&
+      initial.response.sessions.some(
+        (session) => session.current && session.clientKind !== "unknown",
+      )
+    ) {
+      this.unrepairableSessionsBearer = null;
+      return initial.response;
+    }
+
+    // A prior repair already rotated this exact bearer without reaching an
+    // identified current session (e.g. the server-side condition is stuck,
+    // not transient). Repeating the rotate on every 30s poll/focus refetch
+    // would keep spending `/api/v3/auth/refresh` against an unchanging bearer
+    // forever and permanently error the panel; return what we have instead.
+    if (
+      initial.kind === "ok" &&
+      this.unrepairableSessionsBearer === initialAuthority.bearer
+    ) {
+      return initial.response;
+    }
+
+    // A still-valid credential from before individual session tracking has no
+    // row/family yet, and the original upgrader recorded an existing desktop
+    // row as `unknown`. Listing used to turn either case into an authoritative
+    // empty/unknown UI. One locked refresh lets authn create or enrich the row;
+    // then read again with the rotated bearer. The existing single-flight +
+    // cross-process credential lock keeps this from double-spending a refresh.
+    const repairedAuthority =
+      await this.forceRefreshExpectedSession(initialAuthority);
+    if (repairedAuthority === null) {
+      return null;
+    }
+
+    const repaired = await this.runnerHost.listUserSessions(
+      repairedAuthority.bearer,
+      signal,
+    );
+    signal.throwIfAborted();
+    if (!this.isLiveSessionAuthority(repairedAuthority)) {
+      return null;
+    }
+    if (repaired.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    if (repaired.kind === "unauthorized") {
+      if (useAuthStore.getState().status === "signed-in") {
+        throw new Error("Couldn't refresh your signed-in session.");
+      }
+      return null;
+    }
+    const hasIdentifiedCurrentSession = repaired.response.sessions.some(
+      (session) => session.current && session.clientKind !== "unknown",
+    );
+    if (!hasIdentifiedCurrentSession) {
+      this.unrepairableSessionsBearer = repairedAuthority.bearer;
+      throw new Error("Couldn't register this signed-in session yet.");
+    }
+    this.unrepairableSessionsBearer = null;
+    return repaired.response;
+  }
+
+  /**
+   * Revokes one session family. `useStepUpCredential` is false for the first
+   * attempt; if authn responds `step-up-required`, the UI verifies an OTP and
+   * retries by asking the runner-host boundary to attach its retained step-up
+   * bearer internally.
+   */
+  async revokeUserSession(
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeUserSession(
+      this.currentBearer,
+      familyId,
+      useStepUpCredential,
+    );
+  }
+
+  /**
+   * Global sign-out is intentionally tighter than per-session cleanup: callers
+   * verify a fresh step-up challenge for each invocation, then the runner-host
+   * boundary attaches and clears the retained step-up bearer internally.
+   */
+  async revokeAllSessions(): Promise<RevokeAllSessionsFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeAllSessions(this.currentBearer);
+  }
+
+  /**
+   * Mints a device credential for a connected host. A single attempt on the
+   * ordinary bearer: unlike `revokeUserSession` there is no step-up retry,
+   * because the mint is not step-up gated (see the mint route's doc comment).
+   */
+  async mintHostCredential(
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintHostCredential(this.currentBearer, request);
+  }
+
+  async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.requestStepUpChallenge(this.currentBearer);
+  }
+
+  async verifyStepUpChallenge(
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.verifyStepUpChallenge(this.currentBearer, code);
+  }
+
+  /**
+   * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` via the
+   * runner host (run in Electron main for CORS, mirroring
+   * {@link fetchRegisteredHosts}). Never returns `null` on signed-out —
+   * mutating while signed out is a caller bug, so this throws instead of
+   * silently no-oping (unlike the read path, which has a legitimate
+   * signed-out empty state to render).
+   */
+  async updateHostVersionPolicy(
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    if (this.currentBearer === null) {
+      throw new Error("Sign in to update this host.");
+    }
+    return this.runnerHost.updateHostVersionPolicy(
+      this.currentBearer,
+      hostId,
+      input,
+    );
+  }
+
   private async revalidateCurrentContextOnce(
     expected: OpenFrameBearerSource,
   ): Promise<ValidationOutcome | null> {
@@ -1105,6 +1716,14 @@ export class AuthService {
     }
 
     if (outcome.kind === "valid") {
+      // Subscription entitlement can change without a bearer rotation (for
+      // example after a purchase or restore). Project every successful
+      // validation so entitlement-gated surfaces react without an app restart.
+      useAuthStore
+        .getState()
+        .setSubscriptionStatus(
+          outcome.user.userSubscription.subscriptionStatus,
+        );
       if (outcome.user.user.id !== currentUserId) {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.
@@ -1151,7 +1770,12 @@ export class AuthService {
     if (!this.isIdentityCurrent(generation)) {
       return null;
     }
-    const result = this.applyLiveRotateOutcome(rotated, userId, generation);
+    const result = this.applyLiveRotateOutcome(
+      rotated,
+      userId,
+      generation,
+      "reactive",
+    );
     if (result.status === "rotated") {
       const revalidated = await this.validateToken(result.token);
       if (!this.isIdentityCurrent(generation)) {
@@ -1210,7 +1834,12 @@ export class AuthService {
     rotated: TokenRotateResult,
     userId: string,
     generation: number,
+    trigger: string,
   ): SameUserRotateResult {
+    appLogger.info("[auth] live rotate outcome", {
+      trigger,
+      outcome: rotated.outcome,
+    });
     switch (rotated.outcome) {
       case "applied":
       case "superseded":
@@ -1236,6 +1865,7 @@ export class AuthService {
         this.clearUiSession();
         return { status: "signed-out" };
       case "lock-busy":
+      case "spend-pending":
       case "refresh-network":
         // Transient; the access token in hand stays valid for its TTL.
         return { status: "transient" };
@@ -1276,6 +1906,12 @@ export class AuthService {
     });
     this.setLastError(AUTH_ERROR_STORE_UNAVAILABLE);
     this.clearUiSession();
+    // Every store fault is transient from the session's point of view, so the
+    // signed-out projection must never latch: arm the recovery loop here, at
+    // the one seam every fault path passes through (the loop's own store read
+    // keeps re-arming it while the fault persists, and stands down for a live
+    // session).
+    this.scheduleSessionRecovery(`${context}:store-unavailable`);
   }
 
   /**
@@ -1308,8 +1944,8 @@ export class AuthService {
    *   - file null → UI-only signed-out (sign-out-elsewhere / traycer logout);
    *   - file present + access valid → applySignedIn (same-user rotation OR
    *     account switch OR signed-out→present);
-   *   - file present + invalid/expired → clearUiSession (file kept; a later
-   *     proactive/reactive/interactive path does the spend — never here).
+   *   - file present + invalid/expired → UI-only sign-out + a handoff to the
+   *     recovery loop, which owns the locked rotate (never spent here).
    *
    * Every apply is gated by identity + reconcile generation after each await.
    */
@@ -1372,10 +2008,11 @@ export class AuthService {
 
   /**
    * Projects a reconcile's access-only validation result onto the UI session
-   * (never writes/spends). Same-user → rotate the lease in place (host-runtime /
-   * cache state survives); signed-out→present or account switch → full signed-in
-   * projection; network blip → leave the live session intact; invalid/expired →
-   * UI-only sign-out (file kept — the spend is not this path's job).
+   * (never writes/spends itself). Same-user → rotate the lease in place
+   * (host-runtime / cache state survives); signed-out→present or account
+   * switch → full signed-in projection; network blip → leave the live session
+   * intact; invalid/expired → UI-only sign-out plus a recovery-loop handoff
+   * (the loop owns the locked rotate that can revive the stored session).
    */
   private applyReconciledOutcome(
     stored: StoredCredentials,
@@ -1394,12 +2031,22 @@ export class AuthService {
       return;
     }
     if (outcome.kind === "network-error") {
-      // Transient: cannot adopt an unvalidated bearer, but do not tear down a
-      // live session over a blip. A later event / restart re-tries.
+      // Transient: cannot adopt an unvalidated bearer, and a live session is
+      // never torn down over a blip. With NO live session there is also no
+      // later file event guaranteed (authn recovering writes nothing), so the
+      // adoption is handed to the recovery loop instead of dropped.
+      if (!this.hasLiveBearer()) {
+        this.scheduleSessionRecovery("reconcile:validate-network");
+      }
       return;
     }
-    // Invalid/expired: UI-only sign-out, file kept (spend is not this path's job).
+    // Invalid/expired but PRESENT: the file may still hold a perfectly
+    // refreshable session (a 4h-expired access token next to a 30d refresh
+    // token). Sign the UI out now and hand the spend to the recovery loop,
+    // which owns the locked rotate - never latch signed-out over a file that
+    // one refresh call away from a live session.
     this.clearUiSessionIfSignedIn();
+    this.scheduleSessionRecovery("reconcile:rejected");
   }
 
   private isReconcileCurrent(
@@ -1424,63 +2071,91 @@ export class AuthService {
    * two can't both drive a rotate on the same base; a no-op when signed out.
    */
   private forceRefresh(): Promise<void> {
-    if (this.currentForceRefresh !== null) {
-      return this.currentForceRefresh;
+    const expected = this.captureLiveSessionAuthority();
+    if (expected === null) {
+      return Promise.resolve();
     }
-    const op = this.forceRefreshOnce().finally(() => {
+    return this.forceRefreshExpectedSession(expected).then(() => undefined);
+  }
+
+  /**
+   * Refresh only the session authority supplied by the caller. This is used by
+   * the session-list repair so a late response for account A cannot rotate or
+   * clear the credential that account B installed in the meantime.
+   */
+  private async forceRefreshExpectedSession(
+    expected: LiveSessionAuthority,
+  ): Promise<LiveSessionAuthority | null> {
+    if (!this.isLiveSessionAuthority(expected)) {
+      return null;
+    }
+    if (this.currentForceRefresh !== null) {
+      const activeAuthority = this.currentForceRefreshAuthority;
+      if (
+        activeAuthority === null ||
+        activeAuthority.generation !== expected.generation ||
+        activeAuthority.userId !== expected.userId ||
+        activeAuthority.credentials !== expected.credentials
+      ) {
+        return null;
+      }
+      await this.currentForceRefresh;
+      return this.captureUpdatedSessionAuthority(expected);
+    }
+    const op = this.forceRefreshOnce(expected).finally(() => {
       if (this.currentForceRefresh === op) {
         this.currentForceRefresh = null;
+        this.currentForceRefreshAuthority = null;
       }
     });
     this.currentForceRefresh = op;
-    return op;
+    this.currentForceRefreshAuthority = expected;
+    await op;
+    return this.captureUpdatedSessionAuthority(expected);
   }
 
-  private async forceRefreshOnce(): Promise<void> {
-    if (this.isDisposed()) {
+  private async forceRefreshOnce(
+    expected: LiveSessionAuthority,
+  ): Promise<void> {
+    if (!this.isLiveSessionAuthority(expected)) {
       return;
     }
-    // A sign-out (or newer sign-in) that lands during any await below owns the
-    // state from that point on - this tail must not re-project the identity it
-    // started with.
-    const generation = this.identityGeneration;
     // Defer to an in-flight reactive revalidation. Both paths drive the locked
     // `rotate`; awaiting here serializes the proactive and reactive refreshes
     // within this process, and the file lock serializes across processes - so at
     // most one process ever spends a given refresh token.
     if (this.currentRevalidation !== null) {
       await this.currentRevalidation;
-      if (!this.isIdentityCurrent(generation)) {
+      if (!this.isLiveSessionAuthority(expected)) {
         return;
       }
     }
-    const ctx = this.contextProvider.current();
-    if (ctx === null || this.currentBearer === null) {
-      return;
-    }
-    const userId = ctx.identity.userId;
-    const currentToken = this.currentBearer;
     let rotated: TokenRotateResult;
     try {
       rotated = await this.tokenStore.rotate({
-        userId,
-        token: currentToken,
+        userId: expected.userId,
+        token: expected.bearer,
       });
     } catch (error) {
-      if (!this.isIdentityCurrent(generation)) {
+      if (!this.isLiveSessionAuthority(expected)) {
         return;
       }
       this.markStoreUnavailable("proactive.rotate", error);
       return;
     }
-    if (!this.isIdentityCurrent(generation)) {
+    if (!this.isLiveSessionAuthority(expected)) {
       return;
     }
     // `superseded` here adopts a sibling's rotation without spending; `deleted`/
     // `user-mismatch`/`tombstoned` clear the UI session (no resurrection);
     // `refresh-rejected` is the genuine expiry; transient outcomes leave the
     // bearer for the reactive path. Identical handling to the reactive rotate.
-    this.applyLiveRotateOutcome(rotated, userId, generation);
+    this.applyLiveRotateOutcome(
+      rotated,
+      expected.userId,
+      expected.generation,
+      "proactive",
+    );
   }
 
   /**
@@ -1550,8 +2225,8 @@ export class AuthService {
       // re-apply the same token.
       this.clearActiveAttempt();
       // Interactive sign-in: write the freshly-minted pair + validated identity to
-      // the shared credentials file. `signIn` stamps `authnBaseUrl` + `savedAt` in
-      // main and rejects if the write cannot land. This is the file the host's
+      // the shared credentials file. `signIn` stamps `savedAt` in main and
+      // rejects if the write cannot land. This is the file the host's
       // owner gate reads, written BEFORE we flip signed-in (which enables host
       // RPCs) - so on a brand-new sign-in the owner is pinned before the first
       // connection, closing the UNAUTHORIZED race that would burn refresh tokens.
@@ -1751,6 +2426,10 @@ export class AuthService {
     this.disposed = true;
     this.identityGeneration += 1;
     this.refreshScheduler.stop();
+    if (this.sessionRecoveryTimer !== null) {
+      AuthService.cancelTimeout(this.sessionRecoveryTimer);
+      this.sessionRecoveryTimer = null;
+    }
     for (const disposeWake of this.wakeDisposers) {
       disposeWake();
     }
@@ -1870,11 +2549,24 @@ export class AuthService {
   }
 
   /**
-   * Mints a fresh `RequestContext` for the validated identity AND projects
-   * the corresponding signed-in state into the store + persistence
-   * snapshot. The provider's `setSignedIn` aborts any previously-active
-   * context (cross-user transition or same-user re-sign-in), so host /
-   * runtime consumers see a single emit for the new identity.
+   * Projects the validated identity into the request context, store and
+   * persistence snapshot. Which context operation that means depends on who
+   * is already live:
+   *
+   *  - SAME user already signed in -> rotate the live credential lease in
+   *    place. "Same user => same context object" is a load-bearing invariant:
+   *    the remote-session cache keys its auth epoch on the lease SOURCE
+   *    object, and stream owners do not rebuild their transports on a
+   *    same-user event - so minting a fresh context here would retire the
+   *    epoch under every live session while its holders keep using it, then
+   *    duplicate the physical connection on the next acquire. The rotate
+   *    paths (locked rotate, reconcile, session restore) already hold this
+   *    invariant; this branch closes the last two ways around it (the
+   *    cross-window snapshot projection and a same-user device-flow
+   *    re-sign-in).
+   *  - Signed out, or a DIFFERENT user -> mint a fresh context. The
+   *    provider's `setSignedIn` aborts any previously-active context, so
+   *    host / runtime consumers see a single emit for the new identity.
    */
   private applySignedIn(
     bearerToken: string,
@@ -1884,13 +2576,41 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.settleSessionRecovery("signed-in");
+    // A session being established IS the recovery: any prior transient error
+    // (store-unavailable, session-expired) is stale the moment a bearer
+    // lands - including on the automatic watcher/recovery paths that never
+    // pass through the interactive entry's clear.
+    this.setLastError(null);
     this.setDeviceProgress(null);
-    this.contextProvider.setSignedIn({
-      user,
-      bearerToken,
-      operationId: undefined,
-      externalAbortSignal: undefined,
-    });
+    const liveUserId = this.contextProvider.current()?.identity.userId;
+    let rotatedInPlace = false;
+    if (liveUserId !== undefined && liveUserId === user.user.id) {
+      try {
+        this.contextProvider.rotateCurrentBearer({
+          userId: liveUserId,
+          bearerToken,
+        });
+        rotatedInPlace = true;
+      } catch {
+        // The provider's own contract: rotation refusals (no current context,
+        // a released lease, an identity mismatch) are translated by
+        // auth-boundary callers into a clean sign-out + re-sign-in
+        // transition. Falling through to `setSignedIn` IS that transition -
+        // without it, a refused rotation would abort the whole sign-in
+        // projection mid-way (device progress already cleared, store never
+        // updated).
+        rotatedInPlace = false;
+      }
+    }
+    if (!rotatedInPlace) {
+      this.contextProvider.setSignedIn({
+        user,
+        bearerToken,
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+    }
     const profile = profileOverride ?? this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
     this.currentBearer = bearerToken;
@@ -1945,6 +2665,11 @@ export class AuthService {
     });
     this.setLastError(error);
     this.applySignedOut();
+    // A failed interactive attempt says nothing about the SHARED file - a
+    // recoverable stored session may still be sitting there (the entry to
+    // `signIn` settled any loop that was nursing one). Re-arm; the first tick
+    // settles itself when the file turns out to be empty.
+    this.scheduleSessionRecovery("interactive-failure");
   }
 
   private profileFromUser(user: AuthenticatedUser): AuthProfile {
@@ -2073,8 +2798,8 @@ function rotatedLivePair(rotated: TokenRotateResult): StoredCredentials | null {
 
 /**
  * Projects the credentials-file identity block (`{ id, email, name }`) from a
- * validated `AuthenticatedUser`. The store stamps `authnBaseUrl` + `savedAt`;
- * only the user identity crosses the `signIn` seam.
+ * validated `AuthenticatedUser`. The store stamps `savedAt`; only the user
+ * identity crosses the `signIn` seam.
  */
 function identityFromUser(user: AuthenticatedUser): StoredCredentialsIdentity {
   // Single source of truth for the projection lives in shared auth-validation

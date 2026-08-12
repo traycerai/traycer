@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -11,11 +10,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
-import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
@@ -38,7 +38,7 @@ import {
 interface MockSummariesQuery {
   readonly data:
     | {
-        readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+        readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
       }
     | undefined;
   readonly isFetching: boolean;
@@ -114,7 +114,7 @@ const mocks = vi.hoisted(() => {
 
 const GIT_REPO_IDENTIFIER = { owner: "acme", repo: "app" };
 
-const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
+const GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   workspacePath: "/workspace/app",
   isGitRepo: true,
   repoIdentifier: GIT_REPO_IDENTIFIER,
@@ -129,16 +129,18 @@ const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
     },
   ],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
 };
 
-const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV14 = {
   workspacePath: "/workspace/app",
   isGitRepo: false,
   repoIdentifier: null,
   mainBranch: null,
   worktrees: [],
   scripts: null,
+  repoBranchPrefix: { status: "absent" },
   resolvedAt: 1,
 };
 
@@ -252,14 +254,18 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
-  preparedWorkspaceFolderToWorkspaceFolderInfo: (folder: {
-    readonly workspacePath: string;
-    readonly workspaceName: string;
-    readonly repoIdentifier: unknown;
-  }) => ({
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (
+    folder: {
+      readonly workspacePath: string;
+      readonly workspaceName: string;
+      readonly repoIdentifier: unknown;
+    },
+    hostId: string | null,
+  ) => ({
     path: folder.workspacePath,
     name: folder.workspaceName,
     repoIdentifier: folder.repoIdentifier,
+    hostId,
   }),
   useWorkspaceFolderActions: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,
@@ -316,6 +322,7 @@ function DelayedBranchValidationHarness() {
           actions.submit({
             draftId: null,
             editor: editorHandleForPrompt("Investigate the worktree race"),
+            slashCatalog: null,
             toolbar: {
               selection: {
                 harnessId: "codex",
@@ -325,7 +332,6 @@ function DelayedBranchValidationHarness() {
               reasoning: "high",
               serviceTier: "",
               permission: "supervised",
-              agentMode: "regular",
             },
           });
         }}
@@ -432,6 +438,11 @@ describe("landing workspace summary empty state", () => {
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
     expect(screen.getByTestId("composer-host-trigger")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("composer-host-local-chip-host-home")
+        .className.includes("[[data-slot=select-trigger]_&]:hidden"),
+    ).toBe(true);
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",
@@ -591,6 +602,7 @@ describe("landing workspace summary empty state", () => {
           path: GIT_SUMMARY.workspacePath,
           name: "app",
           repoIdentifier: GIT_SUMMARY.repoIdentifier,
+          hostId: null,
         },
       },
       primaryPath: GIT_SUMMARY.workspacePath,
@@ -701,7 +713,7 @@ describe("landing workspace summary empty state", () => {
     const folderAPath = GIT_SUMMARY.workspacePath;
     const folderBPath = "/workspace/lib";
     const folderBRepo = { owner: "acme", repo: "lib" };
-    const folderBSummary: WorktreeWorkspaceSummaryV13 = {
+    const folderBSummary: WorktreeWorkspaceSummaryV14 = {
       workspacePath: folderBPath,
       isGitRepo: true,
       repoIdentifier: folderBRepo,
@@ -716,6 +728,7 @@ describe("landing workspace summary empty state", () => {
         },
       ],
       scripts: null,
+      repoBranchPrefix: { status: "absent" },
       resolvedAt: 1,
     };
 
@@ -743,6 +756,7 @@ describe("landing workspace summary empty state", () => {
           path: folderAPath,
           name: "app",
           repoIdentifier: GIT_REPO_IDENTIFIER,
+          hostId: null,
         },
       },
       primaryPath: folderAPath,
@@ -811,11 +825,13 @@ describe("landing workspace summary empty state", () => {
             path: folderAPath,
             name: "app",
             repoIdentifier: GIT_REPO_IDENTIFIER,
+            hostId: null,
           },
           [folderBPath]: {
             path: folderBPath,
             name: "lib",
             repoIdentifier: folderBRepo,
+            hostId: null,
           },
         },
         primaryPath: folderAPath,
@@ -858,15 +874,20 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
       },
     ],
   };
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,

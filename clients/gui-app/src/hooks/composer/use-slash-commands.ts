@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host/index";
 import { useGuiHarnessCommandsQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { HostRpcRegistry } from "@/lib/host";
+import { rankSlashCommands } from "@/lib/composer/slash-command-ranking";
 import type {
   MentionPreview,
   ProviderSlashCommand,
@@ -25,17 +26,6 @@ export interface UseSlashCommandsParams {
   readonly harnessId: GuiHarnessId;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly enabled: boolean;
-}
-
-function rankCommand(command: SlashCommand, query: string): number {
-  const lower = query.toLowerCase();
-  const name = command.name.toLowerCase();
-  if (name === lower) return 0;
-  if (name.startsWith(lower)) return 1;
-  if (command.argumentHint?.toLowerCase().includes(lower)) return 2;
-  if (command.description.toLowerCase().includes(lower)) return 2;
-  if (command.kind.toLowerCase().includes(lower)) return 3;
-  return 3;
 }
 
 function compareCommandNames(left: SlashCommand, right: SlashCommand): number {
@@ -66,23 +56,10 @@ export function useSlashCommands(
     }));
     return dedupeSlashCommands(providerCommands).toSorted(compareCommandNames);
   }, [commandsQuery.data?.commands]);
-  const data = useMemo<ReadonlyArray<SlashCommand>>(() => {
-    if (!trimmed) return allCommands;
-    const lower = trimmed.toLowerCase();
-    return allCommands
-      .filter(
-        (cmd) =>
-          cmd.name.toLowerCase().includes(lower) ||
-          cmd.description.toLowerCase().includes(lower) ||
-          (cmd.argumentHint?.toLowerCase().includes(lower) ?? false) ||
-          cmd.kind.toLowerCase().includes(lower),
-      )
-      .toSorted((left, right) => {
-        const rankDiff = rankCommand(left, lower) - rankCommand(right, lower);
-        if (rankDiff !== 0) return rankDiff;
-        return compareCommandNames(left, right);
-      });
-  }, [allCommands, trimmed]);
+  const data = useMemo<ReadonlyArray<SlashCommand>>(
+    () => rankSlashCommands(allCommands, trimmed),
+    [allCommands, trimmed],
+  );
 
   return {
     data,

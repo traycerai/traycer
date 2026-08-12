@@ -7,6 +7,7 @@ import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
   DisplayTopology,
+  FeatureSettingsSnapshot,
   InstalledFont,
   LogLevel,
   LogLevelScope,
@@ -31,6 +32,12 @@ export type {
 } from "../ipc-contracts/platform-types";
 
 export interface PlatformBridgeSurface {
+  clipboard: {
+    writeImage(input: {
+      readonly type: string;
+      readonly bytes: ArrayBuffer;
+    }): Promise<void>;
+  };
   recentDocuments: {
     add(path: string): Promise<void>;
   };
@@ -108,6 +115,10 @@ export interface PlatformBridgeSurface {
     get(): Promise<LogLevelsSnapshot>;
     set(scope: LogLevelScope, level: LogLevel): Promise<LogLevelsSnapshot>;
   };
+  featureSettings: {
+    get(): Promise<FeatureSettingsSnapshot>;
+    setAgentRolesEnabled(enabled: boolean): Promise<FeatureSettingsSnapshot>;
+  };
   fonts: {
     list(): Promise<readonly InstalledFont[]>;
   };
@@ -119,6 +130,10 @@ export interface PlatformBridgeSurface {
 
 export function buildPlatformBridge(): PlatformBridgeSurface {
   return {
+    clipboard: {
+      writeImage: (input) =>
+        ipcRenderer.invoke(RunnerHostInvoke.clipboardWriteImage, input),
+    },
     recentDocuments: {
       add: (path) =>
         ipcRenderer.invoke(RunnerHostInvoke.recentDocumentAdd, path),
@@ -298,6 +313,17 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           scope,
           level,
         }) as Promise<LogLevelsSnapshot>,
+    },
+    featureSettings: {
+      get: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.featureSettingsGet,
+        ) as Promise<FeatureSettingsSnapshot>,
+      setAgentRolesEnabled: (enabled) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.agentRolesEnabledSet,
+          enabled,
+        ) as Promise<FeatureSettingsSnapshot>,
     },
     fonts: {
       list: () =>

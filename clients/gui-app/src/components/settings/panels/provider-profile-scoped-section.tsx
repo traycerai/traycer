@@ -105,6 +105,13 @@ interface ProviderProfileScopedSectionProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  /**
+   * Why sign-in is unavailable, or null when it is available. Supplied rather
+   * than reconstructed here: the panel owns the three facts that decide it
+   * (host locality, browser-sign-in capability, managed-pack readiness), and a
+   * second derivation is how the previous hardcoded sentence went stale.
+   */
+  readonly signInUnavailableHint: string | null;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
@@ -138,6 +145,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    signInUnavailableHint,
     startInReauth,
     failedAttempt,
     onAddProfile,
@@ -244,6 +252,7 @@ export function ProviderProfileScopedSection(
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
+          admissionByProfileId={null}
         />
         <div
           data-slot="profile-summary-actions"
@@ -255,11 +264,7 @@ export function ProviderProfileScopedSection(
           />
           {selectedProfile.auth.status === "unauthenticated" ? (
             <TooltipWrapper
-              label={
-                canAddProfile
-                  ? null
-                  : "Sign in requires a local host with browser sign-in available."
-              }
+              label={canAddProfile ? null : signInUnavailableHint}
               side="top"
               sideOffset={6}
               align="start"

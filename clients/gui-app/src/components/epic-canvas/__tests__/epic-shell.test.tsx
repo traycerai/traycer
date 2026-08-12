@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -16,6 +15,8 @@ import {
 
 const hostClient = {
   getActiveHostId: () => "host-test",
+  getActiveHost: () => null,
+  getRequestContextUserId: () => null,
   onChange: () => () => undefined,
   request: vi.fn(() => Promise.resolve({ tasks: [], hasMore: false })),
 };
@@ -28,6 +29,10 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => hostClient,
   useHostBinding: () => ({ hostClient }),
   useAuthService: () => authService,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
 
 // `EpicSessionProvider` opens its own durable transport via this factory, but
@@ -177,8 +182,11 @@ describe("<EpicShell />", () => {
   it("renders the stable shell frame while the session is not ready", () => {
     render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);
 
-    expect(screen.getByTestId("epic-shell").dataset.sessionReady).toBe("false");
-    expect(screen.getByTestId("tile-canvas-loading")).not.toBeNull();
+    const shell = screen.getByTestId("epic-shell");
+    const canvas = screen.getByTestId("tile-canvas-loading");
+    expect(shell.dataset.sessionReady).toBe("false");
+    expect(shell.className).not.toContain("rounded-r-lg");
+    expect(canvas.className).not.toContain("rounded-t-lg");
     expect(screen.queryByTestId("epic-session-loading")).toBeNull();
   });
 

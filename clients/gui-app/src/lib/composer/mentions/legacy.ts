@@ -58,6 +58,7 @@ function legacyEntityMentionAttachment(
       artifactType: null,
       chatId: null,
       terminalAgentId: null,
+      terminalId: null,
       status: null,
     };
   }
@@ -83,6 +84,7 @@ function legacyEntityMentionAttachment(
       artifactType: null,
       chatId,
       terminalAgentId: null,
+      terminalId: null,
       status: null,
     };
   }
@@ -108,6 +110,35 @@ function legacyEntityMentionAttachment(
       artifactType: null,
       chatId: null,
       terminalAgentId,
+      terminalId: null,
+      status: null,
+    };
+  }
+
+  // `terminal:` names the shell itself, not an Agent - see `ContextType.Terminal`.
+  // Order against the `terminal-agent:` branch above does not matter: each
+  // pattern is separately anchored, so `@terminal-agent:…` cannot satisfy this
+  // one however the branches are arranged.
+  const terminalMatch = path.match(/^terminal:([^/\s]+)\/([^\s]+)$/u);
+  if (terminalMatch !== null) {
+    const epicId = terminalMatch[1];
+    const terminalId = terminalMatch[2];
+    return {
+      kind: "mention",
+      contextType: "terminal",
+      path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: terminalId,
+      description: "",
+      epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId: null,
+      terminalId,
       status: null,
     };
   }
@@ -135,6 +166,7 @@ function legacyEntityMentionAttachment(
     artifactType,
     chatId: null,
     terminalAgentId: null,
+    terminalId: null,
     status: null,
   };
 }

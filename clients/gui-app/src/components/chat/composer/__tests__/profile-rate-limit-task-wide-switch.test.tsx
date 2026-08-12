@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -405,7 +404,6 @@ describe("rate-limit banner task-wide switch", () => {
         },
         reasoning: "high",
         serviceTier: "",
-        agentMode: "regular",
       },
       onSettingsChange: null,
       tuiOnly: false,

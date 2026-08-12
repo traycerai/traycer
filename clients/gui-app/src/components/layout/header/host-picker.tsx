@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -14,10 +15,15 @@ import {
   registerHostPickerDirectory,
   useHostPickerList,
 } from "@/hooks/host/use-host-picker-list";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { uiQueryKeys } from "@/lib/query-keys";
 
 /**
  * Generic shell-agnostic host picker.
@@ -37,6 +43,8 @@ export function HostPicker() {
   const runnerHost = useRunnerHost();
   const binding = useHostBinding();
   const [isOpen, setIsOpen] = useState<boolean>(runnerHost.hostPicker.isOpen);
+  const directory = binding === null ? null : binding.directory;
+  useRefreshHostDirectoryOnOpen(isOpen, directory);
 
   useEffect(() => {
     const subscription = runnerHost.hostPicker.onChange((next) => {
@@ -98,37 +106,48 @@ interface HostPickerListProps {
 
 function HostPickerList(props: HostPickerListProps) {
   const binding = useHostBinding();
+  const queryClient = useQueryClient();
   const directory = binding === null ? null : binding.directory;
   const hostClient = binding === null ? null : binding.hostClient;
-  const [revision, setRevision] = useState<number>(0);
   const directoryId =
     directory === null ? null : registerHostPickerDirectory(directory);
 
   useEffect(() => {
-    if (directory === null) {
+    if (directory === null || directoryId === null) {
       return;
     }
     const subscription = directory.onChange(() => {
-      setRevision((prev) => prev + 1);
+      void queryClient.invalidateQueries({
+        queryKey: uiQueryKeys.hostPicker(directoryId),
+      });
     });
     return () => {
       subscription.dispose();
     };
-  }, [directory]);
+  }, [directory, directoryId, queryClient]);
 
   useEffect(() => {
-    if (hostClient === null) {
+    if (hostClient === null || directoryId === null) {
       return;
     }
     const unsubscribe = hostClient.onChange(() => {
-      setRevision((prev) => prev + 1);
+      void queryClient.invalidateQueries({
+        queryKey: uiQueryKeys.hostPicker(directoryId),
+      });
     });
     return () => {
       unsubscribe();
     };
-  }, [hostClient]);
+  }, [hostClient, directoryId, queryClient]);
 
-  const query = useHostPickerList(directoryId, revision);
+  const query = useHostPickerList(directoryId);
+  const remoteRestricted = useRemoteHostsPlanRestricted();
+  // Subscribed, not read at render time: `getActiveHostId()` lives outside
+  // React, and the list query is no longer a proxy render signal for it - a
+  // host swap leaves the directory contents (and, through structural
+  // sharing, `data`'s identity) untouched, so nothing here would re-render
+  // and the selected row would keep pointing at the previous host.
+  const activeId = useReactiveActiveHostId();
 
   if (directory === null || query.isLoading) {
     return (
@@ -179,26 +198,61 @@ function HostPickerList(props: HostPickerListProps) {
     );
   }
 
-  const activeId = hostClient === null ? null : hostClient.getActiveHostId();
+  const showUpsell =
+    remoteRestricted && entries.some((entry) => entry.kind === "remote");
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Available hosts"
-      className="flex flex-col gap-2"
-    >
-      {entries.map((entry) => {
-        const selected = activeId === entry.hostId;
-        return (
-          <HostPickerOption
-            key={entry.hostId}
-            entry={entry}
-            selected={selected}
-            onSelect={props.onSelect}
-          />
-        );
-      })}
+    <div className="flex flex-col gap-2">
+      {showUpsell ? <RemoteHostsUpsellNotice /> : null}
+      <div
+        role="radiogroup"
+        aria-label="Available hosts"
+        className="flex flex-col gap-2"
+      >
+        {entries.map((entry) => {
+          const selected = activeId === entry.hostId;
+          return (
+            <HostPickerOption
+              key={entry.hostId}
+              entry={entry}
+              selected={selected}
+              planRestricted={remoteRestricted}
+              onSelect={props.onSelect}
+            />
+          );
+        })}
+      </div>
     </div>
+  );
+}
+
+/**
+ * Shown when the list contains remote hosts the current (free) plan cannot
+ * connect to. Presentation-side twin of CS's `plan_restricted` attach-grant
+ * denial — the server enforces the gate regardless of this notice.
+ */
+function RemoteHostsUpsellNotice() {
+  const runnerHost = useRunnerHost();
+  return (
+    <p
+      className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-muted-foreground"
+      data-testid="host-picker-remote-upsell"
+    >
+      Remote hosts require a paid plan.{" "}
+      <button
+        type="button"
+        className="text-primary hover:underline"
+        data-testid="host-picker-remote-upsell-upgrade"
+        onClick={() => {
+          void runnerHost.openExternalLink(
+            resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
+          );
+        }}
+      >
+        Upgrade
+      </button>{" "}
+      to connect to your other machines from here.
+    </p>
   );
 }
 
@@ -209,18 +263,22 @@ interface HostPickerOptionProps {
     readonly kind: string;
   };
   readonly selected: boolean;
+  readonly planRestricted: boolean;
   readonly onSelect: (hostId: string) => void;
 }
 
 function HostPickerOption(props: HostPickerOptionProps) {
   const { entry, selected } = props;
+  const restricted = props.planRestricted && entry.kind === "remote";
   return (
     <Button
       type="button"
       role="radio"
       aria-checked={selected}
+      disabled={restricted}
       data-testid={`host-picker-option-${entry.hostId}`}
       data-selected={selected}
+      data-plan-restricted={restricted}
       variant={selected ? "secondary" : "outline"}
       onClick={() => {
         props.onSelect(entry.hostId);
@@ -230,13 +288,21 @@ function HostPickerOption(props: HostPickerOptionProps) {
       <span className="min-w-0 flex-1 truncate text-ui font-medium">
         {entry.label}
       </span>
+      {restricted ? (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+        >
+          Paid plan
+        </Badge>
+      ) : null}
       <HostKindBadge kind={entry.kind} />
     </Button>
   );
 }
 
 function HostKindBadge(props: { readonly kind: string }) {
-  const label = props.kind === "local" ? "Local" : props.kind;
+  const label = hostKindLabel(props.kind);
   return (
     <Badge
       variant="outline"
@@ -245,4 +311,14 @@ function HostKindBadge(props: { readonly kind: string }) {
       {label}
     </Badge>
   );
+}
+
+function hostKindLabel(kind: string): string {
+  if (kind === "local") {
+    return "Local";
+  }
+  if (kind === "remote") {
+    return "Remote";
+  }
+  return kind;
 }

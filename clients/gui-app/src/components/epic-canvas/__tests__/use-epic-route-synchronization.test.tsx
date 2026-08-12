@@ -1,7 +1,15 @@
-import "../../../../__tests__/test-browser-apis";
-import { act, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
@@ -10,6 +18,8 @@ import type {
   EpicCanvasTileRef,
   TileLayoutNode,
 } from "@/stores/epics/canvas/types";
+import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
+import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import {
   DEFAULT_LEFT_PANEL_GROUPS,
@@ -19,14 +29,28 @@ import {
   requestNestedRoutePrimaryEditorFocus,
   resetNestedRouteDomFocusForTests,
 } from "@/lib/nested-route-dom-focus";
+import {
+  beginNestedFocusNavigation,
+  resetNestedFocusNavigationIntentsForTests,
+  shouldDeferNestedRouteApplication,
+} from "@/lib/nested-focus-navigation-intent";
+import {
+  resetPaneActivationFocusIntentsForTests,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 
-interface CanvasStoreSlice {
-  readonly renameTab: Mock;
-  readonly openTileInTab: Mock;
-  readonly applyNestedRouteFocus: Mock;
-  readonly closeCanvasTab: Mock;
-  readonly pendingCreateArtifactIds: ReadonlySet<string>;
-}
+type CanvasStoreSlice = Pick<
+  EpicCanvasStore,
+  | "renameTab"
+  | "openTileInTab"
+  | "applyNestedRouteFocus"
+  | "closeCanvasTab"
+  | "pendingCreateArtifactIds"
+>;
 
 interface TestState {
   activeArtifactId: string | null;
@@ -36,11 +60,19 @@ interface TestState {
     readonly name: string;
   } | null;
   nestedFocusEnabled: boolean;
+  useRealCanvasStore: boolean;
   navigate: Mock;
   canvasActivePaneId: string | null;
   canvasRoot: TileLayoutNode | null;
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
   records: ReadonlyArray<{ readonly id: string }>;
+  /** Chat ids the `useCloudChatList` mock answers as present
+   * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
+  cloudChatIds: ReadonlySet<string>;
+  /** Chat ids the mock answers as present but owned by a COLLABORATOR
+   * (`isOwnedByViewer: false`) - rows the sweep's liveness set must ignore,
+   * because the substitution resolver refuses to serve them. */
+  cloudCollaboratorChatIds: ReadonlySet<string>;
   canvasStore: CanvasStoreSlice;
   openEpicState: {
     readonly setLastFocusedArtifactId: Mock;
@@ -52,11 +84,14 @@ const testState = vi.hoisted<TestState>(() => ({
   activeArtifactId: null,
   autoOpenTarget: null,
   nestedFocusEnabled: false,
+  useRealCanvasStore: false,
   navigate: vi.fn(),
   canvasActivePaneId: null,
   canvasRoot: null,
   canvasTiles: {},
   records: [],
+  cloudChatIds: new Set<string>(),
+  cloudCollaboratorChatIds: new Set<string>(),
   canvasStore: {
     renameTab: vi.fn(),
     openTileInTab: vi.fn(),
@@ -88,18 +123,32 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   }),
 }));
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useActiveEpicArtifactId: () => testState.activeArtifactId,
-  useEpicCanvas: () => ({
-    root: testState.canvasRoot,
-    activePaneId: testState.canvasActivePaneId,
-    tilesByInstanceId: testState.canvasTiles,
-    sizesByGroupId: {},
-  }),
-  useEpicCanvasStore: <T,>(selector: (store: CanvasStoreSlice) => T): T =>
-    selector(testState.canvasStore),
-  useEpicTab: () => null,
-}));
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  return {
+    ...actual,
+    useActiveEpicArtifactId: (tabId: string) =>
+      testState.useRealCanvasStore
+        ? actual.useActiveEpicArtifactId(tabId)
+        : testState.activeArtifactId,
+    useEpicCanvas: (tabId: string) =>
+      testState.useRealCanvasStore
+        ? actual.useEpicCanvas(tabId)
+        : {
+            root: testState.canvasRoot,
+            activePaneId: testState.canvasActivePaneId,
+            tilesByInstanceId: testState.canvasTiles,
+            sizesByGroupId: {},
+          },
+    useEpicCanvasStore: <T,>(selector: (store: CanvasStoreSlice) => T): T =>
+      testState.useRealCanvasStore
+        ? actual.useEpicCanvasStore(selector)
+        : selector(testState.canvasStore),
+    useEpicTab: (tabId: string) =>
+      testState.useRealCanvasStore ? actual.useEpicTab(tabId) : null,
+  };
+});
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => testState.records,
@@ -111,6 +160,90 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/epic-auto-open", () => ({
   resolveAutoOpenTarget: () => testState.autoOpenTarget,
 }));
+
+// The reap effect's same-host cloud-known exemption (chat-sync-v2 ticket
+// 36) reads these two - stubbed at the hook boundary, same reason as every
+// other seam in this provider-less suite.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
+
+// A SETTLED, successful list - the sweep under test refuses to run until the
+// cloud list has produced an answer that can AUTHORIZE it (success,
+// `E_HOST_UNSUPPORTED`, or a disabled query), because an in-flight or
+// transiently failed list reads every cloud row as absent and would reap the
+// never-adopted same-host chat the exemption exists for. A stub that enumerates only the flags its
+// consumer read when it was written answers `undefined` for `isSuccess`, which
+// that gate takes as "still in flight" - the sweep then never runs at all and
+// every assertion about it times out instead of failing on its subject. Rows
+// are whole `CloudChatSummary` values for the same reason: the next field a
+// consumer starts reading fails `compile` here rather than silently reading
+// `undefined`.
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
+  const cloudRow = (
+    chatId: string,
+    isOwnedByViewer: boolean,
+  ): CloudChatSummary => ({
+    identity: {
+      taskId: EPIC_ID,
+      chatId,
+      ownerUserId: isOwnedByViewer ? "user-1" : "collaborator-1",
+    },
+    ownerHostId: "owner-host",
+    createdAt: 1,
+    visibility: "task",
+    title: null,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 1,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer,
+  });
+  return {
+    useCloudChatList: () => ({
+      data: {
+        chats: [
+          ...[...testState.cloudChatIds].map((chatId) =>
+            cloudRow(chatId, true),
+          ),
+          ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
+            cloudRow(chatId, false),
+          ),
+        ],
+      },
+      // `isEnabled` too: the sweep asks `cloudChatListAuthorizesRecordSweep`,
+      // which reads a DISABLED query as authorizing (nothing will answer it).
+      // A stub omitting this answers `undefined`, which that predicate reads
+      // as disabled - the gate would then be open in every test whatever the
+      // other flags said.
+      isEnabled: true,
+      isSuccess: true,
+      isError: false,
+      isPending: false,
+      isFetching: false,
+      error: null,
+    }),
+    isCloudChatListSettled: (query: {
+      readonly isEnabled: boolean;
+      readonly isSuccess: boolean;
+      readonly isError: boolean;
+    }) => !query.isEnabled || query.isSuccess || query.isError,
+    cloudChatListAuthorizesRecordSweep: (query: {
+      readonly isEnabled: boolean;
+      readonly isSuccess: boolean;
+      readonly isError: boolean;
+      readonly error: { readonly code: string } | null;
+    }) =>
+      !query.isEnabled ||
+      query.isSuccess ||
+      (query.isError && query.error?.code === "E_HOST_UNSUPPORTED"),
+  };
+});
 
 const EPIC_ID = "route-sync-epic";
 const TAB_ID = "route-sync-tab";
@@ -126,6 +259,8 @@ const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
 
 function resetStores(): void {
   resetNestedRouteDomFocusForTests();
+  resetNestedFocusNavigationIntentsForTests();
+  resetPaneActivationFocusIntentsForTests();
   window.localStorage.clear();
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
@@ -145,6 +280,7 @@ function resetStores(): void {
   });
   testState.activeArtifactId = null;
   testState.nestedFocusEnabled = false;
+  testState.useRealCanvasStore = false;
   testState.navigate.mockClear();
   testState.canvasActivePaneId = null;
   testState.autoOpenTarget = {
@@ -155,12 +291,30 @@ function resetStores(): void {
   testState.canvasRoot = null;
   testState.canvasTiles = {};
   testState.records = [];
-  testState.canvasStore.renameTab.mockClear();
-  testState.canvasStore.openTileInTab.mockClear();
-  testState.canvasStore.applyNestedRouteFocus.mockClear();
-  testState.canvasStore.closeCanvasTab.mockClear();
+  testState.cloudChatIds = new Set();
+  testState.cloudCollaboratorChatIds = new Set();
+  vi.mocked(testState.canvasStore.renameTab).mockClear();
+  vi.mocked(testState.canvasStore.openTileInTab).mockClear();
+  vi.mocked(testState.canvasStore.applyNestedRouteFocus).mockClear();
+  vi.mocked(testState.canvasStore.closeCanvasTab).mockClear();
   testState.openEpicState.setLastFocusedArtifactId.mockClear();
   testState.openEpicState.setLastFocusedThreadId.mockClear();
+}
+
+function PaneActivationOriginBoundary(props: { readonly children: ReactNode }) {
+  const activation = usePaneActivationOwnership({
+    active: false,
+    activate: () => undefined,
+  });
+  return (
+    <div
+      onFocusCapture={activation.onFocusCapture}
+      onPointerCancelCapture={activation.onPointerCancelCapture}
+      onPointerDownCapture={activation.onPointerDownCapture}
+    >
+      {props.children}
+    </div>
+  );
 }
 
 function specTile(
@@ -397,6 +551,132 @@ describe("useEpicRouteSynchronization", () => {
     });
     expect(testState.navigate).not.toHaveBeenCalled();
     expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale route target undo an in-flight local pane navigation", () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [
+        specTile("artifact-a", "tile-a", "Artifact A"),
+        specTile("artifact-b", "tile-b", "Artifact B"),
+      ],
+      "tile-b",
+    );
+    beginNestedFocusNavigation(EPIC_ID, TAB_ID, {
+      paneId: "pane-current",
+      tileInstanceId: "tile-b",
+    });
+
+    const view = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: "pane-current",
+          focusTileInstanceId: "tile-a",
+        },
+      },
+    );
+
+    expect(testState.canvasStore.applyNestedRouteFocus).not.toHaveBeenCalled();
+
+    view.rerender({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: "pane-current",
+      focusTileInstanceId: "tile-b",
+    });
+
+    expect(
+      shouldDeferNestedRouteApplication(EPIC_ID, TAB_ID, {
+        paneId: "pane-current",
+        tileInstanceId: "tile-b",
+      }),
+    ).toBe(false);
+    expect(testState.canvasStore.applyNestedRouteFocus).not.toHaveBeenCalled();
+  });
+
+  it("reapplies the route target when an optimistic navigation never commits", async () => {
+    vi.useFakeTimers();
+    let unmountHook: (() => void) | null = null;
+    const { useEpicCanvasStore: realCanvasStore } = await vi.importActual<
+      typeof import("@/stores/epics/canvas/store")
+    >("@/stores/epics/canvas/store");
+    try {
+      testState.nestedFocusEnabled = true;
+      testState.useRealCanvasStore = true;
+      testState.records = [{ id: "artifact-a" }, { id: "artifact-b" }];
+      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
+      const realStore = realCanvasStore.getState();
+      const realTabId = realStore.openEpicTab(EPIC_ID, "Route retry");
+      realStore.openTileInTab(
+        realTabId,
+        specTile("artifact-a", "tile-a", "Artifact A"),
+      );
+      realStore.openTileInTab(
+        realTabId,
+        specTile("artifact-b", "tile-b", "Artifact B"),
+      );
+      const before = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (before === undefined) throw new Error("Expected seeded canvas");
+      const paneId = before.activePaneId;
+      if (paneId === null) throw new Error("Expected seeded active pane");
+      expect(getCurrentNestedFocusTarget(before)).toEqual({
+        paneId,
+        tileInstanceId: "tile-b",
+      });
+      beginNestedFocusNavigation(EPIC_ID, realTabId, {
+        paneId,
+        tileInstanceId: "tile-b",
+      });
+
+      const view = renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: realTabId,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: paneId,
+            focusTileInstanceId: "tile-a",
+          },
+        },
+      );
+      unmountHook = view.unmount;
+
+      const deferred = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (deferred === undefined) throw new Error("Expected deferred canvas");
+      expect(getCurrentNestedFocusTarget(deferred)).toEqual({
+        paneId,
+        tileInstanceId: "tile-b",
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      const applied = realCanvasStore.getState().canvasByTabId[realTabId];
+      if (applied === undefined) throw new Error("Expected applied canvas");
+      expect(getCurrentNestedFocusTarget(applied)).toEqual({
+        paneId,
+        tileInstanceId: "tile-a",
+      });
+    } finally {
+      unmountHook?.();
+      testState.useRealCanvasStore = false;
+      realCanvasStore.setState(realCanvasStore.getInitialState(), true);
+      vi.useRealTimers();
+    }
   });
 
   it("treats a pane-only route as applied when the active pane contains a tile", async () => {
@@ -636,7 +916,7 @@ describe("useEpicRouteSynchronization", () => {
       );
     });
 
-    testState.canvasStore.openTileInTab.mockClear();
+    vi.mocked(testState.canvasStore.openTileInTab).mockClear();
     hook.rerender({
       ...THREAD_FOCUS_INTENT,
       epicId: "route-sync-epic-b",
@@ -730,6 +1010,151 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
+  // chat-sync-v2 ticket 36: a chat with no local record but still known to
+  // `epic.listCloudChats` must NOT be reaped - a leased identity that never
+  // adopted this chat's rows, not a genuine deletion.
+  it("does not close a record-less chat tile that is still cloud-known", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudChatIds = new Set(["cloud-known-chat"]);
+    const cloudKnownChat: EpicCanvasTileRef = {
+      id: "cloud-known-chat",
+      instanceId: "inst-cloud-known-chat",
+      type: "chat",
+      name: "Cloud-known chat",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [cloudKnownChat.instanceId],
+      activeTabId: cloudKnownChat.instanceId,
+      previewTabId: null,
+      activationHistory: [cloudKnownChat.instanceId],
+    };
+    // The POSITIVE control, in the same pane: a chat that is neither
+    // record-backed nor cloud-known, which the sweep must close. Waiting for
+    // THAT close is what proves the sweep ran at all - `not.toHaveBeenCalled()`
+    // on its own is satisfied by the first poll and passes just as happily when
+    // `snapshotLoaded` or the cloud-list gate left the effect switched off,
+    // which is the failure this suite's own mock comment warns about.
+    const reapedChat: EpicCanvasTileRef = {
+      id: "unknown-chat",
+      instanceId: "inst-unknown-chat",
+      type: "chat",
+      name: "Neither local nor cloud-known",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [cloudKnownChat.instanceId, reapedChat.instanceId],
+      activeTabId: cloudKnownChat.instanceId,
+      previewTabId: null,
+      activationHistory: [cloudKnownChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [cloudKnownChat.instanceId]: cloudKnownChat,
+      [reapedChat.instanceId]: reapedChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        reapedChat.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      cloudKnownChat.instanceId,
+    );
+  });
+
+  // A COLLABORATOR's row with the same host-minted chatId is not evidence the
+  // viewer's tab is alive: the substitution resolver refuses to serve rows the
+  // viewer does not own, so keeping the tab open on that row's strength would
+  // leave it permanently loading. The liveness set filters by viewer
+  // ownership, same as the resolver.
+  it("closes a record-less chat tile whose only cloud row belongs to a collaborator", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [{ id: "live-artifact" }];
+    testState.cloudChatIds = new Set(["viewer-kept-chat"]);
+    testState.cloudCollaboratorChatIds = new Set(["collaborator-only-chat"]);
+    const keptChat: EpicCanvasTileRef = {
+      id: "viewer-kept-chat",
+      instanceId: "inst-viewer-kept-chat",
+      type: "chat",
+      name: "Viewer's cloud-known chat",
+      hostId: "host-1",
+    };
+    const collaboratorOnlyChat: EpicCanvasTileRef = {
+      id: "collaborator-only-chat",
+      instanceId: "inst-collaborator-only-chat",
+      type: "chat",
+      name: "Collaborator's row only",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [keptChat.instanceId, collaboratorOnlyChat.instanceId],
+      activeTabId: keptChat.instanceId,
+      previewTabId: null,
+      activationHistory: [keptChat.instanceId],
+    };
+    testState.canvasTiles = {
+      [keptChat.instanceId]: keptChat,
+      [collaboratorOnlyChat.instanceId]: collaboratorOnlyChat,
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        collaboratorOnlyChat.instanceId,
+      );
+    });
+    // The viewer's own row keeps its tab, in the same sweep - the positive
+    // control proving ownership is what made the difference.
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      keptChat.instanceId,
+    );
+  });
+
   it("keeps editor focus when a canvas mutation re-runs an already-applied nested focus target", async () => {
     testState.nestedFocusEnabled = true;
     setSinglePaneCanvas(
@@ -800,6 +1225,65 @@ describe("useEpicRouteSynchronization", () => {
 
       expect(document.activeElement).toBe(editorEl);
     } finally {
+      paneEl.remove();
+    }
+  });
+
+  it("preserves a newly opened portalled control while applying its pane route focus", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-current");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    const tileEl = document.createElement("div");
+    tileEl.setAttribute("data-tab-instance-id", "tile-current");
+    tileEl.setAttribute("data-selected", "true");
+    tileEl.tabIndex = -1;
+    paneEl.appendChild(tileEl);
+    document.body.appendChild(paneEl);
+
+    const portalInput = document.createElement("input");
+    portalInput.setAttribute("aria-label", "Portalled picker search");
+    document.body.appendChild(portalInput);
+    const activationView = render(
+      <PaneActivationOriginBoundary>
+        <button type="button">Open model picker</button>
+      </PaneActivationOriginBoundary>,
+      { container: tileEl },
+    );
+
+    try {
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: "Open model picker" }),
+      );
+      portalInput.focus();
+
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-current",
+            focusTileInstanceId: "tile-current",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      expect(document.activeElement).toBe(portalInput);
+    } finally {
+      activationView.unmount();
+      portalInput.remove();
       paneEl.remove();
     }
   });
@@ -935,6 +1419,121 @@ describe("useEpicRouteSynchronization", () => {
       expect(document.activeElement).toBe(renameInputEl);
     } finally {
       paneEl.remove();
+    }
+  });
+
+  it("ticket 21 slice 4: prefers the hosted record over the real selected physical wrapper (design-review F4)", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-hosted",
+      [specTile("chat-hosted", "tile-hosted", "Hosted chat")],
+      "tile-hosted",
+    );
+
+    // Physical pane AND the real selected-tab wrapper `TabGroupView` keeps
+    // mounted around `TileSurfaceSlot`'s bare geometry anchor for a hosted
+    // chat - both carry the SAME instanceId a naive physical-only query would
+    // match first. Its presence must not shadow the hosted fallback.
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-hosted");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    document.body.appendChild(paneEl);
+
+    const selectedWrapperEl = document.createElement("div");
+    selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-hosted");
+    selectedWrapperEl.setAttribute("data-selected", "true");
+    selectedWrapperEl.tabIndex = -1;
+    document.body.appendChild(selectedWrapperEl);
+
+    const hostedRecord = document.createElement("div");
+    hostedRecord.setAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE, "tile-hosted");
+    hostedRecord.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, "pane-hosted");
+    hostedRecord.tabIndex = -1;
+    document.body.appendChild(hostedRecord);
+
+    // Park focus elsewhere so focusNestedRouteTarget will pull it onto the
+    // resolved element (rather than no-opping because focus is already inside).
+    const outside = document.createElement("button");
+    outside.type = "button";
+    document.body.appendChild(outside);
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    try {
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-hosted",
+            focusTileInstanceId: "tile-hosted",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      // Direct signal: focus landed on the hosted record, NOT the real
+      // selected physical wrapper that is also present and would otherwise
+      // be found first by the physical query.
+      expect(document.activeElement).toBe(hostedRecord);
+      expect(document.activeElement).not.toBe(selectedWrapperEl);
+    } finally {
+      outside.remove();
+      hostedRecord.remove();
+      selectedWrapperEl.remove();
+      paneEl.remove();
+    }
+  });
+
+  it("ticket 21 slice 4: falls back to the physical selected wrapper when no hosted record exists (switch-off parity)", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-unhosted",
+      [specTile("chat-unhosted", "tile-unhosted", "Unhosted chat")],
+      "tile-unhosted",
+    );
+
+    // No hosted record anywhere - mirrors the switch-off / non-chat-tile
+    // shape, where `findHostedTileElement` always misses and the ORIGINAL
+    // physical lookup must still resolve exactly as it did before F4.
+    const selectedWrapperEl = document.createElement("div");
+    selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-unhosted");
+    selectedWrapperEl.setAttribute("data-selected", "true");
+    selectedWrapperEl.tabIndex = -1;
+    document.body.appendChild(selectedWrapperEl);
+
+    const outside = document.createElement("button");
+    outside.type = "button";
+    document.body.appendChild(outside);
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    try {
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-unhosted",
+            focusTileInstanceId: "tile-unhosted",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      expect(document.activeElement).toBe(selectedWrapperEl);
+    } finally {
+      outside.remove();
+      selectedWrapperEl.remove();
     }
   });
 });

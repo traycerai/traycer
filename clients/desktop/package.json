@@ -40,6 +40,7 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@sentry/core": "catalog:",
     "@sentry/esbuild-plugin": "catalog:",
     "@sentry/vite-plugin": "catalog:",
     "@rolldown/plugin-babel": "catalog:",
@@ -226,7 +227,8 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "uninstall-host-autostart.nsh"
     }
   },
   "author": {

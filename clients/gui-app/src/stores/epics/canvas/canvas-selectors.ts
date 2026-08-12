@@ -9,19 +9,17 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import {
-  WORKSPACE_FILE_TAB_KIND,
-  isDiffTileRef,
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type EpicViewTab,
   type TileLayoutNode,
   type TilePane,
 } from "./types";
+import { isTileRefRecordBacked } from "./tile-schema";
 import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
 import { findPaneTabByContentId } from "./actions";
 import { EMPTY_RECORDS } from "./canvas-desktop-projection";
-import { isTileRefRecordBacked } from "./tile-schema";
 import {
   resolveTabIdForEpic,
   useEpicCanvasStore,
@@ -128,15 +126,49 @@ export function useEpicArtifactRecords(
  * open-Epic session registry. Sharing this predicate keeps the "record-
  * backed + pending-create-exempt" decision itself from drifting between the
  * two - only the presence lookup differs.
+ *
+ * `isCloudKnown` is the same shape, added for the SAME-host counterpart of
+ * the cross-host exemption above (chat-sync-v2 ticket 36): a chat can be
+ * bound to THIS device's active host and still have no local record - a
+ * leased identity that never adopted its rows - which is a different chat
+ * than one this host's registry has genuinely tombstoned. `epic.listCloudChats`
+ * already excludes locally-tombstoned rows (the host-side filter is the
+ * source of truth for "deleted"; this predicate does not re-derive it), so
+ * "still cloud-known" is sufficient here without a separate local-tombstone
+ * check.
  */
+export interface TileRefLivenessCheck {
+  readonly hasLiveRecord: (id: string) => boolean;
+  readonly isCloudKnown: (id: string) => boolean;
+}
+
 export function isTileRefRecordLive(
   ref: EpicCanvasTileRef,
   pendingCreateArtifactIds: ReadonlySet<string>,
-  hasLiveRecord: (id: string) => boolean,
+  liveness: TileRefLivenessCheck,
+  projectionHostId: string | null,
 ): boolean {
+  const { hasLiveRecord, isCloudKnown } = liveness;
   if (!isTileRefRecordBacked(ref)) return true;
+  // A chat ref bound to ANOTHER host is not policed by this device's
+  // projection. Chat records are HOST-AUTHORITATIVE (each host's own chat
+  // registry), so a cross-host live tab - a reachable owner's chat opened
+  // from the unified sidebar - legitimately has no local record, and reaping
+  // it here is what turned those clicks into silent no-ops. Scoped to
+  // `chat` alone: artifact and terminal-agent records live in the SHARED
+  // epic doc, so their absence still means deleted, whatever host the ref
+  // is bound to. Cross-host chat tiles are closed by the user, never by
+  // record sync - this device cannot see the owner's registry to know more.
+  if (
+    ref.type === "chat" &&
+    projectionHostId !== null &&
+    ref.hostId !== projectionHostId
+  ) {
+    return true;
+  }
   if (pendingCreateArtifactIds.has(ref.id)) return true;
-  return hasLiveRecord(ref.id);
+  if (hasLiveRecord(ref.id)) return true;
+  return ref.type === "chat" && isCloudKnown(ref.id);
 }
 
 export function makeSelectEpicCanvas(tabId: string | undefined) {
@@ -152,18 +184,9 @@ export function useEpicCanvas(tabId: string | undefined): EpicCanvasState {
 }
 
 export function makeSelectActiveEpicArtifactId(tabId: string | undefined) {
-  return (state: EpicCanvasStore): string | null => {
-    if (tabId === undefined) return null;
-    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
-    if (canvas.activePaneId === null) return null;
-    const pane = findPaneById(canvas.root, canvas.activePaneId);
-    if (pane === null || pane.activeTabId === null) return null;
-    const active = canvas.tilesByInstanceId[pane.activeTabId];
-    if (active === undefined) return null;
-    if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
-    if (isDiffTileRef(active)) return null;
-    return active.id;
-  };
+  const selectRef = makeSelectActiveEpicArtifactRef(tabId);
+  return (state: EpicCanvasStore): string | null =>
+    selectRef(state)?.id ?? null;
 }
 
 export function useActiveEpicArtifactId(
@@ -171,6 +194,56 @@ export function useActiveEpicArtifactId(
 ): string | null {
   const selector = useMemo(
     () => makeSelectActiveEpicArtifactId(tabId),
+    [tabId],
+  );
+  return useEpicCanvasStore(selector);
+}
+
+/**
+ * Same active-tile resolution and filtering as
+ * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
+ * than just its id - callers that need to discriminate the active tile's
+ * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
+ * otherwise have to re-walk the pane tree.
+ */
+/**
+ * The tile showing in `tabId`'s ACTIVE pane, or `null`. The one place the
+ * active-pane walk lives, shared by every selector below it - the rules for
+ * "which tile is the user looking at" must not be able to drift between the
+ * record-backed and renderer-only answers.
+ */
+function activeTileRef(
+  state: EpicCanvasStore,
+  tabId: string | undefined,
+): EpicCanvasTileRef | null {
+  if (tabId === undefined) return null;
+  const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+  if (canvas.activePaneId === null) return null;
+  const pane = findPaneById(canvas.root, canvas.activePaneId);
+  if (pane === null || pane.activeTabId === null) return null;
+  return canvas.tilesByInstanceId[pane.activeTabId] ?? null;
+}
+
+export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
+  return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
+    const active = activeTileRef(state, tabId);
+    if (active === null) return null;
+    // Only record-backed tiles are resolvable artifacts. Renderer-only tiles -
+    // workspace file, git-diff, comm-graph, and the PR detail/diff pair -
+    // carry synthetic ids that cannot be restored from artifact records, so
+    // they must never become the persisted `lastFocusedArtifactId` (route
+    // sync writes whatever this returns). `isTileRefRecordBacked` covers
+    // every one of them and any future kind.
+    if (!isTileRefRecordBacked(active)) return null;
+    return active;
+  };
+}
+
+export function useActiveEpicArtifactRef(
+  tabId: string | undefined,
+): EpicCanvasTileRef | null {
+  const selector = useMemo(
+    () => makeSelectActiveEpicArtifactRef(tabId),
     [tabId],
   );
   return useEpicCanvasStore(selector);
@@ -199,6 +272,43 @@ export function useIsActiveEpicArtifact(
   const selector = useMemo(
     () => makeSelectIsActiveEpicArtifact(tabId, nodeId),
     [tabId, nodeId],
+  );
+  return useEpicCanvasStore(selector);
+}
+
+/**
+ * Whether `tileId` is the tile showing in `tabId`'s active pane - the
+ * NON-record-backed counterpart to {@link makeSelectIsActiveEpicArtifact}.
+ *
+ * Renderer-only tiles (workspace file, git-diff, PR detail) are deliberately
+ * invisible to `makeSelectActiveEpicArtifactId`, which returns `null` for them
+ * so their synthetic ids never reach the persisted `lastFocusedArtifactId`.
+ * They still need to light up their own list row, and their ids ARE stable
+ * (derived from host + coordinates), so matching on the tile id directly is
+ * safe here in a way that persisting it would not be.
+ *
+ * `null` means "this row has no tile" (an unknown-base PR) and is never active.
+ * Selects a per-row BOOLEAN for the same reason the artifact variant does:
+ * threading the active id to every row re-renders the whole list on every
+ * selection change.
+ */
+export function makeSelectIsActiveTile(
+  tabId: string | undefined,
+  tileId: string | null,
+) {
+  return (state: EpicCanvasStore): boolean => {
+    if (tileId === null) return false;
+    return activeTileRef(state, tabId)?.id === tileId;
+  };
+}
+
+export function useIsActiveTile(
+  tabId: string | undefined,
+  tileId: string | null,
+): boolean {
+  const selector = useMemo(
+    () => makeSelectIsActiveTile(tabId, tileId),
+    [tabId, tileId],
   );
   return useEpicCanvasStore(selector);
 }
@@ -319,6 +429,33 @@ export function usePaneTabRefs(
 
 export function getCanvasRootForTab(tabId: string): TileLayoutNode | null {
   return useEpicCanvasStore.getState().canvasByTabId[tabId]?.root ?? null;
+}
+
+const EMPTY_CONTENT_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Content ids of every tile open in `tabId`'s canvas - the "what is already
+ * on screen here" question, for surfaces that offer to open something.
+ *
+ * Reads `tilesByInstanceId` rather than walking the pane tree: the store keeps
+ * the two in step (every payload has a tree tab and vice versa, see
+ * `reconcileCanvasInvariants`), so the payload map is the cheaper half of the
+ * same fact. Background strip tabs count as open - they are a click away, not
+ * somewhere else.
+ *
+ * Content ids, not instance ids: the same chat can be open in two tiles, and
+ * a caller asking "is this chat open" wants one answer.
+ */
+export function useOpenTileContentIds(
+  tabId: string | undefined,
+): ReadonlySet<string> {
+  const tiles = useEpicCanvas(tabId).tilesByInstanceId;
+  return useMemo(() => {
+    const ids = Object.values(tiles).flatMap((ref) =>
+      ref === undefined ? [] : [ref.id],
+    );
+    return ids.length === 0 ? EMPTY_CONTENT_IDS : new Set(ids);
+  }, [tiles]);
 }
 
 /**

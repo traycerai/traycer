@@ -1,8 +1,9 @@
 import { useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import { useHostBinding } from "@/lib/host";
 import {
-  routeNotification,
+  routeNotificationForHost,
   type NotificationNavigate,
   type NotificationPayload,
 } from "@/lib/notifications";
@@ -15,6 +16,9 @@ export interface NotificationActivationInput {
   /** Feed correlation for this activation's acknowledgment. `null` when
    * there is no feed identity to acknowledge (a legacy native payload). */
   readonly feedId: string | null;
+  /** Cloud rows retain their owning host. Approval/interview navigation must
+   * target that host rather than the relay host that delivered the feed. */
+  readonly originHostId?: string | null;
   /** Fires exactly once, synchronously, right after routing. `"success"`
    * unless the origin-host guard below trips, in which case `"failure"` -
    * the row settles as unread/no-acknowledgment, same as a genuine failure
@@ -30,6 +34,41 @@ export interface NotificationActivationController {
  * `hostFeedId`; only those carry a host to guard against a switch. */
 function isHostFeedId(feedId: string | null): boolean {
   return feedId !== null && feedId.startsWith("host:");
+}
+
+export function notificationPayloadRequiresOriginHost(
+  payload: NotificationPayload,
+): boolean {
+  return payload.kind === "approval" || payload.kind === "interview";
+}
+
+function ensureOriginHostSelected(input: {
+  readonly payload: NotificationPayload;
+  readonly originHostId: string | null | undefined;
+  readonly directory: IHostDirectoryService | null;
+}): boolean {
+  if (!notificationPayloadRequiresOriginHost(input.payload)) {
+    return true;
+  }
+  if (input.originHostId === undefined || input.originHostId === null) {
+    return false;
+  }
+  if (input.directory === null) return false;
+  const origin = input.directory.findById(input.originHostId);
+  if (origin?.status !== "available") return false;
+  input.directory.selectById(origin.hostId);
+  return true;
+}
+
+function hostFeedStayedOnOrigin(input: {
+  readonly feedId: string | null;
+  readonly beforeRouteHostId: string | null;
+  readonly afterRouteHostId: string | null;
+}): boolean {
+  return (
+    !isHostFeedId(input.feedId) ||
+    input.afterRouteHostId === input.beforeRouteHostId
+  );
 }
 
 /**
@@ -70,21 +109,40 @@ export function useNotificationActivationWithNavigate(
 ): NotificationActivationController {
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
+  const directory = binding?.directory ?? null;
 
   const activate = useCallback(
     (input: NotificationActivationInput) => {
-      const originHostId = client?.getActiveHostId() ?? null;
-      routeNotification(navigate, input.payload, input.receivedAt);
       if (
-        isHostFeedId(input.feedId) &&
-        (client?.getActiveHostId() ?? null) !== originHostId
+        !ensureOriginHostSelected({
+          payload: input.payload,
+          originHostId: input.originHostId,
+          directory,
+        })
+      ) {
+        input.onResult?.("failure");
+        return;
+      }
+      const beforeRouteHostId = client?.getActiveHostId() ?? null;
+      routeNotificationForHost(
+        navigate,
+        input.payload,
+        input.receivedAt,
+        input.originHostId ?? null,
+      );
+      if (
+        !hostFeedStayedOnOrigin({
+          feedId: input.feedId,
+          beforeRouteHostId,
+          afterRouteHostId: client?.getActiveHostId() ?? null,
+        })
       ) {
         input.onResult?.("failure");
         return;
       }
       input.onResult?.("success");
     },
-    [client, navigate],
+    [client, directory, navigate],
   );
 
   return { activate };

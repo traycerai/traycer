@@ -128,7 +128,7 @@ export function AssistantMessageBody({
   const replyText = useMemo(
     () =>
       segments.length === 0 && stopped !== null && stopped.turnHadOutput
-        ? stopped.turnReplyText
+        ? collectAssistantReplyText(stopped.turnReplySegments)
         : collectAssistantReplyText(segments),
     [segments, stopped],
   );
@@ -171,7 +171,10 @@ export function AssistantMessageBody({
     }
   }
   return (
-    <div className="flex w-full max-w-none flex-col gap-2 py-1 @container">
+    <div
+      className="flex w-full max-w-none flex-col gap-2 py-1 @container"
+      data-assistant-turn
+    >
       {timeline.map((item) => {
         if (item.kind === "activity_group") {
           return <ActivityGroupSegment key={item.id} group={item.group} />;
@@ -762,6 +765,7 @@ function ApprovalSegmentCard({
       decision={segment.decision}
       variant="card"
       headerFindUnitId={findUnitId}
+      initiallyOpen={false}
     />
   );
 }
@@ -785,15 +789,23 @@ function AssistantSegment({
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           nextStepActions={nextStepActions}
+          imageContext={segment.assistantImageContext}
         />
       );
     case "reasoning":
+      // Unreachable from the timeline - `isActivitySegment` admits reasoning
+      // unconditionally, so every reasoning block reaches the renderer through
+      // an activity group. Kept so the switch stays exhaustive over the segment
+      // taxonomy, and for direct renders in tests.
       return (
         <ReasoningSegment
           findUnitId={findUnitId}
           markdown={segment.markdown}
           isStreaming={segment.isStreaming}
           durationMs={segment.durationMs}
+          bodyBoundedByParent={false}
+          headerless={false}
+          initiallyExpanded={false}
         />
       );
     case "tool": {
@@ -814,6 +826,7 @@ function AssistantSegment({
           backgroundTask={segment.backgroundTask}
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
+          imageResults={segment.imageResults}
           variant="card"
           headerFindUnitId={
             segment.agentMessageSend === null ? findUnitId : null
@@ -827,6 +840,7 @@ function AssistantSegment({
           segment={segment}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
     case "file_change_group":
@@ -839,20 +853,27 @@ function AssistantSegment({
           findUnitId={findUnitId}
         />
       );
-    case "command":
+    case "command": {
+      // Same treatment as a promoted tool call: while the host still lists the
+      // command as running background work, the card keeps reading "running"
+      // even though the turn that spawned it already finalized its blocks.
+      const isBackgroundRunning = backgroundToolBlockIds.has(segment.id);
       return (
         <CommandSegment
           command={segment.command}
           cwd={segment.cwd}
           exitCode={segment.exitCode}
-          isStreaming={segment.isStreaming}
-          endState={segment.endState}
+          isStreaming={segment.isStreaming || isBackgroundRunning}
+          endState={isBackgroundRunning ? null : segment.endState}
+          stopped={segment.stopped}
           progress={segment.progress}
           startedAt={segment.startedAt}
           variant="card"
           headerFindUnitId={findUnitId}
+          initiallyOpen={false}
         />
       );
+    }
     case "subagent":
       return (
         <SubagentSegment
@@ -894,6 +915,7 @@ function AssistantSegment({
         <ErrorSegment
           message={segment.message}
           code={segment.code}
+          recoverable={segment.recoverable}
           findUnitId={findUnitId}
         />
       );

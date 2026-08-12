@@ -5,6 +5,7 @@ export const worktreeMutationKeys = {
   retrySetup: () => ["worktree.retrySetup"] as const,
   delete: () => ["worktree.delete"] as const,
   setRepoScripts: () => ["worktree.setRepoScripts"] as const,
+  setRepoBranchPrefix: () => ["worktree.setRepoBranchPrefix"] as const,
   refreshListing: () => ["worktree.listAllForHost", "forceRefresh"] as const,
   /**
    * The owner hover card's Refresh. Scoped by `ownerId` rather than sharing
@@ -25,5 +26,19 @@ export const worktreeMutationKeys = {
       "forceRefresh",
       "owner",
       ownerId,
+    ] as const,
+  /**
+   * The folder-mapping picker's Refresh, scoped by the PATH SET it forces
+   * rather than by a surface id. Two pickers showing the same folders read the
+   * same cache entry and issue the identical request, so sharing one in-flight
+   * key is the honest description of that; keying them apart would show one
+   * picker idle while the very request feeding it was still running.
+   */
+  refreshWorkspaceSummaries: (workspacePaths: ReadonlyArray<string>) =>
+    [
+      "worktree.listByWorkspacePaths",
+      "forceRefresh",
+      "workspaces",
+      [...workspacePaths],
     ] as const,
 };

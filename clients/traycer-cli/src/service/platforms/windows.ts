@@ -162,6 +162,14 @@ async function installService(
       },
     );
   } catch (cause) {
+    // Roll the launcher back: `stageTaskDefinition` wrote the persistent
+    // VBS before /Create ran, and a launcher without a task is an orphan
+    // that outlives the failed install (only a later uninstall would
+    // collect it). Best-effort - the error the operator sees is the
+    // install failure, not the rollback's.
+    await rm(hiddenHostLauncherPath(options.label), { force: true }).catch(
+      () => undefined,
+    );
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: `schtasks /Create failed for ${taskName}: ${describeCause(cause)}`,
@@ -198,6 +206,30 @@ async function uninstallService(
     tolerateNonZeroExit: true,
   });
   await rm(hiddenHostLauncherPath(options.label), { force: true });
+  // `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it was
+  // auto-created in stays behind forever (probed live on Windows 11: the
+  // empty folder remains visible in Task Scheduler Library - and folders
+  // show even though the task itself was hidden). schtasks has no verb for
+  // folders, so ask the Schedule.Service COM API - and ONLY when the
+  // folder is genuinely empty: other environments' tasks (`Host-Dev`,
+  // `Host-Staging`) live in the same folder and must survive this
+  // uninstall. Best-effort: a missing folder or denied delete changes
+  // nothing about the uninstall's outcome.
+  await run(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$s=New-Object -ComObject Schedule.Service;$s.Connect();$f=$s.GetFolder('\\Traycer');if((@($f.GetTasks(1)).Count -eq 0) -and (@($f.GetFolders(0)).Count -eq 0)){$s.GetFolder('\\').DeleteFolder('Traycer',0)}",
+    ],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 30_000,
+      tolerateNonZeroExit: true,
+    },
+  ).catch(() => undefined);
   // Same rationale as stopService: the force-kill above skips the host's
   // graceful pid.json cleanup, and metadata surviving an uninstall reads as
   // a crashed (rather than removed) host to anything that finds it later.
@@ -487,6 +519,28 @@ interface SlotProcessScanOptions {
 }
 
 function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
+  return buildSlotProcessScanScriptWithProjection(
+    options,
+    "@($matches | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress",
+  );
+}
+
+// Same filter as the pid scan, projecting name + executable path as well so
+// the install swap's EBUSY error can NAME the processes still matching the
+// slot instead of surfacing a bare errno.
+function buildSlotProcessDetailScanScript(
+  options: SlotProcessScanOptions,
+): string {
+  return buildSlotProcessScanScriptWithProjection(
+    options,
+    "@($matches | Select-Object ProcessId, Name, ExecutablePath) | ConvertTo-Json -Compress",
+  );
+}
+
+function buildSlotProcessScanScriptWithProjection(
+  options: SlotProcessScanOptions,
+  projection: string,
+): string {
   const hostPaths = powershellStringArray(
     slotHostProcessPaths(options.hostHome),
   );
@@ -509,7 +563,7 @@ function buildSlotProcessScanScript(options: SlotProcessScanOptions): string {
     "    $hostMatch",
     "  }",
     "}",
-    "@($matches | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress",
+    projection,
   ].join("\n");
 }
 
@@ -553,6 +607,96 @@ function parseProcessIdJson(stdout: string): readonly number[] {
 
 function uniqueProcessIds(values: readonly number[]): readonly number[] {
   return Array.from(new Set(values.filter(isKillableProcessId)));
+}
+
+// A slot-matching process reported by the detail scan. Field names mirror
+// the installer's `SwapLockHolderProcess` so `install-lifecycle.ts` can
+// hand these through without an adapter layer.
+export interface WindowsSlotLockHolder {
+  readonly pid: number;
+  readonly name: string | null;
+  readonly executablePath: string | null;
+}
+
+function parseProcessDetailJson(
+  stdout: string,
+): readonly WindowsSlotLockHolder[] {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return [];
+  }
+  // `ConvertTo-Json` on `@(...)` still emits a bare object for a single
+  // match on Windows PowerShell 5.1 - accept both shapes, like
+  // `parseProcessIdJson` above.
+  const values = Array.isArray(parsed) ? parsed : [parsed];
+  const holders: WindowsSlotLockHolder[] = [];
+  for (const value of values) {
+    if (value === null || typeof value !== "object") continue;
+    const record = value as Record<string, unknown>;
+    const pid = record.ProcessId;
+    if (!isKillableProcessId(pid)) continue;
+    holders.push({
+      pid,
+      name: readNonEmptyString(record.Name),
+      executablePath: readNonEmptyString(record.ExecutablePath),
+    });
+  }
+  return holders;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// The install swap's between-retry escalation (installer
+// `SwapLockRecovery.killLingeringProcesses`): re-run the same verified
+// kill `stopService` already performed. The first kill ran before the
+// swap; anything the rename now trips over either outlived it (an orphan
+// re-matching the scan) or spawned since, and both answer to another pass.
+// Pass `null` to use the real process runner.
+export async function killLingeringSlotProcesses(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+): Promise<void> {
+  await killHostProcessTree(label, runner ?? runCommand);
+}
+
+// The install swap's post-mortem (`SwapLockRecovery.describeLockHolders`):
+// name the processes the slot scan still matches after the rename retries
+// exhausted. Best-effort - a scan that cannot run reports no holders
+// rather than failing the caller, which is already surfacing an error.
+export async function describeSlotLockHolders(
+  label: ServiceLabel,
+  runner: ProcessRunner | null,
+): Promise<readonly WindowsSlotLockHolder[]> {
+  const run = runner ?? runCommand;
+  try {
+    const result = await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        buildSlotProcessDetailScanScript({
+          hostHome: hostHomeDir(label.environment),
+          currentPid: process.pid,
+        }),
+      ],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_PROCESS_SCAN_TIMEOUT_MS,
+        tolerateNonZeroExit: true,
+      },
+    );
+    return parseProcessDetailJson(result.stdout);
+  } catch {
+    return [];
+  }
 }
 
 function isKillableProcessId(value: unknown): value is number {
@@ -718,6 +862,7 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
+    <Author>Traycer</Author>
     <Description>${escapeXml(options.label.displayName)}</Description>
   </RegistrationInfo>
   <Triggers>
@@ -808,5 +953,7 @@ export {
   buildTaskXml as buildScheduledTaskXml,
   buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
   buildSlotProcessScanScript as buildWindowsSlotProcessScanScript,
+  buildSlotProcessDetailScanScript as buildWindowsSlotProcessDetailScanScript,
   parseProcessIdJson as parseWindowsProcessIdJson,
+  parseProcessDetailJson as parseWindowsProcessDetailJson,
 };

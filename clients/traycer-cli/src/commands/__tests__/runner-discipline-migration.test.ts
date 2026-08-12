@@ -1,6 +1,12 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   afterEach,
   beforeEach,
@@ -52,16 +58,25 @@ beforeEach(() => {
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
   stderrChunks = [];
+  // `write`'s completion callback is load-bearing, not decoration: the
+  // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
+  // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
+  // way to Desktop. A stub that swallows the callback would leave that
+  // flush waiting on a write that never reports completion, so invoke it.
   stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   exitSpy = vi.spyOn(process, "exit").mockImplementation(((
@@ -84,6 +99,12 @@ afterEach(() => {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
   }
   rmSync(workHome, { recursive: true, force: true });
+  // The runner now signals failure by SETTING `process.exitCode` rather than
+  // calling `process.exit`, so a test that drives a failing command leaves it
+  // set on this very process. Left behind, vitest exits non-zero with every
+  // test green - a red suite with nothing to point at. Clear it here so no
+  // individual test has to remember.
+  process.exitCode = undefined;
   stdoutSpy.mockRestore();
   stderrSpy.mockRestore();
   exitSpy.mockRestore();
@@ -104,16 +125,31 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
-  let exitCode = 0;
+  // The runner records its code on `process.exitCode` and lets the loop drain
+  // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
+  // RESTORE it around the run: a leaked non-zero value would otherwise make
+  // the vitest process itself exit non-zero with every test green.
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
   try {
     await fn();
   } catch (err) {
+    process.exitCode = priorExitCode;
     if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-      exitCode = Number.parseInt(err.message.replace("__test_exit_", ""), 10);
-    } else {
-      throw err;
+      // Deliberately fatal rather than translated. This harness USED to report
+      // the thrown code as the run's exit code, which meant every
+      // `expect(out.exitCode)` below passed under either implementation - so
+      // none of them was evidence for int#4840's drain fix. Reaching
+      // `process.exit` is now the failure, because on win32 that is the
+      // teardown abort coming back.
+      throw new Error(
+        `${err.message.replace("__test_exit_", "process.exit(")}) was called: the runner must record process.exitCode and let the loop drain, never exit abruptly`,
+      );
     }
+    throw err;
   }
+  const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
+  process.exitCode = priorExitCode;
   const stdout = joined(stdoutChunks);
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
   const envelopes: Record<string, unknown>[] = [];
@@ -191,7 +227,6 @@ function mockLogoutStore(args: {
         ? {
             token: "t",
             refreshToken: "r",
-            authnBaseUrl: "https://authn.test",
             savedAt: "2026-01-01T00:00:00.000Z",
             user: { id: "u1", email: "a@b.c", name: "A" },
           }
@@ -260,6 +295,49 @@ describe("logoutCommand runner contract", () => {
     expect(out.terminal).toBeNull();
     expect(joined(stdoutChunks)).toContain("Not logged in.");
     expect(out.exitCode).toBe(0);
+  });
+
+  it("drops the content-addressed chat-part cache", async () => {
+    mockLogoutStore({ hadSession: true, signOut: DELETED });
+    const { cliChatPartCacheDir } = await import("../../store/paths");
+    const cacheDir = cliChatPartCacheDir();
+    const digest = "ab".padEnd(64, "c");
+    const entry = join(cacheDir, digest.slice(0, 2), digest);
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, "a published shard's bytes");
+    // The injected state, OBSERVED before the act. Without this the assertion
+    // after would pass just as well against a cache directory that never
+    // existed, which is precisely the shape of a test that proves nothing.
+    expect(existsSync(entry)).toBe(true);
+
+    const { logoutCommand } = await import("../logout");
+    const out = await runJsonCommand(logoutCommand);
+
+    expect(out.exitCode).toBe(0);
+    // Leaving the account means leaving the content. Every entry is a copy of
+    // bytes the cloud still holds, so this costs one cold read and nothing else.
+    expect(existsSync(entry)).toBe(false);
+  });
+
+  it("keeps the chat-part cache when the sign-out delete fails", async () => {
+    mockLogoutStore({
+      hadSession: true,
+      signOut: { outcome: "commit-failed", credentials: null },
+    });
+    const { cliChatPartCacheDir } = await import("../../store/paths");
+    const digest = "de".padEnd(64, "f");
+    const entry = join(cliChatPartCacheDir(), digest.slice(0, 2), digest);
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, "a published shard's bytes");
+    expect(existsSync(entry)).toBe(true);
+
+    const { logoutCommand } = await import("../logout");
+    const out = await runJsonCommand(logoutCommand);
+
+    // The credential was NOT cleared, so the session did not end and the
+    // content is still this user's. The clear rides the confirmed path.
+    expect(out.exitCode).toBe(1);
+    expect(existsSync(entry)).toBe(true);
   });
 
   it("JSON mode: emits a single error envelope (UNEXPECTED) when the sign-out delete fails", async () => {
@@ -383,10 +461,15 @@ describe("buildConfigShellSetCommand conflict-detection", () => {
       );
     } catch (err) {
       if (err instanceof Error && err.message.startsWith("__test_exit_")) {
-        // expected - the runner reached process.exit(1)
-      } else {
-        throw err;
+        // Not tolerated any more: the runner records the failure on
+        // `process.exitCode` and returns normally. A `process.exit` here is
+        // the win32 teardown abort's precondition, so accepting it would let
+        // this case pass against the very implementation it exists to reject.
+        throw new Error(
+          `${err.message.replace("__test_exit_", "process.exit(")}) was called during a --clear-args parse failure`,
+        );
       }
+      throw err;
     }
     const ndjson = joined(stdoutChunks)
       .split("\n")

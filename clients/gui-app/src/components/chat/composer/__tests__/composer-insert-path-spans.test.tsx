@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -111,6 +110,45 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     // "code").run() call), not one transaction per span.
     expect(handleRef.current?.getJSON()).toEqual(before);
   });
+
+  it("inserts a dropped attachment as the same mention node used by @", async () => {
+    const handleRef = await mountedHandle();
+
+    let inserted = false;
+    act(() => {
+      inserted =
+        handleRef.current?.insertMentionAttachment({
+          kind: "mention",
+          contextType: "spec",
+          path: "spec:epic-1/spec-1",
+          pathKind: null,
+          relPath: null,
+          absolutePath: null,
+          workspacePath: null,
+          label: "Composer spec",
+          description: "Drag attachments",
+          epicId: "epic-1",
+          artifactId: "spec-1",
+          artifactType: "spec",
+          chatId: null,
+          terminalAgentId: null,
+          terminalId: null,
+          status: null,
+        }) ?? false;
+    });
+
+    expect(inserted).toBe(true);
+    const nodes = handleRef.current?.getJSON().content?.[0]?.content ?? [];
+    expect(nodes).toHaveLength(2);
+    expect(nodes[0]?.type).toBe("mention");
+    expect(nodes[0]?.attrs).toMatchObject({
+      contextType: "spec",
+      path: "spec:epic-1/spec-1",
+      label: "Composer spec",
+      artifactId: "spec-1",
+    });
+    expect(nodes[1]).toEqual({ type: "text", text: " " });
+  });
 });
 
 async function mountedHandle(): Promise<{
@@ -151,7 +189,9 @@ function Harness({
       hasPastedImageBytes={null}
       ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
-      onSnapshot={() => undefined}
+      onDocumentChange={() => undefined}
+
+      onSelectionChange={() => undefined}
       onSubmit={() => undefined}
       onPaste={() => undefined}
       onDragOver={() => undefined}

@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { LOCAL_CLI_VERSION, buildProgram, resolveCliVersion } from "../index";
+import type { Command } from "commander";
+import {
+  LOCAL_CLI_VERSION,
+  buildProgram,
+  buildProgramWithAgentRoles,
+  resolveCliVersion,
+} from "../index";
 
 // `traycer --version` must report the release-injected
 // `TRAYCER_CLI_VERSION` for SEA builds and the local/dev fallback
@@ -143,5 +149,46 @@ describe("buildProgram() Commander version registration", () => {
         process.env.TRAYCER_CLI_VERSION = previous;
       }
     }
+  });
+});
+
+describe("buildProgramWithAgentRoles() command registration", () => {
+  function commandNames(program: Command): string[] {
+    return program.commands.map((command) => command.name());
+  }
+
+  function nestedCommandNames(program: Command, parentName: string): string[] {
+    const parent = program.commands.find(
+      (command) => command.name() === parentName,
+    );
+    if (parent === undefined) return [];
+    return parent.commands.map((command) => command.name());
+  }
+
+  it("omits agent role commands when the feature is disabled", () => {
+    const program = buildProgramWithAgentRoles(false);
+    const agent = program.commands.find(
+      (command) => command.name() === "agent",
+    );
+
+    expect(commandNames(program)).toContain("agent");
+    expect(nestedCommandNames(program, "agent")).not.toContain("role");
+    expect(agent?.helpInformation()).not.toContain("role");
+  });
+
+  it("registers the role command group and its operations when enabled", () => {
+    const program = buildProgramWithAgentRoles(true);
+    const agent = program.commands.find(
+      (command) => command.name() === "agent",
+    );
+    const role = agent?.commands.find((command) => command.name() === "role");
+
+    expect(role).toBeDefined();
+    expect(role?.commands.map((command) => command.name())).toEqual([
+      "claim",
+      "list",
+      "relinquish",
+    ]);
+    expect(agent?.helpInformation()).toContain("role");
   });
 });

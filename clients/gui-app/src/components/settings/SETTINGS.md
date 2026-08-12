@@ -31,7 +31,8 @@ SettingsLayout
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
         ├── HostSettingsPanel
-        └── DiagnosticsSettingsPanel
+        ├── DiagnosticsSettingsPanel
+        └── UsageSettingsPanel
 ```
 
 Settings is also presented as a **modal** via `settings-modal-content.tsx`,
@@ -69,6 +70,163 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
   multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
   unchanged regardless of density.
 
+## Scope: the organising idea
+
+Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is
+load-bearing rather than cosmetic.
+
+- **Application** - General, Appearance, Keybindings.
+- **Account** - Sessions, Usage.
+- **Host** - headed by THE host picker (`host-scope/host-switcher.tsx`).
+  Everything under it - Overview, Providers, Worktrees, Notifications, Agent
+  selection, Shell, Diagnostics - is scoped by that one selection.
+
+Usage sits in **Account**, not Host (ticket 13). What it reports is the
+ACCOUNT's token and cost spend, with the host as one filter INSIDE the page
+that defaults to all of them - so it does not vary by host, which is the rule
+the groups encode. Under the sidebar's picker it would have put two competing
+host scopes on one screen, with the outer one unable to describe the number
+the inner one produced. It still reads through a host CLIENT, as every RPC
+does; that is a transport fact, the same distinction `requiresLocalHost`
+draws below.
+
+Application and Account lead because they are short, fixed and never re-shaped;
+the host group goes last because it is the only one whose contents depend on a
+selection.
+
+**Scope is not a level.** Settings already spends its nesting budget inside
+Providers, which is a rail plus a per-provider tab bar - so the sidebar gets
+exactly one level and the host cannot become another one. Earlier attempts that
+made the host a tier (tabs across the content, an accordion of host cards in
+the rail) all pushed the deepest page four levels down. The picker is
+navigation only.
+
+**One place per host verb.** There is no Hosts page. A separate collection page
+looks harmless but is a second lifecycle surface the moment it can change an
+update policy, which is exactly what the old "My Hosts" list did - so adding,
+comparing and updating hosts all resolve to: the picker lists them, the `+`
+footer adds one, and everything else about a host lives on that host's Overview
+(`host-scope/host-registry-updates.tsx` holds the registry half of Updates,
+beside the local controller's own region in the SAME card).
+
+**The picker inherits the composer's row anatomy**
+(`components/home/host-workspace-selector/host-section.tsx`): kind glyph, name,
+status dot, check. Two pickers over one concept must not each invent a
+vocabulary. Search appears from six hosts up; below that it is one more thing
+to skip past.
+
+`requiresLocalHost` (Shell, Diagnostics) marks a TRANSPORT limit, never a scope
+one: shell config and `hostLogLevel` are fields of the selected host's own
+config, but this client reads them through the local CLI bridge. Those sections
+stay in the host group and render `RequiresLocalHostNotice` for a remote host,
+rather than showing this computer's values under another host's name. An
+earlier pass let the missing RPC exile them into the App group, which put the
+surface right back to "memorise the exceptions".
+
+This replaced a flat list in which "Appearance" (this app), "Sessions" (your
+account) and "Providers" (one specific host) were indistinguishable peers,
+and in which FOUR sections had each grown their own host `<Select>`: Providers
+(header), Worktrees (toolbar), General -> File Edit Snapshots (a settings row,
+directly above a destructive button) and Agent selection (floating above the
+editor). They differed in width, placement and scoping mechanism while doing
+one job.
+
+All four are gone, and nothing replaced them: a panel states NOTHING about which
+host it is scoped to. An interim pass put an inert `HostScopeLine` readout where
+each dropdown had been, on the theory that content owes the reader the host name
+at the point of use. It does not - the sidebar picker already carries the name,
+the health dot and the "Viewing -" note, and the readout was that same fact
+printed a second time in four places, which is the duplication this surface
+exists to remove. So panels carry only the controls they own.
+
+One caveat, stated because an earlier draft of this file got it wrong: the
+picker is NOT permanently on screen. The rail is a single `overflow-y-auto`
+`<aside>`, so at a short viewport the host group can scroll out of view like
+anything else in it. The argument for removing the readout is
+non-duplication, not permanent visibility. `settings-host-select.tsx` and `use-settings-host-scope.ts`
+are deleted; `useHostScope` is the only host scope in Settings.
+`settings-host-labels.ts` survives solely for the composer's
+`host-workspace-selector`.
+
+**Two host relationships, kept apart by grammar.** Merging them is the defect
+the whole surface guards against:
+
+- **Viewing** (`stores/settings/settings-host-scope-store.ts`) - which host
+  Settings is administering. Free, reversible, no effect outside Settings.
+  Renders as neutral chrome; never accent-coloured.
+- **Active for this window** (`HostDirectoryService.selectById`, read through
+  `useReactiveActiveHostId`) - which host this window talks to for ambient
+  work: notification indicators, the bell, rate limits, the resource monitor,
+  and where newly started work lands. Changed ONLY by a labelled verb that
+  states its consequence ("Use this host in this window"), never as a
+  dropdown side effect. Always wears the accent.
+
+`useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
+host-scoped panel reads. Its status enum is the safety contract, because three
+of its states look identical if you only check `client !== null`:
+
+| Status        | `client` | The panel must                                                                                          |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `following`   | ambient  | render normally - the ambient client IS the scoped host's                                               |
+| `connecting`  | `null`   | render its loading shape, NEVER the ambient client's data                                               |
+| `unreachable` | `null`   | say so - terminal, not pending; never a spinner that cannot resolve                                     |
+| `vanished`    | `null`   | say the host was deregistered and offer a way back - it must NOT silently re-resolve to the active host |
+| `ready`       | scoped   | render normally                                                                                         |
+
+The invariant every consumer owes: **a visible host name must always match the
+client used by every read, stream and mutation beneath it.** Because the only
+visible host name is the sidebar's, that reduces to one rule: a panel must
+neither render content NOR issue a host read while the scope has no client
+behind it.
+
+Two mechanisms, and the split matters:
+
+- `HostScopeGate` (`host-scope/host-scope-gate.tsx`) decides what is
+  **rendered**. It guards its CHILDREN and nothing else - a control passed as a
+  sibling prop (`headerAction`) is outside it, which is how Providers' Refresh
+  button once re-probed the ambient host while the page named another.
+- `isHostScopeUsable(status)` decides what is **mounted**. A query hook under a
+  non-usable scope still fires and caches its answer no matter what the gate
+  renders, so panels that own host reads check this before mounting them.
+
+Every section in the `host` group mounts the gate. Shell and Diagnostics wrap
+their host-tied bodies in it whole (Diagnostics keeps its app-scoped rows -
+the desktop log level and the memory capture - outside, since their subject
+never changes with the scope). Overview is the exception that proves the rule:
+most of its body never touches the scoped host's RPC - the local service
+console runs over the CLI bridge and is the RECOVERY surface, and the Updates
+card writes through the account API - so it mounts the whole-panel gate only
+for the unresolved and `vanished` cases, renders its body for `connecting` and
+`unreachable`, and the RPC-backed rows gate themselves inside
+`HostDangerZone`. The reason is the same one that motivates the gate: a `null`
+scoped host that defaulted to "local" once put this computer's service console
+under a host that no longer exists.
+
+**One host model.** The app carries two host lists that need not agree - the
+runtime directory (what this client can dial; it alone knows `websocketUrl`)
+and the cloud registry (what the account owns; it alone knows presence leases,
+platform, update state). Every old picker was built on exactly one of them and
+was therefore blind to a real class of host. `buildHostScopeOptions`
+(`host-scope/host-scope-model.ts`) is their UNION keyed by `hostId`, recording
+`connectable` / `registered` so a row present in only one list renders honestly
+instead of being dropped or faked. NOTE: `HostDirectoryEntry.kind` is
+`local|remote|mock` while `HostListItem.kind` is `personal|sandbox` - same
+field name, disjoint values. The merged model deliberately exposes neither
+directly.
+
+**One health vocabulary.** `deriveHostHealth` (`host-scope/host-health.ts`)
+replaced two disjoint dialects that described the same machine: the
+registry-backed presence words and the local service words ("Running" /
+"Stopped" / "Not installed"). It keeps a coarse `state` a person acts on plus a
+`detail` fragment carrying the nuance the old design spent a row of pills on.
+`stopped` and `not-installed` stay distinct from `offline` because they are the
+two a person can act on; for the local machine the live service snapshot
+outranks the cloud lease. It DELEGATES to `deriveHostPresence`
+(`panels/my-hosts-model.ts`) rather than re-deriving it - that function's
+invariants (no green dot without live evidence; live-session evidence outranks
+the lease; an expired lease under degraded presence reads "unknown", never a
+false "Offline") are tested and load-bearing.
+
 ## Sections
 
 - `General` App behavior, agent activity, and local data controls, divided
@@ -94,13 +252,17 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
     (retry moving local SQLite tasks/epics to cloud - stays out of
     Diagnostics, which is support capture, not user data recovery).
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
-"danger"`, `data-testid="settings-danger-zone"`, kept last): File Edit
-    Snapshots (local pre-edit snapshot storage, size + clear), Local app
-    state (reset tabs/layout/drafts/settings/view prefs + reload), Remove
-    Traycer (conditional on `hostManagement`; becomes "Traycer removed / Quit
-    Traycer" after removal). The zone's distinct restrained-red card/label
-    tone is unchanged from before the reorg, just carried by the shared
-    group component instead of bespoke markup.
+"danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
+    only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
+    destructive action here that is genuinely about this APP rather than about
+    a host. File Edit Snapshots and Remove Traycer both moved to
+    `host-scope/host-danger-zone.tsx` on the scoped host's own Overview: each
+    acts on ONE host's data, and a host-scoped destructive row sitting on an
+    app-wide page is how a snapshot wipe could be aimed at a host the page
+    never named. Their arm-time target capture lives there too. The zone's
+    distinct restrained-red card/label tone is unchanged from before the
+    reorg, just carried by the shared group component instead of bespoke
+    markup.
 - `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
   specialized in one column: **Theme**, **Interface**, **Typography**,
   **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
@@ -132,12 +294,18 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
     and `terminalFontSize` are clamped 10-24. `theme-provider.tsx` applies
     `uiFontFamily`/`codeFontFamily` as inline overrides of
     `--traycer-font-ui`/`--traycer-font-mono` (chosen font + the default
-    stack as fallback), removing the override when `null`. The terminal host
-    (`terminal-tile-xterm.tsx`) resolves its own effective font
-    (`terminalFontFamily ?? codeFontFamily`) and size
-    (`terminalFontSize ?? codeFontSize`) directly from the store rather than
-    reading computed CSS, and live-syncs both into `term.options` (see
-    `resolveEffectiveFontFamily` and `useTerminalAppearanceSync`). The
+    stack as fallback), removing the override when `null`. The effective
+    TERMINAL font (`terminalFontFamily ?? codeFontFamily`,
+    `terminalFontSize ?? codeFontSize`) is resolved once by
+    `useEffectiveTerminalFont` (`hooks/settings/`) and applied inline by its
+    three consumers - the xterm host, this panel's `TerminalPreview`, and the
+    managed-command output window (`managed-command-output-tile.tsx`, whose
+    content is a program's stdout and so is terminal output too). None of
+    them can read it from CSS: `--traycer-font-mono` carries the CODE font,
+    so `font-mono` would silently ignore a Terminal override, and xterm
+    measures glyph cells on a canvas where CSS variables do not resolve at
+    all. `terminal-tile-xterm.tsx` additionally live-syncs both values into
+    `term.options` (see `useTerminalAppearanceSync`). The
     `@pierre/diffs` diff viewer follows the code font via
     `--diffs-font-family` / `--diffs-font-size` set on `[data-diffs-host]` in
     `diff-tokens-css.ts`.
@@ -230,17 +398,125 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   `providers.addCustomPath` / `providers.removeCustomPath` /
   `providers.setEnabled` / `providers.detectVersion` /
   `providers.setEnvOverride` / `providers.deleteEnvOverride`) through
-  `useHostQuery` / `useHostScopedMutation`. A header host picker (shown
-  only with more than one host) scopes the whole pane to the selected host
-  by re-providing the runtime client for the panel subtree (transient
-  `useHostClientFor`, the Worktrees pattern); the default is the active
-  host. Selection + custom paths + enabled flag + per-provider env persist
+  `useHostQuery` / `useHostScopedMutation`. The pane carries NO host picker of
+  its own: the sidebar switcher scopes it, and the panel re-provides the
+  runtime client for its subtree from `useHostScope` (transient
+  `useHostClientFor`) only once the scope is `ready`. The list query and the
+  Refresh control sit INSIDE `HostScopeGate` rather than in the panel header,
+  because the header renders outside the gate and reached the ambient host
+  there. Selection + custom paths + enabled flag + per-provider env persist
   host-side in `~/.traycer/host/config/provider-overrides.json` (per-device
   == per-host). Disabling a provider marks it unavailable in the new-agent
   picker. `providers.list` is cached for 15 min
   (no auto-refetch on remount/focus) to avoid re-running `--version` probes; a
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
   force-refreshes the list and harness availability on demand.
+  - **The detail pane is tabbed, and the tab RAIL is the only thing between the
+    provider header and its config.** Order is `account` · `usage` · `general` ·
+    `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
+    `supportedTabsFor` (`provider-settings-tabs.ts` - pure, so the rule is
+    tested without rendering the panel).
+    - **The provider header and the rail are PINNED rows; only the active tab's
+      body scrolls.** `ProvidersRailLayout`'s detail column used to carry
+      `overflow-y-auto p-5` around the whole of `ProviderDetail`, so the rail
+      scrolled away with its content and a seven-tab pane lost its navigation
+      as soon as you moved. Scroll ownership now sits on `TabsContent`
+      (`min-h-0 overflow-y-auto`), with `min-h-0 flex-1 flex-col` repeated down
+      every level between the panel body and it - a flex item defaults to
+      `min-height: auto` and refuses to shrink below its content, which pushes
+      the overflow straight back up to the column and un-pins the rows above.
+      - **Pinned as a SIBLING row, not `position: sticky`.** That is what makes
+        it work without a background: nothing ever passes under the rail, so it
+        needs no opaque fill - which the pane's translucent `bg-card/40` could
+        not have supplied without a visible band.
+      - Horizontal padding lives on the column so the rail's `border-b` keeps
+        exactly the width it had when the column owned the scroll; the body
+        cancels it with `-mx-5 px-5` so its scrollbar lands on the pane edge
+        rather than 5 units inside it.
+      - `Tabs` runs `gap-0` and the rail-to-body spacing is the body's own
+        `pt-4`. With the gap on `Tabs`, the scroll box started below the rail's
+        rule and content vanished in mid-air above itself; owned by the body,
+        the clip edge and the rule are the same line.
+      - Radix mounts only the ACTIVE `TabsContent`, so there is exactly one
+        scroll box and switching tabs starts it at the top.
+      - Guarded by `expectPinnedRailLayout` in
+        `providers-settings-panel.test.tsx` - structurally (the rail and the
+        enable switch must NOT be inside the tabpanel, and no ancestor of the
+        tabpanel may carry `overflow-y-auto`) plus the one class that carries
+        the mechanism, since jsdom has no layout engine and cannot be asked
+        whether something scrolls.
+    - **Ids are wire enum members; labels are display strings, and only labels
+      are ever renamed.** `supportedTabs` rides `nativeCapabilities`, which a
+      released client decodes through one
+      `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES)` over the WHOLE object - an
+      id an older client cannot parse fails the enum and drops that entire
+      object, silently taking MCP/Plugins/Skills with it. So `general` displays
+      as **"CLI & Args"** and `usage` as **"Profiles & Limits"** while both ids
+      stay put. The old "General" named nothing about its contents, which is
+      what the rename fixes.
+      **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
+      managed profiles and usage limits, but managed profiles exist for
+      `claude-code` and `codex` only — so on the other ten providers the fixed
+      label promised a section that is not there. Elsewhere it reads
+      **"Usage limits"**, which is the panel's own words for what remains (the
+      section inside is headed exactly that). The ID never varies; this is
+      presentation.
+      The predicate is a deliberate MIRROR of the host's
+      `providerSupportsManagedProfiles`, which is itself an id check — there is
+      no capability on the wire to read instead, because the host answers this
+      before it builds one. `profiles` cannot stand in for it: for an
+      unsupported provider it is empty BY RULE
+      (`resolveProfileWireEntries` returns `[]` without consulting the
+      registry), and an unseeded `claude-code` is empty too, so a label keyed on
+      the count would name the wrong tab and then change under the user. Adding
+      a profile-capable provider means updating both sides; the cost of missing
+      it is a tab that under-promises for a round.
+    - **`account` is CLIENT-ONLY and deliberately not in the wire enum.** It is
+      derived from `state.apiKey.supported` alone. The API key and the
+      profile/limits surfaces answer different questions ("how does this
+      provider authenticate?" vs "which account is running, and how much of it
+      is left?"), and a provider can have either without the other - amp takes
+      a key but advertises no `usage` tab at all, claude-code has profiles and
+      limits but no key field - so one shared tab always showed a hole for
+      whichever half a provider lacked. Nothing about "does this take a key?"
+      needs the host to say so, and adding an id to the enum would risk the
+      whole-object `.catch` above for zero gain.
+    - **The visible set is the host's advertisement, PLUS client-derived
+      `account`.** There is no per-provider subtraction left. `general` used to
+      be dropped for cursor and amp by a `hidesCliCandidates` id check, on the
+      premise that an SDK-driven provider has no CLI binary a user could pick.
+      Both of them spawn the Traycer-resolved binary for their MCP write verbs
+      (`runAmpCliCapture`, `runCursorMcpCli`), so that table was the only
+      control over the binary those verbs use - and hiding it turned "no `amp`
+      on PATH" into an MCP tab with Add/Delete/auth silently gone and no way to
+      supply a path. The emptiness worry it encoded is answered upstream
+      instead: the host's `baseBinaryName` is an exhaustive switch, and the
+      candidates section renders a real "not found, here's how to install it"
+      empty state rather than a bare table. `usage` is taken at the host's word:
+      the contract
+      registry already gates it on being able to POPULATE it (managed profiles,
+      the Traycer subscription card, or rate limits - see
+      `providerCanPopulateUsageTab`), so re-deriving that here would just be a
+      second copy of the same rule.
+    - **`variant="line"` (underline), not the filled default.** Seven unrelated
+      panes is navigation; a filled track reads as a segmented control, which
+      is for re-presenting one dataset and tops out around four options. The
+      list keeps `w-full` for the `border-b` RAIL but the track itself is
+      transparent, so the old "filled slab with dead space after the last tab"
+      (`w-full` cancelling the primitive's `w-fit` while triggers stayed
+      content-width) cannot recur. The nested Tools/Instructions tabs inside
+      the MCP tab deliberately stay on the FILLED variant so the two nesting
+      levels read as different tiers.
+    - **No per-tab content dots.** The former `tabHasContent` dot could not
+      tell the truth: `general` lit for every CLI-backed provider including the
+      ones whose tab was empty, `usage` lit unconditionally for every
+      rate-limit-capable provider, and mcp/plugins/skills were hardcoded to
+      never light - so the three tabs that actually hold user-installed content
+      were the three that looked empty. It also used `bg-primary` ("needs
+      attention") for what was at most "is configured", reusing the same dot
+      the provider rail spends on "disabled". A future signal must split those
+      meanings: a muted count on the list tabs, a warning tone reserved for
+      real attention.
   - **Provider environment variables.** Each provider detail pane (last, below
     the CLI picker and terminal-agent args) has an _Environment variables_ card
     holding the per-provider env applied when the host spawns that harness
@@ -269,8 +545,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
   - **API-key providers (Cursor).** Cursor authenticates with an API key rather
-    than a CLI login, so its row renders an `ApiKeySection` (masked input +
-    Save/Clear) when `state.apiKey.supported`, plus a "Create an API key" link
+    than a CLI login, so it renders an `ApiKeySection` (masked input +
+    Save/Clear) when `state.apiKey.supported` — **as the whole body of the
+    client-derived `account` ("Account") tab**. It used to sit ABOVE the tab bar
+    as its own pre-tab region, which put a provider's only real setting outside
+    the tabs that were supposed to hold its settings (and hid the fact that
+    Cursor's General tab rendered nothing). Nothing renders between the provider
+    header and the tab rail now. Also a "Create an API key" link
     that opens the provider dashboard via `runnerHost.openExternalLink`
     (`API_KEY_DASHBOARD_URL`). The key is stored AES-256-GCM encrypted in
     `provider-overrides.json` and never returned over RPC - `state.apiKey` only
@@ -320,11 +601,714 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Traycer has no API key field. The enable toggle remains a real gate:
     disabling it hides the Traycer harness from the new-agent picker and blocks
     runs like any other provider.
+  - **MCP scope is ONE picker that always names its destination**
+    (`provider-mcp-scope-picker.tsx`, `McpScopePicker` - a Popover + cmdk list
+    reached from `McpScopeHeader`). It replaced a `[Global | Project]` chip
+    pair plus a separate folder `<Select>` that appeared only in Project.
+    - **Why the split was wrong.** Global named nothing, so "where does this
+      server go?" had no on-screen answer while a shadow project read ran
+      against a folder the user could not see. Project silently adopted the
+      single resolved folder (`hostPaths.length === 1`) and rendered it as
+      STATIC TEXT, so the most common case never looked like a choice. And both
+      labelled folders by basename only, which cannot distinguish two worktrees
+      of one repo.
+    - **Rows.** `Global` ("Every workspace on this host") sits above one row
+      per target. Targets come from `useMcpScope`: the resolved workspace
+      folders, PLUS every worktree the host reports for them
+      (`useWorktreeListByWorkspacePathsForClient`), deduped by path since a repo
+      open under two folders reports the same worktree set twice. Each row
+      carries name + a `worktree` badge + branch + the full path, because the
+      branch is what actually separates sibling worktrees. Selecting a row
+      picks the folder AND the scope - they were never two decisions.
+      `selectedByHostId` (`providers-workspace-selection-store.ts`) is validated
+      against every offered target, not just the open workspaces, so a stored
+      worktree selection survives a reload.
+    - **The trigger is ONE line at `h-7`, matching `Button size="sm"`.** It
+      shares a toolbar row with "Add MCP server", and a two-line control beside
+      a one-line button reads as a layout mistake rather than as emphasis. The
+      second line's content did not disappear: the subtitle (Global's promise,
+      or the selected worktree's branch) rides inline as muted text, and the
+      full absolute path - the part that disambiguates two worktrees - moved to
+      the trigger's tooltip while staying on every row of the open list.
+    - **An empty list is a state you can act on, not a dead end.** Targets are
+      derived from the folders THIS client has opened
+      (`useWorkspaceFoldersStore` → `useResolvedWorkspaceFolders`), which is
+      legitimately empty on a fresh install or a host whose work happens
+      elsewhere - and then the picker offered Global and nothing else, with no
+      way to reach a project config at all. The list now says
+      "No workspaces added on this host yet." and carries an **Add a workspace
+      folder…** row driving the same `pickAndPrepareFolders` the Home workspace
+      selector uses, bound to the SETTINGS-selected client so a folder picked
+      while viewing host B is prepared on B. The added folder becomes the
+      selection; a cancelled pick changes nothing.
+    - **The selection is keyed by the BOUND host, not the active one.**
+      `useMcpScope` reads `client.getActiveHostId()` and only subscribes to
+      `useReactiveActiveHostId()` for the re-render. Settings can target a
+      non-active host through the transient `HostRuntimeContext` override, and
+      keying by the active host filed a B-picked path under A - where it could
+      never validate against the list it was picked from.
+    - **The single-workspace default is kept but no longer invisible** - it
+      renders as a selected control that can be changed, rather than a
+      sentence. With more than one candidate there is still no auto-pick.
+    - A provider advertising only one `list` scope gets a plain "Applies to
+      every workspace on this host." line instead of a picker holding one dead
+      option; the wording matches the Global row so the two never disagree.
+      Plugins and Skills remain hardcoded global-scope and get no picker.
+    - The OAuth resume key is `{providerId, scope, workspaceRoot, hostId}`
+      (`useResumeOauthPolling`) - any change to how `workspaceRoot` is derived
+      has to keep that tuple stable across navigation.
+  - **A row shows the provider's OWN artwork or NOTHING**
+    (`ProviderEntryIcon`). There is no fallback glyph anywhere:
+    - Skill rows never had a source for one - a skill is a markdown directory
+      and no provider's format carries artwork for it. They are distinguished
+      by their source badge.
+    - Plugin rows without artwork show nothing either. An earlier version drew
+      a derived monogram (initials over a hashed tone); it asserted a visual
+      identity the plugin never declared, and beside real vendor logos it read
+      as a rendering fault rather than as "this one has no icon". Only Codex
+      ships plugin artwork, so that fallback was the COMMON case, not the rare
+      one. `provider-entry-monogram.ts` was deleted outright.
+
+    A hand-written id-to-icon table remains refused - it would be wrong the
+    first time anyone installs something unknown, the same reason this repo
+    refuses static model catalogs.
+
+    **Alignment is a list-level decision.** `reserveIconSpace` is true when ANY
+    row in the list has artwork, and every row then holds the same footprint -
+    empty where there is no icon - so the names keep one left edge. A provider
+    that ships no plugin icons at all gets no column at all rather than a
+    permanently blank one.
+
+  - **Codex plugin metadata comes from `<version>/.codex-plugin/plugin.json`.**
+    The host listing used to be synthesized from DIRECTORY NAMES alone (three
+    `readdir` calls, no file opened), so rows read `pdf` and
+    `pdf@openai-primary-runtime` where Codex's own UI reads "PDF" / "Read,
+    create, and verify PDF files". All of it was in that manifest's `interface`
+    block, unread. `listCodexPluginsFromHome` now reads it and fills
+    `displayName`, `description`, and `hasIcon`. Three traps live here:
+    - **The manifest is untrusted** - a plugin is an arbitrary user-installed
+      directory, so `interface.composerIcon` may legally be
+      `"../../../../etc/passwd.png"`. Asset paths are containment-checked with
+      `path.relative` (not a `startsWith` prefix test, which would accept a
+      sibling like `/plugins/foobar` under `/plugins/foo`) and restricted to an
+      image extension allow-list. No MIME sniffing: the value ends up in a
+      `data:` URI handed to `<img>`.
+    - **The cache is not an installed-set, and a SYMLINK is the tell.** An
+      installed plugin has a real versioned directory (`sites/0.1.33`); a
+      merely-staged one has a bare `latest` symlink into the marketplace tree,
+      which is what `openai-bundled/chrome/latest` is - and `codex plugin list`
+      calls chrome "not installed". Following the symlink looks like an
+      obvious improvement and is wrong: it surfaces a plugin the user does not
+      have, with a name and artwork read out of staging. Plugins with no real
+      version directory are skipped entirely (`isInstalledVersionDir`).
+      Cross-checked against the CLI: excluding them yields 12 rows, matching
+      the CLI's 9 installed plus the 3 remote-installed `openai-curated-remote`
+      plugins it does not account for.
+    - **Version choice is load-bearing now.** It used to be
+      `versionDirs[versionDirs.length - 1]` - readdir order, under which
+      `0.1.9` outranks `0.1.10`. That was cosmetic while only the version
+      string came off it; the chosen directory is now also where the manifest
+      and the artwork are read from.
+  - **Icons travel on their own RPC arm, never on the plugin list.**
+    `nativeListQuerySchema` gains a `pluginIcon` arm (modelled on
+    `mcpDiscover`, the existing per-item detail query) returning a `data:` URI.
+    Three constraints force that shape:
+    - **A path or `file://` URL cannot work.** Desktop CSP is
+      `img-src 'self' data: blob: https:` - no `file:` - the `app://` handler
+      is sealed to the renderer bundle, and a host-local path renders nothing
+      against a REMOTE host, which is a shipped paid mode. Bytes over the
+      existing websocket behave identically local and remote.
+    - **They cannot ride the list.** Icons are ~900 KB (~1.2 MB base64) for a
+      typical Codex install - one 1024x1024 PNG is 451 KB - and
+      `useProvidersPluginsList` runs `staleTime: 30_000`.
+    - **`poll: false` on the icon query is load-bearing.** `providers.list` is
+      condition-polled and condition queries join the table-owned poll BY
+      DEFAULT; `refetchInterval` also fires regardless of `staleTime`, so the
+      hook's `staleTime: Infinity` would not save it. Omitting `poll: false`
+      puts every icon on a refetch timer.
+
+    **Theme-aware artwork rides the same arm.** The request carries a `theme`,
+    and two rules keep it honest:
+    - **The pair must be coherent.** There is no `composerIconDark` in the
+      format - only `logoDark`, whose light counterpart is `logo`. So a plugin
+      declaring `logoDark` uses the `logo` / `logoDark` pair; everything else
+      uses `composerIcon` for both themes, exactly as Codex renders it.
+      Pairing `composerIcon` with `logoDark` would swap between two different
+      assets on a flip: github declares an 853 B `github-small.svg` against a
+      9.4 KB `github-dark.png`.
+    - **`hasDarkIcon` gates whether the request varies by theme at all.** Only
+      3 of 13 plugins ship a dark asset. The renderer pins the rest to
+      `light`, so their query key is theme-independent; without that, a theme
+      flip would miss the cache on every row and re-fetch the whole ~900 KB
+      set to receive byte-identical images. A `dark` request for a plugin with
+      no dark asset still answers with the light one rather than "no icon".
+
+    The list's `hasIcon` flag is what keeps rows without artwork from each
+    burning a round trip, so it is resolved host-side at LIST time (including
+    a `stat`, so a declared-but-absent file reports `false` rather than
+    promising an icon the fetch cannot deliver). The icon request addresses a
+    plugin BY ID and the host re-walks to resolve the file - the renderer never
+    hands the host a filesystem path, the same discipline as
+    `assertRemovableSkill`. `readPluginIcon` is optional on
+    `ProviderNativeBehavior`: only Codex's plugin format carries artwork, and a
+    required method would mean seventeen stubs asserting nothing. Absent, or
+    resolving to a null `dataUri`, both mean "render no tile".
+
+  - **`enabled` comes from `codex plugin list --json`, with a known gap.**
+    Enabled/disabled is Codex state, not a filesystem fact, so the directory
+    walk could only hardcode `true`. The CLI read is injected
+    (`CodexPluginEnabledLookup`) rather than called directly - the real binary
+    is installed on a typical dev machine, so an un-injected test would
+    exercise the live CLI locally and an empty result in CI, passing for two
+    different reasons. It is enrichment, never a gate: the call is
+    `.catch`-guarded at the CALL SITE (not merely inside the default lookup, or
+    the invariant would hold by accident), on a 5 s budget versus the 60 s
+    install budget, so a missing or slow CLI degrades to the default instead of
+    emptying the tab.
+
+    THE GAP: the id namespaces do not fully align. Ours is
+    `<name>@<cache-dir>`, the CLI's is `<name>@<marketplace>`. They coincide for
+    `openai-primary-runtime`, `openai-bundled` and `pr-completion`, but the
+    cache directory `openai-curated-remote` has no CLI counterpart - the CLI
+    lists those under `openai-curated` and calls them "not installed" even
+    though they are installed through the remote-install path. So github /
+    slack / openai-templates miss the map and keep `enabled: true`. They must
+    NOT be matched by name alone: `github@openai-curated` is a catalog entry
+    whose `enabled` says nothing about the installed copy.
+
+  - **A skill row opens its full `SKILL.md`**
+    (`ProviderSkillDetailDialog`). The row can only ever show frontmatter
+    (name + description) - the instructions the agent actually follows live in
+    the file body, which was unreadable from the app. The dialog mirrors the
+    plan card's expand (`plan-segment.tsx`): the same three-row shape and a
+    scrollable `TraycerMarkdown` body, so both "show me the whole document"
+    surfaces behave alike.
+    - Content is read on open via `workspace.readFile`, passing `skill.path`
+      as the containment root and `SKILL.md` as the file, rather than carried
+      on the list response: adding a body field would put every skill's full
+      text on every `providers.skills.list`, paid on each poll, for something
+      read only when opened.
+    - **HOST DEPENDENCY:** that resolver treats `workspacePath` as the
+      containment root and does NOT require it to be a bound workspace, which is
+      the only reason a skill directory under `~/.agents/skills` can be read at
+      all. Hardening it to accept known roots only would break this surface;
+      `SKILL.md` would then need its own read verb.
+    - `stripSkillFrontmatter` removes the leading `---` block before rendering
+      (the header already shows those two fields, and a renderer with no
+      frontmatter plugin prints them as a `<hr>`-delimited paragraph). It is
+      deliberately narrow - only a block at byte 0 with a closing fence - so a
+      body that legitimately opens with a horizontal rule keeps its first
+      section.
+    - The dialog is mounted only while a skill is open, so the Skills tab does
+      not hold a disabled host query (and its QueryClient dependency) on every
+      render.
+    - **Remove lives in the dialog footer, behind TWO conditions**
+      (`skillRemovability`). `actionScopes.remove` advertising a scope says the
+      provider supports the verb; `skill.source` says whether this skill's files
+      are ours to delete. The host's `assertRemovableSkill` accepts only
+      `shared` / `provider` sources (and re-checks realpath containment in a
+      writable root) and throws otherwise, so a `plugin` or `managed` skill
+      under a remove-capable provider satisfies the first and fails the second.
+      The client mirrors that rule ONLY to avoid offering a button guaranteed to
+      fail - the host stays the enforcement, and a divergence surfaces as its
+      error text rather than a silent deletion.
+      - Three outcomes, not two: `hidden` (no remove scope advertised - a
+        "can't remove" note on every row would be noise), `blocked` (supported,
+        but not for this skill - worth a line, since the missing button would
+        otherwise look broken beside removable siblings), `removable`.
+      - Confirmed through `ConfirmDestructiveDialog`, stacked over the open
+        skill dialog. The confirmation names the **path**: removal deletes a
+        directory, and which of the four skill roots it sits in is what the name
+        alone cannot say.
+      - Removal has its own handler rather than reusing `runMutation`, because
+        its outcomes land elsewhere: success closes BOTH dialogs (the open skill
+        no longer exists, and its `readFile` would point at a deleted path) and
+        must not touch the create/import draft fields; failure closes only the
+        confirmation and renders inside the skill dialog, since the tab's own
+        error banner sits behind it and would be invisible.
+  - **Model Providers is the visual layer of `opencode auth login`**
+    (`provider-model-providers-tab.tsx` +
+    `provider-model-provider-connect-dialog.tsx`): the UPSTREAM LLM credentials
+    a provider calls with, not a Traycer account and not a CLI binary. Backed by
+    four dedicated RPCs on the optional-capability channel
+    (`providers.listModelProviders` / `modelProviderAuth` /
+    `awaitModelProviderAuth` / `cancelModelProviderAuth`) through
+    `useHostQuery` / `useHostMutation`, with keys in
+    `lib/query-keys/model-providers-query-keys.ts`.
+    - **The tab exists only when the host says so.** It rides `supportedTabs`
+      like every other wire tab, and only the `opencode` module advertises it -
+      so an old host, an old CLI below the version gate, or any other provider
+      simply has no tab. There is no client-side derivation that could disagree.
+      It sits after `env` and before `mcp` in `PROVIDER_TAB_ORDER`: it is
+      configuration (what this provider can reach) rather than an inventory of
+      what is installed into it, and that position cannot move any provider's
+      DEFAULT tab, since every provider advertising it also advertises the tabs
+      ahead of it.
+    - **NO scope picker**, unlike MCP. OpenCode's upstream auth is per-user;
+      there are no project-scoped credentials for a `global`/`project` control
+      to choose between. The sidebar host picker still scopes the tab.
+    - **ONE list, connected first** (`sortModelProviderEntries`), not a
+      "Connected" section above a searchable catalog. Search has to be able to
+      find a connected provider, and the two-section shape is precisely the one
+      where it cannot. ~180 rows flowing in the panel's own scroll (no internal
+      height cap - an inner `overflow-y-auto` nested a second scrollbar inside
+      the panel's); deliberately NOT virtualized
+      (single-line rows, no per-row queries - and a virtualizer renders an empty
+      viewport under jsdom's zero-height layout, which would put this list's
+      behavior beyond test).
+      - **One filter beside the search box**
+        (`model-provider-filter.ts` + `model-provider-list-controls.tsx`):
+        **All / Browser sign-in**, in the same `ListFilter` menu shape the
+        provider rail uses (`provider-rail-controls.tsx`), down to the dot that
+        marks an active filter and the trigger's accessible name carrying the
+        current value. Per-row method badges were the other option and would
+        have lit "API key" on ~170 of ~180 rows to say nothing — the failure the
+        removed per-tab content dots had. The interesting answer is the rare
+        one, so it lives one click away instead.
+        There is deliberately **no "API key" option**, and it is the same
+        argument one step further: the host synthesizes an `api` method for
+        every provider whose `/provider/auth` advertises nothing, so that bucket
+        measured **178 of ~180 rows** against a real host. A control that costs a
+        click and returns the list you were already looking at is a dead option
+        wearing a choice's clothes; "All" is the honest name for that set, and
+        the two rows it would have excluded are exactly the ones **Browser
+        sign-in** already isolates. The remaining bucket reads off `methods[]`,
+        and an EMPTY method list means the host offered nothing at all.
+        Filtering runs BEFORE the fuzzy search, so a query cannot quietly
+        re-widen the bucket the user picked.
+    - **`source` is badged only for a CONNECTED provider, and disconnect is
+      gated on `canDisconnect` ALONE.** The host reports `source` as null unless
+      connected, so a badge anywhere else would claim a credential origin the
+      row does not have. `hasStoredCredential` answers a different question
+      ("does Traycer hold a credential?") than `canDisconnect` ("may it be
+      removed from here?"); a later host may answer them differently, and
+      reading either for the other is how a button appears that the host will
+      refuse. The host answers `source ∈ {api, custom, config}`. `api` and
+      `custom` are auth-store removals (`api` for a key written through
+      `auth.set`, `custom` for a provider whose loader is fed by that same
+      store — `xai` signs in through OAuth and reports `custom`). **`config` is
+      disconnectable too, and it is a CONFIG WRITE**: a config row has nothing
+      for `auth.remove` to take, so the host suppresses it through
+      `disabled_providers` — the same mechanism a declared custom uses, and for
+      the same reason. That is true whether or not the row is a declared
+      custom; an earlier version of this doc said config rows were read-only
+      unless declared, which stopped being true when the host closed the
+      key-only-config hole. **`env` stays read-only**: it is not ours to remove
+      and no file write can suppress it. The control is a **text button reading "Disconnect"** —
+      upstream's own word — with hover-only destructive tone (the pattern
+      `provider-cli-candidates-section` and `env-override-editor` already use:
+      quiet among neutral rows, red under the pointer). It was an unplug ICON
+      with a tooltip until the user's manual pass, and it was the one control on
+      the surface they could not read: a glyph in a row of quiet text names
+      neither what it removes nor that it is the destructive one. The confirm
+      dialog carries the nuance the tooltip used to — for an ordinary row it
+      removes the stored key and the row may come back CONNECTED from an env var
+      or config block underneath, so it promises removal and nothing more.
+    - **A connected row shows ONE action.** Connected and disconnectable ⇒
+      "Disconnect" alone, which is upstream's shape; replacing a stored key is
+      disconnect-then-connect there too. The single exception is a connected row
+      the host will NOT disconnect (an `env`-sourced one): it keeps "Connect",
+      because parity's one-action rule would otherwise leave it with no action
+      at all — a dead end that neither explains itself nor lets the user put a
+      credential in place for when the variable is gone.
+    - **Badges use upstream's vocabulary**: `env` → **Environment**, `api` →
+      **API key**, `custom` → **Custom**, and `config` → **Config** or
+      **Custom** depending on the entry's `configDeclaredCustom` flag. That flag
+      is the host's copy of upstream's `T(id)` predicate (a `provider[id]` block
+      whose `npm` is `@ai-sdk/openai-compatible` with a non-empty model map) and
+      it is not recoverable from `source`, which lumps "the user declared this
+      endpoint" together with "a config file supplies this key". The badge is
+      now the row's ONLY origin marker; the trailing "Set by environment" /
+      "Set in config file" line is gone, because a badge reading "Environment"
+      beside a label reading "Set by environment" spent the row's last words
+      saying one thing twice. The provenance sentence survives in the badge's
+      tooltip, which is where a sentence belongs.
+    - **The list is FLAT.** One `<ul>` with hairline separators, not a bordered
+      card per provider: at ~180 rows a border around each turns the surface
+      into a wall of boxes with the provider names as the smallest thing in it.
+      The user's words were "boxy design is kinda bad, too many items", and the
+      per-row status dot for a DISCONNECTED provider went in the same pass — an
+      absent dot says the same thing as a muted one.
+    - **`source` is a STATUS, not a permission.** An `env` / `config` / `custom`
+      row shows where its current credential comes from and still offers Connect.
+      An earlier pass blocked the write affordance on those rows, reasoning that
+      OpenCode resolves env before its own auth store so a key saved here would
+      be shadowed and the click would appear to work while changing nothing.
+      The precedence is real — observed live, an account holding a stored
+      `openai` OAuth credential still reports `source: "env"` while
+      `OPENAI_API_KEY` is exported — but blocking was the wrong response to it.
+      Setting a provider up and choosing which credential wins are different
+      decisions: a user may want the OAuth sign-in in place for when the
+      variable is not exported, or intend to unset it afterwards. OpenCode's own
+      app configures any provider regardless of its current source, and ours
+      refusing to was a restriction we invented. The connect dialog now leads
+      with a warning naming what outranks it (`credentialPrecedenceNotice`,
+      naming the actual variable) instead.
+      `custom` gets its own wording rather than sharing the config-file line:
+      that loader is frequently fed by the auth store — `xai` signs in through
+      OAuth and still reports `custom` — so pointing at a file would send the
+      user where the credential is not.
+    - **Rows carry the provider's BRAND MARK**, from `@lobehub/icons` via a
+      hand-owned `models.dev id → component` map
+      (`home/pickers/model-provider-icons.tsx`, beside the harness map that uses
+      the same package). Monochrome variants, so rows tint with the surrounding
+      text; sizing follows the row (`size-4`).
+      **Coverage is the popular head, and the tail falls back on purpose.** The
+      fallback is **sparkles** — the mark users already read as "provider with
+      no logo" in OpenCode, so the visual language carries over. What does NOT
+      carry over is the reason it is broken there: upstream fetches
+      `models.dev/logos/{id}.svg` at build time, that endpoint answers 200 for
+      any id with a generic sparkles body, and the result is that 14 of their 98
+      sprite entries are the fallback wearing a named provider's identity — and
+      the fallback happens to be Synthetic's real logo, so an unknown provider
+      renders as that company. A user-declared custom provider gets the same
+      neutral mark, for the same reason: it has no brand, and borrowing one puts
+      a real company's logo on someone's private gateway.
+      **A DECLARED row never gets a brand mark, whatever its id.** The host's
+      `isConfigDeclaredCustom` judges a block by its `npm` and model map, never
+      its key, so a hand-written `provider.openai` block pointing at a private
+      endpoint is a legal custom declaration under a mapped id — and painting
+      OpenAI's logo on it is the same impersonation the neutral fallback exists
+      to prevent, arriving through the one door the id cannot close. The mark
+      takes `configDeclaredCustom` alongside the id for exactly that case.
+      On the drift bug, precisely: a key MISSING from the map falls back (that
+      is correct, and the expected fate of most of the catalog), while a
+      reference to a component that does not exist fails to compile. Neither is
+      a coverage guarantee — nothing here promises an id has a mark — but
+      between them there is no state where a mark is claimed and nothing
+      renders, which is what upstream's `llmgateway` does.
+    - **A post-mutation refetch SAYS it is refreshing.** The host rotates its
+      managed server on every write, so the next list pays a cold
+      `opencode serve` boot — **measured ~3.7s, against ~0.24s warm**. For that
+      whole window the rows on screen are the pre-mutation answer. The list
+      keeps them (they are mostly right, and a skeleton would discard more than
+      it protects) but dims them, sets `aria-busy`, and shows a "Refreshing
+      providers" line. Without it a stale row reads as final, which is exactly
+      what the user reported twice — "still needs manual refresh", then "it
+      takes a little time to auto refresh".
+      **No optimistic flip.** Disconnect does not reliably mean disconnected:
+      an env variable or a config block underneath can keep the row connected,
+      and the host decides that across five ordered passes. Guessing the outcome
+      client-side would show a state the refetch contradicts seconds later — a
+      visible flip-flop, and a re-run of the "client re-derives host truth"
+      mistake this surface removed once already.
+    - **The custom-provider dialog MIRRORS upstream's**, extracted field for
+      field from OpenCode desktop 1.18.2 (`CustomProviderForm` /
+      `validateCustomProvider`). An earlier pass mirrored their predicates and
+      invented the form around them; the user's verdict was that this is not
+      parity, and it was correct. Fields, in order: **Provider ID**
+      (`myprovider`, "Lowercase letters, numbers, hyphens, or underscores"),
+      **Display name** (`My AI Provider`), **Base URL**
+      (`https://api.myprovider.com/v1`), **API key** (optional, "Leave empty if
+      you manage auth via headers"), then **Models** — rows of `model-id` +
+      `Display Name` with a trash per row and "Add model" — then **Headers
+      (optional)** — `Header-Name` + `value`, same shape. Submit reads
+      **Submit**. The intro links their own
+      [provider config docs](https://opencode.ai/docs/providers/#custom-provider).
+      `npm` is not a field: the host writes the one constant `T(id)` recognizes.
+      Their rules, adopted verbatim including the loose edges — parity on a
+      validation rule means taking its edges too, or "same form, same values"
+      becomes a Traycer-only failure:
+      - id `^[a-z0-9][a-z0-9-_]*$` — **underscores are legal**; ours banned them
+      - base URL is a `^https?://` **prefix test**, not a URL parse
+      - every model row needs an id AND a display name; ids compare
+        case-sensitively (they are sent verbatim), header names
+        case-insensitively (HTTP says so, and two rows differing only in case
+        would collapse when written)
+      - a wholly empty header row is skipped, not flagged — the list always
+        carries one and the section is optional
+      - the exists-check is SKIPPED for an id in `disabled_providers`: upstream
+        re-enables a disabled custom provider by re-declaring it
+      - **create stays a NAMING surface even then.** Re-declaring over a
+        disabled id skips the exists-check, but not the minting pattern: the
+        wire keeps the regex on `createCustom` and drops it only on
+        `updateCustom`, and the client's two id policies match that split. So a
+        disabled id we could never have minted - a dotted `wafer.ai`, say - is
+        repaired through **Edit** or turned back on through **Connect**, not by
+        retyping it into the create form. Imposing our naming style on an id
+        already in someone's config is the thing that rule was never for.
+      - `{env:VAR}` in the key field is a REFERENCE, not a secret — it becomes
+        `env: ["VAR"]` and stores no credential
+        **Submit stays live and validates on click**, which is upstream's shape
+        and also the way out of the dead-button trap: a Submit disabled until
+        valid is dead on a blank form for exactly the errors a blank form has, and
+        nothing on screen says why. Nothing is red until asked.
+        This REPLACES an earlier rule on this surface that disabled Submit while
+        the draft was invalid. That rule was written before upstream's form had
+        been read, and it was answered by marking every field pre-dirty on edit -
+        a workaround for a problem the shape it was copying does not have. Both
+        halves of the pair went together, so neither survives alone: reinstating
+        the disabled button reinstates the invisible reasons.
+    - **TWO DELIBERATE DIVERGENCES from upstream, both documented here because
+      the extraction is the evidence for everything else on this surface.**
+      1. **Edit exists; theirs does not.** `DialogCustomProvider` always mounts
+         blank — upstream's only route back into a declaration is re-declaring
+         it while disabled. Ours opens the form on the row's current values with
+         the id locked, which is strictly more capable and is the only way to
+         repair a hand-broken declaration. The id stays locked because it is the
+         config key every stored model reference is built from; a rename would
+         be a delete and a create wearing one button.
+      2. **Write order is ours.** Upstream `auth.set`s the key and then writes
+         the config, so a failed config write leaves a stored credential behind.
+         The host does config first, key second — the same two operations
+         failing in the direction where nothing is left over.
+         **Edit opens with an EMPTY key field**, because the read side carries no
+         key — credentials are write-only on this surface. Empty therefore means
+         "leave the stored one alone", never "clear it", and the helper text says
+         so in edit mode. An env REFERENCE is restored verbatim: it is not a secret,
+         and blanking it would silently drop it on the next save.
+    - **Edit can ADD and CHANGE; it cannot REMOVE.** The write is a deep merge,
+      and removal is not something the provider's API can express — probed, not
+      assumed. A null model entry is answered with a 400; a null header value is
+      _accepted_ and stores the literal null, poisoning a file the provider's own
+      CLI reads. Their own app never hit this because it has no Edit at all, so
+      removal was never in the contract their API was written to.
+      So a row already in the config is **locked**: no trash on it, and its KEY
+      is read-only while the value beside it stays editable. The key lock is the
+      non-obvious half and it is not fussiness — under a deep merge a key rename
+      is **a removal wearing a rename**: the payload adds the new key and nothing
+      deletes the old one, so one edit yields two entries plus an orphan the user
+      can now never remove. Renaming a model's display name or changing a
+      header's value carries no such risk, which is exactly why the row splits
+      down the middle rather than locking whole.
+      The trash is **gone, not disabled**, on those rows: a disabled control says
+      "not right now", and this one can never enable. The section note carries the
+      honest route instead — disable the provider and declare it again under a
+      new id. Rows added during the session keep their trash until save, since
+      nothing is stored under them yet, and **create mode is untouched**:
+      everything is removable before it is written. A stored key is also left
+      UNJUDGED by validation, for the same reason an existing provider id is —
+      the field is read-only and the file is hand-editable, so a complaint there
+      is one the user cannot act on; it still enters the duplicate set, so a NEW
+      row colliding with it is flagged on the row that can change.
+      The host refuses removal-shaped updates with `invalid_input` as a backstop
+      for a stale client, and that detail renders **on the form**, which is the
+      only surface that can say which key went missing.
+      `env` is the one genuine exception, and it has **three** states rather than
+      two: `null` leaves the declaration alone, `[]` CLEARS it, non-empty
+      replaces it. The gap between the first two is the whole point — deleting
+      the block's `env` key server-side needs an explicit signal, which forces
+      `[]` to mean clear, so if ABSENT meant the same thing then every edit that
+      touched only the display name would silently delete how the provider reads
+      its key. An untouched form therefore sends `null`, which is also what
+      retired the old `originalEnv` resend: that field existed only because
+      "untouched" had no spelling of its own, and one field could never show
+      several fallbacks anyway. An emptied field sends `[]`, and the edit-mode
+      hint names both halves rather than promising an empty field is always
+      harmless. **Re-enable sends `null` too** — it is not an env instruction,
+      and echoing the read side's array back would be a replace-with-identical
+      whose empty case arrives as CLEAR.
+    - **`config_unreadable` is gone from both model-provider vocabularies** (it
+      survives in `ProviderNativeErrorCode`, which is the MCP/plugins/skills
+      config-write path and a different enum). A config the provider cannot
+      parse is a server that never boots, so the condition was never separately
+      observable here: it arrives as `server_unavailable` carrying the redacted
+      parse error — file, line, column — and the detail-preferred rule renders
+      that instead of the generic sentence. The fallback stays TRUE for a bare
+      code rather than becoming a wrong-bug answer: a config the parser rejects
+      is a server that failed to start.
+    - **The global "All providers" status lives on the panel HEADING row**, and
+      renders only when `isHostScopeUsable(scope.status)`.
+      `latestProviderCheckedAt` is a max over every provider and Refresh
+      re-probes all of them; at the card's top-right it sat inches from the
+      selected provider's Enabled toggle and read as that provider's own.
+      The safety argument is the boundary, not the location. `headerAction` is a
+      SIBLING of the gate, so it is not gated — but `HostRuntimeContext.Provider`
+      wraps this entire shell, header included, whenever the scope resolved a
+      client, and `following` needs no override because the ambient client
+      already IS the scoped host's. The two usable states are therefore both
+      correct, for different reasons, and the three unusable ones
+      (`connecting` / `unreachable` / `vanished`) mount nothing at all.
+      The original bug was mounting these hooks in the header
+      **unconditionally**: with no client, `useHostClient()` fell back to the
+      ambient host and Refresh re-probed and rewrote the provider list of a host
+      the page was not showing. An earlier fix over-corrected by banning the
+      placement outright — and pinned "not in the header" as a test, which
+      forbids the safe implementation rather than the unsafe state. The test now
+      asserts the real invariant: no control and no request while the scope is
+      unusable.
+    - **Structure: ONE scroll context, plain search, Add as the first row.**
+      The list no longer caps itself against the viewport or scrolls
+      internally — that nested a second scrollbar inside the panel's own, so
+      one list had two tracks and the outer one moved the tab while the inner
+      moved the rows. The panel scrolls; the list just gets long.
+      The search controls are an **ordinary control in the header area** that
+      scrolls with the tab — the Skills tab's shape, where `ProviderListSearch`
+      is a plain sibling above its list.
+      **REVERSED, and worth the record.** Sticky was requested (the panel owns
+      the only scroll context, so on ~180 rows the controls scroll away), built,
+      and then retired on the user's live pass. Pinning requires a fill, since
+      rows scroll underneath; this pane is `bg-card/40` composited over the
+      settings background, so the sticky child had to repaint BOTH layers to
+      look like the surface it covers. The first attempt (`bg-background/95` +
+      backdrop blur) was a different colour and read as a lighter band. The
+      second used the pane's own recipe and was correct in the middle, but the
+      fill stopped at the padded container's edges, leaving a visible seam
+      beside the input. Two failures with the same root: a pinned child cannot
+      reproduce a composited translucent parent it does not own the bounds of.
+      The accepted trade is scrolling back up to search a long catalog — one
+      gesture, versus an artifact on every frame.
+      **"Add custom provider" is the list's FIRST item** and scrolls with the
+      content. It stays rendered whatever the search or filter says — including
+      when they match nothing, which is why every empty state renders INSIDE the
+      list shell rather than instead of it. It is an affordance, not a result:
+      a query that hid it would remove the one row whose purpose is "what you
+      want isn't in this list", exactly when someone is typing. (It sat above
+      the search box for one round, for that same reason; the user's live pass
+      overruled the placement, and the always-first-row form keeps the property
+      without pinning it.)
+    - **Disconnect on a declared custom row is a DISABLE**, and says so. There
+      is no separate remove verb on the wire: upstream's disconnect for a
+      config-declared custom disables the block rather than deleting a
+      credential it may not have, so the confirm promises that the declaration
+      stays in the config file and can be turned back on.
+    - **ACCEPTED RESIDUAL: a `custom` row can have nothing to remove.** Upstream
+      assigns `custom` from two different passes, and only one of them requires
+      a stored credential: a plugin auth loader (guarded on an `auth.json` entry
+      existing) and an AUTOLOADING provider loader (guarded on nothing). The
+      wire's `source` cannot tell them apart, so `{api, custom}` shows Remove on
+      the second kind too — the live example being OpenCode's own `opencode` row
+      on a free plan, connected with no `auth.json` entry at all. The failure is
+      the mild direction: `auth.remove` no-ops, the row re-lists as connected,
+      and nothing is misreported. Being exact would mean reading `auth.json` key
+      names, which the plan defers. Special-casing the `opencode` id was
+      considered and rejected — that is the hardcoded-id rule the plan bans, and
+      upstream's own version of that filter turns out to be a PAID-PLAN check
+      (`m.id !== "opencode" || Object.values(m.models).find(v => v.cost?.input)`,
+      the same predicate as their `paid()`), not a credential one, so mirroring
+      it would import their monetisation rule and still not make us exact.
+    - **Every provider gets the same plain masked key field**, unless it
+      advertised a method list saying otherwise. There is no client-side notion
+      of which providers "can" take a pasted key: `connect` sends
+      `{ key, inputs }` where `key` is the SECRET VALUE (upstream's
+      `ApiAuth.key`, which reads like an identifier and is not one) and `inputs`
+      is the prompt answers keyed by prompt key.
+      A `credentialKey` field used to ride the wire, derived host-side from
+      models.dev `env[]`, and the dialog suppressed the key field wherever it
+      came back null — Amazon Bedrock and both Vertex rows. The parity audit
+      called it what it was: a ~130-line heuristic standing in for knowledge we
+      do not have, for a requirement upstream does not have. OpenCode's
+      `auth.set` stores whatever is pasted, and a credential that cannot work is
+      the user's to discover. It is deleted across all three layers.
+    - **The plain path is still suppressed when a provider advertises ANY
+      method** — that rule is genuine upstream parity and stays. A provider with
+      a method list has told us exhaustively how it can be authenticated, and
+      every one that accepts a pasted key advertises that explicitly (`openai`,
+      `xai`, `poe`, `gitlab`, `digitalocean`, `snowflake-cortex` all carry a
+      "Manually enter API Key" arm). `github-copilot` advertises `['oauth']` and
+      nothing else, so synthesizing a key field for it would invent a path
+      upstream does not have. Verified against a live `/provider/auth`.
+      Two consequences worth stating: the env-precedence warning no longer names
+      the variable (that name came from `credentialKey`, and guessing it would
+      be worse than the general statement), and the connect dialog's "this
+      provider offers nothing" body is gone as unreachable — a provider
+      advertising no methods now always has the synthesized key path.
+    - **The prompts DSL is evaluated client-side**
+      (`model-provider-prompts.ts` - pure, so it is tested without a form).
+      Visibility resolves SEQUENTIALLY and only a visible prompt's answer feeds
+      a later `when`: the form is a CLI prompt loop rendered at once, so a
+      question never asked has no answer, and a field predicated on it must stay
+      off screen. An unanswered key fails `neq` as well as `eq`. Hidden fields
+      contribute nothing to the request - the host rejects any key the selected
+      method did not ask for.
+    - **OAuth attempt state lives in `model-provider-pending-auth-store.ts`**
+      (mirrors `mcp-pending-auth-store.ts`), keyed
+      `(hostId, providerId, modelProviderId)` and carrying the host-minted
+      `attemptId`. `hostId` is in the key even though the HOST keys its own
+      registry without it: the host only speaks for itself, while this store is
+      one client-side map spanning every host Settings can point at — without it
+      a sign-in started on host B overwrites host A's record, and A resumes
+      against an `attemptId` that names nothing there. Removal is
+      attempt-guarded for the same class of reason: every teardown resolves
+      asynchronously, so a late cancel must not delete the record of the newer
+      attempt that legitimately replaced it.
+      - **Two lookups, deliberately not one.**
+        `findModelProviderPendingAuth` answers "which row should re-open BY
+        ITSELF" (newest on this host+provider); `getModelProviderPendingAuth`
+        answers "does the row the user just clicked have an attempt" (exact
+        full key). Two upstream providers can each hold a live attempt at once,
+        so collapsing them made the OLDER of the two restart-only: its record
+        sat in the store and the host held its server lease, but the only
+        lookup available could never name it.
+
+      `attemptId` is also what makes a resumed panel honest:
+      attempts are single-flight per `(providerId, modelProviderId)` and a newer
+      one supersedes the pending one, so a panel polling by key alone would be
+      handed the newer attempt's status as its own. The tab adopts a stored
+      attempt during RENDER, guarded on the entry map's identity - the same
+      pattern as the MCP tab's `useResumeOauthPolling`, and what makes the panel
+      re-openable across navigation yet still dismissible.
+
+    - **Two OAuth arms, and neither is faked.** `code` shows the provider's own
+      `instructions` verbatim plus a paste field; `auto` completes on the
+      server's loopback and shows a waiting state with a bounded poll and a
+      **Stop waiting** button - honest wording, because upstream has no
+      OAuth-cancel endpoint.
+      - **Only the START path opens a browser.** The host answers a
+        still-pending poll with the STORED `authorizationUrl` rather than
+        `{kind:"pending"}`, so a client re-attaching after a navigation can
+        still show the provider's page. That is the right wire shape and the
+        wrong thing to open a tab on, so the dialog carries an explicit policy
+        (`applyStartResult` vs `applyPollResult`) instead of inferring one from
+        the arm: a tick refreshes the panel and the resume record, and only a
+        user action reaches `openExternalLink`. Handling both in one place
+        reopened the sign-in page every 1.5s, on a flow the user was already in.
+      - **Polling is single-flight**, scheduled from the previous tick's
+        settlement rather than on a `setInterval`: an interval keeps firing
+        through a slow request, stacking concurrent polls on one attempt — each
+        re-leasing the managed server this whole design exists to stop churning.
+      - **A terminal failure REPORTED BY A POLL ends the attempt.** The same
+        `report` disposition means opposite things depending on who asked: from
+        a submit it is advice against an attempt the host is still holding, so
+        the panel stays put and the user can try again; from a status read it is
+        a post-mortem, because the host only answers that way once the
+        background callback has already failed and released its lease. Applying
+        it identically left the panel saying "Waiting" against a settled row
+        forever, with nothing further to arrive and no live attempt for Stop
+        waiting to cancel. `applyResult` therefore takes the call context, and a
+        polled `report` clears the attempt (attempt-id guarded), stops the poll,
+        and returns to a fresh start with the reason kept on screen.
+      - **Stop waiting keeps the attempt until the host CONFIRMS.** An
+        optimistic teardown left a live host attempt holding a server lease with
+        no surface able to retry when the cancel failed in transport. A
+        confirmed cancel (`{cancelled: true, result: done}`) is LOCAL teardown —
+        `done` describes the cancel, not a credential, so it neither closes the
+        dialog as a success nor invalidates any cache. Only the
+        `cancelled: false` race (the browser callback landing while the click
+        was in flight) actually wrote a credential, and that one does both.
+    - **Typed failures map to four distinct moves**
+      (`modelProviderAuthErrorDisposition` in
+      `lib/providers/model-provider-error-copy.ts`): `attempt_superseded`
+      stands down SILENTLY (a
+      newer attempt owns the surface - reporting it accuses the user of breaking
+      the flow they just restarted), `attempt_expired`/`attempt_not_found` offer
+      a fresh start, `code_rejected` re-prompts and KEEPS the live attempt, and
+      everything else is reported. That mapping is the enum's contract restated
+      as behaviour in one place, instead of a switch per call site that handles
+      half of it.
+    - **A cold list can be a WAIT rather than a failure.** Reaching the catalog
+      needs the managed server, so every reason it would not start arrives as
+      one `server_unavailable` - including a provider pack still downloading.
+      The tab is handed the provider row's `providerPackPreparingForProvider`
+      state and renders that case as loading-with-reason.
+      `capability_unavailable` gets no Retry button: the surface is not offered
+      here at all, and a click that cannot work is the offered-then-failed shape
+      the rest of this panel refuses.
+    - **Mutations invalidate the model catalog, not the harness list.**
+      `agent.gui.listModels` is `staleTime: Infinity` by design, so without the
+      invalidation the model picker would serve the pre-connect list for the
+      rest of the app session - the one place the user looks to confirm the
+      connect worked. `agent.gui.listHarnesses` is left alone: an upstream
+      credential does not change which CLIs are installed, and re-probing every
+      harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
+      user action.
 - `Notifications` Two `SettingsGroup` cards. A design pass
   (`settings-related-panels-core-flows` artifact) replaced the old one-column
   severity×channel matrix with a compact policy card, and gave the hooks
   manager below it the remaining height.
-  - **`"In-app notifications · Current host"`**: three rows, one per severity
+  - **`"In-app notifications"`** (the `· Current host` qualifier is gone - the
+    sidebar names the host now, and the old suffix qualified the one fact the
+    screen refused to resolve): three rows, one per severity
     - `Needs action`, `Failure`, `Done` (`info` has no row) - each a single
       `Switch` gating durable host-row creation before anything reaches the bell
       feed, unread count, tab indicators, or notification hooks. Collaboration
@@ -372,11 +1356,15 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   footer, no Save button. A **Revert to default** button (disabled while the
   content already equals the provider-based default) calls
   `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
-  Default-host scope: the editor remounts (keyed on the active host id) so a host
-  swap reseeds from that device's file. Backed by `agent.selectionGuide.getGlobal`
-  (returns `{ content, generatedDefaultContent }`), `agent.selectionGuide.setGlobal`,
-  and `agent.selectionGuide.resetGlobalToDefault` through the agent selection
-  guide hooks. The global guide is the only scope: per-workspace
+  The editor has NO host selector of its own - the sidebar switcher scopes it.
+  It reaches non-active hosts with a transient `useHostClientFor` context
+  override and remounts on `scope.hostId` so one host's file never carries into
+  another; the whole subtree stays unmounted until `isHostScopeUsable`, so the
+  guide query cannot fire against the ambient host. Backed by
+  `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
+  `agent.selectionGuide.setGlobal`, and
+  `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
+  hooks. The global guide is the only scope: per-workspace
   `.traycer/agent-selection-guide.md` overrides were removed (older hosts may
   still send them, current clients ignore them).
 - `Keybindings` Keyboard shortcut customization.
@@ -389,7 +1377,10 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   Environment-variable overrides ARE merged into the host process env at
   `traycer host start` and therefore take effect on the host's next restart.
   Backed by the `traycer config shell` / `traycer config env` CLI through
-  `IRunnerHost.traycerCli`. Hidden on shells without a CLI (mobile, web).
+  `IRunnerHost.traycerCli`. On shells without a CLI (mobile, web) the panel
+  says so rather than hiding; on a remote scoped host it renders
+  `RequiresLocalHostNotice`, and on an unresolved scope it renders the gate -
+  never this computer's values under another host's name.
   - **Flags belong to a shell, not the panel.** Each program carries its own
     startup flags: `shell.entries` is a list of `{ path, args }` launch specs,
     and `shell.path`/`shell.args` are the selected command MATERIALISED for an
@@ -604,9 +1595,10 @@ aria-live="polite"` carrying the equivalent text for
   - **Worktree inventory.** Host-wide management of the git worktrees Traycer
     creates under `~/.traycer/worktrees/`, presented as a calm
     inspection-and-cleanup list, not a delete console - own bordered card,
-    no heading above it. A host selector
-    (default = active host, gated on `useHostReachability`, demoted to quiet
-    toolbar chrome rather than a dominant control) drives a disk-truth list -
+    no heading above it. The sidebar switcher scopes it - the toolbar holds no
+    host control and no host readout - and the SCOPE's verdict outranks
+    `useHostReachability`, which is the tab-binding check and can call a host
+    reachable that this scope cannot dial. A disk-truth list -
     so orphaned worktrees whose owning agent was deleted still appear -
     grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`)
     that stay visually secondary to row status. The selected host is reached
@@ -694,14 +1686,20 @@ aria-live="polite"` carrying the equivalent text for
     aggregate merge progress across every worktree it owns - deliberately
     plain muted text, not a colored badge, so it never competes with or is
     mistaken for the row's own tier pill.
-- `Host` The active host-management surface for the native-packaging flow, now
-  an operational console (`settings-related-panels-core-flows` artifact): a
-  self-identifying **summary card** (`host-settings-summary-card.tsx`) leads
-  the page with no external "Overview" label, followed by one quiet
-  **Installation** group. This replaced the old three top-level rows (Status /
-  Actions / Updates, `host-settings-status-row.tsx` /
+- `Host` **Overview**: one page about ONE host - the scoped one. The
+  cross-device **My Hosts** list and the separate **This machine** section are
+  both gone; the sidebar switcher is the collection, and every lifecycle verb
+  lives on the Overview of the host it describes. A self-identifying **summary
+  card** (`host-settings-summary-card.tsx`) leads, then a single **Updates**
+  card holding BOTH mechanisms (the local controller's check/apply via
+  `HostUpdateRegion`, and the account registry's auto-update policy,
+  version pin and drain-gate force via `host-scope/host-registry-updates.tsx`),
+  then **Installation**, then the **Danger zone**. This replaced the old three
+  top-level rows (Status / Actions / Updates, `host-settings-status-row.tsx` /
   `-actions-row.tsx` / `-updates-row.tsx`, all deleted); status derivation and
   the CLI-backed `hostManagement` facet underneath are unchanged.
+  `HostRegistryUpdates` is keyed by `hostId` and its controls capture their
+  target when armed, so a scope change cannot re-point an open confirmation.
   - **Summary card.** One bordered card holding, top to bottom: an optional
     install/restart/update progress banner and a terminal-outcome banner
     (retry/dismiss) so in-flight or failed operations render inside the card
@@ -784,6 +1782,97 @@ error` scale, `info` labelled "Info (default)") - all default Info and
     silently going blank. A has-bridge-but-zero-logs response similarly gets
     an explicit "No log files found." message in the Recent logs card rather
     than rendering empty.
+- `Usage` (`usage-settings-panel.tsx`, in the **Account** group beside
+  Sessions - see "Scope: the organising idea" above for why it is not under
+  the host picker. Groups must stay contiguous in `settings-sections.ts`, so
+  landing it there pushed Shell past `SINGLE_DIGIT_LEADER_INDEX_LIMIT`: Shell
+  and Diagnostics are now the two digit-less entries, which are the right two
+  to lose - both are `requiresLocalHost` support surfaces and the rarest
+  destinations here). All reading
+  `host.usage.summary` through `UsageSummaryPanel`
+  (`components/usage-analytics/`), placement-agnostic. `host.usage.summary`
+  is an OPTIONAL RPC (`degrade: { kind: "unsupported" }` in the protocol
+  registry), so this section stays in the static list either way and instead
+  swaps its BODY for a capability notice (same anatomy as `HostScopeGate`'s
+  internal notices - an idle host-capability gap, not an error) on a host
+  that predates the capability. Every priced figure carries its own asterisk
+  plus a five-word footnote below it, "* if billed at full API rate"
+  (`describeCostHeadline` in `cost-format.ts`) - the ONE standing exception is
+  a "· N turns not counted" suffix while unpriced turns exist. Everything
+  else - the estimate-at-list-prices framing, that a subscription bills
+  separately, the exact-vs-estimate split with amounts, the not-counted
+  detail - lives in a tooltip on the figure (`usageCostTooltip`), never as
+  standing text (fixup-01, user ruling 2026-08-10: match t3code's density;
+  the words "provenance"/"modeled"/"unpriced" never appear in UI - the wire
+  still carries the full split for the tooltip). `servedBy: "local"` states
+  the this-machine-only scope; a cloud-unavailable read renders a retryable
+  error card rather than silently falling back to local-looking data (the
+  host resolver's cloud-unavailable path is a plain `RPC_ERROR` on this
+  transport, so `isTransientHostRpcFailure` cannot classify it - the card
+  offers Retry unconditionally instead).
+  - **Ticket 11 dashboard build-out (t3code shape).** Window picker
+    (7/30/90 days) + a date-range label beside it + cost/token toggle;
+    per-harness cost split under the headline (share bar, % of cost, token
+    total - colors keyed off the same series scale as the chart's legend);
+    a per-day stacked chart (harness breakdown, custom SVG/CSS per the
+    `dataviz` skill) whose legend chips now double as a series FILTER
+    (`applyUsageSeriesVisibility` zeroes a hidden series' segments without
+    reassigning colors - "color follows the entity, never its rank"); a
+    5-tile stat row (processed tokens, cached input, uncached input, output,
+    cache savings - `usage-stat-tiles.ts` owns every "absent, not zero"
+    computation, e.g. reasoning tokens/cache-savings multiple render only
+    when the known sum is actually positive); and a Model/Day toggle on the
+    harness/model breakdown table (`buildUsageDayBreakdownRows` folds the
+    same buckets by day instead). A window-wide note ("Excludes N turns with
+    no usage reported") appears under the stat tiles whenever
+    `usageCompletenessBreakdown.absent > 0` - those turns still contribute
+    silent zeros to every token sum, which would otherwise misread as "no
+    caching happened" rather than "nothing was reported". Fixup-01 (below)
+    removed the standing cost-quality panel and the breakdown tables'
+    Provenance column entirely - neither is a "layout" element this bullet
+    still describes.
+  - **Ticket 12 removed the ambient epic-canvas cost badge** (this panel's
+    former `UsageSummaryPanel` reuse target,
+    `epic-canvas/panels/epic-cost-badge.tsx`) per the user ruling that no
+    dollar figure belongs ambient anywhere. The epic canvas status row now
+    carries a numberless `EpicUsageEntryPoint` instead, opening
+    `EpicUsageDialog` (headline, small trend chart, by-chat/agent breakdown,
+    window options including "entire epic") on click - see that panel's own
+    doc comments, not this file, since it is not a Settings surface.
+  - **Ticket 13 made this ONE cross-host dashboard, not a per-host page.**
+    The cloud plane was already per-user and cross-host (its reader filters by
+    user + time); what was missing was the host DIMENSION, not another view.
+    So `host.usage.summary` gained an optional `hostId` filter and a
+    `hostBuckets` grouping alongside `chatBuckets`, and the page gained:
+    - a **host filter defaulting to "All hosts"** (`usage-host-filter.tsx`).
+      On `servedBy: "local"` it is not a disabled dropdown but a plain
+      readout naming this machine - that plane can only ever see the machine
+      it runs on, so there is nothing to choose BETWEEN, and a greyed-out
+      picker would say "you may not choose" instead. A foreign `hostId`
+      against the local plane returns an EMPTY summary, never an error,
+      mirroring the zero-rows shape a foreign `epicId`/`chatId` already has.
+    - a **by-host breakdown** (`usage-host-split.tsx`), shown only once there
+      is more than one host, with the same column anatomy as the harness
+      split. Deliberately NOT keyed to the daily chart's series scale: that
+      scale colors harnesses, and reusing it would paint a host and a harness
+      the same hue in one view.
+    - **names joined client-side** from `useHostScope().hosts` (the merged
+      directory + registry model - see "One host model"). No host name rides
+      the wire: a name is directory state that changes without the fact
+      changing, and only the client knows a host it can no longer reach. An
+      id nothing can name renders as a TRUNCATED ID, never a blank cell.
+    - **scope copy that follows the filter** - `servedByScopeNote` now takes
+      the picked host's name and qualifies the headline whenever the figure
+      covers less than the account.
+  - **Fixup-01 (tickets 11/12) rewrote cost presentation to t3code's density**
+    (user ruling 2026-08-10, three rounds, final - superseded the ticket 11
+    "priced subtotal + N unpriced turns" phrasing and deleted ticket 11's
+    cost-quality panel and both breakdown tables' Provenance column, plus
+    ticket 12's equivalents in the scoped dialogs). `UsageCostFigure`
+    (`components/usage-analytics/usage-cost-figure.tsx`) stays the single
+    owner of the presentation across the dashboard AND both ticket-12 scoped
+    dialogs (epic + chat) - see that file's own doc comment for the current
+    rule, not this one, so the rule can't fragment across two descriptions.
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking

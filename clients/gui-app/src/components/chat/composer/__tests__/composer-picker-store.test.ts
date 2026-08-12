@@ -35,6 +35,8 @@ function fakeMentionEntry(id: string, label: string): MentionMenuEntry {
     description: "",
     icon: FAKE_ICON,
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -83,6 +85,7 @@ function open(
     range: { from: 1, to: 1 + query.length + 1 },
     query,
     commit,
+    dismiss: null,
     clientRect: null,
   });
 }
@@ -99,6 +102,7 @@ function openSlash(
     range: { from: 1, to: 2 },
     query: "",
     commit,
+    dismiss: null,
     clientRect: null,
   });
 }
@@ -119,6 +123,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().openPicker({
@@ -129,6 +134,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
 
@@ -160,6 +166,7 @@ describe("composer picker store session ownership", () => {
       range: { from: 4, to: 5 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
 
@@ -250,6 +257,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 5 },
       query: "src",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -427,6 +435,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -558,6 +567,7 @@ describe("composer picker store", () => {
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
+      dismiss: null,
       clientRect: null,
     });
     store.getState().setItems({
@@ -579,8 +589,8 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     expect(store.getState().knownSlashCommands).toBeNull();
     const commands = new Map([
-      ["plan", "plan"],
-      ["commit", "commit"],
+      ["plan", slashCommand("plan")],
+      ["commit", slashCommand("commit")],
     ]);
     store.getState().setKnownSlashCommands(commands);
     expect(store.getState().knownSlashCommands).toBe(commands);

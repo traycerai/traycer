@@ -6,10 +6,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { DesktopSupportBridge } from "@/lib/windows/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { AboutDetailsDialog } from "@/components/layout/dialogs/desktop/about-details-dialog";
+import { createDesktopSupportBridgeStub } from "./support-bridge-stub";
 
 afterEach(() => {
   cleanup();
@@ -23,11 +24,9 @@ afterEach(() => {
 
 function unavailableSupport(): DesktopSupportBridge {
   return {
+    ...createDesktopSupportBridgeStub(),
     getSnapshot: () =>
       Promise.reject(new Error("secret-token-should-never-render")),
-    revealLog: vi.fn(),
-    submitReport: vi.fn(),
-    tailLog: vi.fn(),
   };
 }
 

@@ -57,6 +57,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
+  "composer.stash",
   "composer.model-picker.toggle",
   "model.provider.byDigit",
   "model.reasoning.byDigit",
@@ -387,7 +388,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "app.terminal.toggle",
     label: "Toggle terminal panel",
     description:
-      "Show or hide the terminal panel on the start page. Opening it with no terminals starts one in the pinned workspace folder.",
+      "Show or hide the terminal panel on the start page. When several directories are attached, choose where to open it.",
     category: "app",
     kind: "chord",
     defaultChord: "mod+j",
@@ -396,7 +397,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "app.terminal.new",
     label: "New terminal",
     description:
-      "Open a new terminal tab in the start page's terminal panel, revealing the panel if it is collapsed.",
+      "Open a new terminal tab in the start page's terminal panel, choosing a directory when several are attached.",
     category: "app",
     kind: "chord",
     defaultChord: "mod+shift+j",
@@ -448,6 +449,15 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // (split group vertically). The desktop global summon shortcut is checked
     // live by conflict detection rather than hand-avoided here.
     defaultChord: "ctrl+shift+m",
+  },
+  "composer.stash": {
+    id: "composer.stash",
+    label: "Stash prompt",
+    description:
+      "Save the focused composer's full prompt for restoration in any composer.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+s",
   },
   "composer.model-picker.toggle": {
     id: "composer.model-picker.toggle",

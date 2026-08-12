@@ -37,7 +37,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import type { WsStreamClient } from "./ws-stream-client";
+import type { IStreamClient } from "./i-stream-client";
 
 /**
  * Typed handlers for an `epic.subscribe` session.
@@ -213,7 +213,7 @@ export interface EpicStreamCallbacks {
 }
 
 export interface EpicStreamClientOptions {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly callbacks: EpicStreamCallbacks;
 }

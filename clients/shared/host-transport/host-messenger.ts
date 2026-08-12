@@ -223,16 +223,18 @@ export class HostTransportFailureError extends HostRpcError {
 }
 
 /**
- * A `HostTransportFailureError` that occurred *before* the request frame was
- * put on the wire - a dial timeout, an `onerror`/`onclose` during the
- * dial-or-handshake phase, or a handshake (`openAck`) frame timeout.
+ * A `HostTransportFailureError` for which the host is known not to have
+ * dispatched the request: either the request frame was never put on the wire
+ * (dial/handshake failure), or the host explicitly reported that its post-open
+ * request deadline elapsed while it was still awaiting that frame.
  *
- * The "before the request was sent" guarantee is what makes it safe to retry
- * even non-idempotent methods: the host never observed the call, so a fresh
- * dial cannot double-apply a side effect. `createRetryingMessenger` keys its
- * bounded retry off this subclass; a post-send drop stays a
+ * The "host did not dispatch the request" guarantee is what makes it safe to
+ * retry even non-idempotent methods: a fresh dial cannot double-apply a side
+ * effect. `createRetryingMessenger` keys its bounded retry off this subclass;
+ * an ambiguous post-send drop stays a
  * `HostTransportFailureError`, and a malformed frame or any host-originated
- * error stays a plain `HostRpcError` - both propagate on the first attempt.
+ * error without the no-dispatch guarantee stays a plain `HostRpcError` - both
+ * propagate on the first attempt.
  */
 export class RetryableTransportError extends HostTransportFailureError {
   constructor(details: {

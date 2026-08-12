@@ -6,10 +6,23 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  RemoteHostMessenger,
+  RemoteStreamClient,
+  type IRemoteSession,
+} from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  acquireRemoteSession,
+  remoteSessionRefCountForTest,
+  type RemoteSessionIdentity,
+} from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import { REMOTE_SESSION_LINGER_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 const bindingRef = vi.hoisted(() => ({
   value: null as {
@@ -48,6 +61,31 @@ vi.mock("@/lib/host/runtime", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => runnerHostRef.host,
 }));
+
+// `createRemoteHostTransport` is the network boundary a remote-kind target
+// crosses (Noise-NK handshake + relay socket) - out of scope for a React
+// stream-lifecycle test. Every other named export of this barrel (notably
+// `RemoteHostMessenger` / `RemoteStreamClient`) stays REAL, and the mock
+// implementation below drives the REAL `acquireRemoteSession` cache, so the
+// test exercises the actual production ref-counting/rotation behavior, not a
+// hand-rolled substitute (mirrors `use-host-client-for-strict-mode.test.tsx`).
+const mocks = vi.hoisted(() => ({
+  createRemoteHostTransport: vi.fn(),
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      createRemoteHostTransport: mocks.createRemoteHostTransport,
+    };
+  },
+);
 
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => {
   const actual =
@@ -96,11 +134,97 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
   return <HostStreamProvider>{props.children}</HostStreamProvider>;
 }
 
+const RELAY_URL = "wss://relay.test/attach";
+
+function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
+  return {
+    hostId: "remote-host-a",
+    label: "remote-host-a",
+    kind: "remote",
+    // Every remote host shares one fixed relay attach URL - a rotation is a
+    // same-URL event by construction, so this stays identical across A/B.
+    websocketUrl: RELAY_URL,
+    version: "1.0.0",
+    status: "available",
+    publicKey,
+    remoteStatus: {
+      presenceLease: "fresh",
+      hostRelayAttached: true,
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      busy: false,
+      busySessionCount: 0,
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+  };
+}
+
+interface FakeRemoteSession extends IRemoteSession<
+  HostRpcRegistry,
+  HostStreamRpcRegistry
+> {
+  readonly closeCalls: number;
+}
+
+// A plain `closeCalls` counter - not a `vi.fn()` reference - so assertions
+// read `session.closeCalls` instead of the bare method (`@typescript-eslint/
+// unbound-method` flags referencing an interface method, since `close(): void`
+// is method-shorthand syntax). Mirrors `active-remote-sessions.test.ts`'s
+// `fakeSession()`.
+function fakeRemoteSession(): FakeRemoteSession {
+  let closeCalls = 0;
+  const session: FakeRemoteSession = {
+    get closeCalls() {
+      return closeCalls;
+    },
+    start: vi.fn(),
+    isClosed: () => closeCalls > 0,
+    isReady: () => true,
+    sendUnary: vi.fn(() => Promise.resolve({}) as never),
+    subscribe: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    subscribeWithParamsProvider: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    notifyBearerRotated: vi.fn(),
+    onClosed: () => () => undefined,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    // These provider tests never exercise fatal verdicts.
+    terminalFatal: () => null,
+    close: () => {
+      closeCalls += 1;
+    },
+  };
+  return session;
+}
+
+/** Matches `createRequestContextFixture`'s default identity. */
+const FIXTURE_USER_ID = "user-fixture-1";
+const FIXTURE_AUTH_EPOCH = "lease-fixture-1";
+
+function remoteIdentity(publicKey: string): RemoteSessionIdentity {
+  return {
+    hostId: "remote-host-a",
+    userId: FIXTURE_USER_ID,
+    hostPublicKey: publicKey,
+    relayAttachUrl: RELAY_URL,
+    // The stream runtime always supplies the app revalidator.
+    authRecovery: "revalidate",
+    // One signed-in context for the whole fixture, so sharing is decided by
+    // the fields under test rather than by an auth-context transition.
+    authEpoch: FIXTURE_AUTH_EPOCH,
+  };
+}
+
 const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
   localTarget: false,
   localHostState: "unknown",
   stage: "loading",
   progress: null,
+  lastProgress: null,
   provisioningError: null,
   provisioning: false,
   removed: false,
@@ -117,6 +241,9 @@ const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
+    hostStatus: null,
   },
 };
 
@@ -133,8 +260,12 @@ describe("HostStreamProvider", () => {
     cleanup();
     bindingRef.value = null;
     runnerHostRef.handlers.clear();
+    mocks.createRemoteHostTransport.mockReset();
     streamFactorySpy.build.mockReset();
     vi.restoreAllMocks();
+    // Tests that drive the session cache's keep-warm linger enable fake
+    // timers; restore unconditionally so a mid-test failure cannot leak them.
+    vi.useRealTimers();
   });
 
   it("force-reconnects all stream sessions on a shell system-resume signal", () => {
@@ -242,6 +373,51 @@ describe("HostStreamProvider", () => {
     expect(result.current?.isClosed()).toBe(false);
   });
 
+  it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
+    // A terminal-class close (incompatible protocol, plan restriction) would
+    // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
+    // fatal -> onClosed -> rebuild, one full mint/dial cycle per round trip.
+    // The first quick close still rebuilds immediately (the wedge-recovery
+    // case above); the SECOND consecutive quick close must wait.
+    vi.useFakeTimers();
+    try {
+      const hostClient = buildClient();
+      bindingRef.value = { hostClient };
+      act(() => {
+        hostClient.bind(mockLocalHostEntry);
+      });
+
+      const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+      const first = result.current;
+      expect(first).toBeInstanceOf(WsStreamClient);
+
+      // Quick close #1: immediate rebuild.
+      act(() => {
+        first?.close("test-terminal-close");
+      });
+      const second = result.current;
+      expect(second).not.toBe(first);
+      expect(second?.isClosed()).toBe(false);
+
+      // Quick close #2: the rebuild is DEFERRED. `useWsStreamClient` hides
+      // the dead instance during the handoff, so consumers see null - what
+      // must NOT happen is an instant fresh client (= a fresh mint+dial).
+      act(() => {
+        second?.close("test-terminal-close");
+      });
+      expect(result.current).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      const third = result.current;
+      expect(third).not.toBe(second);
+      expect(third?.isClosed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("nudges a re-dial exactly once under a StrictMode double-invoke", () => {
     const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     const hostClient = buildClient();
@@ -279,6 +455,92 @@ describe("HostStreamProvider", () => {
     expect(result.current).toBe(first);
     expect(reconnectSpy).toHaveBeenCalledTimes(1);
     expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change");
+  });
+
+  // R-1: the owner-layer discriminator the S1 cache test cannot provide (see
+  // `active-remote-sessions.test.ts` "review finding #2" for the cache-layer
+  // half). Drives the REAL production chain end to end - `HostClient.bind`'s
+  // `sameHostTransport` check, this provider's `remoteAwareOwnerIdentity`
+  // `identityKey`, and the shared `acquireRemoteSession` cache - so a
+  // regression in any one of those layers fails this test.
+  it("rebuilds and closes the client on a same-host remote public-key rotation, isolated from every other field", () => {
+    // Fake timers so the cache's keep-warm linger can be driven to expiry -
+    // a released stale-key session now closes when the window ends, not
+    // synchronously in the release.
+    vi.useFakeTimers();
+    const sessionForKeyA = fakeRemoteSession();
+    const sessionForKeyB = fakeRemoteSession();
+    mocks.createRemoteHostTransport.mockImplementation(
+      (options: {
+        readonly hostId: string;
+        readonly userId: string;
+        readonly relayAttachUrl: string;
+        readonly hostPublicKey: string;
+      }) => {
+        const session = acquireRemoteSession(
+          {
+            hostId: options.hostId,
+            userId: options.userId,
+            hostPublicKey: options.hostPublicKey,
+            relayAttachUrl: options.relayAttachUrl,
+            authRecovery: "revalidate",
+            authEpoch: FIXTURE_AUTH_EPOCH,
+          },
+          options.hostPublicKey === "pubkey-a"
+            ? () => sessionForKeyA
+            : () => sessionForKeyB,
+        );
+        return {
+          session,
+          messenger: new RemoteHostMessenger(session),
+          streamClient: new RemoteStreamClient(session),
+        };
+      },
+    );
+
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(remoteTarget("pubkey-a"));
+    });
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    expect(result.current).toBeInstanceOf(RemoteStreamClient);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-a"))).toBe(1);
+    expect(sessionForKeyA.closeCalls).toBe(0);
+
+    // hostId / kind / websocketUrl / version / status all held stable - ONLY
+    // the public key rotates (re-enrollment / corruption recovery). A
+    // coincident URL/version move would mask the gap this test targets.
+    act(() => {
+      hostClient.bind(remoteTarget("pubkey-b"));
+    });
+
+    // The old owner released its reference...
+    expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-a"))).toBe(0);
+    // ...and a FRESH one was acquired for the new key, not a resurrected
+    // stale-key session.
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+    expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-b"))).toBe(1);
+
+    // The stale-key session is closed AT the rotation, not left to linger.
+    // Keep-warm exists so a prompt re-acquire of the SAME identity is free,
+    // and this identity can never be re-acquired - its cache key embeds the
+    // old public key. Lingering would only hold an obsolete authenticated
+    // relay socket open and, because `hasReadyRemoteSession` matches on
+    // `hostId` alone, report live-session evidence for a host whose real
+    // session is still dialing.
+    expect(sessionForKeyA.closeCalls).toBe(1);
+    expect(sessionForKeyB.closeCalls).toBe(0);
+
+    // ...and nothing is left armed to close the successor when the window
+    // that the old entry would have used elapses.
+    act(() => {
+      vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
+    });
+    expect(sessionForKeyA.closeCalls).toBe(1);
+    expect(sessionForKeyB.closeCalls).toBe(0);
   });
 
   it("stops stream work for a same-id unavailable host and recreates it only on recovery", () => {

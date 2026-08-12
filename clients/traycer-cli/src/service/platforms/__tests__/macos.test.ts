@@ -26,10 +26,17 @@ import {
   readRegisteredCliInvocation,
   type ProcessRunner,
 } from "../macos";
-import { buildCompatibleHostStartScript } from "../host-start-script";
+import {
+  buildCompatibleHostStartScript,
+  buildHostStartLauncherScript,
+} from "../host-start-script";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { ServiceController } from "../../index";
-import { serviceLabelFor, smAppServiceAgentLabelId } from "../../label";
+import {
+  serviceLabelFor,
+  serviceLauncherScriptPath,
+  smAppServiceAgentLabelId,
+} from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 
 const execFileAsync = promisify(execFile);
@@ -225,6 +232,82 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     } finally {
       await rm(work, { recursive: true, force: true });
     }
+  });
+
+  // The launcher-FILE form of the same contract: the macOS plist executes
+  // `~/.traycer/service/<label>/traycer-host-start <cli> <args...>` (so BTM
+  // names the login item after the file, not after /bin/sh), and BOTH CLI
+  // generations must still start. Executes the real emitted file, exactly
+  // like the inline-form row above.
+  it("launcher file: starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args", async () => {
+    const work = mkdtempSync(join(tmpdir(), "traycer-host-start-launcher-"));
+    const launcher = join(work, "traycer-host-start");
+    const oldCli = join(work, "old-cli.sh");
+    const newCli = join(work, "new-cli.sh");
+    const oldArgs = join(work, "old-args.txt");
+    const newArgs = join(work, "new-args.txt");
+    try {
+      await writeFile(
+        launcher,
+        buildHostStartLauncherScript("ai.traycer.host.compat"),
+        "utf8",
+      );
+      await chmod(launcher, 0o755);
+      await writeFile(
+        oldCli,
+        `#!/bin/sh
+if [ "$1" = "host" ] && [ "$2" = "capabilities" ]; then
+  echo "error: unknown command 'capabilities'" >&2
+  exit 1
+fi
+printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
+`,
+        "utf8",
+      );
+      await writeFile(
+        newCli,
+        `#!/bin/sh
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && [ "$5" = "service-label" ]; then exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
+`,
+        "utf8",
+      );
+      await chmod(oldCli, 0o700);
+      await chmod(newCli, 0o700);
+
+      await execFileAsync(launcher, [oldCli]);
+      await execFileAsync(launcher, [newCli, "--entry=cli-entry.js"]);
+
+      expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
+      expect(await readFile(newArgs, "utf8")).toBe(
+        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n",
+      );
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as
+  // ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier:
+  // Unknown Developer` for every CLI-registered install, and
+  // AssociatedBundleIdentifiers alone was probed and ignored for that
+  // shape. The plist must execute the per-label launcher file, whose
+  // basename is what macOS shows.
+  it("puts the per-label launcher file first in ProgramArguments so BTM names the item traycer-host-start", () => {
+    const plist = buildLaunchAgentPlist({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: ["--entry=e.js"] },
+    });
+
+    const launcherPath = serviceLauncherScriptPath(label);
+    expect(launcherPath.endsWith(`/${label.id}/traycer-host-start`)).toBe(true);
+    expect(plist).toContain(`<key>ProgramArguments</key>
+  <array>
+    <string>${launcherPath}</string>
+    <string>/usr/local/bin/traycer</string>
+    <string>--entry=e.js</string>
+  </array>`);
+    expect(plist).not.toContain("/bin/sh");
   });
 
   // The blocker this contract replaces: `--service-label` used to be passed
@@ -968,6 +1051,58 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     await vi.runAllTimersAsync();
 
     await result;
+  });
+
+  it("forces a recycle on the CLI-owned restart, because the supervisor outlives the host pid it waited on", async () => {
+    // `stopService` waits on the pid `pid.json` publishes - the HOST. The
+    // launchd job is the SUPERVISOR, and it outlives its child by the whole
+    // post-mortem (stderr end wait, tee flush, crash-report scan), longer still
+    // when a grandchild holds the inherited stderr open. In that window the
+    // host is gone, this call has returned, and launchd still considers the job
+    // running - so the plain kickstart `forcedRecycle: false` selects is a
+    // silent no-op and the "successful" restart leaves no host.
+    //
+    // It used to be survivable by accident: the supervisor exited with its
+    // signalled child's code and `KeepAlive{SuccessfulExit:false}` respawned it.
+    // That respawn is exactly what made `host stop` come back, so removing it
+    // was the point - and it left this path with nothing underneath.
+    //
+    // This whole branch of `stopForRestart` had no test; all four lived on the
+    // Desktop-managed path.
+    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(false);
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+
+    await expect(controller.stopForRestart(label)).resolves.toEqual({
+      forcedRecycle: true,
+    });
+  });
+
+  it("recycles rather than plain-kickstarts when relaunching a CLI-owned restart", async () => {
+    // The other half: `forcedRecycle` only matters if the relaunch honours it.
+    // Assert the exact invocation, not "some argument list contains -k": the
+    // latter passes for any call carrying that flag anywhere, which is not
+    // evidence that `launchctl kickstart -k` was the thing issued.
+    const calls: { command: string; args: readonly string[] }[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await expect(
+      controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.some(
+        (c) =>
+          c.command === "launchctl" &&
+          c.args[0] === "kickstart" &&
+          c.args[1] === "-k",
+      ),
+    ).toBe(true);
   });
 
   it("detects SMAppService in-bundle LaunchAgent paths", () => {
@@ -2541,6 +2676,24 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }),
         "utf8",
       );
+      await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
+    });
+
+    it("refuses a launcher-form manifest whose path is not this label's own serviceLauncherScriptPath", async () => {
+      // Same basename, wrong path - e.g. an attacker-writable plist
+      // engineered to look like the launcher-file form. Matching on the
+      // `traycer-host-start` basename alone would treat this as a genuine
+      // registration and PRESERVE its command across the next `host
+      // update`, persisting an arbitrary CLI path into the freshly
+      // rewritten plist. Only the exact path this label's own
+      // `serviceLauncherScriptPath` resolves to may attest.
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(
+        createdPlistPath,
+        `<plist><dict><key>ProgramArguments</key><array><string>/tmp/attacker-controlled/traycer-host-start</string><string>${process.execPath}</string></array></dict></plist>`,
+        "utf8",
+      );
+
       await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
     });
   });

@@ -770,12 +770,22 @@ export type HostNotificationsSubscribeClientFrame = z.infer<
   typeof hostNotificationsSubscribeClientFrameSchema
 >;
 
-export const hostNotificationsIndicatorStateSchema = z.object({
+/** Released `indicatorState@1.0` entity flags. FROZEN. */
+export const hostNotificationsIndicatorStateSchemaV10 = z.object({
   pendingApproval: z.boolean(),
   pendingInterview: z.boolean(),
   unreadFailure: z.boolean(),
   unreadDone: z.boolean(),
 });
+export type HostNotificationsIndicatorStateV10 = z.infer<
+  typeof hostNotificationsIndicatorStateSchemaV10
+>;
+
+/** `indicatorState@1.1`: pending fork truth is independent of feed read state. */
+export const hostNotificationsIndicatorStateSchema =
+  hostNotificationsIndicatorStateSchemaV10.extend({
+    pendingFork: z.boolean(),
+  });
 export type HostNotificationsIndicatorState = z.infer<
   typeof hostNotificationsIndicatorStateSchema
 >;
@@ -786,6 +796,15 @@ export const hostNotificationsIndicatorStateRequestSchema = z.object({
 });
 export type HostNotificationsIndicatorStateRequest = z.infer<
   typeof hostNotificationsIndicatorStateRequestSchema
+>;
+
+/** Released `indicatorState@1.0` response. FROZEN. */
+export const hostNotificationsIndicatorStateResponseSchemaV10 = z.object({
+  epics: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
+  chats: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
+});
+export type HostNotificationsIndicatorStateResponseV10 = z.infer<
+  typeof hostNotificationsIndicatorStateResponseSchemaV10
 >;
 
 export const hostNotificationsIndicatorStateResponseSchema = z.object({
@@ -1024,6 +1043,247 @@ export const hostNotificationsFeedSubscribeV10 = defineStreamRpcContract({
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
 });
 
+/**
+ * Cloud-backed feed. This is deliberately a distinct optional method rather
+ * than a new major of the frozen local-feed stream: a stream has no
+ * cross-major bridge, so publishing it as a v2 major would reject deployed
+ * v1 clients before they could choose their compatible local projection.
+ *
+ * The cloud model is IMMUTABLE OCCURRENCE ENTRIES plus monotonic markers, and
+ * the wire follows from that. A row's identity is its `entryId`: a reopened
+ * approval is a DIFFERENT entry, never an edit of the one it replaces, so
+ * there is no occurrence token to guard a mutation with and no idempotency key
+ * to protect a set-once marker write. Nothing on this surface is ordered or
+ * incremental either - the relay only ever sends whole snapshots, so there are
+ * no `changes`/`removals` frames a client could apply out of order.
+ */
+export const hostNotificationsCloudFeedRowSchema = z.object({
+  /**
+   * The occurrence's identity, minted by the producing host and never reused.
+   * OPAQUE to the client: it is a key, never something to parse or order by.
+   */
+  entryId: z.string().min(1).max(191),
+  /**
+   * Which machine this happened on. DISPLAY AND NAVIGATION metadata only -
+   * mutations address the entry, never the host, so a row from an offline or
+   * retired host is still fully actionable in the feed.
+   */
+  originHostId: z.string().min(1),
+  /**
+   * The grouping key (the former semantic id, `approval.requested:<chatId>`),
+   * demoted from identity. Two entries sharing it are two occurrences of the
+   * same thing; only the newest is ever visible.
+   */
+  coalesceKey: z.string().min(1).max(191),
+  /** The v1-shaped projection of the entry, so every existing renderer
+   * formatter, lifecycle classifier and payload parser reads a cloud row and a
+   * local row through one type. `id` carries the `entryId`. */
+  entry: hostNotificationEntrySchema,
+  /** Snapshotted by the producing host at creation. Accepted staleness: a
+   * later rename does not rewrite an immutable entry. */
+  presentation: z.object({
+    epicTitle: z.string().nullable(),
+    chatTitle: z.string().nullable(),
+  }),
+});
+export type HostNotificationsCloudFeedRow = z.infer<
+  typeof hostNotificationsCloudFeedRowSchema
+>;
+
+export const hostNotificationsCloudFeedSummarySchema = z.object({
+  totalCount: z.number().int().nonnegative(),
+  unreadCount: z.number().int().nonnegative(),
+  attentionCount: z.number().int().nonnegative(),
+});
+export type HostNotificationsCloudFeedSummary = z.infer<
+  typeof hostNotificationsCloudFeedSummarySchema
+>;
+
+export const hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10 = z.object(
+  {},
+);
+export type HostNotificationsCloudFeedSubscribeOpenRequestV10 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10
+>;
+
+/**
+ * SNAPSHOT-ONLY. Every `snapshot` frame is the complete visible feed at one
+ * `version`, so a client never reconstructs state from a sequence of deltas
+ * and a dropped or duplicated frame costs nothing. A user's feed is tens of
+ * rows; the bandwidth this trades away buys the absence of an entire class of
+ * ordering bug.
+ *
+ * `version` is the cloud's per-user change sequence. The client's only use for
+ * it is to name the feed it is LOOKING AT when it issues a `clearAll`.
+ */
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      connectionState: z.literal("connected"),
+      version: z.number().int().nonnegative(),
+      rows: z.array(hostNotificationsCloudFeedRowSchema),
+      summary: hostNotificationsCloudFeedSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("connectionState"),
+      ...textFrameFields,
+      connectionState: z.literal("reconnecting"),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+export type HostNotificationsCloudFeedSubscribeServerFrameV10 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV10
+>;
+
+export const hostNotificationsCloudFeedSubscribeClientFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("ping"), ...textFrameFields }),
+  ]);
+export type HostNotificationsCloudFeedSubscribeClientFrameV10 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeClientFrameSchemaV10
+>;
+
+export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * The whole of a per-entry mutation: WHICH entry.
+ *
+ * A marker is set once and merged by "first time it happened", so the write is
+ * idempotent by construction - retry it, duplicate it, race it, and the result
+ * is the same. And because a reopen mints a NEW `entryId`, a stale command can
+ * only ever name an occurrence that has already been superseded, where a no-op
+ * is exactly the right outcome. That is what retires both the occurrence token
+ * (which existed to stop a stale command hitting a reopened row) and the
+ * idempotency key (which existed to stop a retry double-applying).
+ */
+export const hostNotificationsCloudFeedEntryRequestSchema = z.object({
+  entryId: z.string().min(1).max(191),
+});
+export type HostNotificationsCloudFeedEntryRequest = z.infer<
+  typeof hostNotificationsCloudFeedEntryRequestSchema
+>;
+
+/**
+ * Clear everything the user was LOOKING AT.
+ *
+ * `observedVersion` names the snapshot the click was made against, and the
+ * cloud fans the clear out over exactly the entries visible at that version.
+ * Membership, not a timestamp threshold: an entry that arrives afterwards - or
+ * arrives late from a lagging host with an older clock - is simply not in the
+ * set, so it survives no matter how many times a lost-response retry replays
+ * this request. `null` means "whatever is visible now", the only honest
+ * reading of a clear-all issued without a snapshot to point at.
+ */
+export const hostNotificationsCloudFeedClearAllRequestSchema = z.object({
+  observedVersion: z.number().int().nonnegative().nullable(),
+});
+export type HostNotificationsCloudFeedClearAllRequest = z.infer<
+  typeof hostNotificationsCloudFeedClearAllRequestSchema
+>;
+
+/**
+ * Mark every notification read in the cloud snapshot the user was looking at.
+ * The shape matches clear-all because both operations are bounded by observed
+ * feed membership rather than a host timestamp.
+ */
+export const hostNotificationsCloudFeedMarkAllReadRequestSchema =
+  hostNotificationsCloudFeedClearAllRequestSchema;
+export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
+  typeof hostNotificationsCloudFeedMarkAllReadRequestSchema
+>;
+
+/**
+ * `unavailable` means the relay could not reach the cloud, and NOTHING was
+ * changed anywhere - the host deliberately keeps no local shadow of the cloud
+ * feed to mutate optimistically. Neither is an applied mutation.
+ */
+export const hostNotificationsCloudFeedMutationResponseSchema = z
+  .object({
+    status: z.enum(["applied", "unavailable"]),
+    /** The feed version after the mutation; `null` when unavailable. */
+    version: z.number().int().nonnegative().nullable(),
+  })
+  .superRefine((value, context) => {
+    if ((value.status === "applied") === (value.version !== null)) return;
+    context.addIssue({
+      code: "custom",
+      path: ["version"],
+      message: "version must be non-null exactly when status is applied",
+    });
+  });
+export type HostNotificationsCloudFeedMutationResponse = z.infer<
+  typeof hostNotificationsCloudFeedMutationResponseSchema
+>;
+
+/**
+ * The atomic bulk operation is additive. `unsupported` means an older cloud
+ * server accepted its envelope but could not acknowledge this new operation;
+ * the client may then use the released per-entry compatibility path.
+ */
+export const hostNotificationsCloudFeedMarkAllReadResponseSchema = z
+  .object({
+    status: z.enum(["applied", "unavailable", "unsupported"]),
+    /** The feed version after the mutation; `null` when it was not applied. */
+    version: z.number().int().nonnegative().nullable(),
+  })
+  .superRefine((value, context) => {
+    if ((value.status === "applied") === (value.version !== null)) return;
+    context.addIssue({
+      code: "custom",
+      path: ["version"],
+      message: "version must be non-null exactly when status is applied",
+    });
+  });
+export type HostNotificationsCloudFeedMarkAllReadResponse = z.infer<
+  typeof hostNotificationsCloudFeedMarkAllReadResponseSchema
+>;
+
+export const hostNotificationsCloudFeedMarkRead = defineRpcContract({
+  method: "host.notifications.cloudFeed.markRead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedEntryRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+});
+
+export const hostNotificationsCloudFeedResolve = defineRpcContract({
+  method: "host.notifications.cloudFeed.resolve",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedEntryRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+});
+
+export const hostNotificationsCloudFeedClear = defineRpcContract({
+  method: "host.notifications.cloudFeed.clear",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedEntryRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+});
+
+export const hostNotificationsCloudFeedMarkAllRead = defineRpcContract({
+  method: "host.notifications.cloudFeed.markAllRead",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedMarkAllReadRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMarkAllReadResponseSchema,
+});
+
+export const hostNotificationsCloudFeedClearAll = defineRpcContract({
+  method: "host.notifications.cloudFeed.clearAll",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsCloudFeedClearAllRequestSchema,
+  responseSchema: hostNotificationsCloudFeedMutationResponseSchema,
+});
+
 /** Additive minor: same open request and client frames, widened entry union. */
 export const hostNotificationsFeedSubscribeV11 = defineStreamRpcContract({
   method: "host.notifications.feed.subscribe",
@@ -1047,12 +1307,49 @@ export const hostNotificationsSetConfig = defineRpcContract({
   responseSchema: hostNotificationsConfigResponseSchema,
 });
 
-export const hostNotificationsIndicatorState = defineRpcContract({
+export const hostNotificationsIndicatorStateV10 = defineRpcContract({
   method: "host.notifications.indicatorState",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsIndicatorStateRequestSchema,
+  responseSchema: hostNotificationsIndicatorStateResponseSchemaV10,
+});
+
+export const hostNotificationsIndicatorState = defineRpcContract({
+  method: "host.notifications.indicatorState",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostNotificationsIndicatorStateRequestSchema,
   responseSchema: hostNotificationsIndicatorStateResponseSchema,
 });
+
+/**
+ * A v1.0 peer predates fork indicators. Default the new pending-class flag to
+ * false so a newer renderer keeps its sidebar fully functional against an
+ * older host rather than treating field absence as a malformed response.
+ */
+export const hostNotificationsIndicatorStateUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof hostNotificationsIndicatorStateV10,
+    typeof hostNotificationsIndicatorState
+  >({
+    from: hostNotificationsIndicatorStateV10.schemaVersion,
+    to: hostNotificationsIndicatorState.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => ({
+      epics: addPendingForkDefault(response.epics),
+      chats: addPendingForkDefault(response.chats),
+    }),
+  });
+
+function addPendingForkDefault(
+  states: Readonly<Record<string, HostNotificationsIndicatorStateV10>>,
+): Record<string, HostNotificationsIndicatorState> {
+  return Object.fromEntries(
+    Object.entries(states).map(([id, state]) => [
+      id,
+      { ...state, pendingFork: false },
+    ]),
+  );
+}
 
 /**
  * `host.notificationHooks.*@1.0` - status, test, and whole-file save surface

@@ -105,7 +105,7 @@ function changedFile(path: string): GitChangedFileV11 {
 function TerminalFocusButton(props: { readonly viewTabId: string }) {
   const focus = useFocusEpicTerminalSession(props.viewTabId);
   return (
-    <button type="button" onClick={() => focus("term-1", "/work/repo")}>
+    <button type="button" onClick={() => focus("term-1", "/work/repo", null)}>
       Focus terminal
     </button>
   );

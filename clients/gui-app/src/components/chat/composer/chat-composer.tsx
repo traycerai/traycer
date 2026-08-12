@@ -66,6 +66,7 @@ import {
   type ProviderReauthGate,
   type ProviderReauthReason,
 } from "./use-provider-reauth-gate";
+import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import {
@@ -77,6 +78,15 @@ import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
+import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
+import {
+  useChatPromptStashDestination,
+  useChatPromptStashSource,
+} from "./use-chat-prompt-stash-adapters";
+import { PromptStashControl } from "./prompt-stash-control";
+import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -100,6 +110,15 @@ interface ChatComposerProps {
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
+  /**
+   * The view tab this composer is rendered in. Used only by the provider
+   * re-auth banner's terminal sign-in, which must open the host-created
+   * terminal as a tile in ITS OWN view - in a split view each pane renders
+   * its own banner, and the app-wide active view is the wrong answer for at
+   * least one of them. `null` where the composer is not inside an epic view
+   * (the home composer), which is also where terminal sign-in is not offered.
+   */
+  readonly viewTabId: string | null;
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
@@ -159,6 +178,30 @@ export interface ChatComposerSubmitInput {
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
 }
 
+function composerUtilityNeedsClearance(args: {
+  readonly rowCount: number;
+  readonly saving: boolean;
+  readonly connectedUpperSurface: boolean;
+}): boolean {
+  const triggerVisible = args.rowCount > 0 || args.saving;
+  return triggerVisible && args.connectedUpperSurface;
+}
+
+function ComposerUtilityClearanceFill(props: {
+  readonly visible: boolean;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div
+      aria-hidden
+      data-composer-utility-clearance-fill=""
+      className="pointer-events-none absolute inset-x-3 top-0 h-3 border-x border-border bg-muted/30"
+    >
+      <div className="size-full bg-muted/30" />
+    </div>
+  );
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -168,6 +211,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
+    viewTabId,
     settingsSeed,
     fallbackSettingsSeed,
     onSubmitMessage,
@@ -196,6 +240,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const openEpicHandle = useOpenEpicHandle();
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
@@ -205,8 +250,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     () => setEditorReadyTick((tick) => tick + 1),
     [],
   );
+  // "The chat I am working in" for this Task, which is what a terminal quote
+  // targets by default. Focus is the signal, not message recency: an agent that
+  // just finished streaming is not where the user was typing.
+  const handleComposerFocus = useCallback(() => {
+    if (currentEpicId === null) return;
+    recordFocusedChat(currentEpicId, taskId);
+  }, [currentEpicId, taskId]);
   const [pickerStore] = useState(() => createComposerPickerStore());
-
   // The mention/slash menu renders through a body portal. It belongs to the
   // one focused canvas tile, not merely every visible split member, so close
   // its logical picker state whenever the exact focused owner changes. All
@@ -225,7 +276,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftContent,
     draftHasText,
     draftHasImages,
-    handleSnapshot,
+    handleDocumentChange,
+    handleSelectionChange,
   } = useChatComposerDraft({
     taskId,
     editorRef,
@@ -270,10 +322,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused,
     seedSource.kind,
   );
-  const sendBlocked = sendDisabled === true || reauthGate.signedOut;
-  const sendBlockedHint = resolveSendBlockedHint({
+  // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
+  // must gate on that host's packs, never the app-wide default's. Same shape as
+  // the reauth gate above: block send and say why, so a doomed turn can't
+  // start. The host resolver still refuses independently; this is the UX half.
+  const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
+  const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,
+    packPreparingHint: packGate.hint,
+    packBlocked: packGate.blocked,
     sendDisabled,
     sendDisabledHint,
   });
@@ -350,6 +408,37 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
+  });
+
+  const readPromptStashImage = useCallback(
+    async (hash: string) => {
+      const state = openEpicHandle.store.getState();
+      if (!state.hasAttachmentBytes(hash)) return null;
+      // Capture deliberately survives composer unmount, so this read is not
+      // coupled to component-lifecycle cancellation.
+      const bytes = await state.readAttachmentBytes(
+        hash,
+        new AbortController().signal,
+      );
+      return bytes === null ? null : new Uint8Array(bytes);
+    },
+    [openEpicHandle],
+  );
+  const promptStashSource = useChatPromptStashSource(taskId, onCancelQueueEdit);
+  // Chat writes the draft store, but restore still requires the exact ready
+  // editor generation that started the restore - a remount under the same
+  // taskId must not consume the stash into a different editor instance.
+  const promptStashDestination = useChatPromptStashDestination(
+    taskId,
+    editorRef,
+  );
+  const promptStash = usePromptStash({
+    active: focused,
+    disabled: attachmentPending,
+    editorRef,
+    readHashImage: readPromptStashImage,
+    source: promptStashSource,
+    destination: promptStashDestination,
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
@@ -432,13 +521,18 @@ function ChatComposerImpl(props: ChatComposerProps) {
     draftHasText,
     draftHasImages,
   });
+  const utilityClearanceVisible = composerUtilityNeedsClearance({
+    rowCount: promptStash.rows.length,
+    saving: promptStash.saving,
+    connectedUpperSurface: topSpacing === "connected",
+  });
 
   return (
     <>
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
-          <div className="bg-canvas px-4 pt-4">
-            <div className="mx-auto w-full max-w-3xl">
+          <div className="pointer-events-none px-4">
+            <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-4">
               {rateLimitPrompt.kind === "visible" ? (
                 <ProfileRateLimitSwitchBanner
                   key={rateLimitPrompt.warningKey}
@@ -464,14 +558,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
           </div>
         </ChatComposerBannerPortal>
       ) : null}
-      <div
-        data-chat-composer=""
-        className={cn(
-          "bg-canvas px-4 pb-4",
-          topSpacing === "normal" ? "pt-4" : "pt-0",
-        )}
-      >
-        <div className="mx-auto w-full max-w-3xl">
+      <div data-chat-composer="" className="pointer-events-none px-4">
+        <div
+          className={cn(
+            "pointer-events-auto relative mx-auto w-full max-w-3xl bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+            topSpacing === "normal" ? "pt-4" : "pt-0",
+          )}
+        >
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -479,6 +572,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
               reason={reauthBanner.reason}
               profileId={reauthGate.profileId}
               profileLabel={reauthGate.profileLabel}
+              epicId={currentEpicId}
+              viewTabId={viewTabId}
               onContinueOnAmbient={
                 reauthBanner.reason === "provider_unauthenticated"
                   ? null
@@ -495,61 +590,84 @@ function ChatComposerImpl(props: ChatComposerProps) {
             />
           ) : null}
           {topSlot}
-          <div className="flex flex-col gap-3">
-            <ComposerShell
-              pickerStore={pickerStore}
-              onDragOver={onDragOver}
-              onDrop={onDrop}
-              onDragEnter={onDragEnter}
-              onDragLeave={onDragLeave}
-              dragOverlayVariant={dragOverlayVariant}
-              attachmentsStrip={
-                <ChatComposerAttachmentsStrip
-                  content={draftContent}
-                  editingQueueItemId={editingQueueItemId}
-                  onCancelQueueEdit={onCancelQueueEdit}
-                  onRemoveImage={removeImage}
-                />
-              }
-              editor={
-                <ChatComposerEditorSlot
-                  ref={editorRef}
-                  pickerStore={pickerStore}
-                  initialContent={initialContent}
-                  initialSelection={initialSelection}
-                  slashProviderId={harnessId}
-                  hasPastedImageBytes={hasPastedImageBytes}
-                  ingestPastedComposerImages={null}
-                  isActive={focused}
-                  onSnapshot={handleSnapshot}
-                  onSubmit={handleSubmitDraft}
-                  steerHintActive={steerHintActive}
-                  onPaste={onPaste}
-                  onDragOver={onDragOver}
-                  onDrop={onDrop}
-                  onEditorReady={handleEditorReady}
-                />
-              }
-              toolbar={
-                <ChatComposerToolbarSlot
-                  store={toolbarStore}
-                  onAttachImages={attachImageFiles}
-                  canSubmit={canSubmit}
-                  attachmentPending={attachmentPending}
-                  onSubmit={handleSubmitFromButton}
-                  activeTurnStatus={activeTurnStatus}
-                  hasPendingApprovals={hasPendingApprovals}
-                  stopDisabled={stopDisabled}
-                  onStopTurn={onStopTurn}
-                  composerDisabledHint={sendBlockedHint}
-                  dictation={dictationControl}
-                  dictationPreparing={dictationPreparing}
-                  settingsLocked={false}
-                  createProfileHostId={tabHostId}
-                  runTargetHostId={tabHostId}
-                />
-              }
-            />
+          <div
+            data-composer-utility-clearance={
+              utilityClearanceVisible ? "" : undefined
+            }
+            className={cn(
+              "relative flex flex-col gap-3",
+              utilityClearanceVisible && "pt-3",
+            )}
+          >
+            <ComposerUtilityClearanceFill visible={utilityClearanceVisible} />
+            <ComposerAttachmentDropZone
+              viewTabId={viewTabId}
+              hostId={tabHostId}
+              editorRef={editorRef}
+            >
+              <ComposerShell
+                pickerStore={pickerStore}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+                onDragEnter={onDragEnter}
+                onDragLeave={onDragLeave}
+                dragOverlayVariant={dragOverlayVariant}
+                utilityRail={
+                  <PromptStashControl
+                    controller={promptStash}
+                    pickerStore={pickerStore}
+                  />
+                }
+                attachmentsStrip={
+                  <ChatComposerAttachmentsStrip
+                    content={draftContent}
+                    editingQueueItemId={editingQueueItemId}
+                    onCancelQueueEdit={onCancelQueueEdit}
+                    onRemoveImage={removeImage}
+                  />
+                }
+                editor={
+                  <ChatComposerEditorSlot
+                    ref={editorRef}
+                    pickerStore={pickerStore}
+                    initialContent={initialContent}
+                    initialSelection={initialSelection}
+                    slashProviderId={harnessId}
+                    hasPastedImageBytes={hasPastedImageBytes}
+                    ingestPastedComposerImages={null}
+                    isActive={focused}
+                    onDocumentChange={handleDocumentChange}
+                    onSelectionChange={handleSelectionChange}
+                    onSubmit={handleSubmitDraft}
+                    steerHintActive={steerHintActive}
+                    onPaste={onPaste}
+                    onDragOver={onDragOver}
+                    onDrop={onDrop}
+                    onEditorReady={handleEditorReady}
+                    onFocus={handleComposerFocus}
+                  />
+                }
+                toolbar={
+                  <ChatComposerToolbarSlot
+                    store={toolbarStore}
+                    onAttachImages={attachImageFiles}
+                    canSubmit={canSubmit}
+                    attachmentPending={attachmentPending}
+                    onSubmit={handleSubmitFromButton}
+                    activeTurnStatus={activeTurnStatus}
+                    hasPendingApprovals={hasPendingApprovals}
+                    stopDisabled={stopDisabled}
+                    onStopTurn={onStopTurn}
+                    composerDisabledHint={sendBlockedHint}
+                    dictation={dictationControl}
+                    dictationPreparing={dictationPreparing}
+                    settingsLocked={false}
+                    createProfileHostId={tabHostId}
+                    runTargetHostId={tabHostId}
+                  />
+                }
+              />
+            </ComposerAttachmentDropZone>
             {workspaceControls !== null ? (
               <ComposerWorkspaceRow workspaceControls={workspaceControls} />
             ) : null}
@@ -686,15 +804,38 @@ interface CanSubmitDraftArgs {
 }
 
 /**
- * Every blocked-send reason gets a hover/focus hint on the send button — a
- * silently grey button reads as broken. Priority mirrors severity: the
- * workspace gate (can't run anywhere), then the signed-out gate (the reauth
- * banner has the full story), then the caller's reason (connection loss /
- * view-only access).
+ * Whether send is blocked, and the one hint that explains it. Returned together
+ * so a reason can never block send without also supplying its copy — a silently
+ * grey button reads as broken.
+ */
+function resolveSendBlock(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly packPreparingHint: string | null;
+  readonly packBlocked: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): {
+  readonly sendBlocked: boolean;
+  readonly sendBlockedHint: string | null;
+} {
+  return {
+    sendBlocked:
+      args.sendDisabled === true || args.signedOut || args.packBlocked,
+    sendBlockedHint: resolveSendBlockedHint(args),
+  };
+}
+
+/**
+ * Priority mirrors severity: the workspace gate (can't run anywhere), then the
+ * signed-out gate (the reauth banner has the full story), then the managed-pack
+ * gate (self-resolving — it says so, and ranks below the two the user must act
+ * on), then the caller's reason (connection loss / view-only access).
  */
 function resolveSendBlockedHint(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;
+  readonly packPreparingHint: string | null;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): string | null {
@@ -702,6 +843,7 @@ function resolveSendBlockedHint(args: {
   if (args.signedOut) {
     return "Signed out of the provider — sign in to send messages";
   }
+  if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;
 }

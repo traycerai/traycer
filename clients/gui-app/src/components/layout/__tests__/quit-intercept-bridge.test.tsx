@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeEach,
@@ -24,6 +23,7 @@ import {
 import { appLogger } from "@/lib/logger";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 interface RunnerHostOnWindow {
   runnerHost?: unknown;
@@ -87,6 +87,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
     dispose: () => undefined,
     requestFreshSnapshot: () => undefined,
     isClean: () => !state.isDirty,
+    hotArtifactRoomIdsForTests: () => [],
     setDirty: (isDirty, queueSize) => {
       state.isDirty = isDirty;
       state.unsyncedQueueSize = queueSize;
@@ -246,6 +247,7 @@ describe("QuitInterceptBridge", () => {
     clearRegistry();
     clearRunnerHost();
     setActiveDesktopPerWindowProjectionBridge(null);
+    vi.restoreAllMocks();
   });
 
   it("is a no-op when window.runnerHost.appLifecycle is undefined", () => {
@@ -558,6 +560,35 @@ describe("QuitInterceptBridge", () => {
     expect(fake.respondFreshUnsyncedSnapshot.mock.calls[0][0].requestId).toBe(
       "req-flush",
     );
+  });
+
+  it("defers the fresh-snapshot reply until file recovery persistence completes", async () => {
+    const fake = installAppLifecycleFake();
+    let resolveRecovery: (() => void) | null = null;
+    vi.spyOn(fileEditRuntimeRegistry, "flushRecovery").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRecovery = resolve;
+        }),
+    );
+
+    render(<QuitInterceptBridge />);
+    act(() => {
+      fake.emitFreshQuery({ requestId: "req-file-recovery" });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fake.respondFreshUnsyncedSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRecovery?.();
+      await Promise.resolve();
+    });
+    expect(fake.respondFreshUnsyncedSnapshot).toHaveBeenCalledWith({
+      requestId: "req-file-recovery",
+      snapshot: [],
+    });
   });
 
   it("still replies to the fresh-snapshot query when the projection flush rejects", async () => {

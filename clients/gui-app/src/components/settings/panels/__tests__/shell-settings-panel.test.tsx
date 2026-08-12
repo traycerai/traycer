@@ -1,4 +1,14 @@
-import "../../../../../__tests__/test-browser-apis";
+// The panel is host-scoped now (shell config / log levels are fields of the
+// selected host's own config), so it reads `useHostScope`. Mock at that
+// boundary: these suites render the panel bare, without the host runtime and
+// query providers the real hook needs.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () => hostScopeFixture({}),
+  };
+});
 import {
   act,
   cleanup,
@@ -9,7 +19,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   IRunnerHost,
   TraycerShellConfigSetInput,

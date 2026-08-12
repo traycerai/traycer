@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
   useRouter,
@@ -13,6 +13,13 @@ import {
   useEpicTab,
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostClient } from "@/lib/host";
+import {
+  cloudChatListAuthorizesRecordSweep,
+  useCloudChatList,
+} from "@/hooks/chats/use-cloud-chat-queries";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -33,6 +40,9 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+import { getNestedRouteApplicationDeferralMs } from "@/lib/nested-focus-navigation-intent";
+import { shouldYieldPaneActivationRouteFocus } from "@/components/epic-canvas/pane-activation";
+import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 
 const PRIMARY_CHAT_COMPOSER_SELECTOR =
   "[data-chat-composer] [data-composer-editor]";
@@ -75,6 +85,19 @@ export function useEpicRouteSynchronization(
   const liveTitle = useEpicTitle();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
+  // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
+  // ticket 36): `epic.listCloudChats` already excludes anything this host's
+  // own registry has tombstoned, so "still cloud-known" is what tells a
+  // never-adopted chat apart from a genuinely deleted one for
+  // `isTileRefRecordLive` below. `useCloudChatList`'s TanStack Query cache is
+  // shared with the sidebar's own call for this same epic - no extra
+  // network traffic from reading it a second time here.
+  const appHostClient = useHostClient();
+  const cloudChats = useCloudChatList({
+    client: appHostClient,
+    taskId: epicId,
+    enabled: epicId.length > 0,
+  });
   const currentTab = useEpicTab(tabId);
   const renameTab = useEpicCanvasStore((s) => s.renameTab);
   const openTileInTab = useEpicCanvasStore((s) => s.openTileInTab);
@@ -82,6 +105,7 @@ export function useEpicRouteSynchronization(
     (s) => s.applyNestedRouteFocus,
   );
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
+  const [nestedRouteRetryToken, setNestedRouteRetryToken] = useState(0);
   const pendingCreateArtifactIds = useEpicCanvasStore(
     (s) => s.pendingCreateArtifactIds,
   );
@@ -137,6 +161,17 @@ export function useEpicRouteSynchronization(
     if (!hasRestoredCanvas) {
       return;
     }
+    const deferralMs = getNestedRouteApplicationDeferralMs(
+      epicId,
+      tabId,
+      nestedRouteTarget,
+    );
+    if (deferralMs !== null) {
+      const timeout = window.setTimeout(() => {
+        setNestedRouteRetryToken((token) => token + 1);
+      }, deferralMs);
+      return () => window.clearTimeout(timeout);
+    }
 
     if (nestedRouteTarget === null) {
       if (
@@ -181,6 +216,7 @@ export function useEpicRouteSynchronization(
     tabId,
     currentNestedTarget,
     applyNestedRouteFocus,
+    nestedRouteRetryToken,
   ]);
 
   // The nested-route target we last moved DOM focus to. This effect re-runs on
@@ -383,6 +419,13 @@ export function useEpicRouteSynchronization(
     handle.store.getState().setLastFocusedArtifactId(activeArtifactId);
   }, [snapshotLoaded, activeArtifactId, handle]);
 
+  // The host whose projection feeds `records` - the app-wide active host.
+  // Cross-host chat tiles are exempt from record policing (see
+  // `isTileRefRecordLive`); everything else is judged against this host's
+  // projection, which is also correct across a host switch (the records
+  // swap with the host, and so does the policing identity).
+  const activeHostId = useReactiveActiveHostId();
+
   // Close any open tab whose underlying record was removed (sidebar delete,
   // server-side cascade, or remote delete by another collaborator). The
   // sidebar's optimistic Y.Doc delete unmounts the row before the mutation's
@@ -391,16 +434,51 @@ export function useEpicRouteSynchronization(
   // sync rather than by mutation callbacks. `isTileRefRecordLive` is the same
   // predicate back/forward's preview-reopen path uses before restoring a
   // closed tile, so "is this tile's record gone" is answered in one place.
+  // An UNANSWERED cloud list is not an empty one, and this decision cannot
+  // tell the difference from `data` alone: while the list is in flight (or
+  // after it FAILED on a transient transport error) every cloud row reads as
+  // absent, which is exactly the never-adopted same-host chat the exemption
+  // below exists for - and closing its tab is not undoable by the response
+  // that would have saved it.
+  //
+  // The predicate is the query's own, not flags spelled out here, and it is
+  // the sweep-authorizing one rather than plain settledness: a transiently
+  // failed list is settled but has produced no evidence about any chat, so it
+  // must not authorize closing tabs. `E_HOST_UNSUPPORTED` and a DISABLED
+  // query DO authorize - nothing will ever answer through either, and record
+  // policing on local records alone is the correct degraded behavior.
+  const cloudChatsAuthorizeSweep =
+    cloudChatListAuthorizesRecordSweep(cloudChats);
   useEffect(() => {
     if (!snapshotLoaded) return;
+    if (!cloudChatsAuthorizeSweep) return;
     if (canvas.root === null) return;
     const liveIds = new Set(records.map((record) => record.id));
     const hasLiveRecord = (id: string) => liveIds.has(id);
+    // VIEWER-OWNED rows only, matching `usePublishedChatFallbackRef`'s own
+    // filter: `chatId` is host-minted and the list carries collaborators'
+    // rows too, so an id-only set could keep a deleted viewer-owned tab open
+    // on the strength of a collaborator's row - a row the substitution
+    // resolver would then (correctly) refuse to serve, leaving the tab
+    // permanently loading instead of closed.
+    const cloudKnownIds = new Set(
+      (cloudChats.data?.chats ?? [])
+        .filter(cloudRowIsViewersOwn)
+        .map((chat) => chat.identity.chatId),
+    );
+    const isCloudKnown = (id: string) => cloudKnownIds.has(id);
     for (const pane of collectPanes(canvas.root)) {
       for (const instanceId of pane.tabInstanceIds) {
         const tab = canvas.tilesByInstanceId[instanceId];
         if (tab === undefined) continue;
-        if (isTileRefRecordLive(tab, pendingCreateArtifactIds, hasLiveRecord)) {
+        if (
+          isTileRefRecordLive(
+            tab,
+            pendingCreateArtifactIds,
+            { hasLiveRecord, isCloudKnown },
+            activeHostId,
+          )
+        ) {
           continue;
         }
         closeCanvasTab(tabId, pane.id, tab.instanceId);
@@ -408,9 +486,12 @@ export function useEpicRouteSynchronization(
     }
   }, [
     snapshotLoaded,
+    cloudChatsAuthorizeSweep,
     canvas,
     records,
+    cloudChats.data,
     pendingCreateArtifactIds,
+    activeHostId,
     epicId,
     tabId,
     closeCanvasTab,
@@ -508,6 +589,9 @@ function focusNestedRouteTarget(
   if (element === null) {
     return;
   }
+  if (!focusPrimaryEditor && shouldYieldPaneActivationRouteFocus(element)) {
+    return;
+  }
   if (focusPrimaryEditor) {
     const editor =
       element.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
@@ -540,7 +624,22 @@ function findActivePaneElement(paneId: string): HTMLElement | null {
   );
 }
 
+/**
+ * A hosted chat's body no longer sits inside a `[data-tab-instance-id]`
+ * pane-tab layer - `TabGroupView` still keeps that selected wrapper mounted
+ * around `TileSurfaceSlot`'s bare geometry anchor (it carries layout, tab
+ * strip, and DnD target duties independent of hosting), so it is always
+ * found by the physical query and would shadow the hosted fallback if tried
+ * second (design-review slice-4 finding 4). The hosted record, when one
+ * exists for this exact `tileInstanceId`, is therefore checked FIRST: its
+ * presence unambiguously means the real body lives there, never in the
+ * physical wrapper. With the stable-tile-surface-host switch off (or for a
+ * non-hosted tile kind) no hosted record ever exists, so this falls straight
+ * through to the same physical lookup as before - byte-equivalent.
+ */
 function findSelectedTileElement(tileInstanceId: string): HTMLElement | null {
+  const hosted = findHostedTileElement(document, tileInstanceId);
+  if (hosted !== null) return hosted;
   const elements = document.querySelectorAll<HTMLElement>(
     "[data-tab-instance-id][data-selected='true']",
   );

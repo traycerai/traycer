@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useRef, type RefObject } from "react";
@@ -62,6 +61,7 @@ function QuoteHarness(props: { readonly enabled: boolean }) {
           snapshot={snapshot}
           onDismiss={dismiss}
           boundaryRef={NULL_BOUNDARY}
+          bottomOverlayInsetPx={0}
         />
       ) : null}
     </TooltipProvider>

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -139,6 +138,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    imageResolutions: [],
   };
 }
 

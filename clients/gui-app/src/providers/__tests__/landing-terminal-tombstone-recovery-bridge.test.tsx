@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -51,7 +50,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       name: "project",
       titleSource: "default",
     });
-    useLandingTerminalStore.getState().closeTab("closed-tab");
+    useLandingTerminalStore.getState().closeTab("landing-page", "closed-tab");
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
 
     expect(mocks.kill).not.toHaveBeenCalled();

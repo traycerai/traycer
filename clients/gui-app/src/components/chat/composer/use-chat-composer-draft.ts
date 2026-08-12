@@ -28,6 +28,9 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   const setSnapshotInStore = useComposerDraftStore(
     (state) => state.setSnapshot,
   );
+  const setSelectionInStore = useComposerDraftStore(
+    (state) => state.setSelection,
+  );
   const [initialDraft] = useState(() => readComposerDraftSnapshot(args.taskId));
   const initialContent = initialDraft.content;
   const initialSelection = initialDraft.selection;
@@ -48,11 +51,18 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     [draftContent],
   );
 
-  const handleSnapshot = useCallback(
+  const handleDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       setSnapshotInStore(args.taskId, content, selection);
     },
     [args.taskId, setSnapshotInStore],
+  );
+
+  const handleSelectionChange = useCallback(
+    (selection: { from: number; to: number }) => {
+      setSelectionInStore(args.taskId, selection);
+    },
+    [args.taskId, setSelectionInStore],
   );
 
   // `resetEpoch` bumps (queue-edit restore, failed-send restore, a quote
@@ -65,6 +75,10 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   // `appliedResetEpochRef` keeps the apply idempotent per epoch; it stamps the
   // LIVE epoch read alongside the content so a bump that lands between render
   // and effect flush is not re-applied (which would re-fire `focus("end")`).
+  // `syncContent` (not `setContent`) pushes the store's already-recorded
+  // content into the editor WITHOUT re-emitting `onDocumentChange` - the store
+  // bumped `revision` itself when it recorded this replacement, so an echoed
+  // document-change here would double-count the one edit.
   const appliedResetEpochRef = useRef(draftResetEpoch);
   useEffect(() => {
     if (draftResetEpoch === appliedResetEpochRef.current) return;
@@ -72,7 +86,7 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     if (editor === null || !editor.isReady()) return;
     const draft = useComposerDraftStore.getState().drafts[args.taskId];
     if (draft === undefined) return;
-    editor.setContent(draft.content, draft.selection);
+    editor.syncContent(draft.content, draft.selection);
     appliedResetEpochRef.current = draft.resetEpoch;
   }, [args.editorRef, args.taskId, args.editorReadyTick, draftResetEpoch]);
 
@@ -82,6 +96,7 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     draftContent,
     draftHasText,
     draftHasImages,
-    handleSnapshot,
+    handleDocumentChange,
+    handleSelectionChange,
   };
 }

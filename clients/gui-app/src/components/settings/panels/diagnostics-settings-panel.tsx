@@ -4,6 +4,12 @@ import { ChevronDown, ChevronUp, FolderOpen, Info } from "lucide-react";
 import { toast } from "sonner";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { RequiresLocalHostNotice } from "@/components/settings/host-scope/requires-local-host-notice";
+import {
+  HostScopeConnecting,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -14,6 +20,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
+import { getDesktopHeapSnapshotBridge } from "@/lib/resources/desktop-app-resource-usage";
 import { useRunnerLogLevelsQuery } from "@/hooks/runner/use-runner-log-levels-query";
 import { useRunnerLogLevelsSet } from "@/hooks/runner/use-runner-log-levels-set-mutation";
 import {
@@ -24,6 +31,7 @@ import {
 import {
   runnerMutationKeys,
   runnerQueryKeys,
+  supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import type {
@@ -35,11 +43,60 @@ import type {
 
 const LOG_TAIL_LINES = 100;
 const PANEL_DESCRIPTION =
-  "Log verbosity for each Traycer component on this machine, plus recent log output. All default to Info - raise a level to Debug when capturing a problem for support, then set it back.";
+  "Log verbosity for each Traycer component, plus recent log output. All default to Info - raise a level to Debug when capturing a problem for support, then set it back.";
 const LOG_LEVEL_SCOPES: readonly LogLevelScope[] = ["desktop", "cli", "host"];
+const APP_LOG_LEVEL_SCOPES: readonly LogLevelScope[] = ["desktop"];
 
 export function DiagnosticsSettingsPanel() {
   const compact = useSettingsDensity() === "compact";
+  const scope = useHostScope();
+
+  // `cli` and `host` verbosity are fields of the selected host's own config,
+  // but this client reads them through the local CLI bridge — so a remote host
+  // gets the notice rather than this computer's levels under its name. The
+  // same goes for Recent logs: the tails are this machine's cli/host/app
+  // files, and presenting them under a remote host's name is exactly the
+  // misattribution this branch exists to prevent.
+  //
+  // But the page is not ALL host-scoped, and the first cut gated the whole
+  // body: selecting a remote host removed the `desktop` log-level row (which
+  // says in its own copy "applies to this app, not to a host") and the memory
+  // capture (which captures THIS window). Those rows' subject never changes
+  // with the scope, so they render for every scope; only the host-tied rows
+  // sit behind the gate.
+  //
+  // `host === null` takes the same branch. This read `host !== null &&
+  // !isLocalMachine`, so an unresolved scope fell through and offered this
+  // computer's log levels — and its log TAIL — under a host that no longer
+  // exists. The gate answers those states; only a resolved local host proceeds.
+  if (scope.host === null || !scope.host.isLocalMachine) {
+    return (
+      <SettingsPanelShell
+        title="Diagnostics"
+        description={PANEL_DESCRIPTION}
+        bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      >
+        <div
+          className={cn(
+            "flex h-full min-h-0 flex-col",
+            compact ? "gap-2.5" : "gap-3",
+          )}
+        >
+          <LogDetailGroup includeHostScopes={false} />
+          <MemoryDiagnosticsGroup />
+          <HostScopeGate
+            scope={scope}
+            skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+          >
+            <RequiresLocalHostNotice
+              scope={scope}
+              subject="host log settings"
+            />
+          </HostScopeGate>
+        </div>
+      </SettingsPanelShell>
+    );
+  }
 
   return (
     <SettingsPanelShell
@@ -54,7 +111,8 @@ export function DiagnosticsSettingsPanel() {
           compact ? "gap-2.5" : "gap-3",
         )}
       >
-        <LogDetailGroup />
+        <LogDetailGroup includeHostScopes />
+        <MemoryDiagnosticsGroup />
         <RecentLogsSection />
       </div>
     </SettingsPanelShell>
@@ -69,7 +127,16 @@ export function DiagnosticsSettingsPanel() {
  * so each unavailable state stays inside the group it affects instead of
  * hiding the other.
  */
-function LogDetailGroup(): ReactNode {
+function LogDetailGroup(props: {
+  // `false` when the scoped host is remote or unresolved: the `desktop` row
+  // is this app's own setting and stays, while the cli/host rows (and the
+  // reminder's reset, which acts on the same scopes) belong to the local
+  // host and yield to the gate's notice.
+  readonly includeHostScopes: boolean;
+}): ReactNode {
+  const activeScopes = props.includeHostScopes
+    ? LOG_LEVEL_SCOPES
+    : APP_LOG_LEVEL_SCOPES;
   const levelsQuery = useRunnerLogLevelsQuery();
   const setLevelMutation = useRunnerLogLevelsSet();
   const [resetPending, setResetPending] = useState(false);
@@ -87,10 +154,10 @@ function LogDetailGroup(): ReactNode {
   const snapshot = levelsQuery.data;
   const nonDefaultScopes = useMemo(() => {
     if (snapshot === undefined) return [];
-    return LOG_LEVEL_SCOPES.filter(
+    return activeScopes.filter(
       (scope) => selectScopeLevel(snapshot, scope) !== "info",
     );
-  }, [snapshot]);
+  }, [snapshot, activeScopes]);
 
   useEffect(() => {
     const isVisible = nonDefaultScopes.length > 0;
@@ -156,24 +223,32 @@ function LogDetailGroup(): ReactNode {
         tabIndex={-1}
         className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
+        {/* Mixed scope, stated per row: `cli` and `host` belong to the host
+            this page is showing, while `desktop` is this app window wherever
+            it points. Leaving that unsaid is what let the section read as
+            "settings for one machine" and get filed outside the host group. */}
         <LogLevelRow
           scope="desktop"
           label="App log level"
-          description="Verbosity of the desktop app's own logs."
+          description="Verbosity of the desktop app's own logs. Applies to this app, not to a host."
           disabled={resetPending}
         />
-        <LogLevelRow
-          scope="cli"
-          label="CLI log level"
-          description="Verbosity of the bundled Traycer CLI's logs."
-          disabled={resetPending}
-        />
-        <LogLevelRow
-          scope="host"
-          label="Host log level"
-          description="Verbosity of the background host process's logs."
-          disabled={resetPending}
-        />
+        {props.includeHostScopes ? (
+          <>
+            <LogLevelRow
+              scope="cli"
+              label="CLI log level"
+              description="Verbosity of the bundled Traycer CLI's logs on this host."
+              disabled={resetPending}
+            />
+            <LogLevelRow
+              scope="host"
+              label="Host log level"
+              description="Verbosity of the background host process's logs on this host."
+              disabled={resetPending}
+            />
+          </>
+        ) : null}
         {nonDefaultScopes.length > 0 ? (
           <TemporaryDebugReminderRow
             pending={resetPending}
@@ -186,6 +261,112 @@ function LogDetailGroup(): ReactNode {
           />
         ) : null}
       </div>
+    </SettingsGroup>
+  );
+}
+
+/**
+ * On-demand heap capture for memory reports. The renderer freezes while V8
+ * walks the heap and the file runs to gigabytes on exactly the long-lived
+ * sessions worth capturing, so this is a deliberate button rather than
+ * anything automatic - and the warning is stated up front, not after the fact.
+ * The resulting path is shown for copying rather than revealed in the file
+ * manager: no reveal capability is exposed for arbitrary paths.
+ */
+/** Serialization scope for the heap capture - see the `scope` note below. */
+const HEAP_SNAPSHOT_MUTATION_SCOPE = "runner-heap-snapshot";
+
+function MemoryDiagnosticsGroup(): ReactNode {
+  const bridge = useMemo(() => getDesktopHeapSnapshotBridge(), []);
+  const [snapshotPath, setSnapshotPath] = useState<string | null>(null);
+
+  const captureMutation = useMutation({
+    mutationKey: runnerMutationKeys.captureHeapSnapshot(),
+    // `scope` is what actually serializes mutations in TanStack Query -
+    // `mutationKey` alone does not. Without it the only thing standing
+    // between a double-click and two concurrent multi-gigabyte heap walks
+    // is the `disabled` prop, which cannot help a second mounted panel.
+    scope: { id: HEAP_SNAPSHOT_MUTATION_SCOPE },
+    mutationFn: (): Promise<string | null> =>
+      bridge === null ? Promise.resolve(null) : bridge.takeHeapSnapshot(),
+    onSuccess: (path) => {
+      setSnapshotPath(path);
+      if (path === null) {
+        toast.error("Couldn't capture a heap snapshot");
+      }
+    },
+    onError: (error) => {
+      // Clear the previous run's path. Leaving it rendered under a failure
+      // toast offers a Copy button for a file this capture never wrote -
+      // the user pastes it into a report as the snapshot they just took.
+      setSnapshotPath(null);
+      toastFromRunnerError(error, "Couldn't capture a heap snapshot");
+    },
+  });
+
+  if (bridge === null) {
+    return (
+      <SettingsGroup
+        title="Memory"
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
+        <LogInfoLine>
+          Memory snapshots are only available on the desktop app.
+        </LogInfoLine>
+      </SettingsGroup>
+    );
+  }
+
+  return (
+    <SettingsGroup
+      title="Memory"
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+        <span className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+          Captures a heap snapshot of this window for a memory report. The app
+          stops responding while the snapshot is written, and the file can be
+          several gigabytes.
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={captureMutation.isPending}
+          onClick={() => captureMutation.mutate()}
+          data-testid="diagnostics-capture-heap-snapshot"
+        >
+          {captureMutation.isPending ? (
+            <AgentSpinningDots
+              className="text-current"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Capture heap snapshot
+        </Button>
+      </div>
+      {snapshotPath === null ? null : (
+        <div className="flex items-start gap-2 px-4 pb-3">
+          <pre
+            className="min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
+            data-testid="diagnostics-heap-snapshot-path"
+          >
+            {snapshotPath}
+          </pre>
+          <CopyTextButton
+            value={snapshotPath}
+            label="Copy"
+            ariaLabel="Copy heap snapshot path"
+            disabled={false}
+          />
+        </div>
+      )}
     </SettingsGroup>
   );
 }
@@ -281,7 +462,9 @@ function DiagnosticsLogs(props: {
   const { support } = props;
   const listQuery = useQuery(
     queryOptions<DesktopSupportSnapshot>({
-      queryKey: runnerQueryKeys.supportLogList(support),
+      queryKey: runnerQueryKeys.supportLogList(
+        supportBridgeQueryScopeId(support),
+      ),
       queryFn: () => support.getSnapshot(),
       staleTime: 60_000,
     }),
@@ -344,7 +527,10 @@ function DiagnosticsLogEntry(props: {
 
   const tailQuery = useQuery(
     queryOptions<DesktopSupportLogTailResult>({
-      queryKey: runnerQueryKeys.supportLogTail(support, entry.target),
+      queryKey: runnerQueryKeys.supportLogTail(
+        supportBridgeQueryScopeId(support),
+        entry.target,
+      ),
       queryFn: () =>
         support.tailLog({ target: entry.target, tailLines: LOG_TAIL_LINES }),
       enabled: open,

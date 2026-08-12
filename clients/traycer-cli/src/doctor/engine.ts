@@ -11,8 +11,10 @@ import {
   readBootstrapMarkers,
   type BootstrapLogEntry,
 } from "../host/bootstrap-log";
+import { isFatalSignal } from "../host/crash-diagnostics";
 import {
   readHostPidMetadata,
+  type HostLayer0Record,
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
@@ -45,6 +47,10 @@ import {
   createRealLaunchdPrintRunner,
   probeMacosWedgedJob,
 } from "./launchd-wedge";
+import {
+  createRealSystemdProbeRunner,
+  probeLinuxSystemdHealth,
+} from "./systemd-health";
 import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
@@ -445,6 +451,22 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     if (wedgeIssue !== null) issues.push(wedgeIssue);
   }
 
+  // ---- 4a-linux. systemd user-manager health ----
+  // The Linux counterpart of the launchd wedge probe. Reads the manager's
+  // actual run state: no reachable user bus (WSL without systemd, sudo su),
+  // a failed / restart-looping unit ("stopped" everywhere else, since
+  // liveness deliberately keys off pid metadata), a start skipped because
+  // the CLI binary is gone, and disabled lingering.
+  if (process.platform === "linux") {
+    const systemdIssues = await probeLinuxSystemdHealth({
+      labelId: label.id,
+      unitFileInstalled:
+        serviceStatus !== null && serviceStatus.state !== "not-installed",
+      runner: createRealSystemdProbeRunner(),
+    });
+    issues.push(...systemdIssues);
+  }
+
   // ---- 4b. CLI slot binary health ----
   // The manifest's binaryPath may be a symlink into the Desktop app
   // bundle; a bundle remove/replace leaves it dangling, and the only
@@ -462,27 +484,47 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     if (aclIssue !== null) issues.push(aclIssue);
   }
 
+  // ---- 5b. Windows Script Host policy ----
+  // The scheduled task launches the host through wscript.exe. With the WSH
+  // Enabled=0 policy set (common enterprise hardening), the launcher never
+  // executes and nothing surfaces - probed live: `//B` suppresses even the
+  // block dialog, so the host silently never starts at login. Install-time
+  // verification can't see a policy applied later; this can.
+  if (
+    process.platform === "win32" &&
+    serviceStatus !== null &&
+    serviceStatus.state !== "not-installed"
+  ) {
+    const wshIssue = probeWindowsScriptHostPolicy();
+    if (wshIssue !== null) issues.push(wshIssue);
+  }
+
   // ---- 6. Recent bootstrap markers ----
   const recentMarkers = await readBootstrapMarkers(opts.environment, 20);
   const recentCrash = lastCrashMarker(recentMarkers);
   if (recentCrash !== null) {
-    const fields = recentCrash.fields;
+    const fields = recentCrash.entry.fields;
+    const baseTitle =
+      recentCrash.entry.phase === "failed-to-spawn"
+        ? "Host failed to spawn recently"
+        : "Host crashed recently";
     issues.push({
       code: DOCTOR_ISSUE_CODES.RECENT_CRASH_MARKERS,
-      severity:
-        hostProcessAlive || serviceStatus?.state === "running"
+      severity: recentCrash.recovered
+        ? "warning"
+        : hostProcessAlive || serviceStatus?.state === "running"
           ? "warning"
           : "error",
-      title:
-        recentCrash.phase === "failed-to-spawn"
-          ? "Host failed to spawn recently"
-          : "Host crashed recently",
-      message: formatMarkerMessage(recentCrash),
+      title: recentCrash.recovered
+        ? `${baseTitle} (recovered by restart)`
+        : baseTitle,
+      message: formatMarkerMessage(recentCrash.entry),
       fixAction: "host-logs",
       terminalCommand: `traycer host logs --tail 200`,
       details: {
-        phase: recentCrash.phase,
-        timestamp: recentCrash.timestamp,
+        phase: recentCrash.entry.phase,
+        timestamp: recentCrash.entry.timestamp,
+        recovered: recentCrash.recovered,
         fields,
       },
     });
@@ -506,6 +548,16 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
  * absence is "not recorded", and inventing a warning for every host older than
  * this CLI would drown the real signal.
  */
+/**
+ * A Layer 0 record that does NOT carry the guarantee - degraded, or a shape
+ * this CLI cannot read. Named rather than inlined so the two-home loop below
+ * narrows once instead of at every use.
+ */
+type UnguaranteedLayer0Record = Exclude<
+  HostLayer0Record,
+  { readonly status: "acquired" }
+>;
+
 function layer0GuaranteeIssue(
   pidMetadata: HostPidMetadata,
 ): DoctorIssue | null {
@@ -513,13 +565,30 @@ function layer0GuaranteeIssue(
   // decodes without the key at all, and so does any in-process fixture that
   // predates it. Both mean "not recorded".
   const record = pidMetadata.layer0 ?? null;
-  if (record === null || record.status === "acquired") {
+  // ...and the SLOT home's own verdict, on a dev pool host that took two locks
+  // (chat-sync-v2 ticket 38). EITHER home failing costs the guarantee, so this
+  // arm must fire on the slot record even when the identity record is a clean
+  // `acquired` - that combination is precisely the half-truth the field was
+  // added to end. `null` on every ordinary host and every older pid.json.
+  const slotRecord = pidMetadata.layer0Slot ?? null;
+  const degraded: { home: string; record: UnguaranteedLayer0Record }[] = [];
+  for (const entry of [
+    { home: "identity", record },
+    { home: "slot", record: slotRecord },
+  ]) {
+    if (entry.record === null || entry.record.status === "acquired") continue;
+    degraded.push({ home: entry.home, record: entry.record });
+  }
+  if (degraded.length === 0) {
     return null;
   }
-  const detail =
-    record.status === "degraded"
-      ? `cause=${record.cause} evidence=${record.evidence}`
-      : `this CLI does not recognise the record it published (${record.raw})`;
+  const detail = degraded
+    .map(({ home, record: entry }) =>
+      entry.status === "degraded"
+        ? `${home} home: cause=${entry.cause} evidence=${entry.evidence}`
+        : `${home} home: this CLI does not recognise the record it published (${entry.raw})`,
+    )
+    .join("; ");
   return {
     code: DOCTOR_ISSUE_CODES.HOST_LAYER0_NOT_GUARANTEED,
     severity: "warning",
@@ -540,22 +609,37 @@ function layer0GuaranteeIssue(
       pid: pidMetadata.pid,
       hostId: pidMetadata.hostId,
       layer0: record,
+      // Reported alongside rather than folded into `layer0`: an investigator
+      // reading this needs to know WHICH home lost the lock, and a merged
+      // value would answer a question nobody asked.
+      layer0Slot: slotRecord,
     },
   };
 }
 
 function lastCrashMarker(
   entries: readonly BootstrapLogEntry[],
-): BootstrapLogEntry | null {
+): { readonly entry: BootstrapLogEntry; readonly recovered: boolean } | null {
+  let recovered = false;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     if (entry === undefined) continue;
-    if (entry.phase === "crashed" || entry.phase === "failed-to-spawn") {
-      return entry;
+    if (
+      entry.phase === "crashed" ||
+      entry.phase === "failed-to-spawn" ||
+      // A fatal signal (SIGABRT et al.) is a crash wearing the killed phase:
+      // Node fatal aborts on POSIX surface as signal deaths, and skipping
+      // them here would hide exactly the evidence the enrichment attaches.
+      (entry.phase === "killed" && isFatalSignal(entry.fields.signal))
+    ) {
+      return { entry, recovered };
     }
     if (entry.phase === "starting") {
-      // A more recent successful start cancels the older crash signal.
-      return null;
+      // A more recent start used to CANCEL the crash signal entirely - which
+      // erased the evidence in exactly the auto-respawn-recovered case where
+      // the crash is the only thing worth diagnosing. It now only downgrades
+      // the finding to "recovered".
+      recovered = true;
     }
   }
   return null;
@@ -564,10 +648,14 @@ function lastCrashMarker(
 function formatMarkerMessage(entry: BootstrapLogEntry): string {
   const parts: string[] = [`phase=${entry.phase}`, `at=${entry.timestamp}`];
   if (entry.fields.code !== undefined) parts.push(`code=${entry.fields.code}`);
+  if (entry.fields.exitMeaning !== undefined)
+    parts.push(`meaning=${entry.fields.exitMeaning}`);
   if (entry.fields.signal !== undefined)
     parts.push(`signal=${entry.fields.signal}`);
   if (entry.fields.error !== undefined)
     parts.push(`error=${entry.fields.error}`);
+  if (entry.fields.report !== undefined)
+    parts.push(`report=${entry.fields.report}`);
   return parts.join(" ");
 }
 
@@ -575,6 +663,48 @@ function formatMarkerMessage(entry: BootstrapLogEntry): string {
 // principal other than the file owner / well-known system principals
 // has read access. Returns null when the file is owner-only or when
 // the probe itself fails (icacls missing, transient error).
+/**
+ * Reads the Windows Script Host Enabled policy from both hives. `0` in
+ * either disables wscript.exe for this user, which kills the host's
+ * scheduled-task launch chain silently. HKCU wins over HKLM only in the
+ * sense that EITHER being 0 blocks; a missing value means enabled.
+ */
+function probeWindowsScriptHostPolicy(): DoctorIssue | null {
+  const disabledIn: string[] = [];
+  for (const hive of ["HKLM", "HKCU"]) {
+    let stdout: string;
+    try {
+      stdout = execFileSync(
+        "reg",
+        [
+          "query",
+          `${hive}\\Software\\Microsoft\\Windows Script Host\\Settings`,
+          "/v",
+          "Enabled",
+        ],
+        { encoding: "utf8", windowsHide: true, timeout: 5000 },
+      );
+    } catch {
+      // Key or value absent - WSH enabled by default.
+      continue;
+    }
+    if (/Enabled\s+REG_DWORD\s+0x0\b/i.test(stdout)) disabledIn.push(hive);
+  }
+  if (disabledIn.length === 0) return null;
+  return {
+    code: DOCTOR_ISSUE_CODES.WINDOWS_SCRIPT_HOST_DISABLED,
+    severity: "error",
+    title: "Windows Script Host is disabled by policy",
+    message:
+      `The host's scheduled task starts through wscript.exe, and the Windows Script Host Enabled=0 policy is set in ${disabledIn.join(" and ")}. ` +
+      "The launcher never executes and nothing surfaces an error, so the host silently never starts at login. " +
+      "Remove the policy (or have your administrator exempt this machine) to restore host auto-start.",
+    fixAction: null,
+    terminalCommand: `reg query "${disabledIn[0]}\\Software\\Microsoft\\Windows Script Host\\Settings" /v Enabled`,
+    details: { disabledIn },
+  };
+}
+
 async function probeWindowsCredentialsAcl(
   environment: Environment,
 ): Promise<DoctorIssue | null> {

@@ -32,17 +32,35 @@ export interface NewConversationModalDraftPatch {
   readonly settings: ChatRunSettings | null;
   readonly composerMode: ComposerMode | null;
   readonly workspace: LandingDraftWorkspaceSnapshot | null;
+  /**
+   * Bumped on every real `setContent` change. The prompt-stash source adapter
+   * captures this alongside the epicId as a compare-and-swap token: a stash
+   * only clears this draft when the revision it captured still matches, so an
+   * edit made while the stash was durably saving is kept.
+   */
+  readonly revision: number;
 }
 
 interface NewConversationModalStore {
   readonly draftPatchesByEpicId: Readonly<
     Record<string, NewConversationModalDraftPatch | undefined>
   >;
+  /**
+   * Records a real document mutation - callers must only invoke this from the
+   * editor boundary's document-change signal (never a selection-only echo),
+   * so every call unconditionally bumps `revision` without comparing content.
+   */
   readonly setContent: (epicId: string, content: JsonContent) => void;
   readonly setSelection: (
     epicId: string,
     selection: { readonly from: number; readonly to: number },
   ) => void;
+  /**
+   * Drops a remembered caret, for a writer that appended to the END of the
+   * draft and wants the composer's `autofocus: "end"` to put the caret after
+   * what it added rather than restoring wherever the user last was.
+   */
+  readonly clearSelection: (epicId: string) => void;
   readonly setSettings: (
     epicId: string,
     settings: ChatRunSettings | null,
@@ -75,6 +93,7 @@ const EMPTY_DRAFT_PATCH: NewConversationModalDraftPatch = {
   settings: null,
   composerMode: null,
   workspace: null,
+  revision: 0,
 };
 
 // Merge a partial patch onto the epic's current draft (seeded from
@@ -94,15 +113,25 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
   (set, get) => ({
     draftPatchesByEpicId: {},
     setContent: (epicId, content) =>
-      set((state) => ({
-        draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
-          content,
-        }),
-      })),
+      set((state) => {
+        const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        return {
+          draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
+            content,
+            revision: current.revision + 1,
+          }),
+        };
+      }),
     setSelection: (epicId, selection) =>
       set((state) => ({
         draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
           selection,
+        }),
+      })),
+    clearSelection: (epicId) =>
+      set((state) => ({
+        draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
+          selection: null,
         }),
       })),
     setSettings: (epicId, settings) =>

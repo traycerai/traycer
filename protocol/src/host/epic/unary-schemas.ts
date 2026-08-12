@@ -37,6 +37,10 @@ import {
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
+import {
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
 
 export const LatestEpicArtifactKindSchema = getRecordSchema(
   commonRecordRegistry,
@@ -935,6 +939,75 @@ export const createChatForkSourceSchema = z.object({
 });
 export type CreateChatForkSource = z.infer<typeof createChatForkSourceSchema>;
 
+/**
+ * v1.1 fork source: the same precise-boundary shape as v1.0, tagged with an
+ * explicit `boundary` discriminant so it can sit in a union beside the new
+ * latest-checkpoint variant below. NOT a replacement for
+ * {@link createChatForkSourceSchema} - that name stays byte-identical
+ * forever, since `epic.createChat@1.0` is already in released hosts (see
+ * `epicCreateChatV11`'s own doc in `contracts.ts` for why this is a new
+ * minor rather than an in-place edit).
+ */
+export const createChatForkSourceAssistantBoundarySchema = z.object({
+  boundary: z.literal("assistantMessage"),
+  sourceChatId: z.string(),
+  assistantMessageId: z.string(),
+  interviewBlockId: z.string().nullish(),
+  carriedInterviews: z.enum(["pending", "settled"]).nullish(),
+});
+export type CreateChatForkSourceAssistantBoundary = z.infer<
+  typeof createChatForkSourceAssistantBoundarySchema
+>;
+
+/**
+ * v1.1's other fork source: fork through the source chat's LATEST available
+ * assistant checkpoint, naming only the chat. Exists because a client that
+ * cannot READ the source (an unreachable-owner chat viewed through the
+ * doc-replica fallback, ticket 34A) cannot name a specific
+ * `assistantMessageId` the way the precise-boundary variant requires - it
+ * can only say "this chat, whatever it last landed on". The host resolves the
+ * boundary itself via `buildLatestCheckpointForkSeed` against the
+ * best-available transcript (store first, doc second - see `chat-fork-seed.ts`).
+ */
+export const createChatForkSourceLatestCheckpointBoundarySchema = z.object({
+  boundary: z.literal("latest"),
+  sourceChatId: z.string(),
+  /**
+   * The owner the CLIENT was showing for this chat when the user clicked
+   * Clone (chat-sync-v2 ticket 37).
+   *
+   * The clone's cloud tier refuses to seed unless the host can check the
+   * resolved publication's owner against an expectation it holds locally -
+   * the anti-squatting guard from ticket 34 B2, which stops a caller
+   * naming somebody else's `chatId` and being handed their transcript.
+   * When local registry facts are absent (a post-restart swept chat, a
+   * fresh identity) the guard refuses correctly and the clone degrades to
+   * settings-only, losing the history. But the client knew the owner all
+   * along: it is on the sidebar row / published ref it just rendered.
+   *
+   * A HINT, never an authority. The host prefers its own registry facts and
+   * REFUSES the cloud tier outright when the two disagree - the registry
+   * outranks the client, and a disagreement is suspicious rather than a
+   * tiebreak to resolve. See `chat-fork-cloud-source.ts`.
+   *
+   * NULLABLE, NOT OPTIONAL: producers pass it explicitly, and `null` is the
+   * honest value for "the client genuinely does not know who owns this" -
+   * which must never be fabricated into a guess the host would then trust.
+   */
+  sourceOwnerUserId: z.string().min(1).nullable(),
+});
+export type CreateChatForkSourceLatestCheckpointBoundary = z.infer<
+  typeof createChatForkSourceLatestCheckpointBoundarySchema
+>;
+
+export const createChatForkSourceSchemaV11 = z.discriminatedUnion("boundary", [
+  createChatForkSourceAssistantBoundarySchema,
+  createChatForkSourceLatestCheckpointBoundarySchema,
+]);
+export type CreateChatForkSourceV11 = z.infer<
+  typeof createChatForkSourceSchemaV11
+>;
+
 export const createChatRequestSchema = z.object({
   epicId: z.string(),
   parentId: z.string().nullable(),
@@ -966,6 +1039,16 @@ export const createChatRequestSchema = z.object({
   forkSource: createChatForkSourceSchema.nullable().optional(),
 });
 export type CreateChatRequest = z.infer<typeof createChatRequestSchema>;
+
+/**
+ * v1.1 request: `forkSource` widened to the discriminated union above so a
+ * caller can name a latest-checkpoint fork alongside the existing precise
+ * boundary. Every other field is identical to v1.0.
+ */
+export const createChatRequestSchemaV11 = createChatRequestSchema.extend({
+  forkSource: createChatForkSourceSchemaV11.nullable().optional(),
+});
+export type CreateChatRequestV11 = z.infer<typeof createChatRequestSchemaV11>;
 
 export const createChatResponseSchema = z.object({
   chatId: z.string(),
@@ -1088,6 +1171,123 @@ export type SetChatArchivedResponse = z.infer<
   typeof setChatArchivedResponseSchema
 >;
 
+// Optional two-phase artifact-image ingest. Prepare validates and retains
+// recoverable bytes; finish commits the artifact reference index or aborts.
+export const MAX_ARTIFACT_IMAGE_BYTES = 30 * 1024 * 1024;
+const MAX_ARTIFACT_IMAGE_BASE64_LENGTH =
+  4 * Math.ceil(MAX_ARTIFACT_IMAGE_BYTES / 3);
+const artifactImageBase64Schema = z
+  .string()
+  .max(MAX_ARTIFACT_IMAGE_BASE64_LENGTH)
+  .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+
+export const prepareArtifactImageRequestSchema = z.object({
+  epicId: z.string(),
+  source: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("bytes"), base64: artifactImageBase64Schema }),
+    z.object({ kind: z.literal("remote"), url: z.string().url() }),
+  ]),
+});
+export type PrepareArtifactImageRequest = z.infer<
+  typeof prepareArtifactImageRequestSchema
+>;
+
+const artifactImageIngestErrorStateSchema = z.enum([
+  "invalid-path",
+  "blocked-path",
+  "consent-required",
+  "oversized",
+  "invalid-image",
+  "not-found",
+  "budget-exceeded",
+  "io-error",
+]);
+export const prepareArtifactImageResponseSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    operationId: z.string(),
+    attachmentHash: imageSha256HexSchema,
+    mediaType: supportedImageMediaTypeSchema,
+    src: z.string(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    state: artifactImageIngestErrorStateSchema,
+    message: z.string(),
+  }),
+]);
+export type PrepareArtifactImageResponse = z.infer<
+  typeof prepareArtifactImageResponseSchema
+>;
+
+const finishArtifactImageRequestBaseSchema = z.object({
+  epicId: z.string(),
+  artifactId: z.string(),
+  operationId: z.string(),
+});
+export const finishArtifactImageRequestSchema = z.discriminatedUnion("commit", [
+  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(true) }),
+  finishArtifactImageRequestBaseSchema.extend({ commit: z.literal(false) }),
+]);
+export type FinishArtifactImageRequest = z.infer<
+  typeof finishArtifactImageRequestSchema
+>;
+
+export const artifactImageFinishResponseFixtures = {
+  commit: {
+    committed: { committed: true },
+    notYetConverged: { status: "not-yet-converged" },
+    unknownOperation: { status: "unknown-operation" },
+  },
+  abort: {
+    aborted: { status: "aborted" },
+    unknownOperation: { status: "unknown-operation" },
+  },
+} as const;
+
+export const commitArtifactImageResponseSchema = z.union([
+  z.object({
+    committed: z.literal(
+      artifactImageFinishResponseFixtures.commit.committed.committed,
+    ),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.commit.notYetConverged.status,
+    ),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.commit.unknownOperation.status,
+    ),
+  }),
+]);
+export type CommitArtifactImageResponse = z.infer<
+  typeof commitArtifactImageResponseSchema
+>;
+
+export const abortArtifactImageResponseSchema = z.union([
+  z.object({
+    status: z.literal(artifactImageFinishResponseFixtures.abort.aborted.status),
+  }),
+  z.object({
+    status: z.literal(
+      artifactImageFinishResponseFixtures.abort.unknownOperation.status,
+    ),
+  }),
+]);
+export type AbortArtifactImageResponse = z.infer<
+  typeof abortArtifactImageResponseSchema
+>;
+
+export const finishArtifactImageResponseSchema = z.union([
+  commitArtifactImageResponseSchema,
+  abortArtifactImageResponseSchema,
+]);
+export type FinishArtifactImageResponse = z.infer<
+  typeof finishArtifactImageResponseSchema
+>;
+
 export const reparentChatRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),
@@ -1139,8 +1339,54 @@ export const createTuiAgentRequestSchema = z.object({
   // predate profiles keep today's exact behavior. See the multi-profile
   // decision log.
   profileId: z.string().nullable().default(null),
+  // The upstream harness session id this record was forked FROM, when the
+  // client's `agent.tui.prepareLaunch` call that minted `harnessSessionId`
+  // above was itself a fork. `null` for a normal (non-fork) create, and for
+  // older clients that predate this field. The resolver persists this
+  // verbatim as the record's `pendingForkSourceHarnessSessionId` so a
+  // provider failure between PTY spawn and destination-transcript
+  // establishment still has durable provenance to retry the fork from -
+  // the renderer's own prepared-launch stash is cleared on PTY creation,
+  // well before that establishment point.
+  // Rides @1.1 alone - see `createTuiAgentRequestSchemaV10` below.
+  forkSourceHarnessSessionId: z.string().nullable().default(null).catch(null),
 });
 export type CreateTuiAgentRequest = z.infer<typeof createTuiAgentRequestSchema>;
+
+/**
+ * Frozen `epic.createTuiAgent@1.0` request, exactly as shipped through
+ * `host-v1.1.10`: everything above except `forkSourceHarnessSessionId`.
+ *
+ * That field was authored straight onto the live object while @1.0 was the
+ * only registered version, so it silently grew an already-released contract;
+ * `host-v1.1.10` then froze @1.0 without it, because the commit that added it
+ * was not in the release cherry-pick. It rides @1.1 now.
+ *
+ * Hand-pinned field-for-field rather than derived from the live schema via
+ * `.omit()` - a field added to the live shape must not silently leak back into
+ * this contract, which is the exact failure this freeze exists to prevent.
+ */
+export const createTuiAgentRequestSchemaV10 = z.object({
+  epicId: z.string(),
+  parentId: z.string().nullable(),
+  title: z.string(),
+  harnessId: tuiHarnessIdSchema,
+  harnessSessionId: z.string().nullable().catch(null),
+  terminalAgentArgs: z.string().nullable().default(null).catch(null),
+  terminalShellCommand: z.string().nullable().catch(null),
+  terminalShellArgs: z.array(z.string()).nullable().catch(null),
+  hostId: z.string(),
+  workspaceFolders: z.array(z.string()),
+  workspaceMode: worktreeBindingWorkspaceModeSchema.optional(),
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  tuiAgentId: z.string().nullable().optional(),
+  profileId: z.string().nullable().default(null),
+});
+export type CreateTuiAgentRequestV10 = z.infer<
+  typeof createTuiAgentRequestSchemaV10
+>;
 
 export const createTuiAgentResponseSchema = z.object({
   tuiAgentId: z.string(),

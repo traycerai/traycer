@@ -87,7 +87,7 @@ import {
   type HistoryFacets,
 } from "@/hooks/home/use-history-query";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
   useRouteHistorySearchState,
@@ -135,16 +135,22 @@ function historyItemDisplayTitle(item: HistoryItem): string {
       });
 }
 
-export type EpicsListPanelVariant = "page" | "embedded";
+export type EpicsListPanelVariant = "page" | "embedded" | "picker";
 
 interface EpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   /**
-   * When set, row clicks invoke this callback instead of navigating
-   * via the embedded `<Link>`. Used by the system-tab modal to close
-   * the modal and route the user to the epic in one step.
+   * Called immediately before normal row navigation. The system-tab modal
+   * uses this to close its overlay in the same interaction.
    */
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  /**
+   * Replaces the row's normal navigation when this panel is embedded in a
+   * destination picker. The complete item is provided so callers can preserve
+   * the distinct Epic and legacy Phase activation paths.
+   */
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly routeSearch: HistorySearchState | null;
   readonly historyNowMs: number | null;
   /**
@@ -158,7 +164,9 @@ interface EpicsListPanelProps {
 
 interface RouteEpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly routeSearch: HistorySearchState;
   readonly historyNowMs: number | null;
   readonly autoFocusSearch: boolean;
@@ -166,14 +174,18 @@ interface RouteEpicsListPanelProps {
 
 interface AmbientEpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly historyNowMs: number | null;
   readonly autoFocusSearch: boolean;
 }
 
 interface EpicsListPanelBodyProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly historyNowMs: number | null;
   readonly historySearch: HistorySearchController;
   readonly autoFocusSearch: boolean;
@@ -195,7 +207,9 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
     return (
       <AmbientEpicsListPanel
         variant={props.variant}
+        className={props.className}
         onSelectEpic={props.onSelectEpic}
+        onOpenItem={props.onOpenItem}
         historyNowMs={props.historyNowMs}
         autoFocusSearch={props.autoFocusSearch}
       />
@@ -204,7 +218,9 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
   return (
     <RouteEpicsListPanel
       variant={props.variant}
+      className={props.className}
       onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
       routeSearch={props.routeSearch}
       historyNowMs={props.historyNowMs}
       autoFocusSearch={props.autoFocusSearch}
@@ -217,7 +233,9 @@ function RouteEpicsListPanel(props: RouteEpicsListPanelProps): ReactNode {
   return (
     <EpicsListPanelBody
       variant={props.variant}
+      className={props.className}
       onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
       historyNowMs={props.historyNowMs}
       historySearch={historySearch}
       autoFocusSearch={props.autoFocusSearch}
@@ -230,7 +248,9 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
   return (
     <EpicsListPanelBody
       variant={props.variant}
+      className={props.className}
       onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
       historyNowMs={props.historyNowMs}
       historySearch={historySearch}
       autoFocusSearch={props.autoFocusSearch}
@@ -239,7 +259,7 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
 }
 
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
-  const { variant, onSelectEpic, historySearch } = props;
+  const { variant, onSelectEpic, onOpenItem, historySearch } = props;
   // Destructure the stable `update`/`clear` functions (the hook returns a fresh
   // wrapper object each render, so closing over `historySearch.update` would
   // give the compiler an unstable dependency and re-create every handler each
@@ -280,7 +300,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     () => items.map((item) => item.epicId),
     [items],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: indicatorEpicIds,
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
@@ -349,15 +369,25 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setWorktreeCheckOverrides(new Map());
   }, []);
 
+  // `variant="picker"` embeds this panel as a read-only destination browser
+  // (the split chooser's History section) - it must never expose the
+  // select/delete/sweep flow, so every entry point into it is gated here
+  // rather than in the chrome that merely renders it.
+  const selectionEnabled = variant !== "picker";
+
   // A sweep target is a SET: one id from a row action, the whole selection
   // from the bulk action. The set is load-bearing - a worktree shared between
   // two SELECTED tasks is no longer "shared" and becomes an ordinary
   // candidate.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
-  const requestSweep = useCallback((epicId: string) => {
-    setSweepEpicIds([epicId]);
-  }, []);
+  const requestSweep = useCallback(
+    (epicId: string) => {
+      if (!selectionEnabled) return;
+      setSweepEpicIds([epicId]);
+    },
+    [selectionEnabled],
+  );
   const sweepTaskTitle = useMemo(() => {
     if (sweepEpicIds === null || sweepEpicIds.length !== 1) return null;
     const item = items.find(
@@ -380,20 +410,21 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
 
   const toggleSelection = useCallback(
     (id: string) => {
-      if (!selectableIdSet.has(id)) return;
+      if (!selectionEnabled || !selectableIdSet.has(id)) return;
       setSelectedIds((prev) => withMemberToggled(prev, id));
       setSelectionMode(true);
     },
-    [selectableIdSet],
+    [selectableIdSet, selectionEnabled],
   );
 
   const requestDelete = useCallback(
     (ids: ReadonlyArray<string>) => {
+      if (!selectionEnabled) return;
       const deletableIds = ids.filter((id) => selectableIdSet.has(id));
       if (deletableIds.length === 0) return;
       setPendingDeleteIds(deletableIds);
     },
-    [selectableIdSet],
+    [selectableIdSet, selectionEnabled],
   );
 
   const visibleSelectedIds = useMemo(() => {
@@ -413,9 +444,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [visibleSelectedIds, worktreesByEpicId],
   );
   const enterSelectionMode = useCallback(() => {
+    if (!selectionEnabled) return;
     setSelectedIds(new Set());
     setSelectionMode(true);
-  }, []);
+  }, [selectionEnabled]);
   const selectAllVisible = useCallback(() => {
     setSelectedIds(new Set(selectableItemIds));
   }, [selectableItemIds]);
@@ -473,7 +505,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     void refetch();
   };
 
-  const showChrome = variant === "page";
+  const showPageSearch = variant === "page";
+  const showToolbarSearch = variant === "picker";
 
   return (
     <TooltipProvider>
@@ -481,9 +514,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         className={cn(
           "flex min-h-0 w-full flex-col",
           variant === "page" ? "mx-auto max-w-3xl flex-1 px-6 pt-6" : "mt-8",
+          props.className,
         )}
       >
-        {showChrome ? (
+        {showPageSearch ? (
           <PanelSearchInput
             value={search.query}
             onChange={(next) => {
@@ -491,10 +525,25 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             }}
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
+            placement="page"
           />
         ) : null}
         <PanelChromeBar
+          leading={
+            showToolbarSearch ? (
+              <PanelSearchInput
+                value={search.query}
+                onChange={(next) => {
+                  updateSearch({ query: next });
+                }}
+                isFetching={isFetching}
+                focusOnMount={props.autoFocusSearch}
+                placement="toolbar"
+              />
+            ) : null
+          }
           filters={{ active: hasActiveFilters, onClear: handleClear }}
+          showSelection={selectionEnabled}
           selection={
             selectionMode
               ? {
@@ -537,9 +586,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           facets={facets}
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
-        <NotificationIndicatorsProvider
-          indicators={notificationIndicators.data}
-        >
+        <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <div className="min-h-0 flex-1 overflow-y-auto pb-10">
             <EpicsListBody
               error={error}
@@ -549,6 +596,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               items={items}
               onRetry={handleRetry}
               selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
               selectedIds={selectedIds}
               onToggleSelection={toggleSelection}
               onRequestDelete={requestDelete}
@@ -559,6 +607,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               isFetchingNextPage={isFetchingNextPage}
               onLoadMore={fetchNextPage}
               onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
               worktreesByEpicId={worktreesByEpicId}
@@ -607,6 +656,7 @@ interface PanelSearchInputProps {
   readonly onChange: (next: string) => void;
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
+  readonly placement: "page" | "toolbar";
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
@@ -626,7 +676,11 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
     };
   }, [focusOnMount]);
   return (
-    <div className="px-2 pb-3">
+    <div
+      className={cn(
+        props.placement === "page" ? "px-2 pb-3" : "min-w-0 flex-1 sm:max-w-sm",
+      )}
+    >
       <InputGroup>
         <InputGroupAddon align="inline-start">
           {props.isFetching ? (
@@ -701,7 +755,11 @@ interface PanelRefreshControls {
 }
 
 interface PanelChromeBarProps {
+  readonly leading: ReactNode;
   readonly filters: PanelFilterControls;
+  /** False for the read-only `variant="picker"` embed: hides the entry point
+   * into bulk select/sweep/delete rather than merely disabling it. */
+  readonly showSelection: boolean;
   readonly selection: PanelSelectionControls;
   readonly sort: HistorySortOption;
   readonly onSortChange: (next: HistorySortOption) => void;
@@ -726,7 +784,8 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
 
   return (
     <div className="flex items-center justify-between gap-2 px-2 pb-2">
-      <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {props.leading}
         {props.filters.active ? (
           <ClearFiltersButton onClick={props.filters.onClear} />
         ) : null}
@@ -805,18 +864,20 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               onSearchChange={props.onSearchChange}
               facets={props.facets}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label="Select history items"
-              disabled={!props.selection.canSelect}
-              className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
-              onClick={props.selection.onStart}
-            >
-              <ListChecks className="size-4" />
-              Select
-            </Button>
+            {props.showSelection ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label="Select history items"
+                disabled={!props.selection.canSelect}
+                className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
+                onClick={props.selection.onStart}
+              >
+                <ListChecks className="size-4" />
+                Select
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -866,6 +927,7 @@ interface EpicsListBodyProps {
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
+  readonly selectionEnabled: boolean;
   readonly selectedIds: ReadonlySet<string>;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
@@ -876,6 +938,7 @@ interface EpicsListBodyProps {
   readonly isFetchingNextPage: boolean;
   readonly onLoadMore: () => void;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktreesByEpicId: ReadonlyMap<
@@ -894,6 +957,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     items,
     onRetry,
     selectionMode,
+    selectionEnabled,
     selectedIds,
     onToggleSelection,
     onRequestDelete,
@@ -904,6 +968,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetchingNextPage,
     onLoadMore,
     onSelectEpic,
+    onOpenItem,
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktreesByEpicId,
@@ -938,6 +1003,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               key={item.id}
               item={item}
               selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
               isSelected={selectedIds.has(item.epicId)}
               onToggleSelection={onToggleSelection}
               onRequestDelete={onRequestDelete}
@@ -945,6 +1011,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onSetPinned={onSetPinned}
               isPinPending={pendingSetPinnedEpicIds.has(item.epicId)}
               onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
@@ -1008,6 +1075,9 @@ function EpicsListFilteringLoading() {
 interface EpicsListRowProps {
   readonly item: HistoryItem;
   readonly selectionMode: boolean;
+  /** False for the read-only `variant="picker"` embed - disables the sweep
+   * affordance instead of leaving it live-looking but inert. */
+  readonly selectionEnabled: boolean;
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
@@ -1015,6 +1085,7 @@ interface EpicsListRowProps {
   readonly onSetPinned: (epicId: string, pinned: boolean) => void;
   readonly isPinPending: boolean;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
@@ -1047,6 +1118,7 @@ function HistoryRowTrailingMetadata(props: {
           maximumVisible={2}
           className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
+          openPrInApp={null}
         />
       ) : null}
     </span>
@@ -1073,6 +1145,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
     selectionMode,
+    selectionEnabled,
     isSelected,
     onToggleSelection,
     onRequestDelete,
@@ -1080,18 +1153,20 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onSetPinned,
     isPinPending,
     onSelectEpic,
+    onOpenItem,
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktrees,
     isOpen,
   } = props;
   const isPhase = item.taskType === "phase";
-  const rowSweep = useHistoryRowSweep(
+  const rowSweep = useHistoryRowSweep({
     item,
     worktrees,
     selectionMode,
+    selectionEnabled,
     onRequestSweep,
-  );
+  });
   const displayTitle = historyItemDisplayTitle(item);
   const canEditTitle = canEditHistoryItemTitle(item);
   const canDeleteItem = canDeleteHistoryItem(item);
@@ -1159,6 +1234,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     [],
   );
   const openEpic = useCallback(() => {
+    if (onOpenItem !== null) {
+      onOpenItem(item);
+      return;
+    }
     onSelectEpic?.(item.epicId);
     if (isPhase) {
       // Route the Phase deep link through the canonical activation boundary so
@@ -1188,7 +1267,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       title: item.title,
       source: "direct_ui",
     });
-  }, [isPhase, item.epicId, item.title, navigate, onSelectEpic, pathname]);
+  }, [isPhase, item, navigate, onOpenItem, onSelectEpic, pathname]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
@@ -1447,9 +1526,10 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   const activityStatus = useEpicActivityStatus(
     props.item.taskType === "epic" ? props.item.epicId : null,
   );
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.item.epicId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: props.item.epicId },
+    null,
+  );
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
@@ -1509,12 +1589,15 @@ interface HistoryRowSweepState {
  * Cheap and reactive - derived from the same enriched listing the PR pills
  * already join, with no extra host call to render the affordance.
  */
-function useHistoryRowSweep(
-  item: HistoryItem,
-  worktrees: readonly WorktreeHostEntryV12[],
-  selectionMode: boolean,
-  onRequestSweep: (epicId: string) => void,
-): HistoryRowSweepState {
+function useHistoryRowSweep(args: {
+  readonly item: HistoryItem;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly selectionMode: boolean;
+  readonly selectionEnabled: boolean;
+  readonly onRequestSweep: (epicId: string) => void;
+}): HistoryRowSweepState {
+  const { item, worktrees, selectionMode, selectionEnabled, onRequestSweep } =
+    args;
   const requestSweep = useCallback(() => {
     onRequestSweep(item.epicId);
   }, [item.epicId, onRequestSweep]);
@@ -1522,11 +1605,16 @@ function useHistoryRowSweep(
   // delete control and the bulk Sweep button behave: the affordance keeps its
   // place in the row instead of appearing and disappearing per row. Phases are
   // still skipped entirely - they never have worktrees, so a permanently dead
-  // control there would be noise rather than consistency.
+  // control there would be noise rather than consistency. The read-only picker
+  // embed (`selectionEnabled=false`) uses the same disabled treatment rather
+  // than a live-looking button whose click is silently neutered upstream.
   return {
     isVisible: !selectionMode && item.taskType !== "phase",
     canSweep:
-      !selectionMode && item.taskType !== "phase" && worktrees.length > 0,
+      selectionEnabled &&
+      !selectionMode &&
+      item.taskType !== "phase" &&
+      worktrees.length > 0,
     requestSweep,
   };
 }

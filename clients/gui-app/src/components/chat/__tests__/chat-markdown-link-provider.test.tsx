@@ -137,6 +137,35 @@ const SAME_EPIC_ARTIFACT_PATH = `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifa
 const CROSS_EPIC_ARTIFACT_PATH =
   "/Users/them/.traycer/epics/epic-other/artifacts/parent/child-ticket/index.md";
 
+// The exact markdown a Windows agent emits when it lists an epic's artifacts:
+// a native drive path with backslash separators, wrapped in `<>` because the
+// home directory contains a space. Rendering this reloaded the production
+// renderer, so it is driven through the whole pipeline (markdown parse ->
+// url transform -> sanitize -> anchor -> link policy -> artifact RPC).
+// Assembled by joining rather than interpolated into one `String.raw` literal:
+// a `${…}` directly after a backslash reads as an escaped `$`, which would
+// quietly eat the separator this case is about.
+const WINDOWS_SAME_EPIC_ARTIFACT_PATH = [
+  String.raw`C:\Users\Traycer Dev\.traycer\epics`,
+  OPEN_EPIC_ID,
+  "artifacts",
+  "dummy-alpha",
+  "index.md",
+].join("\\");
+
+// What the link policy receives once the markdown parser is done with it. The
+// `\.` before `.traycer` is a CommonMark escape and is consumed by the parser
+// (spec behaviour, unrecoverable at render time) - every other separator
+// survives, so the root-agnostic `epics/<id>/artifacts/<chain>/index.md` marker
+// the artifact resolver keys on is intact and the link still resolves.
+const WINDOWS_SAME_EPIC_RESOLVED_PATH = [
+  String.raw`C:\Users\Traycer Dev.traycer\epics`,
+  OPEN_EPIC_ID,
+  "artifacts",
+  "dummy-alpha",
+  "index.md",
+].join("\\");
+
 beforeEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -248,6 +277,7 @@ describe("ChatMarkdownLinkProvider", () => {
           markdown="[Open app](src/app.ts)"
           proseSize="compact"
           quotable={false}
+          components={null}
         />,
       );
 
@@ -400,6 +430,101 @@ describe("ChatMarkdownLinkProvider", () => {
     expect(previewTabId(tabId)).toBeNull();
   });
 
+  it("opens a Windows-authored artifact link without letting the browser navigate the anchor", async () => {
+    // The production crash: the drive-letter bypass in `markdownUrlTransform`
+    // only matched a LITERAL `\` or `/` after the colon, but remark hands it a
+    // percent-encoded destination (`C:%5CUsers…`). The bypass missed and
+    // `defaultUrlTransform` emptied the href as an unsafe `C:` scheme - and
+    // `<a href="">` points at the current document, so the click navigated for
+    // real and unloaded the whole renderer.
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-dummy-alpha",
+      kind: "spec",
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    const { container } = renderProvider(
+      tabId,
+      <AgentReferenceMarkdown
+        isStreaming={false}
+        markdown={`- [Dummy Alpha](<${WINDOWS_SAME_EPIC_ARTIFACT_PATH}>)`}
+        proseSize="compact"
+        quotable={false}
+        components={null}
+      />,
+    );
+
+    // Addressed as an element, not by role: an anchor whose href was emptied
+    // (and therefore dropped) has no `link` role, and that href is the bug.
+    // Asserting the drive prefix specifically - a bare "not empty" check would
+    // pass on the dropped-attribute form the anchor falls back to.
+    const link = container.querySelector("a");
+    if (link === null) throw new Error("Expected a rendered anchor.");
+    expect(link.getAttribute("href")).toMatch(/^C:(%5C|\\)Users/i);
+
+    // `fireEvent.click` returns false when the handler called `preventDefault`.
+    // True means the browser owns the navigation - the renderer reload.
+    expect(fireEvent.click(link)).toBe(false);
+
+    await waitFor(() => {
+      expect(mocks.resolveArtifactByPath).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostId: ACTIVE_HOST_ID,
+        epicId: OPEN_EPIC_ID,
+        filePath: WINDOWS_SAME_EPIC_RESOLVED_PATH,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        mocks.openProjectedSidebarNodeInTabWhenAvailable,
+      ).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable.mock.calls[0][0].nodeId,
+    ).toBe("artifact-dummy-alpha");
+  });
+
+  it("resolves an artifact whose chain folder contains a space", async () => {
+    // A POSIX artifact link into a folder named "space path test". The parser
+    // percent-encodes the space either way - whether the agent wrote `%20`
+    // itself or wrapped a literal space in `<>` - so the policy used to receive
+    // `space%20path%20test`, which matches no folder in the epic's
+    // `folderName -> id` index. The resolve came back null and the click ended
+    // in the "Couldn't open link" toast (the tolerable macOS symptom of the
+    // same encoding bug that reloads the renderer on Windows).
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-spaced",
+      kind: "spec",
+    });
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    const decodedPath = `/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/space path test/index.md`;
+    renderProvider(
+      tabId,
+      <AgentReferenceMarkdown
+        isStreaming={false}
+        markdown={`[Encoded](/Users/me/.traycer/epics/${OPEN_EPIC_ID}/artifacts/space%20path%20test/index.md) [Bracketed](<${decodedPath}>)`}
+        proseSize="compact"
+        quotable={false}
+        components={null}
+      />,
+    );
+
+    for (const name of ["Encoded", "Bracketed"]) {
+      mocks.resolveArtifactByPath.mockClear();
+      expect(fireEvent.click(screen.getByRole("link", { name }))).toBe(false);
+      await waitFor(() => {
+        expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+          expect.objectContaining({
+            epicId: OPEN_EPIC_ID,
+            filePath: decodedPath,
+          }),
+        );
+      });
+    }
+  });
+
   it("lets an external click supersede a slow artifact resolution", async () => {
     let resolveArtifact: (
       value: ResolveArtifactByPathResult | null,
@@ -417,6 +542,7 @@ describe("ChatMarkdownLinkProvider", () => {
         markdown={`[Artifact](${SAME_EPIC_ARTIFACT_PATH}) [External](https://example.com)`}
         proseSize="compact"
         quotable={false}
+        components={null}
       />,
     );
 

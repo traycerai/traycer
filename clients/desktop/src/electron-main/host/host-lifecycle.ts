@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
@@ -33,8 +33,23 @@ export { isCurrentHostWebsocketUrl } from "./host-endpoint-reachability";
  * user's shell as part of bootstrap, so this needs to absorb the user's
  * full rc-file init cost. 60s is sized for slow oh-my-zsh setups +
  * Prisma/native init.
+ *
+ * It is a QUIET budget, not a wall-clock one: `notifyProvisioningActivity`
+ * re-arms it, exactly the way the CLI's own inactivity guard re-arms on every
+ * NDJSON progress event. A first install downloads ~800MB and extracts a
+ * multi-gigabyte runtime tree, which on a slow or AV-scanned machine takes
+ * minutes - a flat 60s deadline declared "Could not start Traycer Host" while
+ * that install was demonstrably still progressing (traycer#862, and again in
+ * traycer#858's desktop log).
  */
 const HOST_READY_TIMEOUT_MS = 60_000;
+/**
+ * Ceiling on the total wait regardless of progress, so an installer that
+ * emits events forever can never hold bootstrap open indefinitely. Sized well
+ * above a realistic worst-case first install (the field report that motivated
+ * the sliding budget took ~3m17s) while still bounded.
+ */
+const HOST_READY_MAX_WAIT_MS = 15 * 60_000;
 const HOST_POLL_INTERVAL_MS = 250;
 const HOST_ENDPOINT_CHECK_TIMEOUT_MS = 750;
 const CLI_START_STOP_TIMEOUT_MS = 60_000;
@@ -179,6 +194,12 @@ export class HostLifecycle extends EventEmitter {
   private disposed = false;
   private reachabilityRetryTimer: NodeJS.Timeout | null = null;
   private reachabilityRetryDelayMs = REACHABILITY_RETRY_INITIAL_MS;
+  /**
+   * Epoch ms of the last reported host-provisioning progress event, or 0 when
+   * none has been seen. Read only by `waitForReady`, which treats it as the
+   * point its quiet budget restarts from.
+   */
+  private lastProvisioningActivityAt = 0;
 
   constructor(options: HostLifecycleOptions) {
     super();
@@ -210,13 +231,44 @@ export class HostLifecycle extends EventEmitter {
    * - `status(...)` against the legacy SMAppService-backed controller can
    * falsely report `not-installed` against a CLI-owned LaunchAgent
    * registration. Install / upgrade / register-service actions are all
-   * CLI-owned (Tech Plan Decision 1).
+   * CLI-owned (Tech Plan Decision 1). `hostInstalled` is therefore handed
+   * IN by the caller rather than read here - the boot seam already holds a
+   * controller and resolves it there.
+   *
+   * @param options.hostInstalled Whether this machine has a host install
+   * record at all. `false` means nothing was ever installed, which is a
+   * different state from "installed but not up yet" and must not be waited
+   * out - see the readiness short-circuit below.
    */
-  async bootstrap(): Promise<void> {
+  async bootstrap(options: { readonly hostInstalled: boolean }): Promise<void> {
+    // Ahead of BOTH watcher installs below - the success path and the catch.
+    await this.ensureWatchableRootDir();
     try {
       await this.reloadSnapshot();
       if (!this.isCompatible(this.currentSnapshot)) {
-        await this.waitForReady();
+        // Nothing is installed on this machine, so nothing is coming. The
+        // launch converge deliberately refuses to provision a
+        // never-installed host before sign-in
+        // (`host-launch-converge.ts`'s `isUnavailableInstalledHost`), which
+        // means no provisioning lane exists to extend the quiet budget
+        // below - it would run the full timeout every time and then report
+        // that a host "did not start" when nothing ever asked it to.
+        //
+        // That line is not free: it lands at ERROR in the desktop.log
+        // attached to every support report from a fresh install, where it
+        // has already misdirected three field investigations
+        // (traycer#961, #996, #1001), and holding `bootstrap` open delays
+        // the deferred work gated on it - the host health monitor (which
+        // owns Windows auto-respawn) and the macOS login-item revision
+        // monitor. The watcher installed below is what picks the host up
+        // once the user signs in and provisioning actually runs.
+        if (options.hostInstalled) {
+          await this.waitForReady();
+        } else {
+          log.info(
+            "[host] no host installed on this machine yet - skipping the readiness wait",
+          );
+        }
       }
       this.installWatcher();
     } catch (cause) {
@@ -249,6 +301,24 @@ export class HostLifecycle extends EventEmitter {
   }
 
   /**
+   * Report that host provisioning made progress just now.
+   *
+   * Wired from `HostController.onMutationProgress` at startup - the CLI emits
+   * an NDJSON progress event per download chunk / extraction stage, and the
+   * desktop already re-arms its inactivity-SIGKILL guard off that same stream.
+   * `waitForReady` re-arms its own budget here for the same reason: an install
+   * that is demonstrably still moving is not a host that failed to start.
+   *
+   * Deliberately a plain timestamp rather than a "provisioning in flight"
+   * boolean. A lane that hangs without emitting anything must still time out,
+   * and only a per-event stamp distinguishes progress from a wedged lane.
+   */
+  notifyProvisioningActivity(): void {
+    if (this.disposed) return;
+    this.lastProvisioningActivityAt = Date.now();
+  }
+
+  /**
    * Path to the pid-metadata file this lifecycle is bound to. Exposed
    * so the SMAppService respawn handler can drive its own
    * `waitForHostReady` poll against the same on-disk source of truth
@@ -257,6 +327,15 @@ export class HostLifecycle extends EventEmitter {
    */
   get pidMetadataFile(): string {
     return this.options.layout.pidMetadataFile;
+  }
+
+  /**
+   * The host's durable enrollment record. Read-only, and unlike `pid.json` it
+   * outlives the host process - which is what makes it answerable while the
+   * host is stopped.
+   */
+  get identityEnrollmentFile(): string {
+    return this.options.layout.identityEnrollmentFile;
   }
 
   /**
@@ -478,9 +557,42 @@ export class HostLifecycle extends EventEmitter {
     }
   }
 
+  /**
+   * `fs.watch` needs the directory to already exist, and on a machine where
+   * no host has ever been provisioned the CLI has not created the host root
+   * yet - so `installWatcher` fails ENOENT and this lifecycle is left with NO
+   * watcher for the rest of the session. Every fresh-install field report
+   * carries that line (traycer#961, #996, #1001).
+   *
+   * It used to be partly self-correcting by accident: the readiness wait gave
+   * a provisioning install time to create the root before the watcher was
+   * installed at the end of it. Skipping that wait for a never-installed host
+   * removes the accident, so the directory is created explicitly instead.
+   * `HostController.publishReachableHostSnapshot` only re-arms the watcher on
+   * converge paths that reach a live host - a converge that fails after
+   * creating the root, or a host installed outside this controller, leaves
+   * nothing to re-arm it.
+   *
+   * Creating it is safe: an empty root means nothing to the CLI (which
+   * creates it recursively during install anyway), nothing infers install
+   * state from its existence, and the desktop already does exactly this for
+   * host name settings (`writeHostNameSettings`).
+   *
+   * Best-effort by design - a failure here must not become a startup error,
+   * since `installWatcher` already degrades gracefully.
+   */
+  private async ensureWatchableRootDir(): Promise<void> {
+    try {
+      await mkdir(this.options.layout.rootDir, { recursive: true });
+    } catch (err) {
+      log.warn("[host] unable to create the host root directory to watch", err);
+    }
+  }
+
   private async waitForReady(): Promise<void> {
-    const deadline = Date.now() + this.readyTimeoutMs;
-    while (Date.now() < deadline) {
+    const startedAt = Date.now();
+    let extendedFrom: number | null = null;
+    for (;;) {
       if (this.disposed) {
         return;
       }
@@ -488,12 +600,39 @@ export class HostLifecycle extends EventEmitter {
       if (this.isCompatible(this.currentSnapshot)) {
         return;
       }
+      // The budget runs from the last EVIDENCE that host provisioning is still
+      // doing work, not from bootstrap. A fresh install can legitimately hold
+      // this loop open for minutes while the CLI downloads and extracts the
+      // runtime, and reporting "did not start" over a live installer is a
+      // false failure the user cannot act on.
+      const now = Date.now();
+      const lastActivityAt = Math.max(
+        startedAt,
+        this.lastProvisioningActivityAt,
+      );
+      const quietMs = now - lastActivityAt;
+      const waitedMs = now - startedAt;
+      if (
+        quietMs >= this.readyTimeoutMs ||
+        waitedMs >= HOST_READY_MAX_WAIT_MS
+      ) {
+        throw new HostStartupException(
+          "HOST_NOT_READY",
+          `Traycer Host did not start within ${waitedMs}ms (${quietMs}ms with no installer progress) - run \`traycer host doctor\` to recover.`,
+        );
+      }
+      if (extendedFrom === null && lastActivityAt > startedAt) {
+        extendedFrom = lastActivityAt;
+        log.info(
+          "[host] extending the startup budget while host provisioning reports progress",
+          {
+            readyTimeoutMs: this.readyTimeoutMs,
+            maxWaitMs: HOST_READY_MAX_WAIT_MS,
+          },
+        );
+      }
       await sleep(HOST_POLL_INTERVAL_MS);
     }
-    throw new HostStartupException(
-      "HOST_NOT_READY",
-      `Traycer Host did not start within ${this.readyTimeoutMs}ms - run \`traycer host doctor\` to recover.`,
-    );
   }
 
   private reloadSnapshotFromWatcher(): void {

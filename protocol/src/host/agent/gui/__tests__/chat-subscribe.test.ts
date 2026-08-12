@@ -2,6 +2,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
   chatActiveTurnSchema,
   chatQueuedItemSchema,
+  chatQueuedManagedCommandItemSchema,
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
@@ -10,12 +11,30 @@ import {
   chatSubscribeV13,
   chatSubscribeV14,
   chatSubscribeV15,
+  chatSubscribeV16,
+  chatSubscribeV17,
+  createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  guiAgentModelCapabilitiesSchema,
+  guiAgentModelOptionSchema,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  autonomousResumeTriggerSchema,
+  imageGenerationResultSchema,
+  toolCallBlockSchema,
+} from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  imageResolutionEntrySchema,
+  imageResolutionStateSchema,
+} from "@traycer/protocol/persistence/epic/messages";
 import type {
   Chat,
   ChatEvent,
+  ImageResolutionEntry,
+  ImageResolutionState,
   UserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { describe, expect, it } from "vitest";
@@ -53,6 +72,8 @@ const chat: Chat = {
   messages: [userMessage],
   events: [],
   archivedAt: null,
+  pinnedUserProviderHandle: null,
+  lastDeliveredRolesDigest: null,
 };
 
 const event: ChatEvent = {
@@ -168,6 +189,7 @@ describe("chat.subscribe@1.2 server frames", () => {
     });
 
     expect(parsed.status).toBe("steer_requested");
+    if (parsed.kind !== "prompt") throw new Error("expected prompt item");
     expect(parsed.steerRequest?.mode).toBe("safe_point");
   });
 
@@ -365,6 +387,9 @@ describe("chat.subscribe@1.2 server frames", () => {
       blockId: "wake-tool-1",
       outputFile: null,
       mcp: null,
+      // A fired schedule is not a managed command; there is nothing to open.
+      managedCommand: null,
+      live: false,
     });
   });
 
@@ -389,7 +414,10 @@ describe("chat.subscribe@1.2 server frames", () => {
       mcp: { serverName: "probe", toolName: "slow_op" },
     });
     expect(mcpTrigger.kind).toBe("command");
-    expect(mcpTrigger.mcp).toEqual({ serverName: "probe", toolName: "slow_op" });
+    expect(mcpTrigger.mcp).toEqual({
+      serverName: "probe",
+      toolName: "slow_op",
+    });
   });
 
   it("parses mcp background items on 1.4, defaulting startedAt for old-host frames", () => {
@@ -412,7 +440,9 @@ describe("chat.subscribe@1.2 server frames", () => {
       backgroundItems: [backgroundItem],
     });
 
-    expect(chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem))).toMatchObject({
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem)),
+    ).toMatchObject({
       backgroundItems: [{ ...mcpItem, startedAt: null }],
     });
     expect(
@@ -1415,6 +1445,298 @@ describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
   });
 });
 
+describe("chat.subscribe@1.6 (managed-command queue items)", () => {
+  const managedCommandItem = {
+    kind: "managed-command" as const,
+    queueItemId: "queue-managed-1",
+    commandId: "command-1",
+    description: "bun test --watch",
+    status: "pending" as const,
+    createdAt: 3000,
+    updatedAt: 3000,
+  };
+
+  // The exact shape a released 1.4 host persisted into `queue.added` metadata
+  // and put on the wire: no `kind` key at all.
+  const legacyKindlessItem = {
+    queueItemId: "queue-legacy-1",
+    messageId: "message-2",
+    message: { kind: "user", content: { type: "doc", content: [] } },
+    sender: { type: "user", userId: "user-1" },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "epic",
+    },
+    createdAt: 2001,
+    updatedAt: 2002,
+  };
+
+  function snapshotFrameWithQueueItems(
+    items: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    };
+  }
+
+  it("declares schemaVersion 1.6", () => {
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
+  });
+
+  // The load-bearing compat guarantee: every payload a ≤1.4 host ever wrote
+  // carries no `kind`, and the defaulted prompt discriminant must adopt them
+  // with no migration. This is why the union is a plain `z.union` (a
+  // `z.discriminatedUnion` rejects a missing discriminant even when the
+  // literal is defaulted) with the managed-command arm listed first.
+  it("parses a legacy kind-less queued item as a prompt item", () => {
+    const parsed = chatQueuedItemSchema.parse(legacyKindlessItem);
+
+    expect(parsed.kind).toBe("prompt");
+    if (parsed.kind !== "prompt") throw new Error("expected prompt item");
+    expect(parsed.messageId).toBe("message-2");
+    expect(parsed.sender).toMatchObject({ type: "user", userId: "user-1" });
+  });
+
+  it("parses a managed-command queued item as its own variant", () => {
+    const parsed = chatQueuedItemSchema.parse(managedCommandItem);
+
+    expect(parsed.kind).toBe("managed-command");
+    if (parsed.kind !== "managed-command") {
+      throw new Error("expected managed-command item");
+    }
+    expect(parsed.commandId).toBe("command-1");
+    expect(parsed.description).toBe("bun test --watch");
+    expect(parsed.status).toBe("pending");
+    // The variant is content-free: no fabricated message/sender/settings ride
+    // along on the durable record.
+    expect(parsed).not.toHaveProperty("message");
+    expect(parsed).not.toHaveProperty("sender");
+    expect(parsed).not.toHaveProperty("messageId");
+    expect(parsed).not.toHaveProperty("settings");
+  });
+
+  it("defaults a managed-command item's status to pending", () => {
+    const parsed = chatQueuedManagedCommandItemSchema.parse({
+      kind: "managed-command",
+      queueItemId: "queue-managed-2",
+      commandId: "command-2",
+      description: "tail -f server.log",
+      createdAt: 3000,
+      updatedAt: 3000,
+    });
+
+    expect(parsed.status).toBe("pending");
+  });
+
+  it("rejects a managed-command item that omits its durable dispatch key", () => {
+    expect(
+      chatQueuedItemSchema.safeParse({
+        kind: "managed-command",
+        queueItemId: "queue-managed-3",
+        description: "no commandId",
+        createdAt: 3000,
+        updatedAt: 3000,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries a managed-command queue item through a 1.6 snapshot frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithQueueItems([managedCommandItem]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      kind: "managed-command",
+      commandId: "command-1",
+    });
+  });
+
+  it("carries a managed-command queue item through a 1.6 queueChanged frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      queue: { status: "idle", items: [managedCommandItem] },
+    });
+    if (parsed.kind !== "queueChanged")
+      throw new Error("expected queueChanged");
+    expect(parsed.queue.items[0]).toMatchObject({
+      kind: "managed-command",
+      commandId: "command-1",
+    });
+  });
+
+  // The frozen 1.4 line must not be able to absorb the new variant - this is
+  // what forces the host's per-minor frame projection to exist rather than
+  // relying on zod stripping unknown keys.
+  it("cannot parse a managed-command item on the frozen 1.4 line", () => {
+    expect(
+      chatSubscribeV14.serverFrameSchema.safeParse(
+        snapshotFrameWithQueueItems([managedCommandItem]),
+      ).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV14.serverFrameSchema.safeParse({
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        queue: { status: "idle", items: [managedCommandItem] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still parses ordinary prompt items on the frozen 1.4 line", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse(
+      snapshotFrameWithQueueItems([legacyKindlessItem]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      queueItemId: "queue-legacy-1",
+    });
+    // The 1.4 line predates the discriminant and must never grow one.
+    expect(parsed.snapshot.queue.items[0]).not.toHaveProperty("kind");
+  });
+
+  // Same guarantee one line up: 1.5 shipped before the union existed, so it
+  // must reject the variant too, not just 1.4.
+  it("cannot parse a managed-command item on the frozen 1.5 line", () => {
+    expect(
+      chatSubscribeV15.serverFrameSchema.safeParse(
+        snapshotFrameWithQueueItems([managedCommandItem]),
+      ).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
+  const shell = {
+    id: "command-1",
+    monitoring: true,
+    description: "deploy watcher",
+    status: {
+      state: "running" as const,
+      pid: 4410,
+      startedAtMs: 1_700_000_000_000,
+    },
+    chatId: "chat-1",
+    createdAtMs: 1_699_999_000_000,
+    updatedAtMs: 1_700_000_000_000,
+  };
+
+  function snapshotFrameWithManagedCommands(
+    managedCommands: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        managedCommands,
+      },
+    };
+  }
+
+  const managedCommandsChangedFrame = {
+    kind: "managedCommandsChanged",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    managedCommands: [shell],
+  };
+
+  it("carries the chat's commands on a live snapshot", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithManagedCommands([shell]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.managedCommands).toEqual([shell]);
+  });
+
+  // Optional on the wire, always present after parsing: no consumer ever
+  // null-checks the set, on either channel.
+  it("defaults an omitted set to empty rather than undefined", () => {
+    const frame = snapshotFrameWithManagedCommands([]);
+    const snapshot = frame["snapshot"] as Record<string, unknown>;
+    delete snapshot["managedCommands"];
+
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(frame);
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.managedCommands).toEqual([]);
+
+    const changed = chatSubscribeV16.serverFrameSchema.parse({
+      kind: "managedCommandsChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+    });
+    if (changed.kind !== "managedCommandsChanged") {
+      throw new Error("expected managedCommandsChanged");
+    }
+    expect(changed.managedCommands).toEqual([]);
+  });
+
+  it("drops the field on the frozen 1.5 line", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse(
+      snapshotFrameWithManagedCommands([shell]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot).not.toHaveProperty("managedCommands");
+  });
+
+  it("carries the whole set on every managedCommandsChanged frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      managedCommandsChangedFrame,
+    );
+    if (parsed.kind !== "managedCommandsChanged") {
+      throw new Error("expected managedCommandsChanged");
+    }
+    expect(parsed.managedCommands).toEqual([shell]);
+  });
+
+  // The frame and the field arrive together or not at all - a 1.5 peer has no
+  // variant for it, so the host must never send one (see the host's
+  // `projectManagedCommandsForPreV16`).
+  it("is not a frame a 1.5 peer can parse", () => {
+    expect(
+      chatSubscribeV15.serverFrameSchema.safeParse(managedCommandsChangedFrame)
+        .success,
+    ).toBe(false);
+  });
+});
+
 describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
   // Pre-1.5 active turn shape: no sameTurnSteeringSupported field at all.
   // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state)
@@ -1503,5 +1825,469 @@ describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
       throw new Error("expected turnStateChanged");
     }
     expect(v15.activeTurn?.sameTurnSteeringSupported).toBe(true);
+  });
+});
+
+// ─── chat.subscribe@1.7 image generation + rendering ───────────────────────
+//
+// Live image shapes land on 1.7 only. Every earlier minor is pinned to a
+// pre-image freeze so additive image fields cannot leak onto a released wire
+// line (the bug this ticket closed).
+describe("chat.subscribe@1.7 (image generation)", () => {
+  const imageHashA = "a".repeat(64);
+  const imageHashB = "b".repeat(64);
+  const resolutionHash = "c".repeat(64);
+  const imageResultA = {
+    attachmentHash: imageHashA,
+    mediaType: "image/png" as const,
+    byteLength: 1024,
+    width: 64,
+    height: 48,
+    alt: "generated chart",
+    revisedPrompt: "a clean chart",
+    filePath: "/tmp/chart.png",
+  };
+
+  const imageResultB = {
+    attachmentHash: imageHashB,
+    mediaType: "image/jpeg" as const,
+    byteLength: 2048,
+    width: null,
+    height: null,
+    alt: null,
+    revisedPrompt: null,
+    filePath: null,
+  };
+
+  const toolCallBlockWithImages = {
+    type: "tool_call" as const,
+    blockId: "tool-image-1",
+    status: "completed" as const,
+    timestamp: 5000,
+    parentBlockId: null,
+    toolName: "image_gen",
+    inputSummary: "draw a chart",
+    inputDetail: null,
+    taskTodoItems: null,
+    error: null,
+    agentMessageSend: null,
+    progress: null,
+    backgroundOutput: null,
+    startedAt: 4900,
+    endedAt: 5000,
+    backgroundTask: false,
+    stopped: false,
+    imageResults: [imageResultA, imageResultB],
+  };
+
+  const resolutionStates = imageResolutionStateSchema.options;
+
+  function buildResolutionEntry(
+    state: ImageResolutionState,
+    index: number,
+  ): ImageResolutionEntry {
+    const source = `https://example.com/img-${index}.png`;
+    const canonicalSource = source;
+    if (state === "resolved") {
+      return {
+        source,
+        canonicalSource,
+        state,
+        attachmentHash: resolutionHash,
+        mediaType: "image/png",
+        width: 100,
+        height: 80,
+      };
+    }
+    return {
+      source,
+      canonicalSource,
+      state,
+      attachmentHash: null,
+      mediaType: null,
+      width: null,
+      height: null,
+    };
+  }
+
+  const imageResolutions = resolutionStates.map((state, index) =>
+    buildResolutionEntry(state, index),
+  );
+
+  const assistantWithImages = {
+    role: "assistant" as const,
+    messageId: "assistant-image-1",
+    sender: {
+      type: "agent" as const,
+      harnessId: "codex" as const,
+      agentId: "agent-1",
+      displayName: "Coder",
+      reply: { expectsReply: false as const },
+      inReplyTo: null,
+    },
+    blocks: [toolCallBlockWithImages],
+    startedAt: 4900,
+    timestamp: 5000,
+    turnId: "turn-image-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions,
+  };
+
+  const chatWithImages: Chat = {
+    ...chat,
+    messages: [userMessage, assistantWithImages],
+  };
+
+  function snapshotFrameWithChat(
+    chatPayload: Chat,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat: chatPayload,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    };
+  }
+
+  function blockDeltaFrame(event: Record<string, unknown>): Record<string, unknown> {
+    return {
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event,
+    };
+  }
+
+  const frozenSubscribeContracts = [
+    { label: "1.0", contract: chatSubscribeV10 },
+    { label: "1.1", contract: chatSubscribeV11 },
+    { label: "1.2", contract: chatSubscribeV12 },
+    { label: "1.3", contract: chatSubscribeV13 },
+    { label: "1.4", contract: chatSubscribeV14 },
+    { label: "1.5", contract: chatSubscribeV15 },
+    { label: "1.6", contract: chatSubscribeV16 },
+  ] as const;
+
+  it("declares schemaVersion 1.7", () => {
+    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+  });
+
+  it("round-trips a tool_call content block with multiple imageResults", () => {
+    const parsed = toolCallBlockSchema.parse(toolCallBlockWithImages);
+    expect(parsed.imageResults).toHaveLength(2);
+    expect(parsed.imageResults[0]).toMatchObject(imageResultA);
+    expect(parsed.imageResults[1]).toMatchObject({
+      attachmentHash: imageHashB,
+      mediaType: "image/jpeg",
+      byteLength: 2048,
+      width: null,
+      height: null,
+      alt: null,
+      revisedPrompt: null,
+      filePath: null,
+    });
+  });
+
+  it("defaults omitted imageResults to an empty array on the live tool_call block", () => {
+    const { imageResults: _omit, ...withoutImages } = toolCallBlockWithImages;
+    const parsed = toolCallBlockSchema.parse(withoutImages);
+    expect(parsed.imageResults).toEqual([]);
+  });
+
+  it("defaults omitted imageGenerationResult optionals to null", () => {
+    expect(
+      imageGenerationResultSchema.parse({
+        attachmentHash: imageHashA,
+        mediaType: "image/png",
+        byteLength: 1,
+      }),
+    ).toEqual({
+      attachmentHash: imageHashA,
+      mediaType: "image/png",
+      byteLength: 1,
+      width: null,
+      height: null,
+      alt: null,
+      revisedPrompt: null,
+      filePath: null,
+    });
+  });
+
+  it("round-trips tool_call.completed with imageResults through the 1.7 frame", () => {
+    const withImages = chatSubscribeV17.serverFrameSchema.parse(
+      blockDeltaFrame({
+        type: "tool_call.completed",
+        blockId: "tool-image-1",
+        timestamp: 5000,
+        toolName: "image_gen",
+        imageResults: [imageResultA, imageResultB],
+      }),
+    );
+    expect(withImages).toMatchObject({
+      kind: "blockDelta",
+      event: {
+        type: "tool_call.completed",
+        imageResults: [
+          expect.objectContaining({ attachmentHash: imageHashA }),
+          expect.objectContaining({ attachmentHash: imageHashB }),
+        ],
+      },
+    });
+
+    const omitted = chatSubscribeV17.serverFrameSchema.parse(
+      blockDeltaFrame({
+        type: "tool_call.completed",
+        blockId: "tool-image-1",
+        timestamp: 5000,
+        toolName: "image_gen",
+      }),
+    );
+    if (omitted.kind !== "blockDelta") throw new Error("expected blockDelta");
+    if (omitted.event.type !== "tool_call.completed") {
+      throw new Error("expected tool_call.completed");
+    }
+    expect(omitted.event.imageResults).toEqual([]);
+  });
+
+  it("round-trips a resolution entry for every imageResolution state", () => {
+    for (const state of resolutionStates) {
+      if (state === "resolved") {
+        const parsed = imageResolutionEntrySchema.parse({
+          source: "https://example.com/a.png",
+          canonicalSource: "https://example.com/a.png",
+          state,
+          attachmentHash: resolutionHash,
+          mediaType: "image/png",
+        });
+        expect(parsed.state).toBe("resolved");
+        expect(parsed.attachmentHash).toBe(resolutionHash);
+        expect(parsed.mediaType).toBe("image/png");
+        expect(parsed.width).toBeNull();
+        expect(parsed.height).toBeNull();
+        continue;
+      }
+      const parsed = imageResolutionEntrySchema.parse({
+        source: "https://example.com/a.png",
+        canonicalSource: "https://example.com/a.png",
+        state,
+      });
+      expect(parsed.state).toBe(state);
+      expect(parsed.attachmentHash).toBeNull();
+      expect(parsed.mediaType).toBeNull();
+      expect(parsed.width).toBeNull();
+      expect(parsed.height).toBeNull();
+    }
+  });
+
+  it("rejects a resolved resolution entry without an attachment", () => {
+    expect(
+      imageResolutionEntrySchema.safeParse({
+        source: "https://example.com/a.png",
+        canonicalSource: "https://example.com/a.png",
+        state: "resolved",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a non-resolved resolution entry that carries attachment data", () => {
+    for (const state of resolutionStates) {
+      if (state === "resolved") continue;
+      expect(
+        imageResolutionEntrySchema.safeParse({
+          source: "https://example.com/a.png",
+          canonicalSource: "https://example.com/a.png",
+          state,
+          attachmentHash: resolutionHash,
+          mediaType: "image/png",
+        }).success,
+        state,
+      ).toBe(false);
+    }
+  });
+
+  it("round-trips image_resolution.updated through the 1.7 serverFrame", () => {
+    for (const entry of imageResolutions) {
+      const parsed = chatSubscribeV17.serverFrameSchema.parse(
+        createImageResolutionUpdatedFrame({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          event: {
+            type: "image_resolution.updated",
+            blockId: "assistant-image-1",
+            timestamp: 5100,
+            turnId: "turn-image-1",
+            messageId: "assistant-image-1",
+            entry,
+          },
+        }),
+      );
+      expect(parsed).toMatchObject({
+        kind: "blockDelta",
+        event: {
+          type: "image_resolution.updated",
+          messageId: "assistant-image-1",
+          entry: { state: entry.state, canonicalSource: entry.canonicalSource },
+        },
+      });
+    }
+  });
+
+  it("carries imageResults and imageResolutions through a live 1.7 snapshot", () => {
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
+      snapshotFrameWithChat(chatWithImages),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    const assistant = parsed.snapshot.chat.messages.find(
+      (message) => message.role === "assistant",
+    );
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("expected assistant message");
+    }
+    expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
+    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    if (!toolCall || toolCall.type !== "tool_call") {
+      throw new Error("expected tool_call block");
+    }
+    expect(toolCall.imageResults).toHaveLength(2);
+  });
+
+  it("stays frozen without image fields on every released minor 1.0-1.6", () => {
+    const snapshotFrame = snapshotFrameWithChat(chatWithImages);
+    const completedWithImages = blockDeltaFrame({
+      type: "tool_call.completed",
+      blockId: "tool-image-1",
+      timestamp: 5000,
+      toolName: "image_gen",
+      imageResults: [imageResultA],
+    });
+    const resolutionUpdated = blockDeltaFrame({
+      type: "image_resolution.updated",
+      blockId: "assistant-image-1",
+      timestamp: 5100,
+      turnId: "turn-image-1",
+      messageId: "assistant-image-1",
+      entry: imageResolutions[0],
+    });
+
+    for (const { label, contract } of frozenSubscribeContracts) {
+      const snapshot = contract.serverFrameSchema.parse(snapshotFrame);
+      if (snapshot.kind !== "snapshot") {
+        throw new Error(`expected snapshot on ${label}`);
+      }
+      const assistant = snapshot.snapshot.chat.messages.find(
+        (message) => message.role === "assistant",
+      );
+      if (!assistant || assistant.role !== "assistant") {
+        throw new Error(`expected assistant message on ${label}`);
+      }
+      // Frozen assistant message has no imageResolutions key at all.
+      expect(assistant, label).not.toHaveProperty("imageResolutions");
+      const toolCall = assistant.blocks.find(
+        (block) => block.type === "tool_call",
+      );
+      if (!toolCall || toolCall.type !== "tool_call") {
+        throw new Error(`expected tool_call block on ${label}`);
+      }
+      expect(toolCall, label).not.toHaveProperty("imageResults");
+
+      const completed = contract.serverFrameSchema.parse(completedWithImages);
+      if (completed.kind !== "blockDelta") {
+        throw new Error(`expected blockDelta on ${label}`);
+      }
+      expect(completed.event.type, label).toBe("tool_call.completed");
+      expect(completed.event, label).not.toHaveProperty("imageResults");
+
+      // New event variant must not exist on any pre-image line.
+      expect(
+        contract.serverFrameSchema.safeParse(resolutionUpdated).success,
+        label,
+      ).toBe(false);
+    }
+  });
+
+  it("declares schemaVersion 1.6 and freezes chat against pre-image messages", () => {
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
+
+    // Runtime proof that V16 binds `chatSchemaPreImage`, not live `chatSchema`:
+    // a live host's image-bearing chat still parses, but every image field is
+    // stripped rather than accepted.
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      snapshotFrameWithChat(chatWithImages),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    const assistant = parsed.snapshot.chat.messages.find(
+      (message) => message.role === "assistant",
+    );
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("expected assistant message");
+    }
+    expect(assistant).not.toHaveProperty("imageResolutions");
+    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    if (!toolCall || toolCall.type !== "tool_call") {
+      throw new Error("expected tool_call block");
+    }
+    expect(toolCall).not.toHaveProperty("imageResults");
+    // Live chat still carries pinnedUserProviderHandle / lastDeliveredRolesDigest
+    // on the 1.6 freeze (those predate image support).
+    expect(parsed.snapshot.chat).toHaveProperty("pinnedUserProviderHandle");
+    expect(parsed.snapshot.chat).toHaveProperty("lastDeliveredRolesDigest");
+  });
+});
+
+describe("chat.subscribe@1.7 registry membership", () => {
+  it("registers chat.subscribe major 1 latestMinor 7 as chatSubscribeV17", () => {
+    const entry = hostStreamRpcRegistry["chat.subscribe"];
+    expect(entry).toBeDefined();
+    expect(entry[1].latestMinor).toBe(7);
+    expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
+    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+  });
+});
+
+describe("guiAgentModelCapabilitiesSchema (imageGeneration)", () => {
+  it("parses { imageGeneration: true } and defaults omitted imageGeneration to false", () => {
+    expect(
+      guiAgentModelCapabilitiesSchema.parse({ imageGeneration: true }),
+    ).toEqual({ imageGeneration: true });
+    expect(guiAgentModelCapabilitiesSchema.parse({})).toEqual({
+      imageGeneration: false,
+    });
+  });
+
+  it("leaves guiAgentModelOptionSchema.metadata as an open record", () => {
+    const parsed = guiAgentModelOptionSchema.parse({
+      harnessId: "codex",
+      slug: "gpt-5",
+      label: "GPT-5",
+      description: null,
+      contextWindow: 200000,
+      maxOutputTokens: 8192,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      metadata: {
+        capabilities: { imageGeneration: true, extraFutureFlag: "ok" },
+        anythingElse: 42,
+      },
+    });
+    expect(parsed.metadata).toEqual({
+      capabilities: { imageGeneration: true, extraFutureFlag: "ok" },
+      anythingElse: 42,
+    });
   });
 });

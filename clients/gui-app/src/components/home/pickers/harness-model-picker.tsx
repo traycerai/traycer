@@ -49,10 +49,17 @@ import {
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
 import {
+  EMPTY_PREPARING_BY_HARNESS_ID,
   railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
+import {
+  providerPackBlocksExecution,
+  providerPackPreparingByHarnessId,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
+import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
   profileCommitId,
   profileDisplayLabel,
@@ -85,10 +92,17 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  guiHarnessIdToProviderId,
   providerIdToGuiHarnessId,
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import {
+  paneActivationDeferProps,
+  runAfterPaneActivationFocusIntent,
+  usePaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -142,6 +156,14 @@ interface HarnessModelPickerProps {
   /** The exact host where the next run executes. This is explicit so usage
    *  comparison can never silently fall back to the renderer-default host. */
   runTargetHostId: string | null;
+  /**
+   * Per-row admission override for the active provider's profile strip,
+   * keyed by `profileCommitId`. `null` for every caller except the TUI
+   * continue-under-another-profile dialog, which overlays its bulk fork-
+   * admission preflight verdicts here so an unshared profile renders
+   * disabled with its rejection reason as a tooltip.
+   */
+  profileAdmission: ReadonlyMap<string | null, ProfileRowAdmission> | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -154,8 +176,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     registerActivation,
     createProfileHostId,
     runTargetHostId,
+    profileAdmission,
   } = props;
   const activityEnabled = useSurfaceActivity();
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const selection = useStore(store, (s) => s.selection);
   const selectedModel = useStore(store, (s) => s.selectedModel);
   const reasoning = useStore(store, (s) => s.reasoning);
@@ -228,8 +252,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
 
   useEffect(() => {
     if (activityEnabled || !visibleOpen) return;
-    closeOnly();
-  }, [activityEnabled, closeOnly, visibleOpen]);
+    return runAfterPaneActivationFocusIntent(
+      paneActivationFocusIntent,
+      closeOnly,
+    );
+  }, [activityEnabled, closeOnly, paneActivationFocusIntent, visibleOpen]);
 
   const harnessesQuery = useGuiHarnessesQuery({
     enabled: activityEnabled,
@@ -245,6 +272,40 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         ? EMPTY_DEGRADED_HARNESS_IDS
         : degradedHarnessIdsFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
+  );
+  // Managed-pack readiness, from the SAME `providers.list` response the rail
+  // already reads for degraded/profile state - no extra query, no extra poll.
+  const preparingByHarnessId = useMemo(
+    () =>
+      providersQuery.data === undefined
+        ? EMPTY_PREPARING_BY_HARNESS_ID
+        : providerPackPreparingByHarnessId(providersQuery.data.providers),
+    [providersQuery.data],
+  );
+  // Client-scoped on purpose: the rail renders the app-wide default host's
+  // providers, and this picker already resolves that client for every other
+  // query it runs. Going through `useHostClient()` instead would bind the
+  // retry to whatever host the surrounding tree happens to provide - a
+  // different host than the row the user clicked.
+  const ensurePack = useProvidersEnsurePackForClient(useDefaultHostClient());
+  const ensurePackMutate = ensurePack.mutate;
+  // A real user gesture on a failed provider tab. This is the ONLY caller, and
+  // it must stay that way: reaching the host through `providers.ensurePack` is
+  // what marks the retry user-initiated, which clears the pack's backoff and
+  // takes the one arm allowed to quarantine an unverifiable version dir.
+  // The rail speaks GUI harness ids (`claude`); the wire speaks provider ids
+  // (`claude-code`). Map explicitly rather than letting the two vocabularies
+  // meet. `guiHarnessIdToProviderId` is total over the harness catalog, so the
+  // null branch is unreachable for any id the rail can render - but it is a
+  // real return value, and inventing an id to satisfy the type would be worse
+  // than doing nothing.
+  const handleRetryPack = useCallback(
+    (harnessId: ProviderId) => {
+      const providerId = guiHarnessIdToProviderId(harnessId);
+      if (providerId === null) return;
+      ensurePackMutate({ providerId });
+    },
+    [ensurePackMutate],
   );
   const profilesByHarnessId = useMemo(
     () =>
@@ -313,7 +374,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       subscribed: activityEnabled,
     },
   );
-  // Traycer and OpenRouter fetch their model catalogs over remote HTTP, so
+  // Traycer, OpenRouter and Hugging Face fetch their model catalogs over
+  // remote HTTP, so
   // `selectedModelsQuery` never touches their managed OpenCode server - only
   // `listCommands` (or chat) does. The intent edges below therefore also
   // refetch this harness's commands purely to prewarm that server; the
@@ -368,7 +430,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // Each query is asked separately whether it is due, rather than sharing one
   // verdict: models are seeded by the app-load prefetch while the commands
   // prewarm is only ever fired from here, so a shared verdict keyed on models
-  // would leave a Traycer/OpenRouter server un-prewarmed for the whole first
+  // would leave a Traycer/OpenRouter/Hugging Face server un-prewarmed for the
+  // whole first
   // window (their models come from remote HTTP and never touch it - only
   // `listCommands` does).
   const runSelectedHarnessIntentRefetch = useCallback(() => {
@@ -454,17 +517,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const resolvedActiveProviderId = useMemo(
     () =>
       lockedHarnessId ??
-      resolveActiveProviderId(
-        catalogHarnesses,
+      resolveActiveProviderId({
+        harnesses: catalogHarnesses,
         activeProviderId,
-        selection.harnessId,
+        selectedProviderId: selection.harnessId,
         degradedHarnessIds,
-      ),
+        preparingByHarnessId,
+      }),
     [
       activeProviderId,
       catalogHarnesses,
       degradedHarnessIds,
       lockedHarnessId,
+      preparingByHarnessId,
       selection.harnessId,
     ],
   );
@@ -518,6 +583,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
   );
+  // The browsed provider's full CLI state, for the panel's ambient-auth line
+  // (which credential a single-profile provider is actually running on - e.g.
+  // Copilot riding the GitHub CLI's login). Same `providers.list` response the
+  // rail already reads for degraded/profile state - no extra query.
+  const activeProviderState = useMemo(
+    () =>
+      providersQuery.data?.providers.find(
+        (provider) =>
+          providerIdToGuiHarnessId(provider.providerId) ===
+          resolvedActiveProviderId,
+      ) ?? null,
+    [providersQuery.data, resolvedActiveProviderId],
+  );
   // Which profile each harness's rail dot reflects: the active provider's
   // browsed profile, plus the composer's already-committed selection's
   // profile when browsing a DIFFERENT provider (so its dot doesn't silently
@@ -545,6 +623,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         harnesses: catalogHarnesses,
         fallbackHarnesses: harnesses,
         degradedHarnessIds,
+        preparingByHarnessId,
         profilesByHarnessId,
         activeProfileIdByHarnessId,
       }),
@@ -553,6 +632,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       catalogHarnesses,
       degradedHarnessIds,
       harnesses,
+      preparingByHarnessId,
       profilesByHarnessId,
     ],
   );
@@ -731,6 +811,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     reasoningActionable,
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
+    activeProviderProfileAdmission: profileAdmission,
     onProfileChange: handleProfileChange,
   });
 
@@ -786,6 +867,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
           align={undefined}
         >
           <HarnessModelTrigger
+            {...paneActivationDeferProps}
             selection={selection}
             label={presentation.label}
             reasoningLabel={presentation.reasoningLabel}
@@ -816,8 +898,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         activeProfileId={activePanelProfileId}
         activeProfileIdByHarnessId={activeProfileIdByHarnessId}
         activeProviderProfiles={activeProviderProfiles}
+        activeProviderState={activeProviderState}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
+        preparingByHarnessId={preparingByHarnessId}
+        onRetryPack={handleRetryPack}
         catalogHarnessesLoading={catalog.harnessesLoading}
         onEntryChange={handleRailEntryChange}
         onProfileChange={handleProfileChange}
@@ -842,6 +927,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         runTargetHostId={runTargetHostId}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
+        profileAdmission={profileAdmission}
       />
     </Popover>
   );
@@ -976,12 +1062,16 @@ function degradedHarnessIdsFromProviderStates(
   );
 }
 
+// The definitive "this ambient account cannot run a turn" verdict - the same
+// predicate the composer's send gate reads, so the rail's degraded treatment
+// and the send gate cannot drift. Since `railHarnessDegraded` applies this set
+// regardless of availability, membership must stay limited to the definitive
+// signed-out verdict: a missing API key is NOT one (`requiresApiKey` handles
+// it under `!available`, and a keyless provider's auth probe reports its own
+// definitive `unauthenticated` anyway), and folding it in here would degrade
+// live providers on a transient probe state.
 function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
-  return (
-    provider.enabled &&
-    (isProviderAmbientSignedOut(provider) ||
-      (provider.apiKey.supported && !provider.apiKey.configured))
-  );
+  return provider.enabled && isProviderAmbientSignedOut(provider);
 }
 
 function profilesByHarnessIdFromProviderStates(
@@ -995,14 +1085,44 @@ function profilesByHarnessIdFromProviderStates(
   );
 }
 
-function resolveActiveProviderId(
-  harnesses: ReadonlyArray<HarnessOption>,
-  activeProviderId: ProviderId,
-  selectedProviderId: ProviderId,
-  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
-): ProviderId {
-  const selectable = (harness: HarnessOption): boolean =>
-    harness.available || railHarnessDegraded(harness, degradedHarnessIds);
+function resolveActiveProviderId(input: {
+  readonly harnesses: ReadonlyArray<HarnessOption>;
+  readonly activeProviderId: ProviderId;
+  readonly selectedProviderId: ProviderId;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly preparingByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ProviderPackPreparing
+  >;
+}): ProviderId {
+  const {
+    harnesses,
+    activeProviderId,
+    selectedProviderId,
+    degradedHarnessIds,
+    preparingByHarnessId,
+  } = input;
+  // A provider the user CANNOT RUN is visible but not selectable, so the picker
+  // never auto-lands on it - otherwise a first boot would open onto a provider
+  // whose model list is empty and whose turn would bounce.
+  //
+  // "Cannot run" is `providerPackBlocksExecution`, the same question
+  // `railEntryPackGated` asks, and NOT "has a pack state at all". Those differ
+  // for exactly the case the lazy-download work created: a pack downloading
+  // behind a runnable bundled binary. Treating that as unselectable here while
+  // the rail deliberately renders its tab as selectable made the two disagree -
+  // the tab drew a shortcut badge, accepted the click, committed the selection,
+  // and then this function recomputed and threw it away. The user saw the tab
+  // bounce back, once per provider, for as long as the queue took to drain.
+  const selectable = (harness: HarnessOption): boolean => {
+    const preparing = preparingByHarnessId.get(harness.id);
+    if (preparing !== undefined && providerPackBlocksExecution(preparing)) {
+      return false;
+    }
+    return (
+      harness.available || railHarnessDegraded(harness, degradedHarnessIds)
+    );
+  };
   if (
     harnesses.some(
       (harness) => harness.id === activeProviderId && selectable(harness),

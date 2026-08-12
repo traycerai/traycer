@@ -61,7 +61,6 @@ import {
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   buildTaskMergeRollups,
   taskMergeRollupEqual,
@@ -77,15 +76,7 @@ import {
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -107,10 +98,13 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ScriptsReviewDialog } from "@/components/workspaces/scripts-review-dialog";
 import { type RepoScriptsSeed } from "@/components/workspaces/repo-scripts-form";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import {
+  useHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
@@ -153,12 +147,17 @@ import {
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
 // `ready` = enriched (real tier), `pending` = in flight ("Checking…" spinner),
-// `unknown` = the per-path query settled to an error (non-animated fallback, no
-// infinite spinner). `pending` and `unknown` are both un-enriched for filtering.
-type WorktreeEnrichmentState = "ready" | "pending" | "unknown";
+// `unknown` = the first probe settled to an error (no tier is known), and
+// `unavailable` = a refresh failed but a last-known tier remains displayable.
+type WorktreeEnrichmentState = "ready" | "pending" | "unknown" | "unavailable";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
+
+const STALE_CLASSIFICATION_ENTRY_CACHE = new WeakMap<
+  WorktreeHostEntryV14,
+  WeakMap<WorktreeHostEntryV14, WorktreeHostEntryV14>
+>();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 
@@ -219,37 +218,23 @@ function useObservedHeight(): {
 }
 
 /**
- * Two stacked cards, no section headings - the branch-prefix strip's own
- * label + "All hosts" scope tag and the inventory's own host/search/filter
- * toolbar already identify what each card is, so a redundant "New
- * worktrees" / "Existing worktrees" heading above either would just repeat
- * that. The branch-prefix strip is a client-wide creation default; the
- * inventory below lists every git worktree under the selected host's
- * `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
+ * Inventory-only: this panel lists every git worktree under the selected
+ * host's `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
  * owning chat/agent was deleted still appear) and lets the user delete ones
- * they no longer need.
+ * they no longer need. The branch-prefix default lives in General settings;
+ * a per-repository override lives in that repo's Environment dialog - this
+ * page carries neither, so the inventory's own host/search/filter toolbar is
+ * the only chrome above the list.
  *
- * The selected host is reached through transient per-host clients
- * (`useHostClientFor` for listing, `useHostStreamClientFor` for the
- * streamed delete), so picking a host here never swaps the app-wide active
- * host or reloads the Epic list - and never affects the branch-prefix
- * default above, which is not host-scoped. The host picker + a refresh
- * control sit in a toolbar directly above the worktree cards.
+ * The scoped host comes from the ONE picker in the sidebar (`useHostScope`),
+ * which reaches a non-active host through a transient client, so viewing
+ * another host's worktrees never swaps the app-wide active host or reloads the
+ * Epic list. This panel used to carry its own host `<Select>` in the
+ * toolbar; that slot is gone entirely — the sidebar names the scoped host,
+ * and the toolbar keeps only the refresh control and its own filters.
  */
 export function WorktreesSettingsPanel(): ReactNode {
-  const activeHostId = useReactiveActiveHostId();
-  const hostsQuery = useHostDirectoryList();
-  const hosts = useMemo(() => hostsQuery.data ?? [], [hostsQuery.data]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Default to the active host until the user picks another.
-  const effectiveId = selectedId ?? activeHostId;
-  // Resolve the entry from the (referentially stable) directory data so the
-  // transient clients memoize per host rather than rebuilding each render.
-  const selectedEntry = useMemo(
-    () => hosts.find((entry) => entry.hostId === effectiveId) ?? null,
-    [hosts, effectiveId],
-  );
-  const client = useHostClientFor(selectedEntry);
+  const scope = useHostScope();
   // One-shot `worktree.deleteByPath` stream transport: it survives the panel
   // unmounting (a backgrounded delete keeps its socket) but wires no proactive
   // reconnect and no auth revalidation, so an OS wake / host respawn does not
@@ -261,7 +246,7 @@ export function WorktreesSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Set the default branch prefix and manage Traycer-created worktrees."
+      description="Traycer-created worktrees on this host."
       fillHeight
       bodyClassName="relative rounded-none border-none bg-transparent"
     >
@@ -271,15 +256,12 @@ export function WorktreesSettingsPanel(): ReactNode {
           compact ? "gap-2.5" : "gap-3",
         )}
       >
-        <WorktreeBranchPrefixSection />
         <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
           <WorktreesBody
-            client={client}
+            client={scope.client}
             openStreamTransport={openStreamTransport}
-            hostId={effectiveId}
-            hosts={hosts}
-            value={effectiveId}
-            onChange={setSelectedId}
+            hostId={scope.hostId}
+            scope={scope}
           />
         </div>
       </div>
@@ -288,9 +270,6 @@ export function WorktreesSettingsPanel(): ReactNode {
 }
 
 function WorktreesToolbar(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
   readonly onRefresh: () => Promise<unknown>;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -301,13 +280,10 @@ function WorktreesToolbar(props: {
   const {
     canRefresh,
     filterControls,
-    hosts,
     lastUpdatedAt,
-    onChange,
     onRefresh,
     refreshing,
     selectionControls,
-    value,
   } = props;
   const refreshWorktrees = useCallback(async () => {
     await onRefresh();
@@ -320,8 +296,10 @@ function WorktreesToolbar(props: {
 
   return (
     <div className="flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <HostSelect hosts={hosts} value={value} onChange={onChange} />
+      {/* The slot on the left held first a host `<Select>`, then a readout of
+          the scoped host. Both are gone: the sidebar names that host one row
+          away and never scrolls, so this toolbar carries only what it owns. */}
+      <div className="flex items-center justify-end gap-2">
         <div
           className="flex shrink-0 items-center gap-2"
           data-testid="worktrees-toolbar-actions"
@@ -423,8 +401,8 @@ function worktreeTierFilterLabel(
   tierFilters: WorktreeTierFilterSet,
   availableTiers: readonly WorktreeTier[],
 ): string {
-  // Only count selections that still exist in the list, so a stale selection for
-  // a now-absent tier does not leave the trigger reading a phantom count.
+  // `availableTiers` includes every selected tier even when it currently has no
+  // matches, so a strict persisted filter never masquerades as "All".
   const active = availableTiers.filter((tier) => tierFilters.has(tier));
   if (active.length === 0) return "All";
   if (active.length === 1) return WORKTREE_TIER_LABEL[active[0]];
@@ -546,50 +524,23 @@ function WorktreeSortMenu(props: {
   );
 }
 
-/**
- * Host picker - visible so the user always knows which host they're managing,
- * but deliberately lower-emphasis than the search/filter/sort/refresh cluster:
- * no border or filled background at rest, muted text, only gaining contrast on
- * hover/open. It stays a real `Select` (keyboard-reachable, same interaction
- * model), just styled to read as ambient context rather than a primary action.
- */
-function HostSelect(props: {
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
-}): ReactNode {
-  return (
-    <Select value={props.value ?? undefined} onValueChange={props.onChange}>
-      <SelectTrigger
-        size="sm"
-        aria-label="Select a host"
-        data-testid="worktrees-host-select"
-        className="w-[min(60vw,15rem)] border-transparent bg-transparent px-2 text-muted-foreground shadow-none hover:bg-accent/40 hover:text-foreground data-[state=open]:bg-accent/40 data-[state=open]:text-foreground dark:bg-transparent dark:hover:bg-accent/40"
-      >
-        <SelectValue placeholder="Select a host" />
-      </SelectTrigger>
-      <SelectContent>
-        {props.hosts.map((host) => (
-          <SelectItem key={host.hostId} value={host.hostId}>
-            {hostOptionLabel(host)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
   readonly hostId: string | null;
-  readonly hosts: readonly HostDirectoryEntry[];
-  readonly value: string | null;
-  readonly onChange: (hostId: string) => void;
+  readonly scope: HostScope;
 }): ReactNode {
-  const { client, openStreamTransport, hostId, hosts, value, onChange } = props;
+  const { client, openStreamTransport, hostId, scope } = props;
   const reachability = useHostReachability(hostId ?? "");
-  const reachable = hostId !== null && reachability.status === "reachable";
+  // Two reachability opinions used to disagree here. `useHostReachability` is
+  // the TAB-binding check and can call a host reachable that this settings
+  // scope cannot dial (a registry row with no websocket URL), which surfaced
+  // as a bogus "Sign in to manage worktrees" on a host that was simply not
+  // routable from here. The scope's verdict wins: it is the one that knows
+  // whether a client exists.
+  const scopeUsable = isHostScopeUsable(scope.status);
+  const reachable =
+    scopeUsable && hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
   // The full listing's paths seed the background enrichment sweep: rows the
   // user never scrolls to still get probed (in bounded chunks), so tier pills
@@ -608,11 +559,13 @@ function WorktreesBody(props: {
   // still-unresolved ids through epic.getTaskContexts on this host.
   const taskTitlesByEpicId = useWorktreeTaskTitles(client, listing.worktrees);
   const canRefresh = reachable && client !== null;
-  const onRefresh = useCallback(() => listing.refresh(), [listing]);
+  const { prepareEnrichmentRefresh } = enrichment;
+  const onRefresh = useCallback(async () => {
+    const completeEnrichmentRefresh = prepareEnrichmentRefresh();
+    await listing.refresh();
+    completeEnrichmentRefresh();
+  }, [listing, prepareEnrichmentRefresh]);
   const toolbarProps = {
-    hosts,
-    value,
-    onChange,
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
     // A cold fleet enriches for tens of seconds; gating on that stranded the
@@ -625,13 +578,7 @@ function WorktreesBody(props: {
 
   let content: ReactNode;
   let listOwnsToolbar = false;
-  if (hostId === null) {
-    content = (
-      <WorktreesStateMessage tone="muted" spinner={false}>
-        Select a host to manage its worktrees.
-      </WorktreesStateMessage>
-    );
-  } else if (reachability.status === "checking") {
+  if (reachability.status === "checking") {
     content = (
       <WorktreesStateMessage tone="muted" spinner>
         Checking {reachability.hostLabel}…
@@ -698,7 +645,7 @@ function WorktreesBody(props: {
     );
   }
 
-  const showStandaloneToolbar = hosts.length > 0 && !listOwnsToolbar;
+  const showStandaloneToolbar = scope.hosts.length > 0 && !listOwnsToolbar;
 
   return (
     <div className="flex h-full flex-col">
@@ -709,13 +656,38 @@ function WorktreesBody(props: {
           filterControls={null}
         />
       ) : null}
-      {listing.isPartial ? (
-        <WorktreesPartialListingBanner
-          message={listing.errorMessage}
-          onRetry={listing.retryPartial}
-        />
-      ) : null}
-      {content}
+      {/* The gate owns every state where the scope has no client: it names
+          the host, distinguishes deregistered from unroutable, and offers the
+          way back to the active host — the old `hostId === null` branch
+          flattened all of that into "Select a host". The reachability/listing
+          content renders as the gate's CHILDREN (not beside it) so the list —
+          a script review mid-read, an armed delete, selection and collapse
+          state — is preserved through a transient same-host disconnect
+          instead of being unmounted, exactly as the other host-scoped panels
+          do. The partial-listing banner is a child too: today it could not
+          outlive a disconnect either way (a scope with no client drops the
+          listing data, and `isPartial` with it — measured), but it is
+          host-scoped content, and behind the boundary its concealment stays
+          correct even if the listing cache ever learns to survive a client
+          loss. A usable scope is `following` or `ready`, both of which
+          require a resolved host, so no "Select a host" branch is needed
+          inside. */}
+      <HostScopeGate
+        scope={scope}
+        skeleton={
+          <WorktreesStateMessage tone="muted" spinner>
+            Connecting to {scope.hostLabel}…
+          </WorktreesStateMessage>
+        }
+      >
+        {listing.isPartial ? (
+          <WorktreesPartialListingBanner
+            message={listing.errorMessage}
+            onRetry={listing.retryPartial}
+          />
+        ) : null}
+        {content}
+      </HostScopeGate>
     </div>
   );
 }
@@ -866,9 +838,6 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
-    readonly hosts: readonly HostDirectoryEntry[];
-    readonly value: string | null;
-    readonly onChange: (hostId: string) => void;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;
@@ -905,6 +874,28 @@ export function WorktreesList(props: {
     }
     return accepted;
   }, [worktrees, enrichedByPath]);
+  // Classification is stale-while-revalidate. TanStack retains an invalidated
+  // query's data while its refetch runs, and that last-known evidence is exactly
+  // what keeps an active tier filter stable. It is DISPLAY-ONLY: destructive
+  // actions continue to use `acceptedEnrichedByPath` below and therefore never
+  // trust an overlay older than the refreshed base row.
+  const classificationEntryByPath = useMemo(() => {
+    const known = new Map<string, WorktreeHostEntryV14>();
+    for (const base of worktrees) {
+      const enriched = enrichedByPath.get(base.worktreePath);
+      if (
+        enriched !== undefined &&
+        enriched.resolvedAt !== null &&
+        hasMatchingActivityIdentity(base, enriched)
+      ) {
+        known.set(
+          base.worktreePath,
+          mergeStaleActivityOntoBase(base, enriched),
+        );
+      }
+    }
+    return known;
+  }, [worktrees, enrichedByPath]);
   // The merged view every downstream computation reads. A row is "pending"
   // until a freshness-valid overlay exists for its current base row.
   const mergedWorktrees = useMemo(
@@ -914,22 +905,28 @@ export function WorktreesList(props: {
       ),
     [worktrees, acceptedEnrichedByPath],
   );
-  // Un-enriched for classification/filtering (covers BOTH still-in-flight and
-  // settled-error rows - neither has a known tier, so both stay out of the green /
-  // tier-filtered cohorts).
-  const isPending = useCallback(
-    (worktreePath: string) => !acceptedEnrichedByPath.has(worktreePath),
-    [acceptedEnrichedByPath],
+  // Search/display may keep using a last-known overlay while it revalidates.
+  // This mirrors tier filtering: entering a loading state must not erase a PR
+  // number the user could search a moment earlier. Safety-sensitive consumers
+  // continue to read `mergedWorktrees` / `acceptedEnrichedByPath` instead.
+  const displayWorktrees = useMemo(
+    () =>
+      mergedWorktrees.map(
+        (entry) => classificationEntryByPath.get(entry.worktreePath) ?? entry,
+      ),
+    [mergedWorktrees, classificationEntryByPath],
   );
   // The row PILL, however, distinguishes the two: an errored row reads a settled
   // "Unknown" (non-animated), never an infinite "Checking…" spinner.
   const enrichmentStateFor = useCallback(
     (worktreePath: string): WorktreeEnrichmentState => {
-      if (acceptedEnrichedByPath.has(worktreePath)) return "ready";
+      if (classificationEntryByPath.has(worktreePath)) {
+        return erroredPaths.has(worktreePath) ? "unavailable" : "ready";
+      }
       if (erroredPaths.has(worktreePath)) return "unknown";
       return "pending";
     },
-    [acceptedEnrichedByPath, erroredPaths],
+    [classificationEntryByPath, erroredPaths],
   );
   // DELETE surfaces read this variant instead: a snapshot-seeded row reads
   // "pending" (its restored tier is last-run display data, not verified
@@ -939,11 +936,12 @@ export function WorktreesList(props: {
   // tier filters) keeps using `enrichmentStateFor`, so warm-open tiers still
   // paint instantly.
   const deleteEnrichmentStateFor = useCallback(
-    (worktreePath: string): WorktreeEnrichmentState =>
-      seededPaths.has(worktreePath)
-        ? "pending"
-        : enrichmentStateFor(worktreePath),
-    [seededPaths, enrichmentStateFor],
+    (worktreePath: string): WorktreeEnrichmentState => {
+      if (seededPaths.has(worktreePath)) return "pending";
+      if (acceptedEnrichedByPath.has(worktreePath)) return "ready";
+      return erroredPaths.has(worktreePath) ? "unknown" : "pending";
+    },
+    [seededPaths, acceptedEnrichedByPath, erroredPaths],
   );
   // True-AND merge rollup per owning Task (epic), aggregated across every worktree
   // entry the epic owns (superproject branch + each entry's owned submodules). Same
@@ -984,8 +982,8 @@ export function WorktreesList(props: {
   // Keyed on the ENRICHED list, unlike the text haystack above: a PR number only
   // exists once a path's activity probe has landed.
   const prHaystackByPath = useMemo(
-    () => buildWorktreePrHaystackByPath(mergedWorktrees),
-    [mergedWorktrees],
+    () => buildWorktreePrHaystackByPath(displayWorktrees),
+    [displayWorktrees],
   );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
@@ -993,55 +991,68 @@ export function WorktreesList(props: {
   // background sweep over the rest).
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
-    for (const entry of mergedWorktrees) {
-      if (isPending(entry.worktreePath)) continue;
+    for (const entry of classificationEntryByPath.values()) {
       present.add(classifyWorktreeTier(entry));
     }
-    return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
-  }, [mergedWorktrees, isPending]);
-  // Intersects the raw selection with the tiers actually present (mirroring
-  // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is
-  // ignored, so the effective filter is empty and every row shows, matching
-  // the "All" the toolbar reads. Hoisted so the tier-filter stage below and the
-  // "still checking" notice agree on whether a filter is ACTUALLY narrowing
-  // the list.
-  const effectiveTierFilters = useMemo(
-    () => new Set(availableTiers.filter((tier) => tierFilters.has(tier))),
-    [availableTiers, tierFilters],
-  );
-  // Rows still waiting on their probe. A PR-number query CANNOT match them yet
+    // A persisted/selected tier remains visible even when it currently has no
+    // matches. Otherwise its trigger would silently read "All" and broaden the
+    // list while never-classified rows are still resolving.
+    return WORKTREE_TIER_ORDER.filter(
+      (tier) => present.has(tier) || tierFilters.has(tier),
+    );
+  }, [classificationEntryByPath, tierFilters]);
+  // Rows still waiting on their first probe. A PR-number query CANNOT match them yet
   // (their `prNumber` is null), so an empty result set only honestly reads "no
   // matches" once this hits zero - until then the empty state says "still
   // checking". Errored rows are excluded deliberately: they settle to "Unknown"
   // and will never enrich, so counting them would hold the notice open forever.
   //
-  // Suppressed entirely while a tier filter is active: a pending row bypasses
-  // the tier stage only WHILE it's pending (see `filteredWorktrees` below) - if
-  // it resolves into an excluded tier, it drops out right where a plain PR
-  // match would otherwise have shown it. Promising "still checking" in that
-  // case overclaims; the tier-filtered empty state falls back to the honest
-  // plain "no matches" copy instead.
+  // This count is also shown beside an active tier filter: unknown rows remain
+  // outside the strict result set, but the user can still see that classification
+  // is incomplete.
   const stillCheckingCount = useMemo(() => {
-    if (effectiveTierFilters.size > 0) return 0;
     return mergedWorktrees.filter(
       (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
     ).length;
-  }, [mergedWorktrees, enrichmentStateFor, effectiveTierFilters]);
+  }, [mergedWorktrees, enrichmentStateFor]);
+  const searchStillCheckingCount = useMemo(() => {
+    const needle = deferredSearchText.trim().toLowerCase();
+    if (needle.length === 0) return stillCheckingCount;
+    const couldMatchUnknownPr = needle === "#" || /^#?\d+$/.test(needle);
+    return mergedWorktrees.filter((entry) => {
+      if (enrichmentStateFor(entry.worktreePath) !== "pending") return false;
+      return (
+        couldMatchUnknownPr ||
+        (searchHaystackByPath.get(entry.worktreePath) ?? "").includes(needle)
+      );
+    }).length;
+  }, [
+    deferredSearchText,
+    stillCheckingCount,
+    mergedWorktrees,
+    enrichmentStateFor,
+    searchHaystackByPath,
+  ]);
+  const unavailableStatusCount = useMemo(
+    () =>
+      mergedWorktrees.filter((entry) => {
+        const state = enrichmentStateFor(entry.worktreePath);
+        return state === "unknown" || state === "unavailable";
+      }).length,
+    [mergedWorktrees, enrichmentStateFor],
+  );
   // The status filter composes with the search box (both apply) before repo
   // grouping. The repo / branch / path / Task legs of search run on cheap base
   // fields, so they work before enrichment; only the PR-number leg waits on a
   // probe, and the empty state owns that gap.
   // Tier comes from the shared classifier, so the filter options exactly match the
-  // row pills. Intersect the selection with the tiers actually present (mirroring
-  // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is ignored,
-  // so the effective filter is empty and every row shows, matching the "All" the
-  // toolbar reads.
+  // row pills. Selected zero-match tiers remain active and visible in the control;
+  // only an explicit "All" action broadens the result set.
   //
-  // Pending rows are KEPT under an active tier filter (tier unknown ⇒ can't be
-  // excluded yet): they render as "Checking…" until their probe lands (viewport
-  // or background sweep). Once enriched, a non-matching row drops out on the
-  // next pass, so the filtered list converges on its own - scrolling only
-  // changes which rows resolve first.
+  // A tier selection is strict: only rows with last-known evidence in a selected
+  // tier enter the result set. Never-classified rows are accounted for by the
+  // checking/unavailable status outside the results, then appear only if their
+  // first successful classification matches.
   const filteredWorktrees = useMemo(() => {
     const searched = filterWorktrees(
       mergedWorktrees,
@@ -1049,19 +1060,21 @@ export function WorktreesList(props: {
       searchHaystackByPath,
       prHaystackByPath,
     );
-    if (effectiveTierFilters.size === 0) return searched;
-    return searched.filter(
-      (entry) =>
-        isPending(entry.worktreePath) ||
-        effectiveTierFilters.has(classifyWorktreeTier(entry)),
-    );
+    if (tierFilters.size === 0) return searched;
+    return searched.filter((entry) => {
+      const classification = classificationEntryByPath.get(entry.worktreePath);
+      return (
+        classification !== undefined &&
+        tierFilters.has(classifyWorktreeTier(classification))
+      );
+    });
   }, [
     mergedWorktrees,
     deferredSearchText,
     searchHaystackByPath,
     prHaystackByPath,
-    effectiveTierFilters,
-    isPending,
+    tierFilters,
+    classificationEntryByPath,
   ]);
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
@@ -1563,6 +1576,22 @@ export function WorktreesList(props: {
           summary={progressSummary}
           onDismiss={dismissTerminalBackgrounded}
         />
+        {shouldShowWorktreeFilterResolutionStatus(
+          tierFilters,
+          stillCheckingCount,
+          unavailableStatusCount,
+        ) ? (
+          <div
+            role="status"
+            className="border-b border-border/40 px-5 py-1.5 text-ui-xs text-muted-foreground"
+            data-testid="worktrees-filter-resolution-status"
+          >
+            {worktreeFilterResolutionStatusText(
+              stillCheckingCount,
+              unavailableStatusCount,
+            )}
+          </div>
+        ) : null}
 
         {/*
          * Relatively-positioned wrapper so the contextual selection bar can be
@@ -1585,19 +1614,21 @@ export function WorktreesList(props: {
           >
             {groups.length === 0 ? (
               /**
-               * Empty because the search excluded everything - a tier filter
-               * alone can't land here, since un-enriched rows always pass it.
-               * So while probes are outstanding, "no matches" would be a lie for
-               * a PR-number query: the row exists, it just doesn't know its PR
-               * yet. Say what's actually true and keep the spinner honest.
+               * A strict tier filter can legitimately have no proven matches
+               * while first-time probes are outstanding. Distinguish that from
+               * the settled no-match state; the status strip above accounts for
+               * failed first classifications without an endless spinner.
                */
               <WorktreesStateMessage
                 tone="muted"
-                spinner={stillCheckingCount > 0}
+                spinner={searchStillCheckingCount > 0}
               >
-                {stillCheckingCount > 0
-                  ? worktreeSearchCheckingNoticeText(stillCheckingCount)
-                  : "No worktrees match your search."}
+                {searchStillCheckingCount > 0
+                  ? worktreeSearchCheckingNoticeText(searchStillCheckingCount)
+                  : worktreeEmptyStateText(
+                      deferredSearchText,
+                      tierFilters.size > 0,
+                    )}
               </WorktreesStateMessage>
             ) : (
               <div
@@ -1649,6 +1680,11 @@ export function WorktreesList(props: {
                         >
                           <WorktreeRow
                             entry={item.entry}
+                            classificationEntry={
+                              classificationEntryByPath.get(
+                                item.entry.worktreePath,
+                              ) ?? null
+                            }
                             enrichment={enrichmentStateFor(
                               item.entry.worktreePath,
                             )}
@@ -1924,6 +1960,111 @@ function worktreeSearchCheckingNoticeText(checkingCount: number): string {
   return `No matches yet - still checking ${checkingCount} ${plural}.`;
 }
 
+function worktreeEmptyStateText(
+  searchText: string,
+  hasTierFilters: boolean,
+): string {
+  if (searchText.trim().length > 0) return "No worktrees match your search.";
+  if (hasTierFilters) return "No worktrees match the selected tier filters.";
+  return "No worktrees found.";
+}
+
+function mergeStaleActivityOntoBase(
+  base: WorktreeHostEntryV14,
+  enriched: WorktreeHostEntryV14,
+): WorktreeHostEntryV14 {
+  // A v1.4 unresolved base row is a schema-safe sentinel, not fresh truth.
+  // Preserve the last resolved entry wholesale until the base becomes
+  // authoritative; otherwise its null branch/owners would destabilize tiers.
+  if (base.resolvedAt === null) return enriched;
+  let byEnriched = STALE_CLASSIFICATION_ENTRY_CACHE.get(base);
+  if (byEnriched === undefined) {
+    byEnriched = new WeakMap();
+    STALE_CLASSIFICATION_ENTRY_CACHE.set(base, byEnriched);
+  }
+  const cached = byEnriched.get(enriched);
+  if (cached !== undefined) return cached;
+  const merged: WorktreeHostEntryV14 = {
+    ...base,
+    lastActivityAt: enriched.lastActivityAt,
+    branchStatus: enriched.branchStatus,
+    prState: enriched.prState,
+    prNumber: enriched.prNumber,
+    prUrl: enriched.prUrl,
+    mergedHeadShaMatches: enriched.mergedHeadShaMatches,
+    submodules: enriched.submodules,
+    atBaseCommit: enriched.atBaseCommit,
+    resolvedAt: enriched.resolvedAt,
+  };
+  byEnriched.set(enriched, merged);
+  return merged;
+}
+
+function hasMatchingActivityIdentity(
+  base: WorktreeHostEntryV14,
+  enriched: WorktreeHostEntryV14,
+): boolean {
+  // Even an unresolved row can carry reliable cheap identity facts. Use every
+  // fact it actually knows to reject stale evidence from a branch switch or a
+  // deleted/recreated directory at the same deterministic path; ignore only
+  // sentinel-null facts that cannot prove a mismatch.
+  if (
+    base.createdAt !== null &&
+    enriched.createdAt !== null &&
+    base.createdAt !== enriched.createdAt
+  ) {
+    return false;
+  }
+  if (base.resolvedAt !== null) {
+    if (base.branch !== enriched.branch) return false;
+    if (base.repoIdentifier === null || enriched.repoIdentifier === null) {
+      return (
+        base.repoIdentifier === enriched.repoIdentifier &&
+        base.repoLabel === enriched.repoLabel
+      );
+    }
+    return (
+      base.repoIdentifier.owner === enriched.repoIdentifier.owner &&
+      base.repoIdentifier.repo === enriched.repoIdentifier.repo
+    );
+  }
+  if (base.branch !== null && base.branch !== enriched.branch) return false;
+  if (base.repoIdentifier !== null) {
+    const enrichedRepoIdentifier = enriched.repoIdentifier;
+    return (
+      enrichedRepoIdentifier !== null &&
+      base.repoIdentifier.owner === enrichedRepoIdentifier.owner &&
+      base.repoIdentifier.repo === enrichedRepoIdentifier.repo
+    );
+  }
+  if (base.repoLabel !== enriched.repoLabel) return false;
+  return true;
+}
+
+function worktreeFilterResolutionStatusText(
+  checkingCount: number,
+  unavailableCount: number,
+): string {
+  const parts: string[] = [];
+  if (checkingCount > 0) {
+    const plural = checkingCount === 1 ? "worktree" : "worktrees";
+    parts.push(`Checking ${checkingCount} ${plural}…`);
+  }
+  if (unavailableCount > 0) {
+    const plural = unavailableCount === 1 ? "worktree" : "worktrees";
+    parts.push(`Status unavailable for ${unavailableCount} ${plural}.`);
+  }
+  return parts.join(" ");
+}
+
+function shouldShowWorktreeFilterResolutionStatus(
+  tierFilters: WorktreeTierFilterSet,
+  checkingCount: number,
+  unavailableCount: number,
+): boolean {
+  return tierFilters.size > 0 && (checkingCount > 0 || unavailableCount > 0);
+}
+
 /**
  * Bulk-delete confirmation: aggregate-by-class summary, dirty loss naming, a
  * neutral caveat for the unverified cohort, named exclusions, and the full
@@ -2108,6 +2249,7 @@ function worktreeDeleteDisabledReason(
 
 interface WorktreeRowProps {
   readonly entry: WorktreeHostEntryV14;
+  readonly classificationEntry: WorktreeHostEntryV14 | null;
   // This row's activity-enrichment state, driving the tier pill: `pending` (still
   // in flight → "Checking…"), `unknown` (settled to error → non-animated fallback),
   // or `ready` (enriched → real tier). Base fields paint regardless.
@@ -2142,6 +2284,7 @@ function worktreeRowPropsEqual(
 ): boolean {
   if (
     prev.entry !== next.entry ||
+    prev.classificationEntry !== next.classificationEntry ||
     prev.enrichment !== next.enrichment ||
     prev.deleteEnrichment !== next.deleteEnrichment ||
     prev.deleteStatus !== next.deleteStatus ||
@@ -2171,6 +2314,7 @@ const WorktreeRow = memo(function WorktreeRow(
 ): ReactNode {
   const {
     entry,
+    classificationEntry,
     enrichment,
     deleteEnrichment,
     taskTitlesByEpicId,
@@ -2189,6 +2333,9 @@ const WorktreeRow = memo(function WorktreeRow(
   // row look clean enough to delete when it is actually still unknown.
   const classification =
     entry.resolvedAt === null ? null : classifyWorktree(entry);
+  const tierClassification =
+    classificationEntry === null ? null : classifyWorktree(classificationEntry);
+  const displayEntry = classificationEntry ?? entry;
   const navigate = useNavigate();
   const openTask = useCallback(
     (epicId: string): void => {
@@ -2245,11 +2392,13 @@ const WorktreeRow = memo(function WorktreeRow(
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
           <WorktreeTierPill
-            entry={entry}
-            tier={classification?.tier ?? "review"}
-            state={entry.resolvedAt === null ? "pending" : enrichment}
+            entry={classificationEntry ?? entry}
+            tier={tierClassification?.tier ?? classification?.tier ?? "review"}
+            state={enrichment}
           />
-          {entry.resolvedAt === null ? null : <WorktreePrChips entry={entry} />}
+          {displayEntry.resolvedAt === null ? null : (
+            <WorktreePrChips entry={displayEntry} />
+          )}
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
           </span>
@@ -2367,12 +2516,13 @@ function WorktreeTierPill(props: {
       </TooltipWrapper>
     );
   }
+  const unavailable = props.state === "unavailable";
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
   const reviewReasons =
     props.tier === "review" && props.entry.branchStatus !== null
       ? describeReviewReasons(props.entry)
       : [];
-  const tooltip =
+  const tierTooltip =
     reviewReasons.length === 0 ? (
       WORKTREE_TIER_TOOLTIP[props.tier]
     ) : (
@@ -2382,6 +2532,14 @@ function WorktreeTierPill(props: {
         ))}
       </div>
     );
+  const tooltip = unavailable ? (
+    <div className="max-w-[min(90vw,24rem)] space-y-1">
+      <p>Status couldn't be refreshed; showing the last known tier.</p>
+      {typeof tierTooltip === "string" ? <p>{tierTooltip}</p> : tierTooltip}
+    </div>
+  ) : (
+    tierTooltip
+  );
   return (
     <TooltipWrapper
       label={tooltip}
@@ -2394,8 +2552,10 @@ function WorktreeTierPill(props: {
         className={cn("gap-1 font-medium", style.className)}
         data-testid="worktree-tier-pill"
         data-tier={props.tier}
+        data-status={unavailable ? "unavailable" : "ready"}
       >
         <WorktreeTierPillIcon tier={props.tier} />
+        {unavailable ? <HelpCircle className="size-3" aria-hidden /> : null}
         {WORKTREE_TIER_LABEL[props.tier]}
       </Badge>
     </TooltipWrapper>
@@ -3051,12 +3211,18 @@ function WorktreeScriptReviewDialog(props: {
       scriptSeed={props.scriptSeed}
       seedPending={false}
       errorNote={null}
+      scriptsNote={null}
+      repositoryDefaultsSlot={null}
       inUseNote={
         target.inUse ? "This worktree is in use by an active agent." : null
       }
+      saveLabel="Save"
       // Settings stashes the reviewed scripts synchronously for its delete flow;
       // wrap in a resolved promise so the shared dialog's success path runs.
       onSave={(scripts) => Promise.resolve(onSave(target, scripts))}
+      // No nested editor to protect here (no Branch naming section) - plain
+      // Escape-closes-the-dialog behavior.
+      onEscapeKeyDown={() => {}}
       onOpenChange={props.onOpenChange}
     />
   );
@@ -3685,11 +3851,6 @@ function worktreeSelectionCheckboxVisibility(args: {
 
 function branchLabel(entry: WorktreeHostEntry): string {
   return entry.branch ?? "detached HEAD";
-}
-
-function hostOptionLabel(host: HostDirectoryEntry): string {
-  const label = host.label.length > 0 ? host.label : host.hostId;
-  return host.status === "unavailable" ? `${label} (offline)` : label;
 }
 
 function invalidateWorktreeDeleteCaches(

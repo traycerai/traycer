@@ -99,9 +99,9 @@ export interface ChatProjection {
   readonly settings: ChatRunSettings | null;
   /**
    * Host-backed archive flag (`epic.setChatArchived`). `null` = active. The
-   * sidebar hides a node whose ancestor-or-self carries a timestamp unless
-   * "Show archived" is on. Records written before the field existed project as
-   * `null`, so pre-archive chats read as active.
+   * sidebar applies the selected archive visibility to this timestamp. Records
+   * written before the field existed project as `null`, so pre-archive chats
+   * read as active.
    */
   readonly archivedAt: number | null;
 }

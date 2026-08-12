@@ -14,7 +14,10 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   parseNotificationRoomEntry,
 } from "@traycer/protocol/notifications/notification-room";
-import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
+import {
+  createHostStreamReopenScheduler,
+  isReopenableNotificationsStreamClose,
+} from "@/lib/host/stream-reopen";
 
 /** The surface `openNotificationsStream` needs from a stream client; the
  * only two members production and test doubles both provide. */
@@ -35,7 +38,6 @@ interface NotificationsState {
   readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
   readonly revision: number;
-
   markAsRead: (notificationId: string) => void;
   markAllAsRead: () => void;
   clearAll: () => void;
@@ -220,6 +222,7 @@ function createNotificationsStore(
       },
 
       reset: () => {
+        // `onProjection` binds to the Y.Doc that `replace()` swaps out.
         if (unwireProjection !== null) {
           unwireProjection();
           unwireProjection = null;
@@ -256,11 +259,8 @@ export const useNotificationsStore = createNotificationsStore(replica);
  * filters on that so only user-driven writes travel upstream, never snapshot
  * or remote-update applications which are tagged `"stream"`.
  *
- * A terminal close ("closed" + fatalError) disposes the underlying transport
- * session, which can never redial itself — the factory is re-invoked on
- * capped backoff so one bad window doesn't leave collaboration rows frozen
- * until app restart. The re-landed snapshot merges into the same Y.Doc, the
- * same convergence path a plain reconnect already uses.
+ * The Y.Doc is deliberately not reset here: a reconnect's snapshot merges into
+ * the existing local replica.
  */
 export function openNotificationsStream(
   factory: NotificationsStreamClientFactory,
@@ -271,11 +271,11 @@ export function openNotificationsStream(
   let currentClient: NotificationsStreamClientHandle | null = null;
   let generation = 0;
 
-  const reopenScheduler = createNotificationStreamReopenScheduler(() => {
+  const reopenScheduler = createHostStreamReopenScheduler(() => {
     currentClient?.close();
     currentClient = null;
     openClient();
-  });
+  }, isReopenableNotificationsStreamClose);
 
   function openClient(): void {
     if (disposed) return;
@@ -321,6 +321,7 @@ export function openNotificationsStream(
         if (!isCurrent()) return;
         Y.applyUpdate(targetDoc, updateBytes, STREAM_ORIGIN);
       },
+      onAwareness: () => {},
       onConnectionStatus: (status, reason) => {
         if (!isCurrent()) return;
         useNotificationsStore.setState({ connectionStatus: status });
@@ -387,7 +388,9 @@ export function useNotificationEntryById(id: string): NotificationEntry | null {
 
 export function useNotificationUnreadCount(): number {
   return useNotificationsStore((state) => state.unreadCount);
-} /**
+}
+
+/**
  * Test helper - delegates to the public `reset()` action so tests get the
  * same teardown semantics as a sign-out transition in production.
  */

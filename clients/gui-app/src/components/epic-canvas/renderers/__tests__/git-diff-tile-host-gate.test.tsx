@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import {
   afterEach,
   beforeEach,
@@ -38,6 +37,7 @@ const state = vi.hoisted((): GateTestState => ({
     repoState: null,
     repoMode: null,
     pollStartedAtMs: null,
+    watcherStatus: null,
   })),
 }));
 
@@ -132,6 +132,7 @@ describe("<GitDiffTile /> host-binding gate", () => {
       repoState: null,
       repoMode: null,
       pollStartedAtMs: null,
+      watcherStatus: null,
     });
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -212,6 +213,7 @@ describe("<GitDiffTile /> host-binding gate", () => {
       repoState: null,
       repoMode: "normal",
       pollStartedAtMs: 1,
+      watcherStatus: null,
     });
     const updateView = vi.spyOn(
       useEpicCanvasStore.getState(),

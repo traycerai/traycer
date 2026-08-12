@@ -3,6 +3,8 @@ import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mockLocalHostEntry,
@@ -44,6 +46,7 @@ const bindingState = vi.hoisted<{
     readonly hostClient: {
       readonly getActiveHostId: () => string | null;
     };
+    readonly directory: IHostDirectoryService;
   } | null;
 }>(() => ({ current: null }));
 
@@ -97,6 +100,29 @@ function bindStubClient(): void {
     hostClient: {
       getActiveHostId: () => activeHostIdStub.value,
     },
+    directory: createTestDirectory([], () => undefined),
+  };
+}
+
+function createTestDirectory(
+  entries: readonly HostDirectoryEntry[],
+  onSelect: (hostId: string) => void,
+): IHostDirectoryService {
+  let selected: HostDirectoryEntry | null = null;
+  return {
+    list: () => Promise.resolve(entries),
+    findById: (hostId) =>
+      entries.find((entry) => entry.hostId === hostId) ?? null,
+    refresh: () => Promise.resolve(entries),
+    getSelected: () => selected,
+    selectById: (hostId) => {
+      selected =
+        hostId === null
+          ? null
+          : (entries.find((entry) => entry.hostId === hostId) ?? null);
+      if (selected !== null) onSelect(selected.hostId);
+    },
+    onSelectionChange: () => ({ dispose: () => undefined }),
   };
 }
 
@@ -563,6 +589,51 @@ describe("useNotificationActivation", () => {
     );
   });
 
+  it("routes TUI agent notifications to the exact open terminal-agent tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedTabId = store.openEpicTab("epic-tui", "TUI task");
+    store.openTileInTab(notifiedTabId, {
+      id: "tui-notified",
+      instanceId: "tui-notified-instance",
+      type: "terminal-agent",
+      name: "Notified terminal agent",
+      hostId: "host-1",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[notifiedTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected notified TUI agent canvas");
+    }
+    const paneId = canvas.activePaneId;
+    store.openEpicTab("epic-tui", "Other task view");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-tui",
+          chatId: "tui-notified",
+        },
+        receivedAt: 904,
+        feedId: "host:tui",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-tui", tabId: notifiedTabId },
+      search: {
+        focusedAt: 904,
+        focusArtifactId: "tui-notified",
+        focusPaneId: paneId,
+        focusTileInstanceId: "tui-notified-instance",
+      },
+    });
+  });
+
   it("reopens a closed Task at its exact open chat tile", () => {
     const store = useEpicCanvasStore.getState();
     const notifiedChatTabId = store.openEpicTab("epic-hidden", "Hidden task");
@@ -699,7 +770,13 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
         bearerToken: "token",
       }),
     );
-    bindingState.current = { hostClient: client };
+    bindingState.current = {
+      hostClient: client,
+      directory: createTestDirectory([hostA, hostB], (hostId) => {
+        const entry = hostId === hostA.hostId ? hostA : hostB;
+        client.bind(entry);
+      }),
+    };
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -766,5 +843,157 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
         (call) => call.method === "host.notifications.markRead",
       ),
     ).toBe(false);
+  });
+
+  it("selects an approval's origin host before routing to its exact tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-origin", "Origin B");
+    store.openTileInTab(tabId, {
+      id: "chat-origin",
+      instanceId: "host-b-chat",
+      type: "chat",
+      name: "Host B chat",
+      hostId: hostB.hostId,
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected host B canvas");
+    }
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-origin",
+          chatId: "chat-origin",
+          approvalId: "approval-origin",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        receivedAt: 101,
+        feedId: "cloud:approval-origin",
+        originHostId: hostB.hostId,
+        onResult,
+      });
+    });
+
+    expect(client.getActiveHostId()).toBe(hostB.hostId);
+    expect(navigateSpy.mock.calls[0]?.[0]).toMatchObject({
+      params: { epicId: "epic-origin", tabId },
+      search: {
+        focusPaneId: canvas.activePaneId,
+        focusTileInstanceId: "host-b-chat",
+      },
+    });
+    expect(onResult).toHaveBeenCalledWith("success");
+  });
+
+  it("fails closed before routing an approval whose origin is unavailable", () => {
+    bindingState.current = {
+      hostClient: client,
+      directory: createTestDirectory(
+        [{ ...hostB, status: "unavailable" }],
+        () => undefined,
+      ),
+    };
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-origin",
+          chatId: "chat-origin",
+          approvalId: "approval-origin",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        receivedAt: 102,
+        feedId: "cloud:approval-origin",
+        originHostId: hostB.hostId,
+        onResult,
+      });
+    });
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(onResult).toHaveBeenCalledWith("failure");
+  });
+
+  it("fails closed before routing an approval with no origin host", () => {
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-origin",
+          chatId: "chat-origin",
+          approvalId: "approval-origin",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        receivedAt: 103,
+        feedId: null,
+        originHostId: null,
+        onResult,
+      });
+    });
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(onResult).toHaveBeenCalledWith("failure");
+  });
+
+  it("does not reuse a host B tile for a host A approval", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-origin", "Retained B tile");
+    store.openTileInTab(tabId, {
+      id: "chat-shared",
+      instanceId: "host-b-shared-chat",
+      type: "chat",
+      name: "Host B chat",
+      hostId: hostB.hostId,
+    });
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-origin",
+          chatId: "chat-shared",
+          approvalId: "approval-host-a",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        receivedAt: 104,
+        feedId: "cloud:approval-host-a",
+        originHostId: hostA.hostId,
+        onResult,
+      });
+    });
+
+    expect(client.getActiveHostId()).toBe(hostA.hostId);
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    const search = navigateSpy.mock.calls.at(0)?.at(0)?.search;
+    if (search === undefined) {
+      throw new Error("expected notification navigation search params");
+    }
+    expect(search).not.toMatchObject({
+      focusTileInstanceId: "host-b-shared-chat",
+    });
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 });

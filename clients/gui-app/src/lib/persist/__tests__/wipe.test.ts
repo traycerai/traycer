@@ -10,6 +10,7 @@ const flushActiveDesktopPerWindowProjection = vi.fn<() => Promise<void>>(() =>
 const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
+const publishPromptStashReset = vi.fn<() => void>();
 vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
   flushActiveDesktopPerWindowProjection: () =>
     flushActiveDesktopPerWindowProjection(),
@@ -17,8 +18,12 @@ vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
 vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
   drainDesktopTabsPersistence: () => drainDesktopTabsPersistence(),
 }));
+vi.mock("@/lib/composer/prompt-stash-channel", () => ({
+  publishPromptStashReset: () => publishPromptStashReset(),
+}));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 function createMockStorage(seed: Record<string, string>): Storage {
   const map = new Map<string, string>(Object.entries(seed));
@@ -60,6 +65,7 @@ const LOCAL_SEED: Record<string, string> = {
   "traycer-gui-app:settings": "{}",
   "traycer-gui-app:composer-run-settings:anon": "{}",
   "traycer-gui-app:open-epic:u1:e1": "{}",
+  "traycer-gui-app:reading-position:u1:epic-1:view:native:tile-1": "{}",
   "traycer.token": "secret-auth-token",
   "some-unrelated-key": "keep-me",
   "traycer-gui-appX:foo": "must-not-be-swept",
@@ -100,6 +106,7 @@ let reloadSpy: Mock<() => void>;
 beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
+  publishPromptStashReset.mockClear();
 
   localStorageMock = createMockStorage(LOCAL_SEED);
   sessionStorageMock = createMockStorage(SESSION_SEED);
@@ -200,8 +207,8 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(order[order.length - 1]).toBe("reload");
     // hostClear precedes every sweep removal.
     expect(order[0]).toBe("hostClear");
-    // 3 local + 2 session persisted keys are swept (the seeds above).
-    expect(order.filter((e) => e.includes("removeItem")).length).toBe(5);
+    // 4 local + 2 session persisted keys are swept (the seeds above).
+    expect(order.filter((e) => e.includes("removeItem")).length).toBe(6);
   });
 
   it("awaits `hostClear` BEFORE sweeping (a rejecting clear aborts the sweep + reload)", async () => {
@@ -221,15 +228,55 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(order).toEqual(["hostClear"]);
     expect(reloadSpy).not.toHaveBeenCalled();
   });
+
+  it("does not tear down file-edit runtimes when `hostClear` rejects (mounted editors keep working)", async () => {
+    const teardownSpy = vi
+      .spyOn(fileEditRuntimeRegistry, "teardown")
+      .mockResolvedValue(undefined);
+    const hostClear = vi.fn(() => Promise.reject(new Error("clear failed")));
+
+    await expect(clearAllPersistedStores({ hostClear })).rejects.toThrow(
+      "clear failed",
+    );
+
+    expect(teardownSpy).not.toHaveBeenCalled();
+  });
+
+  it("tears down file-edit runtimes AFTER `hostClear` succeeds, before the storage sweep", async () => {
+    const order: string[] = [];
+    const teardownSpy = vi
+      .spyOn(fileEditRuntimeRegistry, "teardown")
+      .mockImplementation(() => {
+        order.push("teardown");
+        return Promise.resolve();
+      });
+    const hostClear = vi.fn(() => {
+      order.push("hostClear");
+      return Promise.resolve();
+    });
+    vi.spyOn(localStorageMock, "removeItem").mockImplementation(() => {
+      order.push("local:removeItem");
+    });
+
+    await clearAllPersistedStores({ hostClear });
+
+    expect(teardownSpy).toHaveBeenCalledTimes(1);
+    const hostClearIndex = order.indexOf("hostClear");
+    const teardownIndex = order.indexOf("teardown");
+    const sweepIndex = order.indexOf("local:removeItem");
+    expect(hostClearIndex).toBeLessThan(teardownIndex);
+    expect(teardownIndex).toBeLessThan(sweepIndex);
+  });
 });
 
-describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
-  // A mix of: two real per-window landing-image partitions, a same-prefix db
-  // that is NOT a landing-image db, and an unrelated db. Only the two
-  // `traycer-gui-app:*:landing-images` entries must be deleted.
+describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
+  // A mix of app-owned per-window partitions, a same-prefix db that is not one
+  // of ours, and an unrelated db. Only the known renderer stores are deleted.
   const DB_NAMES = [
     "traycer-gui-app:default:landing-images",
     "traycer-gui-app:window-7:landing-images",
+    "traycer-gui-app:default:file-edit-recovery",
+    "traycer-gui-app:window-7:file-edit-recovery",
     "traycer-gui-app:some-other-store",
     "unrelated-app-db",
   ];
@@ -258,20 +305,51 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes ONLY `traycer-gui-app:*:landing-images` dbs; same-prefix + unrelated dbs survive", async () => {
+  it("deletes only known renderer dbs (landing-image, file-edit-recovery, prompt-stash); same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
 
     await clearAllPersistedStores({ hostClear: null });
 
+    // Landing partitions come from enumeration; prompt-stash is always deleted
+    // by exact fixed name even when enumeration never lists it.
     expect(deleted.sort()).toEqual(
       [
         "traycer-gui-app:default:landing-images",
+        "traycer-gui-app:prompt-stash",
         "traycer-gui-app:window-7:landing-images",
+        "traycer-gui-app:default:file-edit-recovery",
+        "traycer-gui-app:window-7:file-edit-recovery",
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
+    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies peer windows only after the prompt-stash database is deleted", async () => {
+    const order: string[] = [];
+    const value = {
+      databases: vi.fn(() => Promise.resolve([])),
+      deleteDatabase: vi.fn((name: string) => {
+        const { request, fire } = fakeDeleteRequest();
+        queueMicrotask(() => {
+          order.push(`deleted:${name}`);
+          fire();
+        });
+        return request;
+      }),
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+    publishPromptStashReset.mockImplementation(() => order.push("reset"));
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(order).toEqual(["deleted:traycer-gui-app:prompt-stash", "reset"]);
   });
 
   it("drops the dbs AFTER the storage sweep and BEFORE the reload", async () => {
@@ -308,7 +386,7 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     expect(deleteIndex).toBeLessThan(reloadIndex);
   });
 
-  it("still reloads when a landing-image db deletion errors (best-effort)", async () => {
+  it("still reloads when a renderer db deletion errors (best-effort)", async () => {
     // The first partition's delete fires `onerror`; the second succeeds. A single
     // erroring delete must NOT abort the wipe or the reload.
     const value = {
@@ -346,18 +424,50 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("no-ops gracefully and still reloads when `indexedDB.databases` is absent", async () => {
+  it("still deletes the fixed prompt-stash db when `indexedDB.databases` is absent", async () => {
+    const deleteDatabase = vi.fn((_name: string) => {
+      const { request, fire } = fakeDeleteRequest();
+      queueMicrotask(fire);
+      return request;
+    });
     Object.defineProperty(globalThis, "indexedDB", {
       configurable: true,
       writable: true,
       // A shell IndexedDB with no `databases()` (non-Chromium engine).
-      value: { deleteDatabase: vi.fn() },
+      value: { deleteDatabase },
     });
 
     await expect(
       clearAllPersistedStores({ hostClear: null }),
     ).resolves.toBeUndefined();
 
+    // Without enumeration, landing partitions cannot be found - accepted gap -
+    // but the single known prompt-stash name is always deleted.
+    expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("still deletes prompt stash and reloads when database enumeration rejects", async () => {
+    const deleteDatabase = vi.fn((_name: string) => {
+      const { request, fire } = fakeDeleteRequest();
+      queueMicrotask(fire);
+      return request;
+    });
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value: {
+        databases: vi.fn(() => Promise.reject(new Error("enumeration failed"))),
+        deleteDatabase,
+      },
+    });
+
+    await expect(
+      clearAllPersistedStores({ hostClear: null }),
+    ).resolves.toBeUndefined();
+
+    expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
+    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -372,6 +482,36 @@ describe("clearAllPersistedStores — landing-image IndexedDB drop", () => {
       clearAllPersistedStores({ hostClear: null }),
     ).resolves.toBeUndefined();
 
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("deleteDatabase onblocked resolves so the wipe still reloads", async () => {
+    const value = {
+      databases: vi.fn(() =>
+        Promise.resolve([{ name: "traycer-gui-app:default:landing-images" }]),
+      ),
+      deleteDatabase: vi.fn((_name: string) => {
+        const request = {
+          onsuccess: null as (() => void) | null,
+          onerror: null as (() => void) | null,
+          onblocked: null as (() => void) | null,
+          error: null as DOMException | null,
+        };
+        // Blocked path: resolve (not reject) so a stuck connection can't abort
+        // the rest of the wipe/reload sequence.
+        queueMicrotask(() => request.onblocked?.());
+        return request;
+      }),
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+
+    await expect(
+      clearAllPersistedStores({ hostClear: null }),
+    ).resolves.toBeUndefined();
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 });

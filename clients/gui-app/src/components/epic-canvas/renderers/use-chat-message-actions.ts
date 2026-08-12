@@ -20,12 +20,15 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type { ChatSurfaceNode } from "./chat-tile-types";
 import {
   hasUndoableFileEditsFromMessage,
   scopedArtifactCountFromMessage,
 } from "@/lib/chat/file-edits-below-message";
-import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  buildSubmittedChatJSONContent,
+  type SlashCommandCatalog,
+} from "@/lib/composer/tiptap-json-content";
 import type { ChatActions } from "@/hooks/chats/use-chat-actions";
 import {
   chatMessageEditingForInlineEdit,
@@ -49,10 +52,17 @@ export interface ChatMessageActionsInput {
   readonly canAct: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
+  /**
+   * The tile's loaded command catalog, or null when it has not loaded. An edit
+   * resubmit re-runs `buildSubmittedChatJSONContent`, so it needs the same
+   * catalog the original send used - otherwise a `$skill` the user retyped
+   * after deleting its chip would silently stay prose.
+   */
+  readonly slashCatalog: SlashCommandCatalog | null;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
-  readonly node: EpicNodeRef;
+  readonly node: ChatSurfaceNode;
   readonly chatTitle: string | null;
   readonly chatParentId: string | null;
   readonly messages: ChatSessionState["messages"];
@@ -111,6 +121,7 @@ export function useChatMessageActions(
     canAct,
     currentComposerSettings,
     editSettings,
+    slashCatalog,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -169,7 +180,10 @@ export function useChatMessageActions(
       if (sender === null) return;
       const sent = chatActions.editUserMessage({
         targetMessageId: activeInlineEdit.targetMessageId,
-        content: buildSubmittedChatJSONContent(activeInlineEdit.currentContent),
+        content: buildSubmittedChatJSONContent(
+          activeInlineEdit.currentContent,
+          slashCatalog,
+        ),
         sender,
         settings: editSettings,
         revertFileChanges,
@@ -194,6 +208,7 @@ export function useChatMessageActions(
       dispatchUi,
       editSettings,
       profile,
+      slashCatalog,
     ],
   );
 

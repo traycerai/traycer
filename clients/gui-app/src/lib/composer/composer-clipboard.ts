@@ -5,6 +5,7 @@ import {
   mentionPlainTextFromAttrs,
   numberValue,
   quotePrefixLines,
+  slashCommandLabelFromAttrs,
   slashCommandPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { appLogger } from "@/lib/logger";
@@ -44,6 +45,14 @@ interface ComposerClipboardPayload {
 
 interface ClipboardTextContext {
   readonly listDepth: number;
+  /**
+   * How a `slashCommand` chip serializes. Copy and provider text use the
+   * canonical `/name`; the chat-find index uses the chip's on-screen label, so a
+   * `$`-written skill is searchable by the text actually rendered. Getting this
+   * wrong is invisible until you search: the index and the DOM disagree, so a
+   * match is either unfindable or counted with no node to highlight.
+   */
+  readonly slashText: (attrs: Record<string, unknown> | undefined) => string;
 }
 
 export async function copyComposerContentToClipboard(
@@ -77,7 +86,25 @@ export async function copyComposerContentToClipboard(
 
 export function composerClipboardPlainText(content: JsonContent): string {
   return normalizeClipboardText(
-    composerClipboardPlainTextFromNode(content, { listDepth: 0 }),
+    composerClipboardPlainTextFromNode(content, {
+      listDepth: 0,
+      slashText: slashCommandPlainTextFromAttrs,
+    }),
+  );
+}
+
+/**
+ * The same projection as {@link composerClipboardPlainText}, but rendering each
+ * chip as it reads on screen rather than as it serializes. Chat find indexes
+ * this so a `$`-written skill chip matches what the user sees; everything that
+ * leaves the app (clipboard, provider prompt) keeps the canonical form.
+ */
+export function composerDisplayPlainText(content: JsonContent): string {
+  return normalizeClipboardText(
+    composerClipboardPlainTextFromNode(content, {
+      listDepth: 0,
+      slashText: slashCommandLabelFromAttrs,
+    }),
   );
 }
 
@@ -185,20 +212,26 @@ function composerClipboardPlainTextFromNode(
   node: JsonContent,
   ctx: ClipboardTextContext,
 ): string {
-  const inlineText = composerClipboardInlinePlainText(node);
+  const inlineText = composerClipboardInlinePlainText(node, ctx);
   if (inlineText !== null) return inlineText;
+  // A sourced quote copies out exactly like a blockquote - the source it
+  // remembers travels in its attrs, not in the prose.
+  if (node.type === "sourcedQuote") {
+    return blockquotePlainText(node.content ?? [], ctx);
+  }
   const blockText = composerClipboardBlockPlainText(node, ctx);
   if (blockText !== null) return blockText;
   return composerClipboardPlainTextFromNodes(node.content ?? [], ctx, "");
 }
 
-function composerClipboardInlinePlainText(node: JsonContent): string | null {
+function composerClipboardInlinePlainText(
+  node: JsonContent,
+  ctx: ClipboardTextContext,
+): string | null {
   if (node.type === "text") return node.text ?? "";
   if (node.type === "hardBreak") return "\n";
   if (node.type === "mention") return mentionPlainTextFromAttrs(node.attrs);
-  if (node.type === "slashCommand") {
-    return slashCommandPlainTextFromAttrs(node.attrs);
-  }
+  if (node.type === "slashCommand") return ctx.slashText(node.attrs);
   if (node.type === "imageAttachment" || node.type === "attachmentGroup") {
     return "";
   }
@@ -259,7 +292,9 @@ function listPlainText(
   kind: "bullet" | "ordered",
   start: number | null,
 ): string {
-  const childCtx = { listDepth: ctx.listDepth + 1 };
+  // Spread, not rebuild: the nested context has to keep carrying `slashText`,
+  // or a chip inside a list would serialize differently from one outside it.
+  const childCtx = { ...ctx, listDepth: ctx.listDepth + 1 };
   return children
     .flatMap((child, index) => {
       if (child.type !== "listItem") return [];

@@ -63,6 +63,7 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
   localHostState: "unknown",
   stage: "loading",
   progress: null,
+  lastProgress: null,
   provisioningError: null,
   provisioning: false,
   removed: false,
@@ -79,6 +80,9 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
+    hostStatus: null,
   },
 };
 
@@ -320,10 +324,9 @@ describe("<HostReadyGate />", () => {
         canManageHost: true,
         provisioningError: new Error("restart failed"),
         compatibility: {
+          ...PRESENTATION.compatibility,
           status: "incompatible",
           errorMessage: "host 1.0.0 < required 1.1.0",
-          retrying: false,
-          retry: () => undefined,
         },
       },
     );

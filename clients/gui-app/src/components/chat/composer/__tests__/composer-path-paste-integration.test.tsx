@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -523,7 +522,9 @@ function Harness({
       hasPastedImageBytes={null}
       ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
-      onSnapshot={() => undefined}
+      onDocumentChange={() => undefined}
+
+      onSelectionChange={() => undefined}
       onSubmit={() => undefined}
       onPaste={paste.onPaste}
       onDragOver={paste.onDragOver}

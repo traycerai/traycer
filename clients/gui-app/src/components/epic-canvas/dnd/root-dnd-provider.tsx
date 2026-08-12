@@ -13,9 +13,8 @@
  */
 import {
   ARTIFACT_TAB_DND_TYPE,
-  CHAT_ARTIFACT_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
-  readEpicCanvasDragSourceData,
+  readComposerAttachmentDropTargetData,
   readEpicCanvasDropTargetData,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropTargetData,
@@ -43,6 +42,7 @@ import {
   isLeftPanelDropNoop,
   resolveCanvasDropPreview,
   resolveOverlayTileForSource,
+  type HeaderStripDropResult,
   type ResolvedEpicCanvasDrop,
 } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import {
@@ -106,27 +106,13 @@ import {
   type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
-  type Modifier,
 } from "@dnd-kit/core";
 import { snapCenterToCursor } from "@dnd-kit/modifiers";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 
-/**
- * The artifact-reference drag source can come from wide in-content rows/cards,
- * so dnd-kit's default overlay anchoring (chip top-left pinned to the dragged
- * node's top-left) can leave the chip far from the pointer when the row is
- * grabbed away from its leading edge. Center the overlay chip on the cursor for
- * THIS source only - every other source (sidebar rows, tabs, tiles, rail items)
- * keeps its grab-anchored overlay. Reuses dnd-kit's official
- * `snapCenterToCursor`; the wrapper only gates which source it runs for.
- */
-const snapChatArtifactChipToCursor: Modifier = (args) => {
-  const source = readEpicCanvasDragSourceData(args.active?.data.current);
-  return source?.kind === CHAT_ARTIFACT_DND_TYPE
-    ? snapCenterToCursor(args)
-    : args.transform;
-};
+/** Keep every root drag preview centered beneath pointer-based activators. */
+const ROOT_DRAG_OVERLAY_MODIFIERS = [snapCenterToCursor];
 
 function readOverRect(
   event: DragMoveEvent | DragOverEvent | DragEndEvent,
@@ -459,6 +445,29 @@ function commitHeaderEdgeSplit(
   );
 }
 
+/**
+ * Canvas tear-off onto the header strip. Source creation and authoritative
+ * placement run inside ONE suppressed coordinator transaction: the source
+ * store's synchronous reconciliation subscriber fires between them otherwise,
+ * and with a stale legacy `stripOrder` it would rebuild the flat layout and
+ * dissolve existing split groups before placement. Returns the committed drop
+ * only when the new ref was also placed.
+ */
+function commitHeaderStripDropAtIndex(
+  source: EpicCanvasDragSourceData,
+  headerStripIndex: number,
+): HeaderStripDropResult | null {
+  let dropped: HeaderStripDropResult | null = null;
+  const placedRef = tabCommandCoordinator.createSourceRefAtStripIndex(
+    headerStripIndex,
+    () => {
+      dropped = commitHeaderStripDrop(source, headerStripIndex);
+      return dropped === null ? null : { kind: "epic", id: dropped.tabId };
+    },
+  );
+  return placedRef === null ? null : dropped;
+}
+
 interface RootDndProviderProps {
   readonly children: ReactNode;
 }
@@ -617,11 +626,27 @@ export function RootDndProvider(props: RootDndProviderProps) {
         useEpicDndStore.getState().dragEnded();
         return;
       }
-      const headerStripIndex = useEpicDndStore.getState().headerStripDropIndex;
       const source = readActiveDragSource(event.active);
+      const composerTarget = readComposerAttachmentDropTargetData(
+        event.over?.data.current,
+      );
+      if (
+        source !== null &&
+        composerTarget !== null &&
+        composerTarget.accepts(source)
+      ) {
+        composerTarget.attach(source);
+        edgeDwell.reset();
+        lastResolvedDropRef.current = null;
+        lastReparentDropRef.current = null;
+        clearLastCollisionPointerPoint();
+        useEpicDndStore.getState().dragEnded();
+        return;
+      }
+      const headerStripIndex = useEpicDndStore.getState().headerStripDropIndex;
       if (source !== null) {
         if (headerStripIndex !== null && canDropOnHeaderStrip(source)) {
-          const result = commitHeaderStripDrop(source, headerStripIndex);
+          const result = commitHeaderStripDropAtIndex(source, headerStripIndex);
           if (result !== null) {
             navigateToTabIntent(
               navigate,
@@ -677,10 +702,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       onDragCancel={handleDragCancel}
     >
       {props.children}
-      <DragOverlay
-        dropAnimation={null}
-        modifiers={[snapChatArtifactChipToCursor]}
-      >
+      <DragOverlay dropAnimation={null} modifiers={ROOT_DRAG_OVERLAY_MODIFIERS}>
         <EpicRootDragOverlayContent />
       </DragOverlay>
     </DndContext>

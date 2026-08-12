@@ -1,7 +1,9 @@
 import type { Stats } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import {
+  markersIdentifyWriter,
   parseBootstrapLogLine,
+  retainAuthenticMarkers,
   type BootstrapLogEntry,
   type BootstrapPhase,
 } from "./bootstrap-log";
@@ -179,32 +181,134 @@ function offsetForBaseline(baseline: LogFileBaseline, info: Stats): number {
 }
 
 /**
- * Read the host log slice written after the baseline, identity-aware.
- * Handles rotation that lands new markers at offset 0 of a fresh file.
+ * Prefix scan window. The pre-baseline region is only ever asked a yes/no
+ * question, so it is streamed in fixed chunks rather than buffered whole:
+ * `host-log-rotation.ts` caps `host.log` only at START, and states plainly
+ * that a long-lived host can grow it past the cap within one lifetime. This
+ * reader runs inside the 250ms `runTaskAndVerifyStart` poll loop on the
+ * failure path, which must time out and report Last Run Result - allocating
+ * a multi-megabyte stale log there could block or OOM the very path whose
+ * job is to give up cleanly.
  */
-export async function readPostBaselineLogText(
+const PREFIX_SCAN_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Upper bound on a partial line carried between chunks. Marker lines are far
+ * shorter (`stderrTail` itself is capped in `crash-diagnostics.ts`), so a
+ * "line" past this length is host output that cannot be a marker; dropping
+ * the excess keeps the carry bounded on a log with no newlines at all.
+ */
+const MAX_CARRY_BYTES = 64 * 1024;
+
+/**
+ * Answers only "did the writer stamp a marker before `prefixBytes`?", in
+ * bounded memory, returning at the first stamped marker.
+ *
+ * The carry is kept as BYTES, not a decoded string: a chunk boundary can
+ * land mid-sequence in UTF-8, and decoding each chunk independently would
+ * corrupt the characters that straddle it.
+ */
+async function prefixIdentifiesWriter(
+  handle: FileHandle,
+  prefixBytes: number,
+): Promise<boolean> {
+  if (prefixBytes <= 0) return false;
+  const chunk = Buffer.alloc(Math.min(PREFIX_SCAN_CHUNK_BYTES, prefixBytes));
+  let carry = Buffer.alloc(0);
+  let position = 0;
+  while (position < prefixBytes) {
+    const want = Math.min(chunk.length, prefixBytes - position);
+    const { bytesRead } = await handle.read(chunk, 0, want, position);
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    const combined = Buffer.concat([carry, chunk.subarray(0, bytesRead)]);
+    const lastNewline = combined.lastIndexOf(0x0a);
+    if (lastNewline === -1) {
+      carry =
+        combined.length > MAX_CARRY_BYTES
+          ? combined.subarray(combined.length - MAX_CARRY_BYTES)
+          : combined;
+      continue;
+    }
+    carry = combined.subarray(lastNewline + 1);
+    const complete = combined.subarray(0, lastNewline).toString("utf8");
+    if (markersIdentifyWriter(parseMarkerLines(complete))) return true;
+  }
+  return (
+    carry.length > 0 &&
+    markersIdentifyWriter(parseMarkerLines(carry.toString("utf8")))
+  );
+}
+
+interface BaselineSlicedLog {
+  /** Whether the writer had already stamped a marker before the baseline. */
+  readonly writerIdentifiedBefore: boolean;
+  /** Only what was appended after the baseline, the evidence window. */
+  readonly postBaselineText: string;
+}
+
+/**
+ * Resolves the pre-baseline boundary answer and the post-baseline slice
+ * from ONE open.
+ *
+ * Evidence is drawn only from the slice, but whether the slice sits past
+ * the writer-identity boundary depends on what came BEFORE it: the
+ * supervisor's `writer=supervisor` marker can be pre-baseline entirely (a
+ * service-managed start writes no CLI marker for this attempt), which would
+ * otherwise leave the slice looking pre-boundary and promote a marker-shaped
+ * host stderr line to `starting-marker` evidence.
+ *
+ * Both come from a single handle so a rotation between two opens cannot
+ * pair one file's boundary with another file's slice - the same reason
+ * `offset` is taken from the opened handle's stat rather than a path stat.
+ */
+async function readBaselineSlicedLog(
   baseline: LogFileBaseline,
-): Promise<string> {
+): Promise<BaselineSlicedLog> {
+  const empty: BaselineSlicedLog = {
+    writerIdentifiedBefore: false,
+    postBaselineText: "",
+  };
   let handle: FileHandle;
   try {
     handle = await spawnEvidenceFileDeps.openRead(baseline.path);
   } catch {
-    return "";
+    return empty;
   }
   try {
     const info = await handle.stat();
     // Identity and offset must come from the opened handle. A path stat before
     // open can observe the old log while open lands on a rotated replacement.
     const offset = offsetForBaseline(baseline, info);
-    if (info.size <= offset) return "";
-    const length = info.size - offset;
+    if (info.size === 0) return empty;
+    const split = Math.min(offset, info.size);
+    const writerIdentifiedBefore = await prefixIdentifiesWriter(handle, split);
+    if (info.size <= split)
+      return { writerIdentifiedBefore, postBaselineText: "" };
+    const length = info.size - split;
     const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, offset);
-    return buffer.toString("utf8");
+    const { bytesRead } = await handle.read(buffer, 0, length, split);
+    return {
+      writerIdentifiedBefore,
+      postBaselineText: buffer.subarray(0, bytesRead).toString("utf8"),
+    };
   } finally {
     await handle.close();
   }
 }
+
+/**
+ * Read the host log slice written after the baseline, identity-aware.
+ * Handles rotation that lands new markers at offset 0 of a fresh file.
+ */
+export async function readPostBaselineLogText(
+  baseline: LogFileBaseline,
+): Promise<string> {
+  return (await readBaselineSlicedLog(baseline)).postBaselineText;
+}
+
+/** Bound on the reader's retained window; see the eviction note in `read`. */
+const MAX_RETAINED_MARKERS = 64;
 
 export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   readonly read: () => Promise<readonly BootstrapLogEntry[]>;
@@ -213,7 +317,29 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   let dev: number | null = null;
   let ino: number | null = null;
   let pending = "";
-  let entries: readonly BootstrapLogEntry[] = [];
+  // Labelled and unfiltered; the authoritative view is derived per read.
+  let observed: readonly BootstrapLogEntry[] = [];
+  // TWO bits, deliberately. They answer different questions and conflating
+  // them breaks one of the two cases this reader has to serve.
+  //
+  // `boundaryIdentified` is about THIS file: had the writer already stamped
+  // before the window we are accumulating began? Only that justifies
+  // filtering the window wholesale. It is per-file and never set from a
+  // marker inside the window - within one file the boundary is POSITIONAL,
+  // which is what keeps an N-1 legacy marker that precedes the first stamped
+  // one (the ordinary upgrade, both eras in one file).
+  let boundaryIdentified = false;
+  // `sawSupervisorMarker` is about the WRITER, and outlives any single file.
+  // Sticky because `observed` is capped below, so re-deriving it from the
+  // retained window would let a burst of marker-shaped host output evict the
+  // verified marker and reopen the hole.
+  let sawSupervisorMarker = false;
+  // The boundary also has to account for what came BEFORE the baseline, which
+  // this reader never otherwise looks at: the verified marker can sit in
+  // the pre-baseline region (a service-managed start writes no CLI marker
+  // for this attempt), and reading only forward would call that log legacy.
+  // Seeded once per observed file; seeding can only turn the bit ON.
+  let seeded = false;
 
   return {
     read: async (): Promise<readonly BootstrapLogEntry[]> => {
@@ -237,12 +363,35 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
             : offsetForBaseline(baseline, info);
         if (!sameOpenFile) {
           pending = "";
-          entries = [];
+          observed = [];
+          // A replacement INHERITS the boundary answer we already proved:
+          // capability belongs to the WRITER, and rotation hands the same
+          // supervisor a fresh file it will keep identifying itself in. That
+          // file has no pre-baseline region to re-seed from, so without this
+          // the boundary is forgotten and a marker-shaped host line in the
+          // replacement reads as legacy evidence - the collision this reader
+          // exists to reject.
+          boundaryIdentified = sawSupervisorMarker;
+          seeded = false;
+        }
+        if (!seeded) {
+          seeded = true;
+          // Streamed, not buffered whole: this runs in a 250ms poll loop
+          // against a log that may have outgrown its start-time cap.
+          if (
+            !boundaryIdentified &&
+            (await prefixIdentifiesWriter(handle, readOffset))
+          ) {
+            boundaryIdentified = true;
+            sawSupervisorMarker = true;
+          }
         }
         dev = info.dev;
         ino = info.ino;
         offset = info.size;
-        if (info.size <= readOffset) return entries;
+        if (info.size <= readOffset) {
+          return retainAuthenticMarkers(observed, boundaryIdentified);
+        }
         const length = info.size - readOffset;
         const buffer = Buffer.alloc(length);
         const { bytesRead } = await handle.read(buffer, 0, length, readOffset);
@@ -250,11 +399,29 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
         const text = pending + buffer.subarray(0, bytesRead).toString("utf8");
         const lines = text.split(/\r?\n/);
         pending = lines.pop() ?? "";
-        entries = [
-          ...entries,
-          ...parseBootstrapMarkersFromText(lines.join("\n")),
-        ].slice(-64);
-        return entries;
+        const combined = [...observed, ...parseMarkerLines(lines.join("\n"))];
+        // Retain BEFORE capping. Capping first lets marker-shaped host
+        // output consume the window: a real `starting` or terminal marker
+        // followed by more than MAX_RETAINED_MARKERS raw lines would be
+        // evicted, the reader would report no marker, and
+        // `runTaskAndVerifyStart` would time out on a spawn that had in
+        // fact left evidence.
+        const retained = retainAuthenticMarkers(combined, boundaryIdentified);
+        // Record the capability from a marker seen in the STREAM, not just
+        // from the pre-baseline seed - post-baseline is where the supervisor
+        // ordinarily stamps, so the seed usually never sees one. This feeds
+        // ONLY the next file (see the rotation branch); promoting it into
+        // `boundaryIdentified` here would re-filter this same window on the
+        // next poll and delete the pre-boundary legacy marker that
+        // `retainAuthenticMarkers` was given a positional boundary to keep.
+        //
+        // The CAP needs no equivalent: everything kept past the boundary is
+        // stamped and the cap keeps the most recent entries, so it cannot
+        // lose the boundary. Rotation is a different loss and needs this.
+        sawSupervisorMarker =
+          sawSupervisorMarker || markersIdentifyWriter(retained);
+        observed = retained.slice(-MAX_RETAINED_MARKERS);
+        return observed;
       } finally {
         await handle.close();
       }
@@ -262,9 +429,12 @@ export function createPostBaselineMarkerReader(baseline: LogFileBaseline): {
   };
 }
 
-export function parseBootstrapMarkersFromText(
-  text: string,
-): readonly BootstrapLogEntry[] {
+// Labelled but UNFILTERED - the writer latch is a property of the whole
+// scanned region, so a caller that accumulates across chunks has to apply
+// it itself over everything it has seen (see
+// `createPostBaselineMarkerReader`). Filtering per chunk would let a chunk
+// that happens to contain no verified marker read as legacy.
+function parseMarkerLines(text: string): readonly BootstrapLogEntry[] {
   const entries: BootstrapLogEntry[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (line.length === 0) continue;
@@ -274,11 +444,28 @@ export function parseBootstrapMarkersFromText(
   return entries;
 }
 
+// Standalone text with nothing known to precede it, so the boundary is
+// located within the text itself.
+export function parseBootstrapMarkersFromText(
+  text: string,
+): readonly BootstrapLogEntry[] {
+  return retainAuthenticMarkers(parseMarkerLines(text), false);
+}
+
 export async function readPostBaselineMarkers(
   baseline: LogFileBaseline,
 ): Promise<readonly BootstrapLogEntry[]> {
-  const text = await readPostBaselineLogText(baseline);
-  return parseBootstrapMarkersFromText(text);
+  // Evidence from the slice; whether the slice is already past the
+  // boundary is answered by what preceded it. Asking only the slice would
+  // let a pre-baseline `writer=supervisor` marker fall outside the window
+  // and hand `collectSpawnEvidence` a host stderr line as a
+  // `starting-marker`.
+  const { writerIdentifiedBefore, postBaselineText } =
+    await readBaselineSlicedLog(baseline);
+  return retainAuthenticMarkers(
+    parseMarkerLines(postBaselineText),
+    writerIdentifiedBefore,
+  );
 }
 
 /**

@@ -2,6 +2,7 @@ import type { ListTasksRequest } from "@traycer/protocol/host/epic/unary-schemas
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 const CLOUD_EPIC_TASKS_DISCRIMINATOR = "cloud.listTasks";
+const CLOUD_EPIC_TASKS_LAST_KNOWN_DISCRIMINATOR = "cloud.listTasks.lastKnown";
 
 export const cloudQueryKeys = {
   epicTasks: (
@@ -15,6 +16,12 @@ export const cloudQueryKeys = {
     "all-epics-and-phases",
     fingerprint,
   ],
+  epicTasksLastKnown: (hostId: string, fingerprint: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      CLOUD_EPIC_TASKS_LAST_KNOWN_DISCRIMINATOR,
+      fingerprint,
+    ] as const,
 };
 
 /**

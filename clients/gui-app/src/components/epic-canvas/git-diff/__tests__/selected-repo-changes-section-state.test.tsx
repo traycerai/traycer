@@ -66,6 +66,7 @@ const EMPTY_SUBSCRIPTION: GitListChangedFilesSubscriptionResult = {
   repoState: null,
   repoMode: null,
   pollStartedAtMs: null,
+  watcherStatus: null,
 };
 
 function file(path: string): GitChangedFileV11 {

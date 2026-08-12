@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useHomeWorkspaceSource } from "../use-home-workspace-source";
@@ -32,6 +31,7 @@ function numberedFolder(index: number): WorkspaceFolderInfo {
     path: `/tmp/cap-workspace-${index}`,
     name: `cap-workspace-${index}`,
     repoIdentifier: null,
+    hostId: null,
   };
 }
 

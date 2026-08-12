@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
   AgentMessageSend,
   BackgroundTaskOutput,
+  ImageGenerationResult,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -47,6 +48,7 @@ import {
   useChatOpenStoreScope,
 } from "@/stores/chats/open-store-scope";
 import { ElapsedTime } from "./segment-elapsed";
+import { ImageGenerationCard } from "./image-generation-card";
 
 interface ToolSegmentProps {
   id: string;
@@ -74,6 +76,7 @@ interface ToolSegmentProps {
   // Wall-clock start (epoch ms) driving the elapsed heartbeat while streaming.
   startedAt: number;
   durationMs: number | null;
+  imageResults: ReadonlyArray<ImageGenerationResult>;
   variant: "card" | "row";
   headerFindUnitId: string | null;
 }
@@ -220,10 +223,18 @@ function resolveToolHeaderElapsed(props: {
   readonly startedAt: number;
   readonly variant: ToolSegmentProps["variant"];
 }): ToolHeaderElapsed {
-  if (props.variant !== "card") return { kind: "hidden" };
+  // A RUNNING row shows its elapsed inline, like the card always has. It used
+  // to be pushed into the streaming footer, which put the number on a second
+  // line under the header and read as a separate entry in the group.
   if (props.isStreaming) {
     return { kind: "live", startedAt: props.startedAt };
   }
+  // A SETTLED row shows no total - unchanged, not newly dropped: the elapsed
+  // only ever appeared while streaming, because it lived in the streaming
+  // footer. Note the group header above does NOT make up for it; its summary
+  // counts commands and files and carries a duration only for thinking. This is
+  // a deliberate density call for a list of finished rows, not a deferral.
+  if (props.variant !== "card") return { kind: "hidden" };
   if (props.durationMs !== null) {
     return { kind: "static", durationMs: props.durationMs };
   }
@@ -234,18 +245,31 @@ function renderToolStreamingFooter(props: {
   readonly isStreaming: boolean;
   readonly progress: string | null;
   readonly stackedHeader: boolean;
-  readonly startedAt: number;
 }): ReactNode {
   if (!props.isStreaming || props.stackedHeader) return null;
-  return (
-    <StreamingActivityFooter
-      startedAt={props.startedAt}
-      progress={props.progress}
-    />
-  );
+  // Nothing to say, no second line. The footer carries only the progress line
+  // now that the elapsed counter lives in the header, so a tool that reports no
+  // progress (every command, and most tools) renders no footer at all.
+  const { progress } = props;
+  if (progress === null || progress.length === 0) return null;
+  return <StreamingActivityFooter progress={progress} />;
 }
 
 export function ToolSegment(props: ToolSegmentProps) {
+  if (props.toolName === "image_generation" && props.variant === "card") {
+    return (
+      <ImageGenerationCard
+        id={props.id}
+        inputSummary={props.inputSummary}
+        inputDetail={props.inputDetail}
+        error={props.error}
+        isStreaming={props.isStreaming}
+        endState={props.endState}
+        stopped={props.stopped}
+        imageResults={props.imageResults}
+      />
+    );
+  }
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
   }
@@ -301,7 +325,6 @@ function GenericToolSegment(props: ToolSegmentProps) {
     isStreaming,
     progress,
     stackedHeader,
-    startedAt,
   });
 
   const header = (
@@ -335,8 +358,10 @@ function GenericToolSegment(props: ToolSegmentProps) {
   ) : null;
 
   if (variant === "row") {
-    // The streaming footer (progress + elapsed) sits beneath the row via
-    // SegmentRow's `footer` slot - visible whether or not the group is expanded.
+    // The streaming footer is the progress LINE only - the elapsed counter went
+    // to the header row. It sits beneath the row via SegmentRow's `footer` slot,
+    // visible whether or not the group is expanded, and is absent entirely when
+    // the tool reports no progress.
     return (
       <SegmentRow
         open={open}
@@ -435,25 +460,33 @@ function GenericToolHeader(props: GenericToolHeaderProps) {
   );
 }
 
+// `data-find-skip`: the counter now sits INSIDE the row's find anchor, and it is
+// ephemeral chrome the projection never indexes. Without the skip a find query
+// on the digits would paint a highlight inside an anchor that counted no match,
+// so paint and count would disagree.
 function ToolHeaderElapsedLabel(props: {
   readonly elapsed: ToolHeaderElapsed;
 }) {
   if (props.elapsed.kind === "live") {
     return (
-      <ElapsedTime
-        startedAt={props.elapsed.startedAt}
-        durationMs={null}
-        isStreaming
-      />
+      <span data-find-skip className="contents">
+        <ElapsedTime
+          startedAt={props.elapsed.startedAt}
+          durationMs={null}
+          isStreaming
+        />
+      </span>
     );
   }
   if (props.elapsed.kind === "static") {
     return (
-      <ElapsedTime
-        startedAt={null}
-        durationMs={props.elapsed.durationMs}
-        isStreaming={false}
-      />
+      <span data-find-skip className="contents">
+        <ElapsedTime
+          startedAt={null}
+          durationMs={props.elapsed.durationMs}
+          isStreaming={false}
+        />
+      </span>
     );
   }
   return null;

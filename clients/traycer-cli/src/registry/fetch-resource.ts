@@ -155,7 +155,7 @@ export async function fetchText(
     try {
       const response = await fetch(url, { signal: linkedSignal });
       if (!response.ok) {
-        throw httpStatusError(url, response);
+        throw await httpStatusFailure(url, response);
       }
       if (response.body === null) {
         const body = await response.text();
@@ -411,7 +411,7 @@ async function downloadAttempt(
         };
       }
       if (response.status !== 206) {
-        throw httpStatusError(opts.url, response);
+        throw await httpStatusFailure(opts.url, response);
       }
       const contentRange = parseContentRange(
         response.headers.get("content-range"),
@@ -429,7 +429,7 @@ async function downloadAttempt(
         };
       }
     } else if (!response.ok) {
-      throw httpStatusError(opts.url, response);
+      throw await httpStatusFailure(opts.url, response);
     }
     if (response.body === null) {
       throw new Error(`host registry: GET ${opts.url} returned no body`);
@@ -582,7 +582,23 @@ async function waitForRetry(delayMs: number): Promise<void> {
   });
 }
 
-function httpStatusError(url: string, response: Response): Error {
+/**
+ * Build the error for a non-2xx registry response, releasing its body first.
+ *
+ * The cancel is not tidiness. An un-consumed, un-cancelled body leaves the
+ * undici request RUNNING, and the CLI's exit path calls `Agent.close()`, which
+ * waits for running requests and has no timeout of its own. A CDN that answers
+ * `503` with a partial body and then goes quiet would therefore park the whole
+ * process in teardown - the command has already produced its terminal error
+ * envelope, so it would look like a hang after a completed run (int#4840).
+ *
+ * Async for that reason alone; call it as `throw await httpStatusFailure(...)`.
+ */
+async function httpStatusFailure(
+  url: string,
+  response: Response,
+): Promise<Error> {
+  await cancelResponseBody(response);
   return new Error(
     `host registry: GET ${url} returned ${response.status} ${response.statusText}`,
   );

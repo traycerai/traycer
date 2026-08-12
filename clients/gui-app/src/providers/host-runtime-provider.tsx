@@ -8,31 +8,43 @@ import {
   type Context,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { v4 as uuidv4 } from "uuid";
+import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import type {
   HostClient,
   IHostQueryInvalidator,
 } from "@traycer-clients/shared/host-client/host-client";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import { WsRpcClient } from "@traycer-clients/shared/host-transport/ws-rpc-client";
-import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
 } from "@traycer-clients/shared/host-transport/retrying-messenger";
-import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
-import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostFetcher,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { HostBindingAuthorityRegistry } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
 import { HostRequestCoordinator } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import type { RpcSchedulingPolicy } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
+import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import {
+  buildRuntimeHostMessenger,
+  defaultHostRpcRequestId,
+  type RuntimeHostMessengerBinding,
+} from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createSessionRetirementSweep } from "@/lib/host/session-retirement";
 import { appLogger } from "@/lib/logger";
+import {
+  runnerHostQueryScopeId,
+  runnerQueryKeys,
+} from "@/lib/query-keys/runner-mutation-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
@@ -40,6 +52,22 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
   readonly hostClient: HostClient<Registry>;
   readonly directory: HostDirectoryService;
   readonly auth: AuthService;
+}
+
+export interface HostRuntimeState<Registry extends VersionedRpcRegistry> {
+  readonly context: Context<HostRuntimeBinding<Registry> | null>;
+  readonly bindingSnapshot: {
+    value: HostRuntimeBinding<Registry> | null;
+  };
+}
+
+export function createHostRuntimeState<
+  Registry extends VersionedRpcRegistry,
+>(): HostRuntimeState<Registry> {
+  return {
+    context: createContext<HostRuntimeBinding<Registry> | null>(null),
+    bindingSnapshot: { value: null },
+  };
 }
 
 export type MessengerFactory<Registry extends VersionedRpcRegistry> = (args: {
@@ -86,14 +114,6 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
 }
 
 /**
- * Per-frame timeout after a successful dial. 30 s covers slow downstream
- * work (e.g. the host waiting on an LLM call) without giving a stuck
- * socket an unbounded lease. Matches the host's post-open timeout
- * so neither side holds a dangling connection.
- */
-const DEFAULT_WS_FRAME_TIMEOUT_MS = 30_000;
-
-/**
  * Builds a typed host-runtime provider + hooks bound to a specific
  * versioned registry.
  *
@@ -113,12 +133,9 @@ const DEFAULT_WS_FRAME_TIMEOUT_MS = 30_000;
  */
 export function createHostRuntime<Registry extends VersionedRpcRegistry>(
   schedulingPolicy: RpcSchedulingPolicy<Registry>,
+  runtimeState: HostRuntimeState<Registry>,
 ): TypedHostRuntime<Registry> {
-  const context: Context<HostRuntimeBinding<Registry> | null> =
-    createContext<HostRuntimeBinding<Registry> | null>(null);
-  const latestBindingSnapshot: {
-    value: HostRuntimeBinding<Registry> | null;
-  } = { value: null };
+  const { context, bindingSnapshot: latestBindingSnapshot } = runtimeState;
   const setLatestBindingSnapshot = (
     binding: HostRuntimeBinding<Registry> | null,
   ): void => {
@@ -171,7 +188,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       return createHostQueryInvalidator(queryClient);
     }, [invalidatorProp, queryClient]);
 
-    const requestId = requestIdProp ?? defaultRequestId;
+    const requestId = requestIdProp ?? defaultHostRpcRequestId;
 
     useEffect(() => {
       const lifecycle: { disposed: boolean } = { disposed: false };
@@ -180,21 +197,71 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       const auth = new AuthService({ runnerHost });
       const directory = new HostDirectoryService({
         runnerHost,
-        remoteFetcher,
+        remoteFetcher:
+          remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
+        localHostIdSeeder: () =>
+          queryClient.fetchQuery(localHostIdQueryOptions(runnerHost)),
       });
 
       let runtime: HostRuntime<Registry> | null = null;
 
+      // Endpoint + bearer now ride the per-request `HostRequestAuthority` the
+      // coordinator mints, so neither is closed over here. The remote branch
+      // still needs the FULL directory entry (`kind`/`publicKey`) behind the
+      // hostId an authority names - that lookup is all this seam supplies.
+      //
+      // Resolved against the whole DIRECTORY, not just the active host: a
+      // transient requester (`createRequester`, Settings ▸ Worktrees / the
+      // My Hosts panel) issues authorities for a non-active host, and keying
+      // this off `getActiveHost()` would drop those onto the local WS client -
+      // i.e. dial a relay attach URL directly and never connect.
+      const resolveTarget = (hostId: string) =>
+        runtime === null ? null : runtime.hostClient.resolveHostById(hostId);
+
+      let runtimeMessenger: RuntimeHostMessengerBinding<Registry> | null = null;
       const rawMessenger: IHostMessenger<Registry> =
         messengerFactory !== null
           ? messengerFactory({ registry })
-          : new WsRpcClient<Registry>({
+          : (runtimeMessenger = buildRuntimeHostMessenger({
               registry,
+              resolveTarget,
+              // UNAUTHORIZED session-fatal recovery for the shared remote
+              // session: revalidate + redial with the fresh bearer instead of
+              // terminally closing (the same recovery the stream transports
+              // wire via `useStreamAuthRevalidator`).
+              auth: createStreamAuthRevalidator(auth),
+              authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
-              webSocketFactory: createWhatwgWebSocketFactory(),
-              dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-              frameTimeoutMs: DEFAULT_WS_FRAME_TIMEOUT_MS,
-            });
+              // Un-strands queries that errored while this binding's remote
+              // session was still dialing (a Settings host-picker selection
+              // has no other session holder). A non-active host takes the
+              // announcing notify; an active one is invalidated directly,
+              // because the active variant emits a host-change event - which
+              // the `onChange` subscription below answers with
+              // `runtimeMessenger.reset()`, tearing this very binding down as
+              // a side effect of its own good news. Steady state for an active
+              // host is still owned by the stream-runtime wiring over the SAME
+              // shared session; this path only covers the promoted-mid-dial
+              // window, before that wiring exists to hear anything.
+              onRemoteAvailabilityRecovered: (hostId) => {
+                if (runtime === null) {
+                  return;
+                }
+                const active = runtime.hostClient.getActiveHost();
+                if (active !== null && active.hostId === hostId) {
+                  // Promoted to active while this dial was still in flight, so
+                  // the active stream-runtime wiring may not have attached yet
+                  // - and it never replays, so waiting for it to own this
+                  // boundary can strand the queries forever. Deliver the
+                  // invalidation directly instead: same un-stranding, minus the
+                  // active-change announcement that would reset this binding as
+                  // a side effect of its own good news.
+                  runtime.hostClient.invalidateHostScopeForAvailability(hostId);
+                  return;
+                }
+                runtime.hostClient.notifyHostAvailabilityRecovered(hostId);
+              },
+            })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as
       // `HostRpcError { code: "UNAUTHORIZED" }`, and this wrapper drives
@@ -202,11 +269,14 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // the existing context's credential lease in place (refresh
       // succeeded) or signs the user out (refresh rejected) instead of
       // leaving them staring at a generic failure toast.
-      // Retry is the outermost layer: a pre-send transient dial/handshake
-      // failure (`RetryableTransportError`) re-dials on a short backoff before
-      // the auth-aware wrapper or the query layer ever see it. The auth wrapper
-      // only acts on `UNAUTHORIZED`, never a retryable transport error, so the
-      // two never contend. When auth revalidation really rotates the bearer,
+      // Retry is the outermost layer: a transport failure the host provably
+      // never dispatched (`RetryableTransportError` - a pre-send dial/handshake
+      // failure, or a host-attested post-`openAck` request timeout) re-dials on
+      // a short backoff before the auth-aware wrapper or the query layer ever
+      // see it. That includes the legacy `UNAUTHORIZED` spelling of the
+      // post-open timeout, which is why the auth wrapper never sees it as a
+      // credential rejection. The auth wrapper only acts on `UNAUTHORIZED`,
+      // never a retryable transport error, so the two never contend. When auth revalidation really rotates the bearer,
       // retry the same RPC once against the fresh lease; some usage-limit
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
@@ -228,6 +298,28 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       });
 
       const activeRuntime = runtime;
+      const requestContextProvider = auth.getRequestContextProvider();
+      // Retires the previous auth context's cached remote sessions on ANY
+      // context transition - which transitions sweep (and why the key is the
+      // context REFERENCE, not the userId) is `createSessionRetirementSweep`'s
+      // pinned contract.
+      //
+      // Two ordering invariants this wiring provides:
+      // `runtimeMessenger.reset()` runs FIRST in this callback, so the
+      // messenger holds no binding over an entry the sweep is about to close;
+      // and this listener is registered before `runtime.start()` and before
+      // any child mounts, so no consumer can have acquired a NEW-context
+      // session earlier in the same emit for the indiscriminate sweep to kill.
+      const sweepRetiredContextSessions = createSessionRetirementSweep({
+        currentContext: () => requestContextProvider.current(),
+        retire: retireAllRemoteSessions,
+      });
+      const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
+        () => {
+          runtimeMessenger?.reset();
+          sweepRetiredContextSessions();
+        },
+      );
       void (async () => {
         let phase = "auth.start";
         try {
@@ -266,9 +358,14 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           });
         } catch (error) {
           appLogger.error("[host-runtime] startup failed", { phase }, error);
+          runtimeMessenger?.dispose();
+          runtimeTransportUnsubscribe();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
+          // The messenger's availability callback guards on `runtime === null`;
+          // without this reset that guard could never fire.
+          runtime = null;
           if (!isDisposed()) {
             setLatestBindingSnapshot(null);
             setBinding(null);
@@ -279,9 +376,14 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
 
       return () => {
         lifecycle.disposed = true;
+        runtimeMessenger?.dispose();
+        runtimeTransportUnsubscribe();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();
+        // The messenger's availability callback guards on `runtime === null`;
+        // without this reset that guard could never fire.
+        runtime = null;
         setLatestBindingSnapshot(null);
         setBinding(null);
       };
@@ -294,6 +396,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       remoteFetcher,
       authorityRegistry,
       requestCoordinator,
+      queryClient,
     ]);
 
     useEffect(() => {
@@ -339,6 +442,68 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
   };
 }
 
-function defaultRequestId(): string {
-  return uuidv4();
+/**
+ * The production `RemoteHostFetcher` used whenever a caller does not override
+ * one (S2/T14): every shell today passes `remoteFetcher={null}` down through
+ * `TraycerApp`, which used to fall back to `HostDirectoryService`'s built-in
+ * always-empty stub (S1 - "visible in My Hosts, not in the selectable
+ * directory"). Reuses `AuthService.fetchRegisteredHosts()` - the same
+ * bearer-gated `GET /api/v3/hosts` call My Hosts already makes - rather than
+ * exposing a separate raw-bearer getter (the bearer deliberately never leaves
+ * `AuthService`).
+ *
+ * Maps `fetchRegisteredHosts()`'s contract onto `RemoteHostFetchOutcome`
+ * (T20 / audit P4): a `null` return (no bearer, or one the registry
+ * rejected - `AuthService` deliberately does not distinguish the two so a
+ * background poll never forces a sign-out) becomes `signed-out`; a thrown
+ * network error becomes `failed` so `HostDirectoryService.refresh()` retains
+ * the last-known remote entries instead of wiping the merged directory and
+ * unbinding an active remote selection.
+ */
+/**
+ * The shell's durable answer to "which host id is THIS machine", the value
+ * `HostDirectoryService` seeds itself with before its first emission.
+ *
+ * Query owns the read like every other `RunnerHost` request, but the directory
+ * consumes it through `fetchQuery` rather than a hook: the service is
+ * constructed inside the provider's effect and must recognise this machine
+ * BEFORE it emits a directory, so a hook's value would arrive a render too
+ * late to BE the seed. `fetchQuery` still gives it the centralized key, the
+ * cache, and in-flight dedupe.
+ *
+ * `retry: false` deliberately. `start()` awaits this, and the service already
+ * falls back to the persisted id when the shell cannot answer - so Query's
+ * default backoff would delay the first directory the user sees in order to
+ * reach a value there is already a fallback for.
+ */
+function localHostIdQueryOptions(runnerHost: IRunnerHost) {
+  return queryOptions({
+    queryKey: runnerQueryKeys.lastKnownLocalHostId(
+      runnerHostQueryScopeId(runnerHost),
+    ),
+    queryFn: () => runnerHost.getLastKnownLocalHostId(),
+    retry: false,
+  });
+}
+
+function buildDefaultRemoteFetcher(
+  auth: AuthService,
+  runnerHost: IRunnerHost,
+): RemoteHostFetcher {
+  return async () => {
+    try {
+      const response = await auth.fetchRegisteredHosts();
+      if (response === null) {
+        return { kind: "signed-out" };
+      }
+      return {
+        kind: "hosts",
+        entries: response.hosts.map((item) =>
+          hostListItemToDirectoryEntry(item, runnerHost.relayBaseUrl),
+        ),
+      };
+    } catch {
+      return { kind: "failed" };
+    }
+  };
 }

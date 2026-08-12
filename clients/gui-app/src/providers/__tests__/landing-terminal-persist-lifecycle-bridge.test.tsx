@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
@@ -52,8 +51,13 @@ function persistSnapshot(email: string): void {
       state: {
         tabs: [tab],
         activeInstanceId: tab.instanceId,
-        panelOpen: true,
-        panelWidthFraction: 0.36,
+        layoutsByLandingPageId: {
+          "landing-page": {
+            panelOpen: true,
+            panelWidthFraction: 0.36,
+            maximized: false,
+          },
+        },
         pendingKills: [],
       },
       version: 1,

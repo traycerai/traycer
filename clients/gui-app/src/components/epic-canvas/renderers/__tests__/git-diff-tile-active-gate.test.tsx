@@ -1,4 +1,4 @@
-import "../../../../../__tests__/test-browser-apis";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -68,6 +68,11 @@ class MockStreamSession implements IStreamSession {
   sendClientFrame(): void {
     // Not exercised here.
   }
+  /** Never negotiates: this fake exercises no version-dependent path. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+
   requestReconnect(): void {
     // Not exercised here.
   }
@@ -85,6 +90,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");

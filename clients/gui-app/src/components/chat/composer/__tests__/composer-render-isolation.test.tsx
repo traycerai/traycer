@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { Profiler, useState, type ProfilerOnRenderCallback } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -13,6 +12,10 @@ import {
   createComposerPickerStore,
   type ComposerPickerStore,
 } from "../picker/composer-picker-store";
+import {
+  PaneActivationFocusIntentContext,
+  type PaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 afterEach(() => {
   cleanup();
@@ -57,7 +60,9 @@ function Harness({
         hasPastedImageBytes={null}
         ingestPastedComposerImages={null}
         stabilizeImageAttachmentCaret={stabilizeImageAttachmentCaret}
-        onSnapshot={() => undefined}
+        onDocumentChange={() => undefined}
+
+        onSelectionChange={() => undefined}
         onSubmit={() => undefined}
         onPaste={() => undefined}
         onDragOver={() => undefined}
@@ -72,6 +77,80 @@ function Harness({
 }
 
 describe("ComposerPromptEditor render isolation", () => {
+  it("does not steal focus from the control that activated its pane", async () => {
+    const handleRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const pickerStore = createComposerPickerStore();
+    let yieldCheckCount = 0;
+    const focusIntent: PaneActivationFocusIntent = {
+      mark: () => undefined,
+      shouldYieldAutoFocus: () => {
+        yieldCheckCount += 1;
+        return true;
+      },
+    };
+    const initialContent = emptyContent();
+    const renderEditor = (isActive: boolean) => (
+      <PaneActivationFocusIntentContext.Provider value={focusIntent}>
+        <ComposerPromptEditor
+          ref={(instance) => {
+            handleRef.current = instance;
+          }}
+          initialContent={initialContent}
+          initialSelection={null}
+          pickerStore={pickerStore}
+          placeholder="test"
+          editorClassName={undefined}
+          isActive={isActive}
+          disabled={false}
+          slashProviderId="claude"
+          hasPastedImageBytes={null}
+          ingestPastedComposerImages={null}
+          stabilizeImageAttachmentCaret={false}
+          onDocumentChange={() => undefined}
+          onSelectionChange={() => undefined}
+          onSubmit={() => undefined}
+          onPaste={() => undefined}
+          onDragOver={() => undefined}
+          onDrop={() => undefined}
+          onKeyDown={undefined}
+          onFocus={() => undefined}
+          onBlur={() => undefined}
+          onEditorReady={null}
+        />
+      </PaneActivationFocusIntentContext.Provider>
+    );
+    const view = render(renderEditor(false));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(handleRef.current?.isReady()).toBe(true);
+
+    const control = document.createElement("button");
+    view.container.append(control);
+    control.focus();
+    view.rerender(renderEditor(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(yieldCheckCount).toBe(1);
+    expect(document.activeElement).toBe(control);
+
+    // Nested route synchronization can briefly reapply the previous pane and
+    // then this pane again. The same activation intent must cover both active
+    // edges instead of being consumed by the first one.
+    view.rerender(renderEditor(false));
+    view.rerender(renderEditor(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(yieldCheckCount).toBe(2);
+    expect(document.activeElement).toBe(control);
+  });
+
   it("does not re-render the editor wrapper on focus / typing", async () => {
     const phases: string[] = [];
     const profileRender: ProfilerOnRenderCallback = (_id, phase) => {

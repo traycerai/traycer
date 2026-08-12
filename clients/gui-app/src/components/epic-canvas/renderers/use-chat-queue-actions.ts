@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -56,15 +57,15 @@ export interface ChatQueueActionsInput {
 }
 
 export interface ChatQueueActionsResult {
-  readonly editQueuedItem: (item: ChatQueuedItem) => void;
+  readonly editQueuedItem: (item: ChatQueuedPromptItem) => void;
   readonly cancelQueuedItem: (item: ChatQueuedItem) => void;
-  readonly abortSteerQueuedItem: (item: ChatQueuedItem) => void;
+  readonly abortSteerQueuedItem: (item: ChatQueuedPromptItem) => void;
   readonly cancelQueueEditMode: () => void;
   readonly reorderQueuedItem: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly steerQueuedItemNow: (item: ChatQueuedItem) => void;
+  readonly steerQueuedItemNow: (item: ChatQueuedPromptItem) => void;
   readonly handleComposerSettingsChange: (settings: ChatRunSettings) => void;
   readonly steerRestart: {
     readonly open: boolean;
@@ -126,7 +127,7 @@ export function useChatQueueActions(
   }, [clearDraftContent, nodeId, replaceDraftContent]);
 
   const editQueuedItem = useCallback(
-    (item: ChatQueuedItem): void => {
+    (item: ChatQueuedPromptItem): void => {
       if (item.delivery === "same_turn") {
         const actionId = chatActions.queueCancel(item.queueItemId);
         if (actionId === null) return;

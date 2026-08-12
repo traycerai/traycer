@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   DesktopSupportBridge,
@@ -15,6 +15,7 @@ import type {
 } from "@/lib/windows/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { LogsChooserDialog } from "@/components/layout/dialogs/desktop/logs-chooser-dialog";
+import { createDesktopSupportBridgeStub } from "./support-bridge-stub";
 
 afterEach(() => {
   cleanup();
@@ -38,24 +39,22 @@ function readySnapshot(): DesktopSupportSnapshot {
     logs: [{ target: "desktop", label: "Desktop", path: "/tmp/desktop.log" }],
     links: [],
     supportEmail: "support@traycer.ai",
+    privateDeliveryAvailable: true,
   };
 }
 
 function unavailableSupport(): DesktopSupportBridge {
   return {
+    ...createDesktopSupportBridgeStub(),
     getSnapshot: () =>
       Promise.reject(new Error("secret-token-should-never-render")),
-    revealLog: vi.fn(),
-    submitReport: vi.fn(),
-    tailLog: vi.fn(),
   };
 }
 
 function supportWithFailingTail(): DesktopSupportBridge {
   return {
+    ...createDesktopSupportBridgeStub(),
     getSnapshot: () => Promise.resolve(readySnapshot()),
-    revealLog: vi.fn(),
-    submitReport: vi.fn(),
     tailLog: () =>
       Promise.reject(new Error("secret-log-path-should-never-render")),
   };

@@ -18,6 +18,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import {
@@ -35,10 +36,7 @@ import {
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
-import {
-  buildFontFamilyValue,
-  DEFAULT_MONO_FONT_STACK,
-} from "@/lib/default-font-stacks";
+import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 import {
   trackedSettingSetter,
@@ -65,6 +63,12 @@ export function AppearanceSettingsPanel() {
   const pointerCursors = useSettingsStore((state) => state.pointerCursors);
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
+  );
+  const chatTurnMinimapSide = useSettingsStore(
+    (state) => state.chatTurnMinimapSide,
+  );
+  const setChatTurnMinimapSide = useSettingsStore(
+    (state) => state.setChatTurnMinimapSide,
   );
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
@@ -177,6 +181,39 @@ export function AppearanceSettingsPanel() {
                 )}
                 aria-label="Use pointer cursors"
               />
+            }
+          />
+          <SettingsRow
+            label="Message minimap side"
+            description="Place the chat turn minimap on either transcript edge, or hide it entirely."
+            control={
+              <Select
+                value={chatTurnMinimapSide}
+                onValueChange={(value) => {
+                  if (
+                    value !== "left" &&
+                    value !== "right" &&
+                    value !== "hide"
+                  ) {
+                    return;
+                  }
+                  trackAppearanceSetting("chatTurnMinimapSide");
+                  setChatTurnMinimapSide(value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Message minimap side"
+                  className="w-[min(40vw,8rem)]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="right">Right</SelectItem>
+                  <SelectItem value="left">Left</SelectItem>
+                  <SelectItem value="hide">Hide</SelectItem>
+                </SelectContent>
+              </Select>
             }
           />
         </SettingsGroup>
@@ -449,30 +486,18 @@ function DesktopZoomSettingsRow() {
  * convey the same information textually. Font family/size are applied
  * inline rather than through the `font-mono`/`text-code-sm` utilities,
  * which track the Code font - this preview must reflect the effective
- * TERMINAL font (`terminalFontFamily ?? codeFontFamily`, mirroring
- * `resolveEffectiveFontFamily` in `terminal-tile-xterm.tsx`), not the code
- * font it falls back to.
+ * TERMINAL font, which `useEffectiveTerminalFont` resolves.
  */
 function TerminalPreview() {
   const cursorStyle = useSettingsStore((state) => state.terminalCursorStyle);
   const cursorBlink = useSettingsStore((state) => state.terminalCursorBlink);
-  const terminalFontFamily = useSettingsStore(
-    (state) => state.terminalFontFamily,
-  );
-  const codeFontFamily = useSettingsStore((state) => state.codeFontFamily);
-  const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
-  const codeFontSize = useSettingsStore((state) => state.codeFontSize);
-  const effectiveFontFamily = buildFontFamilyValue(
-    terminalFontFamily ?? codeFontFamily,
-    DEFAULT_MONO_FONT_STACK,
-  );
-  const effectiveFontSize = terminalFontSize ?? codeFontSize;
+  const terminalFont = useEffectiveTerminalFont();
   return (
     <div
       className="w-full overflow-hidden rounded-md border border-border bg-background text-foreground"
       style={{
-        fontFamily: effectiveFontFamily,
-        fontSize: `${effectiveFontSize}px`,
+        fontFamily: terminalFont.fontFamily,
+        fontSize: `${terminalFont.fontSize}px`,
       }}
       aria-hidden="true"
     >

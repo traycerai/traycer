@@ -18,6 +18,7 @@ import {
   parseLeadingSlashCommand,
   slashCommandParagraph,
   stringValue,
+  type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
@@ -200,6 +201,23 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               // `text/uri-list` type - is correctly left unclaimed and falls
               // through to normal text/markdown paste below.
               if (hasClaimableFileTransfer(clipboardData)) return true;
+
+              // Inside a code block, every textual flavor degrades to the
+              // clipboard's literal plain text — the in-code paste behavior
+              // ProseMirror itself would apply if this handler didn't claim
+              // the event. The branches below parse the paste into block
+              // nodes (markdown/HTML), and `replaceSelection` can fit only
+              // the first line's text inside the code block; the remaining
+              // blocks get hoisted out below it.
+              if (view.state.selection.$from.parent.type.spec.code === true) {
+                const codeText = clipboardData.getData("text/plain");
+                if (codeText.length === 0) return false;
+                const tr = view.state.tr.insertText(
+                  codeText.replace(/\r\n?/g, "\n"),
+                );
+                view.dispatch(tr.scrollIntoView());
+                return true;
+              }
 
               const composerContent =
                 readComposerContentFromClipboardData(clipboardData);
@@ -713,7 +731,7 @@ function composerContentSlice(
 function leadingSlashCommandSlice(
   state: EditorState,
   text: string,
-  knownCommands: ReadonlyMap<string, string> | null,
+  knownCommands: SlashCommandCatalog | null,
 ): Slice | null {
   // Without a loaded catalog we cannot tell a real command from arbitrary text,
   // so leave the paste as plain text rather than risk a chip for a non-command.
@@ -721,13 +739,14 @@ function leadingSlashCommandSlice(
   if (!isLeadingSlashTarget(state)) return null;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return null;
-  // Match case-insensitively but build the chip from the catalog's canonical
-  // name, so a pasted `/Plan` lands the same chip the popover would for `plan`.
-  const canonicalName = knownCommands.get(parsed.name.toLowerCase());
-  if (canonicalName === undefined) return null;
+  // Match case-insensitively but build the chip from the resolved option, so a
+  // pasted `/Plan` lands the same chip the popover would for `plan`.
+  const command = knownCommands.get(parsed.name.toLowerCase());
+  if (command === undefined) return null;
   const paragraph = slashCommandParagraph(
-    canonicalName,
+    command,
     text.slice(parsed.end),
+    parsed.trigger,
   );
   try {
     const node = state.schema.nodeFromJSON(paragraph);
@@ -751,7 +770,7 @@ function isLeadingSlashTarget(state: EditorState): boolean {
 function existingLeadingSlashCommandPaste(
   state: EditorState,
   text: string,
-  knownCommands: ReadonlyMap<string, string> | null,
+  knownCommands: SlashCommandCatalog | null,
 ): { readonly pos: number; readonly text: string } | null {
   if (knownCommands === null) return null;
   // This path inserts after the existing chip without replacing the selection,

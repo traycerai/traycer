@@ -337,7 +337,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             // A split half shares the group's silhouette and only has half the
             // width, so it trades the tab's generous side padding for enough
             // room to still show an icon plus a readable title.
-            chrome === "member" && "gap-1 px-1.5",
+            chrome === "member" && cn("gap-1", isActive ? "px-5" : "px-1.5"),
             tabStateClass(isActive),
             NO_DRAG_CLASS,
             "cursor-pointer",
@@ -528,9 +528,10 @@ function TabLeadingIcon(props: {
   readonly tabId: string;
   readonly epicId: string | null;
 }) {
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId ?? props.tabId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: props.epicId ?? props.tabId },
+    null,
+  );
   let defaultIcon: React.ReactNode = null;
   if (props.titleGenerationPending) {
     defaultIcon = (
@@ -724,32 +725,26 @@ function StripPairPreview(props: {
 }
 
 /**
- * Focus treatment for one half of a split group.
- *
- * A filled panel was tried first and read as a control pasted inside the tab:
- * the halves sit inside the group's side padding, so any fill floats short of
- * the tab edges instead of looking like a region of it. The focused side is
- * marked with the same accent rule the canvas strip uses for its active tab,
- * spanning exactly that half - a deliberate marker rather than a shape - and
- * carried by the weight/colour split `tabStateClass` already applies. The
- * remaining wash is hover affordance only, so it stays soft and inset.
+ * Selection treatment for one member of a split group. The focused member uses
+ * the same raised silhouette as an ordinary selected tab; group membership is
+ * communicated independently by the split group's accent underline.
  */
 export function SplitMemberChrome(props: { readonly focused: boolean }) {
-  return (
-    <>
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
+  if (props.focused) {
+    return (
+      <TabChromeBackground
+        fill="var(--color-background)"
+        borderColor="var(--color-primary)"
+        coversBaseline
       />
-      {props.focused ? (
-        <DropLine
-          orientation="horizontal"
-          glow={false}
-          className="absolute inset-x-0 top-0 z-20 animate-in fade-in slide-in-from-bottom-1 duration-200 ease-spring"
-          testId="split-member-focus-accent"
-        />
-      ) : null}
-    </>
+    );
+  }
+
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
+    />
   );
 }
 
@@ -803,10 +798,14 @@ function TabCap({
     side === "left"
       ? "M 20 0 L 15 0 C 10.6 0 8 2.8 8 7 L 8 32 C 8 36.8 4.8 40 0 40 L 20 40 Z"
       : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 40 20 40 L 0 40 Z";
+  // SVG strokes are centered on their path. Inset the top edge by half the
+  // stroke width so it occupies the same inside pixel row as the center's CSS
+  // border; placing it at y=0 clips the outer half and makes the center look
+  // like a second line at display scaling.
   const outline =
     side === "left"
-      ? "M -2 39.5 L 0 39.5 C 4.8 39.5 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0 15 0 L 20 0"
-      : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 39.5 20 39.5 L 22 39.5";
+      ? "M -2 39.5 L 0 39.5 C 4.8 39.5 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0.5 15 0.5 L 20 0.5"
+      : "M 0 0.5 L 5 0.5 C 9.4 0.5 12 2.8 12 7 L 12 32 C 12 36.8 15.2 39.5 20 39.5 L 22 39.5";
   return (
     <svg
       data-testid={`tab-cap-${side}`}

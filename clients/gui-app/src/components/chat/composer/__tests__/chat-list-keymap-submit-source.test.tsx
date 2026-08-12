@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 
@@ -76,6 +75,7 @@ describe("ChatListKeymap submit source", () => {
       range: { from: 1, to: 2 },
       query: "te",
       commit,
+      dismiss: null,
       clientRect: null,
     });
     pickerStore.getState().setItems({
@@ -110,6 +110,7 @@ describe("ChatListKeymap submit source", () => {
       range: { from: 1, to: 2 },
       query: "te",
       commit,
+      dismiss: null,
       clientRect: null,
     });
     pickerStore.getState().setItems({
@@ -158,6 +159,7 @@ describe("ChatListKeymap submit source", () => {
       range: { from: 1, to: 2 },
       query: "pl",
       commit,
+      dismiss: null,
       clientRect: null,
     });
     pickerStore.getState().setItems({
@@ -200,6 +202,7 @@ describe("ChatListKeymap submit source", () => {
             range: { from: 1, to: 2 },
             query: "zz",
             commit: vi.fn(),
+            dismiss: null,
             clientRect: null,
           });
           pickerStore.getState().setItems({
@@ -226,6 +229,7 @@ describe("ChatListKeymap submit source", () => {
             range: { from: 1, to: 2 },
             query: "te",
             commit: vi.fn(),
+            dismiss: null,
             clientRect: null,
           });
           pickerStore.getState().setItems({
@@ -252,6 +256,7 @@ describe("ChatListKeymap submit source", () => {
             range: { from: 1, to: 2 },
             query: "pl",
             commit: vi.fn(),
+            dismiss: null,
             clientRect: null,
           });
           pickerStore.getState().setItems({
@@ -313,6 +318,7 @@ describe("ChatListKeymap submit source", () => {
         range: { from: 1, to: 2 },
         query: "te",
         commit,
+        dismiss: null,
         clientRect: null,
       });
       pickerStore.getState().setItems({
@@ -354,6 +360,7 @@ describe("ChatListKeymap submit source", () => {
         range: { from: 1, to: 2 },
         query: "te",
         commit,
+        dismiss: null,
         clientRect: null,
       });
       pickerStore.getState().setItems({

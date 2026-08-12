@@ -26,6 +26,7 @@ export function AgentMessageBody(props: {
           markdown={value}
           proseSize="compact"
           quotable={false}
+          components={null}
         />
       </div>
       <AgentMessageCopyButton value={value} />

@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import "../../../../../__tests__/test-browser-apis";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -28,11 +28,7 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 
 const directoryEntries = vi.hoisted(() => ({
-  current: [] as ReadonlyArray<{
-    hostId: string;
-    label: string;
-    status: "available" | "unavailable";
-  }>,
+  current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -176,6 +172,9 @@ describe("host binding survives restart", () => {
       {
         hostId: REPLACEMENT_HOST,
         label: "Replacement",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5002/rpc",
+        version: "1.0.0",
         status: "available",
       },
     ];
@@ -191,6 +190,9 @@ describe("host binding survives restart", () => {
       {
         hostId: SOURCE_HOST,
         label: "Local",
+        kind: "local",
+        websocketUrl: null,
+        version: "1.0.0",
         status: "unavailable",
       },
     ];
@@ -206,6 +208,9 @@ describe("host binding survives restart", () => {
       {
         hostId: SOURCE_HOST,
         label: "Local",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:5001/rpc",
+        version: "1.0.0",
         status: "available",
       },
     ];
@@ -214,5 +219,53 @@ describe("host binding survives restart", () => {
 
     expect(result.current.status).toBe("reachable");
     expect(result.current.hostLabel).toBe("Local");
+  });
+
+  it("answers a remote entry from its directory status (unavailable => unreachable)", () => {
+    // SUPERSEDES the earlier pin ("does not treat a remote presence-lease
+    // status as tab reachability"). That rule predates the unified sidebar
+    // handing this hook LOCK-BADGE and LIVE-VS-COPY ROUTING duties: with
+    // remote entries hardwired "reachable", an unavailable owner's rows
+    // carried no lock, routed to a LIVE tab, and dialed a dead host forever
+    // (two-slot live check, 2026-08-08). A populated directory explicitly
+    // marking a host unavailable is high-confidence evidence, and every
+    // consumer of "unreachable" degrades recoverably - the badge and
+    // routing flip back on the next directory refresh, and the dead-tile
+    // banner is reactive, never a tab kill. The 2026-07-14 incident's
+    // protection lives in the EMPTY-directory arm ("host-starting"),
+    // which is untouched.
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Remote",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "1.0.0",
+        status: "unavailable",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("unreachable");
+    expect(result.current.hostLabel).toBe("Remote");
+  });
+
+  it("answers reachable for an AVAILABLE remote entry", () => {
+    directoryEntries.current = [
+      {
+        hostId: SOURCE_HOST,
+        label: "Remote",
+        kind: "remote",
+        websocketUrl: "wss://relay.traycer.invalid/attach",
+        version: "1.0.0",
+        status: "available",
+      },
+    ];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("reachable");
+    expect(result.current.hostLabel).toBe("Remote");
   });
 });

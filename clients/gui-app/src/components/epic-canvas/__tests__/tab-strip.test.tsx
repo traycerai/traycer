@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -68,6 +66,7 @@ vi.mock("@dnd-kit/core", () => ({
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
+  useRegisteredEpicNodeArchived: () => false,
 }));
 
 // TabItem resolves the tab's bound-host client for terminal renames; these

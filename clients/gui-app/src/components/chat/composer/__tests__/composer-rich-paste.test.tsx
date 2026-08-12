@@ -1,9 +1,9 @@
-import "../../../../../__tests__/test-browser-apis";
 import { fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import { DOMSerializer } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SlashCommand } from "@/lib/composer/types";
 
 import {
   buildComposerClipboardHtml,
@@ -552,6 +552,57 @@ describe("composer rich clipboard paste", () => {
     });
   });
 
+  it("keeps every line of a multi-line plain text paste inside a code block", () => {
+    const editor = makeCodeBlockEditor("existing\n");
+
+    pastePlainText(editor, "line one\nline two\nline three");
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { language: null },
+          content: [
+            { type: "text", text: "existing\nline one\nline two\nline three" },
+          ],
+        },
+        { type: "paragraph" },
+      ],
+    });
+  });
+
+  it("keeps markdown-looking text literal inside a code block, with CRLF normalized", () => {
+    const editor = makeCodeBlockEditor("");
+
+    pastePlainText(editor, "# Title\r\n- first\r\n**bold**");
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe(
+      "# Title\n- first\n**bold**",
+    );
+  });
+
+  it("degrades an HTML-flavored paste inside a code block to its plain text sibling", () => {
+    const editor = makeCodeBlockEditor("");
+
+    fireEvent.paste(editor.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html", "text/plain"],
+        getData: (type: string) => {
+          if (type === "text/html") return "<p>one</p><p>two</p>";
+          if (type === "text/plain") return "one\ntwo";
+          return "";
+        },
+      },
+    });
+
+    expect(editor.state.doc.firstChild?.type.name).toBe("codeBlock");
+    expect(editor.state.doc.firstChild?.textContent).toBe("one\ntwo");
+  });
+
   it("converts a leading slash command paste into a chip with literal args", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 
@@ -560,6 +611,46 @@ describe("composer rich clipboard paste", () => {
     const slash = collectSlashCommands(editor);
     expect(slash).toEqual(["plan"]);
     expect(remainderText(editor)).toBe(" review the diff");
+  });
+
+  // `$` is the picker's other trigger, so raw text leading with it has to chip
+  // exactly like `/` does - and the chip records which character the paste led
+  // with, so it reads back as what was pasted.
+  it("converts a leading $ skill paste into a chip that reads back as $name", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pastePlainText(editor, "$plan review the diff");
+
+    expect(collectSlashCommands(editor)).toEqual(["plan"]);
+    expect(collectSlashTriggers(editor)).toEqual(["$"]);
+    expect(remainderText(editor)).toBe(" review the diff");
+  });
+
+  // A pasted chip has to carry the resolved option's `kind`, not just its name:
+  // the host reads skills structurally off `kind`, and the editor's leading
+  // guard deletes a kindless chip the moment it stops being leading.
+  it("carries the catalog option's kind and path onto a pasted skill chip", () => {
+    const editor = makeEditor([...KNOWN_SLASH_NAMES, "frontend-design"]);
+
+    pastePlainText(editor, "$frontend-design polish the header");
+
+    expect(collectSlashAttrs(editor)).toEqual([
+      {
+        commandName: "frontend-design",
+        kind: "skill",
+        path: "/repo/.agents/skills/frontend-design/SKILL.md",
+        trigger: "$",
+      },
+    ]);
+  });
+
+  it("does not convert a $ name that is not in the catalog", () => {
+    const editor = makeEditor(KNOWN_SLASH_NAMES);
+
+    pastePlainText(editor, "$not-a-command do the thing");
+
+    expect(collectSlashCommands(editor)).toEqual([]);
+    expect(remainderText(editor)).toBe("$not-a-command do the thing");
   });
 
   it("keeps an existing leading slash chip when another slash command is pasted before it", () => {
@@ -686,6 +777,25 @@ describe("composer rich clipboard paste", () => {
   });
 });
 
+// A composer opening with a code block, caret at the end of its text — the
+// state right after typing ``` and some content. The caret is positioned
+// explicitly inside the code block because the schema keeps a trailing
+// paragraph after it.
+function makeCodeBlockEditor(text: string): Editor {
+  const editor = makeEditor(KNOWN_SLASH_NAMES);
+  editor.commands.setContent({
+    type: "doc",
+    content: [
+      {
+        type: "codeBlock",
+        content: text.length > 0 ? [{ type: "text", text }] : [],
+      },
+    ],
+  });
+  editor.commands.setTextSelection(1 + text.length);
+  return editor;
+}
+
 function pastePlainText(editor: Editor, text: string): void {
   fireEvent.paste(editor.view.dom, {
     clipboardData: {
@@ -709,6 +819,33 @@ function collectSlashCommands(editor: Editor): string[] {
     }
   });
   return names;
+}
+
+function collectSlashTriggers(editor: Editor): string[] {
+  const triggers: string[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "slashCommand") {
+      triggers.push(
+        typeof node.attrs.trigger === "string" ? node.attrs.trigger : "",
+      );
+    }
+  });
+  return triggers;
+}
+
+function collectSlashAttrs(editor: Editor): Record<string, unknown>[] {
+  const attrs: Record<string, unknown>[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== "slashCommand") return true;
+    attrs.push({
+      commandName: node.attrs.commandName,
+      kind: node.attrs.kind,
+      path: node.attrs.path,
+      trigger: node.attrs.trigger,
+    });
+    return false;
+  });
+  return attrs;
 }
 
 function collectImageIds(editor: Editor): string[] {
@@ -744,6 +881,27 @@ function remainderText(editor: Editor): string {
 }
 
 const KNOWN_SLASH_NAMES = ["plan", "code-review", "implement"];
+
+// `frontend-design` is the catalog's only skill, so a test can tell a chip built
+// from a resolved option (carries `kind`) from the bare lexical fallback.
+function catalogCommand(name: string): SlashCommand {
+  const isSkill = name.toLowerCase() === "frontend-design";
+  return {
+    harnessId: "claude",
+    name,
+    description: `Use ${name}`,
+    argumentHint: null,
+    kind: isSkill ? "skill" : "slash-command",
+    metadata: isSkill ? { path: `/repo/.agents/skills/${name}/SKILL.md` } : {},
+    source: "provider",
+    preview: {
+      kind: "text",
+      primary: `Use ${name}`,
+      secondary: null,
+      mono: false,
+    },
+  };
+}
 
 function imageAttrs(id: string) {
   return {
@@ -783,7 +941,9 @@ function makeEditorWithPastedImagePresenceGetter(
     pickerStore
       .getState()
       .setKnownSlashCommands(
-        new Map(slashNames.map((name) => [name.toLowerCase(), name])),
+        new Map(
+          slashNames.map((name) => [name.toLowerCase(), catalogCommand(name)]),
+        ),
       );
   }
   const editor = new Editor({

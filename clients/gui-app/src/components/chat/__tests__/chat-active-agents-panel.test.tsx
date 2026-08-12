@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveAgentsPanel } from "@/components/chat/chat-active-agents-panel";
@@ -44,6 +42,11 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
     openTileInTab: navigation.openTileInTab,
   }),
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
+    nodeId === "child-2" ? "claude" : null,
 }));
 
 // Stub the host-coupled stop button so these render tests stay focused on the
@@ -216,6 +219,7 @@ describe("ActiveAgentsPanel", () => {
             type: "chat",
             name: "Root chat",
             hostId: "d1",
+            harnessId: null,
           },
         },
       },
@@ -230,6 +234,7 @@ describe("ActiveAgentsPanel", () => {
             type: "chat",
             name: "Sub-agent one",
             hostId: "d1",
+            harnessId: null,
           },
         },
       },
@@ -244,6 +249,7 @@ describe("ActiveAgentsPanel", () => {
             type: "terminal-agent",
             name: "Sub-agent two",
             hostId: "d2",
+            harnessId: "claude",
           },
         },
       },

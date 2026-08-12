@@ -15,6 +15,7 @@ import {
   createSlashSuggestionExtension,
 } from "./extensions/slash-command-extension";
 import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
+import { ComposerSourcedQuote } from "./extensions/sourced-quote-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
 import {
@@ -73,6 +74,7 @@ export function buildComposerExtensions(
       gapcursor: false,
     }),
     ComposerBlockquote,
+    ComposerSourcedQuote,
     Markdown,
     Link.configure({
       openOnClick: false,
@@ -80,7 +82,11 @@ export function buildComposerExtensions(
       linkOnPaste: true,
     }),
     Placeholder.configure({
-      placeholder: () => args.getPlaceholder(),
+      // An empty code block is still an empty editor to Tiptap. Returning the
+      // composer hint there makes it render as monospaced code inside the new
+      // block; placeholders belong only on ordinary prompt paragraphs.
+      placeholder: ({ node }) =>
+        node.type.name === "paragraph" ? args.getPlaceholder() : "",
       includeChildren: false,
       emptyEditorClass: "is-editor-empty",
     }),

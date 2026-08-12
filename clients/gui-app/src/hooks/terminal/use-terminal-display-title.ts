@@ -1,20 +1,30 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
+import type {
+  CanonicalTerminalSessionInfoWithCurrentCwd,
+  TerminalScope,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 
+/** The identity a caller has for a terminal it is rendering. */
+export interface TerminalSessionIdentity {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string | null;
+  readonly sessionId: string | null;
+}
+
 /**
- * Live display title for an epic-scoped terminal session, resolved from the
- * HOST's `terminal.list` rows - the single source of truth for terminal
- * titles (explicit `session.title`, else the active process name).
+ * The HOST's `terminal.list` row for an epic-scoped session - the single
+ * source of truth for everything about a live terminal that the session store
+ * does not carry (title, directories, foreground process).
  *
  * `client` is the session's BOUND-host client (session ids are only unique
  * per host, and a tab's bound host may not be the app-wide default host).
  * The caller resolves it once - e.g. `TabItem` shares one
  * `useHostClientForHostId(tab.hostId)` between this hook and the rename
- * mutation - so title resolution adds no extra directory subscription.
+ * mutation - so reading the row adds no extra directory subscription.
  *
  * Mounting this hook keeps a query observer on that host, so a backgrounded
  * tab whose tile (and PTY stream) is unmounted still tracks renames and
@@ -23,15 +33,12 @@ import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
  * a tile is live.
  *
  * Returns `null` while the host has no row for the session (host restarted /
- * unreachable, list not yet hydrated) - the caller then falls back to the
- * persisted tile-name snapshot. Callers rendering a non-terminal node pass
- * all-null identity; the hook is then inert (no query).
+ * unreachable, list not yet hydrated). Callers rendering a non-terminal node
+ * pass all-null identity; the hook is then inert (no query).
  */
-export function useTerminalDisplayTitle(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly epicId: string | null;
-  readonly sessionId: string | null;
-}): string | null {
+export function useTerminalFindSessionRow(
+  args: TerminalSessionIdentity,
+): CanonicalTerminalSessionInfoWithCurrentCwd | null {
   const enabled =
     args.client !== null && args.epicId !== null && args.sessionId !== null;
   const epicId = args.epicId;
@@ -43,11 +50,24 @@ export function useTerminalDisplayTitle(args: {
   );
   const list = useTerminalListFor(enabled ? args.client : null, scope);
   if (!enabled) return null;
-  const session =
-    list.data?.sessions.find((s) => s.sessionId === args.sessionId) ?? null;
+  return (
+    list.data?.sessions.find((s) => s.sessionId === args.sessionId) ?? null
+  );
+}
+
+/**
+ * Live display title for a terminal session: the host's explicit title, else
+ * the live directory plus active process/default. `null` while there is no
+ * row yet - the caller then falls back to the persisted tile-name snapshot.
+ */
+export function useTerminalDisplayTitle(
+  args: TerminalSessionIdentity,
+): string | null {
+  const session = useTerminalFindSessionRow(args);
   if (session === null) return null;
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
+    currentCwd: session.currentCwd,
   });
 }

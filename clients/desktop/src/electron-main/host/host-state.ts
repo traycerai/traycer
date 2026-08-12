@@ -5,6 +5,7 @@ import {
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
+import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
 import {
@@ -107,28 +108,27 @@ export async function readDesktopHostStagedRecord(
 }
 
 /**
- * Mirror of the CLI's `HostLayer0Record`
- * (`clients/traycer-cli/src/host/pid-metadata.ts`) - the host's Layer 0
- * single-writer (I1) verdict. `unrecognized` exists so a desktop build older
- * than its host reports "I cannot confirm the guarantee" rather than
- * dropping the record and reporting nothing, which is the same silence this
- * type exists to remove.
+ * Desktop interpretation of the host's Layer 0 single-writer (I1) verdict
+ * from `pid.json`. The known degraded cause is owned by `@traycer/protocol`;
+ * `unrecognized` exists so a desktop build older than its host reports "I
+ * cannot confirm the guarantee" rather than dropping a newer record and
+ * reporting nothing, which is the same silence this type exists to remove.
  */
 export type DesktopHostLayer0Record =
   | { readonly status: "acquired"; readonly attemptId: string }
   | {
       readonly status: "degraded";
       readonly attemptId: string;
-      readonly cause: string;
+      readonly cause: Layer0UnavailableCause;
       readonly evidence: string;
     }
   | { readonly status: "unrecognized"; readonly raw: string };
 
 /**
- * Mirror of the CLI's `decodeLayer0Record`, same fail-open contract: a
- * malformed record decodes to `unrecognized` rather than `null`, so "this
- * record could not be parsed" is never conflated with "this host predates
- * the field" (which is `null`, handled by the caller before this is reached).
+ * Fail-open decoder for the host's record. A malformed record, including a
+ * degraded record carrying a cause this desktop does not know yet, decodes to
+ * `unrecognized` with its raw JSON intact rather than `null`. That keeps
+ * "could not interpret" distinct from "this host predates the field".
  */
 export function decodeHostLayer0Record(
   value: unknown,
@@ -136,27 +136,85 @@ export function decodeHostLayer0Record(
   if (value === null || value === undefined) {
     return null;
   }
-  if (typeof value !== "object" || Array.isArray(value)) {
+  if (!isPlainObject(value)) {
     return { status: "unrecognized", raw: JSON.stringify(value) };
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const attemptId =
     typeof record.attemptId === "string" ? record.attemptId : "";
   if (record.status === "acquired" && attemptId.length > 0) {
     return { status: "acquired", attemptId };
   }
-  if (record.status === "degraded" && attemptId.length > 0) {
+  if (
+    record.status === "degraded" &&
+    attemptId.length > 0 &&
+    isLayer0UnavailableCause(record.cause)
+  ) {
     return {
       status: "degraded",
       attemptId,
-      cause:
-        typeof record.cause === "string"
-          ? record.cause
-          : JSON.stringify(record.cause ?? null),
+      cause: record.cause,
       evidence: typeof record.evidence === "string" ? record.evidence : "",
     };
   }
   return { status: "unrecognized", raw: JSON.stringify(record) };
+}
+
+type Layer0UnavailableStringCause = Extract<Layer0UnavailableCause, string>;
+type Layer0UnavailableObjectCause = Exclude<Layer0UnavailableCause, string>;
+type Layer0UnavailableObjectKind = Layer0UnavailableObjectCause["kind"];
+
+type GuardedLayer0UnavailableStringCause =
+  | "addon-load-failed"
+  | "fs-unsupported"
+  | "lock-path-invalid"
+  | "sharing-violation-unattested";
+type GuardedLayer0UnavailableObjectKind = "os-error";
+
+type AssertNever<TValue extends never> = TValue;
+
+/**
+ * Compile-time-only, bidirectional coverage tripwires for the runtime guard
+ * below. A guarded literal outside the protocol union, or a protocol string
+ * cause/object kind missing from the guard, fails the desktop compile. Runtime
+ * decoding remains fail-open for version skew.
+ */
+type _Layer0UnavailableStringGuardCoverage = [
+  AssertNever<
+    Exclude<GuardedLayer0UnavailableStringCause, Layer0UnavailableStringCause>
+  >,
+  AssertNever<
+    Exclude<Layer0UnavailableStringCause, GuardedLayer0UnavailableStringCause>
+  >,
+];
+type _Layer0UnavailableObjectGuardCoverage = [
+  AssertNever<
+    Exclude<GuardedLayer0UnavailableObjectKind, Layer0UnavailableObjectKind>
+  >,
+  AssertNever<
+    Exclude<Layer0UnavailableObjectKind, GuardedLayer0UnavailableObjectKind>
+  >,
+];
+
+function isLayer0UnavailableCause(
+  value: unknown,
+): value is Layer0UnavailableCause {
+  if (
+    value === ("addon-load-failed" satisfies Layer0UnavailableStringCause) ||
+    value === ("fs-unsupported" satisfies Layer0UnavailableStringCause) ||
+    value === ("lock-path-invalid" satisfies Layer0UnavailableStringCause) ||
+    value ===
+      ("sharing-violation-unattested" satisfies Layer0UnavailableStringCause)
+  ) {
+    return true;
+  }
+  return (
+    isPlainObject(value) &&
+    value.kind === ("os-error" satisfies Layer0UnavailableObjectKind) &&
+    typeof value.syscall === "string" &&
+    typeof value.code === "string" &&
+    (typeof value.fsType === "string" || value.fsType === null)
+  );
 }
 
 /**

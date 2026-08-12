@@ -15,14 +15,12 @@
  * Ownership is resolved through the leader-scope stack (see
  * `lib/keybindings/leader-scope.ts`): `modOwnerScopeId` / `altOwnerScopeId` /
  * `modShiftOwnerScopeId` name the scope whose action currently owns each
- * modifier's visible hint. A clean bare hold always publishes the held
- * modifier's owner, and also publishes the OTHER modifiers' owners when a
- * DIFFERENT scope owns them - so two sibling app scopes (canvas tabs + header
- * tabs) show `⌘` and `⌥` bindings together, while a single overlay scope that
- * binds all three (the model picker: `⌘` rail, `⌥` reasoning, `⌘⇧` profile)
- * lights only the dimension for the modifier combo actually held. Consumer
- * hooks still gate their badges on their own scope id, so badges only light up
- * on the surface that actually handles the chord.
+ * modifier's visible hint. A clean bare `mod` or `alt` hold also publishes the
+ * other ordinary leader's owner when a DIFFERENT scope owns it, so two sibling
+ * app scopes (canvas tabs + header tabs) show `⌘` and `⌥` bindings together.
+ * `modShift` is exact-owner-only, so an unowned Cmd+Shift hold cannot reveal
+ * ordinary leader badges. Consumer hooks still gate their badges on their own
+ * scope id, so badges only light up on the surface that handles the chord.
  *
  * This context exposes visual hint eligibility, not raw physical key state.
  * Digit shortcuts still dispatch immediately from the global listener.

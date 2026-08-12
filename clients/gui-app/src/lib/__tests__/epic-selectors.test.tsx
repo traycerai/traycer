@@ -1,17 +1,28 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatRunSettings,
   GuiHarnessId,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  __getOpenEpicRegistryForTests,
+  EpicSessionContext,
+} from "@/lib/registries/epic-session-registry";
 import {
   useEpicChatHarnessId,
+  useEpicAgentRoleClaims,
+  useEpicAgentRoleClaimsByAgentId,
   useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
+  useRegisteredEpicLiveArtifactTitles,
 } from "@/lib/epic-selectors";
+
+const featureSettings = vi.hoisted(() => ({ enabled: true }));
+vi.mock("@/hooks/runner/use-runner-feature-settings-query", () => ({
+  useAgentRolesEnabled: () => featureSettings.enabled,
+}));
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -26,10 +37,96 @@ const handles: OpenEpicStoreHandle[] = [];
 
 afterEach(() => {
   cleanup();
+  __getOpenEpicRegistryForTests().disposeAll();
+  featureSettings.enabled = true;
   for (const handle of handles) {
     handle.dispose();
   }
   handles.length = 0;
+});
+
+describe("useRegisteredEpicLiveArtifactTitles", () => {
+  it("subscribes when a registered handle initially has no title", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const { result } = renderHook(() =>
+      useRegisteredEpicLiveArtifactTitles([
+        { epicId: "epic-late-handle", artifactId: "chat-1" },
+      ]),
+    );
+    expect(result.current).toEqual([null]);
+
+    const handle = createOpenEpicStore({
+      epicId: "epic-late-handle",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: { "chat-1": { ...chat("chat-1", null), title: "" } },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-late-handle", () => handle);
+    });
+    expect(result.current).toEqual([null]);
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": { ...chat("chat-1", null), title: "Generated title" },
+          },
+        },
+      });
+    });
+
+    expect(result.current).toEqual(["Generated title"]);
+  });
+
+  it("subscribes to a late handle when the refs identity is stable", () => {
+    const registry = __getOpenEpicRegistryForTests();
+    const { result } = renderHook(() => {
+      const refs = useMemo(
+        () => [{ epicId: "epic-stable-refs", artifactId: "chat-1" }],
+        [],
+      );
+      return useRegisteredEpicLiveArtifactTitles(refs);
+    });
+    expect(result.current).toEqual([null]);
+
+    const handle = createOpenEpicStore({
+      epicId: "epic-stable-refs",
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    });
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: { "chat-1": { ...chat("chat-1", null), title: "" } },
+      },
+    });
+    act(() => {
+      registry.acquire("epic-stable-refs", () => handle);
+    });
+    expect(result.current).toEqual([null]);
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": { ...chat("chat-1", null), title: "Stable refs title" },
+          },
+        },
+      });
+    });
+
+    expect(result.current).toEqual(["Stable refs title"]);
+  });
 });
 
 describe("useMaybeEpicTuiAgentHarnessId", () => {
@@ -236,6 +333,44 @@ describe("useEpicSyncPillState", () => {
     });
 
     expect(result.current).toBe("synced");
+  });
+});
+
+describe("agent role selectors", () => {
+  const claim = {
+    claimId: "11111111-1111-4111-8111-111111111111",
+    agentId: "agent-1",
+    userId: "user-1",
+    role: "Planner",
+    scope: "selector tests",
+    claimedAt: 1,
+  };
+
+  it("hides projected claims while disabled and restores them without a Yjs update", () => {
+    const handle = createHandle("epic-role-selector-gate");
+    handle.store.setState({
+      agentRoles: { byAgentId: { "agent-1": [claim] } },
+    });
+
+    const { result, rerender } = renderHook(
+      () => ({
+        claims: useEpicAgentRoleClaims("agent-1"),
+        byAgent: useEpicAgentRoleClaimsByAgentId(),
+      }),
+      { wrapper: openEpicWrapper(handle) },
+    );
+    expect(result.current.claims).toEqual([claim]);
+    expect(result.current.byAgent).toEqual({ "agent-1": [claim] });
+
+    featureSettings.enabled = false;
+    rerender();
+    expect(result.current.claims).toEqual([]);
+    expect(result.current.byAgent).toEqual({});
+
+    featureSettings.enabled = true;
+    rerender();
+    expect(result.current.claims).toEqual([claim]);
+    expect(result.current.byAgent).toEqual({ "agent-1": [claim] });
   });
 });
 

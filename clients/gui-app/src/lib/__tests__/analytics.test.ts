@@ -80,14 +80,47 @@ describe("analytics", () => {
       sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
         source: "direct_ui",
         harness: "codex",
-        mode: "regular",
         path: "/private/repository",
         query: "customer secret",
         prompt: "user content",
         error: "raw server response",
         userId: "user-1",
       }),
-    ).toEqual({ harness: "codex", mode: "regular" });
+    ).toEqual({ harness: "codex" });
+  });
+
+  it("accepts every settings section the type union declares", async () => {
+    // The runtime allowlist is what `section` is validated against, and a
+    // union member missing from it drops the event with no error anywhere -
+    // `devices` and `usage` had both gone missing exactly that way.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const sections = [
+      "agents",
+      "appearance",
+      "devices",
+      "diagnostics",
+      "general",
+      "host",
+      "keybindings",
+      "notifications",
+      "providers",
+      "shell",
+      "usage",
+      "worktrees",
+    ];
+    // `source` alongside `section`, matching what the sidebars actually emit -
+    // the sanitizer requires every expected key to be present, so omitting it
+    // would reject all twelve and prove nothing.
+    const rejected = sections.filter(
+      (section) =>
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
+          source: "direct_ui",
+          section,
+        }) === null,
+    );
+    expect(rejected).toEqual([]);
   });
 
   it("rejects an allowed key with a value outside its event taxonomy", async () => {
@@ -97,7 +130,6 @@ describe("analytics", () => {
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
         harness: "customer-secret",
-        mode: "regular",
       }),
     ).toBeNull();
   });
@@ -199,7 +231,6 @@ describe("analytics", () => {
 
     sdk.capture("chat_message_sent", {
       harness: "codex",
-      mode: "regular",
     });
     sdk.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", {
       email: "alice@example.com",
@@ -217,7 +248,6 @@ describe("analytics", () => {
       platform: "macos",
       release_channel: "production",
       harness: "codex",
-      mode: "regular",
     });
     // $session_id / $window_id are the ONLY SDK enrichment allowed through:
     // opaque SDK-generated UUIDs that keep session analyses working.
@@ -226,7 +256,6 @@ describe("analytics", () => {
       "app_version",
       "distinct_id",
       "harness",
-      "mode",
       "platform",
       "release_channel",
       "token",

@@ -55,8 +55,11 @@ const SLASH_MENU_COPY = {
 const LOAD_FAILED_LABEL = "Couldn't load commands";
 const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
-// Conservative bound for open-time placement decision; list is capped via
-// max-h CSS so the rendered menu never exceeds this.
+// Open-time preference only: how much room a side needs before it is worth
+// opening into. The rendered menu routinely exceeds this - a full roster of
+// files or terminals grows the list to its `max-h` viewport cap - and that is
+// fine, because `flip()` re-picks the side and `shift()` keeps it on screen
+// once the real height is known. Nothing here bounds the menu.
 const MENU_HEIGHT_ESTIMATE = 280;
 
 type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
@@ -351,7 +354,17 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           ref={listRef}
           id={menuId}
           role="listbox"
-          className="max-h-[min(50vh,12rem)] overflow-y-auto py-1"
+          // The first menu (mention categories, slash commands) stays compact:
+          // tall enough for the full category roster without a scrollbar,
+          // while typed-query results scroll behind the cap. A provider
+          // submenu mirrors a bounded roster (terminals, git refs), so it
+          // grows to the viewport cap instead of scrolling.
+          className={cn(
+            "overflow-y-auto py-1",
+            kind === "mention" && step.kind === "provider"
+              ? "max-h-[70vh]"
+              : "max-h-[min(50vh,16rem)]",
+          )}
         >
           <ComposerMenuBody
             renderedItems={renderedItems}

@@ -9,6 +9,7 @@ import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
 import type {
   EpicChatMentionEntry,
   EpicTerminalAgentMentionEntry,
+  EpicTerminalMentionEntry,
 } from "@/lib/composer/types";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
@@ -23,8 +24,28 @@ function context(
     epicEntries: [],
     currentEpicId: null,
     agentEntries: [],
+    terminalEntries: [],
     epicAttachedRoots: new Set(),
     ...overrides,
+  };
+}
+
+function terminal(fields: {
+  terminalId: string;
+  label: string;
+  cwd: string;
+  updatedAt: number;
+}): EpicTerminalMentionEntry {
+  return {
+    kind: "epic-terminal",
+    id: `terminal:epic-1:${fields.terminalId}`,
+    token: `terminal:epic-1/${fields.terminalId}`,
+    epicId: "epic-1",
+    terminalId: fields.terminalId,
+    label: fields.label,
+    description: fields.cwd,
+    cwd: fields.cwd,
+    updatedAt: fields.updatedAt,
   };
 }
 
@@ -44,6 +65,7 @@ function chatAgent(
     description: "Auth epic",
     parentId: null,
     updatedAt,
+    archived: false,
     agentInterface: "chat",
     runtimeSupportsMessageDelivery: true,
   };
@@ -75,6 +97,7 @@ function terminalAgent(fields: {
     description: "Auth epic",
     parentId: null,
     updatedAt,
+    archived: false,
     agentInterface: "terminal",
     runtimeSupportsMessageDelivery,
   };
@@ -135,6 +158,7 @@ describe("mention provider registry", () => {
       "Git",
       "Task",
       "Agents",
+      "Terminals",
       "Artifacts",
     ]);
 
@@ -167,6 +191,90 @@ describe("mention provider registry", () => {
       epicId: "epic-1",
       terminalAgentId: "tui-1",
     });
+  });
+
+  it("lists Task terminals in their own category, separate from Agents", () => {
+    const terminalEntries = [
+      terminal({
+        terminalId: "term-1",
+        label: "repo · zsh",
+        cwd: "/repo",
+        updatedAt: 10,
+      }),
+      terminal({
+        terminalId: "term-2",
+        label: "web · vite",
+        cwd: "/repo/apps/web",
+        updatedAt: 20,
+      }),
+    ];
+    const agentEntries = [chatAgent("chat-1", "Kickoff chat", 30)];
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
+    );
+    const terminalsStep = navigateEntry(entries[6]);
+
+    const rows = mentionProviderRegistry.entries(
+      terminalsStep,
+      context({ currentEpicId: "epic-1", agentEntries, terminalEntries }),
+    );
+
+    // Terminals never appear under Agents: a shell has no inbox, so listing it
+    // there would imply it can be messaged.
+    expect(labels(rows)).toEqual(["Back", "web · vite", "repo · zsh"]);
+    expect(rows.map((row) => row.detail)).toEqual([
+      "",
+      "/repo/apps/web",
+      "/repo",
+    ]);
+    expect(mentionProviderRegistry.menuCopy(terminalsStep)).toEqual({
+      header: "Terminals",
+      empty: "No terminals available",
+    });
+  });
+
+  it("completes a terminal row into a pointer-only terminal mention", () => {
+    const terminalEntries = [
+      terminal({
+        terminalId: "term-1",
+        label: "repo · zsh",
+        cwd: "/repo",
+        updatedAt: 10,
+      }),
+    ];
+    const rows = mentionProviderRegistry.entries(
+      {
+        kind: "provider",
+        providerId: "terminals",
+        stepId: "root",
+        workspacePath: null,
+      },
+      context({ currentEpicId: "epic-1", terminalEntries }),
+    );
+
+    expect(completeEntry(rows[1])).toMatchObject({
+      contextType: "terminal",
+      path: "terminal:epic-1/term-1",
+      epicId: "epic-1",
+      terminalId: "term-1",
+      label: "repo · zsh",
+      // A mention is a pointer: no terminal output rides along with it.
+      chatId: null,
+      terminalAgentId: null,
+      artifactId: null,
+    });
+  });
+
+  it("hides the Terminals category outside an open Task", () => {
+    expect(
+      labels(
+        mentionProviderRegistry.entries(
+          ROOT_MENTION_STEP,
+          context({ currentEpicId: null }),
+        ),
+      ),
+    ).not.toContain("Terminals");
   });
 
   it("labels each Agent row by interface, and marks unsupported delivery without hiding it", () => {
@@ -206,14 +314,105 @@ describe("mention provider registry", () => {
       )
       .slice(1);
 
+    // The row detail carries harness and reference-only capability, never an
+    // interface label; the trailing slot's time rides `updatedAt` separately.
     expect(rows.map((row) => row.detail)).toEqual([
-      "Chat",
-      "Terminal · Claude Code",
-      "Terminal · Codex · Reference only",
-      "Terminal · OpenCode · Reference only",
+      "",
+      "Claude Code",
+      "Codex · Reference only",
+      "OpenCode · Reference only",
     ]);
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, 9, 8, 7]);
     // Reference-only Agents stay selectable - only delivery is unavailable.
     expect(rows.every((row) => row.action.kind === "complete")).toBe(true);
+  });
+
+  it("ranks archived Agents below live ones at equal match quality", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          agentEntries: [
+            // The archived record is the more recent one: archived-ness must
+            // outweigh recency, not just tie-break it.
+            { ...chatAgent("chat-arch", "Archived run", 100), archived: true },
+            chatAgent("chat-live", "Live run", 10),
+          ],
+        }),
+      )
+      .slice(1);
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "chat:epic-1:chat-live",
+      "chat:epic-1:chat-arch",
+    ]);
+    expect(rows.map((row) => row.archived)).toEqual([false, true]);
+    // Archived rows carry no time: the record clock is bumped by the archive
+    // write itself, so a label would always claim the archive action as
+    // activity. The badge alone marks them.
+    expect(rows.map((row) => row.updatedAt)).toEqual([10, null]);
+  });
+
+  it("never lets archived-ness override match quality", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          query: "auth",
+          agentEntries: [
+            chatAgent("chat-live", "my oauth notes", 10),
+            { ...chatAgent("chat-arch", "auth runner", 5), archived: true },
+          ],
+        }),
+      )
+      .slice(1);
+
+    // The archived prefix hit still beats the live substring hit: demotion
+    // applies within a match-quality band, never across bands.
+    expect(rows.map((row) => row.id)).toEqual([
+      "chat:epic-1:chat-arch",
+      "chat:epic-1:chat-live",
+    ]);
+  });
+
+  it("carries the archived demotion into root search within a match tier", () => {
+    const entries = mentionProviderRegistry.entries(
+      ROOT_MENTION_STEP,
+      context({
+        currentEpicId: "epic-1",
+        query: "auth",
+        agentEntries: [
+          // Same label = same fuzzy score and same prefix tier: the tie falls
+          // back to the provider's input order, where archived sorts last.
+          { ...chatAgent("chat-arch", "auth runner", 100), archived: true },
+          chatAgent("chat-live", "auth runner", 10),
+          // A live substring hit sits in a LOWER tier than the archived
+          // prefix hits - demotion never lifts it above them.
+          chatAgent("chat-sub", "my auth helper", 200),
+        ],
+      }),
+    );
+
+    const agentIds = entries
+      .map((entry) => entry.id)
+      .filter((id) => id.startsWith("chat:epic-1:"));
+    expect(agentIds).toEqual([
+      "chat:epic-1:chat-live",
+      "chat:epic-1:chat-arch",
+      "chat:epic-1:chat-sub",
+    ]);
   });
 
   it("filters mixed-interface Agents by query and falls back to untitled labels", () => {

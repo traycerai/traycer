@@ -20,7 +20,10 @@ import {
   HostRequestAuthority,
   HostTransportEndpoint,
 } from "../../../shared/host-transport/host-messenger";
-import { WsRpcClient } from "../../../shared/host-transport/ws-rpc-client";
+import {
+  HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+  WsRpcClient,
+} from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -100,6 +103,10 @@ export async function callHostRpc<
  * callers (IDE hook commands such as title/activity reporting) where blocking
  * the agent for a multi-attempt retry of a non-responsive host is worse than a
  * quick miss.
+ *
+ * Because it never redials, it also waives the host attestation window (see
+ * `attestationWindowForPolicy`): a post-send miss surfaces at the 15s response
+ * deadline instead of waiting out an attestation this caller could not act on.
  */
 export async function callHostRpcFastFail<
   Method extends keyof HostRpcRegistry & string,
@@ -208,6 +215,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
         webSocketFactory: createWhatwgWebSocketFactory(),
         dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
         frameTimeoutMs: FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
       }),
       revalidator,
     ),
@@ -450,7 +458,7 @@ function mapHostRpcError(err: HostRpcError): CliError {
     return cliError({
       code: CLI_ERROR_CODES.FORBIDDEN,
       message:
-        "traycer: access denied for this epic - check --epic-id and that you're signed in to the account that owns it.",
+        "traycer: access denied for this epic - check TRAYCER_EPIC_ID and that you're signed in to the account that owns it.",
       details: null,
       exitCode: 1,
     });
@@ -479,7 +487,7 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
-  if (err.code === "E_INVALID_ARGUMENT") {
+  if (err.code === "E_INVALID_ARGUMENT" || err.code === "MESSAGE_TOO_LARGE") {
     return cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `traycer: ${err.message}`,
@@ -545,4 +553,27 @@ function retryPolicyLabel(
   policy: TransportRetryPolicy,
 ): "default" | "fast-fail" {
   return policy === NO_RETRY_TRANSPORT_POLICY ? "fast-fail" : "default";
+}
+
+/**
+ * The attestation window a call gets is a function of what it could do with an
+ * attestation.
+ *
+ * A retrying call gets the production window: the CLI's 15s response deadline
+ * is half the host's 30s post-`openAck` deadline - and a stalled host fires that
+ * timer later still - so without the window every stalled host would surface an
+ * ambiguous, non-retryable timeout long before it could attest that it never
+ * dispatched the request, and the retry wrapper would never get its one safe
+ * reason to redial a non-idempotent method.
+ *
+ * A `maxRetries: 0` policy has no such reason to wait. Its retry wrapper goes
+ * straight to the final attempt and propagates even a valid
+ * `RetryableTransportError` without redialing, so holding the socket open for an
+ * attestation would only delay a failure that is already decided - exactly what
+ * `callHostRpcFastFail`'s latency-bound IDE-hook callers must not pay. Keyed off
+ * `maxRetries` rather than policy identity so any future no-retry policy
+ * inherits the same wiring.
+ */
+function attestationWindowForPolicy(policy: TransportRetryPolicy): number {
+  return policy.maxRetries === 0 ? 0 : HOST_POST_OPEN_ATTESTATION_WINDOW_MS;
 }

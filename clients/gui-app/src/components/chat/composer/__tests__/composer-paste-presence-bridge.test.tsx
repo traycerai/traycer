@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { createRef, useState, type RefObject } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -99,7 +98,9 @@ function BridgeHarness({
       hasPastedImageBytes={hasPastedImageBytes}
       ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
-      onSnapshot={() => undefined}
+      onDocumentChange={() => undefined}
+
+      onSelectionChange={() => undefined}
       onSubmit={() => undefined}
       onPaste={() => undefined}
       onDragOver={() => undefined}

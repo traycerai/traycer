@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   commitHeaderStripDrop,
@@ -265,6 +264,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -312,6 +312,7 @@ describe("root dnd commits - left panel", () => {
         { panelIds: ["artifacts"] },
         { panelIds: ["terminals"] },
         { panelIds: ["git-diff"] },
+        { panelIds: ["pull-requests"] },
         { panelIds: ["file-tree"] },
         { panelIds: ["sharing"] },
         { panelIds: ["comments"] },
@@ -342,6 +343,7 @@ describe("root dnd commits - left panel", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
     ]);
@@ -382,6 +384,7 @@ describe("root dnd commits - left panel", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "git-diff", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -398,6 +401,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     { panelIds: ["artifacts"] },
     { panelIds: ["terminals"] },
     { panelIds: ["git-diff"] },
+    { panelIds: ["pull-requests"] },
     { panelIds: ["file-tree"] },
     { panelIds: ["sharing"] },
     { panelIds: ["comments"] },
@@ -415,6 +419,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -432,6 +437,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff", "artifacts"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -443,6 +449,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -467,6 +474,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -482,6 +490,7 @@ describe("root dnd commits - left panel drop resolver", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -503,6 +512,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     ).toEqual([
       { panelIds: ["chats", "git-diff", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },

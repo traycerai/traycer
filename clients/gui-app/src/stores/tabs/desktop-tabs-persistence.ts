@@ -43,6 +43,7 @@ const SETTINGS_PATHS = new Set([
   "providers",
   "service",
   "shell",
+  "usage",
   "worktrees",
 ]);
 
@@ -290,6 +291,7 @@ function createDesktopTabsPersistenceController(
     if (
       state.items !== previous.items ||
       state.activeItemId !== previous.activeItemId ||
+      state.activationHistory !== previous.activationHistory ||
       state.systemTabs !== previous.systemTabs
     ) {
       schedule();
@@ -367,6 +369,7 @@ function currentLayout(): PersistedTabStripLayout {
     items: state.items,
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
+    activationHistory: state.activationHistory,
   };
 }
 
@@ -635,6 +638,7 @@ function desktopLayoutJson(layout: PersistedTabStripLayout): DesktopJsonValue {
     version: 2,
     items: layout.items.map(desktopStripItemJson),
     activeItemId: layout.activeItemId,
+    activationHistory: (layout.activationHistory ?? []).map(desktopRefJson),
     systemTabs: {
       history: desktopSystemTabJson(layout.systemTabs.history),
       settings: desktopSystemTabJson(layout.systemTabs.settings),

@@ -10,7 +10,7 @@ import type { MentionPathTree } from "@/lib/path";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
-  "epic" | "chat" | "terminal-agent" | EpicArtifactKind | "user";
+  "epic" | "chat" | "terminal-agent" | "terminal" | EpicArtifactKind | "user";
 export type MentionContextType =
   PathKind | "git" | "worktree" | EntityMentionContextType;
 
@@ -40,6 +40,13 @@ interface EpicAgentMentionEntryBase {
   readonly description: string;
   readonly parentId: string | null;
   readonly updatedAt: number;
+  /**
+   * Whether the Agent's record is archived. Archived Agents stay
+   * referenceable - the picker lists them - but rank below live Agents at
+   * equal match quality and carry a visible badge, so a stale record never
+   * shadows the active one the user almost certainly means.
+   */
+  readonly archived: boolean;
   readonly agentInterface: AgentMentionInterface;
   /**
    * Whether this Agent's RUNTIME supports agent-to-agent delivery at all - the
@@ -78,8 +85,33 @@ export interface EpicTerminalAgentMentionEntry extends EpicAgentMentionEntryBase
 export type EpicAgentMentionEntry =
   EpicChatMentionEntry | EpicTerminalAgentMentionEntry;
 
+/**
+ * A plain interactive terminal in the open Task - the shell itself, not an
+ * Agent reached through one. Deliberately NOT an `EpicAgentMentionEntry` arm:
+ * a coding agent can only READ a terminal (it has no inbox), so it carries
+ * none of the Agent interface/delivery metadata and lists under its own
+ * category.
+ *
+ * Sourced from the same host `terminal.list` rows the Task's Terminals sidebar
+ * renders, so the picker and that panel never disagree about what exists.
+ */
+export interface EpicTerminalMentionEntry {
+  readonly kind: "epic-terminal";
+  readonly id: string;
+  readonly token: string;
+  readonly epicId: string;
+  readonly terminalId: string;
+  /** Terminal title, resolved exactly as the sidebar row resolves it. */
+  readonly label: string;
+  readonly description: string;
+  readonly cwd: string;
+  /** Session start time - terminals carry no separate "updated" clock. */
+  readonly updatedAt: number;
+}
+
 export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
-export type MentionSuggestionEntry = WorkspaceEntry | EpicMentionEntry;
+export type MentionSuggestionEntry =
+  WorkspaceEntry | EpicMentionEntry | EpicTerminalMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";
@@ -154,6 +186,8 @@ export type EntityMentionAttachment = {
   artifactType: EpicArtifactKind | null;
   chatId: string | null;
   terminalAgentId: string | null;
+  /** Session id of a plain terminal mention; null for every other entity. */
+  terminalId: string | null;
   status: string | number | null;
 };
 
@@ -198,3 +232,15 @@ export type ProviderSlashCommand = GuiAgentCommandOption & {
 };
 
 export type SlashCommand = ProviderSlashCommand;
+
+/**
+ * Character that opened a slash picker, or that a raw-text prompt led with.
+ * Purely what the user pressed - it does not narrow the catalog. The menu echoes
+ * it so a row picked with `$` does not read as `/name`, and the chip keeps it for
+ * the same reason; translating a skill into the form a provider expects (Codex
+ * takes `$name`, everything else `/name`) is the harness layer's job.
+ *
+ * Lives here rather than beside the picker so the text-to-chip converters in
+ * `tiptap-json-content.ts` can name it without importing from the editor.
+ */
+export type SlashCommandTrigger = "/" | "$";

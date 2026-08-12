@@ -8,6 +8,7 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
 import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import { stashActivePrompt } from "@/lib/commands/active-prompt-stash-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -47,6 +48,7 @@ import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 
 const SELECTED_GROUP_TAB_SELECTOR =
   '[data-tab-instance-id][data-selected="true"]';
@@ -367,6 +369,7 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // No-op (false) when no composer is active, matching the "hidden/disabled"
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
+  "composer.stash": () => stashActivePrompt(),
   // No `nav.back` / `nav.forward` entries: in-app back/forward has no keyboard
   // chord (see ACTION_META). The palette + header buttons call the shared
   // `goBack`/`goForward` actions directly via the router seam.
@@ -408,6 +411,7 @@ export function isExternallyHandled(id: ActionId): boolean {
 // canvas (the store reuses an active blank tab), but on the landing page it
 // shares the new-terminal handler, so it needs the same protection.
 const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
+  "composer.stash",
   "composer.model-picker.toggle",
   "app.terminal.toggle",
   "app.terminal.new",
@@ -737,11 +741,36 @@ function focusGroupEditor(groupId: string): boolean {
     SELECTED_GROUP_TAB_SELECTOR,
   );
   const editor =
-    selectedTab?.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
-    selectedTab?.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
-  if (editor === undefined || editor === null) return false;
+    findComposerOrArtifactEditor(selectedTab) ??
+    findComposerOrArtifactEditor(hostedRecordForSelectedTab(selectedTab));
+  if (editor === null) return false;
   editor.focus({ preventScroll: true });
   return true;
+}
+
+function findComposerOrArtifactEditor(
+  scope: HTMLElement | null | undefined,
+): HTMLElement | null {
+  if (scope === null || scope === undefined) return null;
+  return (
+    scope.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+    scope.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR)
+  );
+}
+
+/**
+ * A hosted chat's own composer/editor lives in `StableTileSurfaceHost`'s
+ * plane - `selectedTab` (the pane's tab-body wrapper) only ever contains
+ * `TileSurfaceSlot`'s empty geometry anchor for it. `selectedTab` still
+ * carries the tab's own `data-tab-instance-id`, so no extra plumbing is
+ * needed to locate the hosted record for the same instance.
+ */
+function hostedRecordForSelectedTab(
+  selectedTab: HTMLElement | null | undefined,
+): HTMLElement | null {
+  const instanceId = selectedTab?.dataset.tabInstanceId;
+  if (instanceId === undefined) return null;
+  return findHostedTileElement(document, instanceId);
 }
 
 function focusActiveGroupEditor(router: KeybindingRouter): boolean {

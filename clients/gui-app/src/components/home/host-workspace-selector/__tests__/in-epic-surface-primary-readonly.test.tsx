@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
@@ -52,6 +51,16 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
     data: { workspaces: [] },
     isFetching: false,
     isLoading: false,
+  }),
+}));
+// Its sibling above is mocked, so the real hook's `useQueryClient` would be
+// the only thing in this file demanding a provider it deliberately has none of.
+vi.mock("@/hooks/worktree/use-worktree-workspaces-refresh", () => ({
+  useWorktreeWorkspacesRefresh: () => ({
+    refresh: () => Promise.resolve(),
+    isRefreshing: false,
+    checkedAt: null,
+    canRefresh: false,
   }),
 }));
 vi.mock("@/hooks/worktree/use-worktree-set-entry-mode-mutation", () => ({

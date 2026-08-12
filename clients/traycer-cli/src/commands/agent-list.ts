@@ -26,7 +26,7 @@ export function buildAgentListCommand(opts: {
       callHostRpc("agent.list", {
         epicId,
         senderAgentId,
-        scope: opts.all ? "all" : "user",
+        scope: opts.all ? ("all" as const) : ("user" as const),
       }),
     );
     const response = parseHostResponse(listAgentsResponseSchema, result);

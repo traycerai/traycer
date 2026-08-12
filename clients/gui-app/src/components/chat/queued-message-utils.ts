@@ -8,6 +8,11 @@ export function queueItemSteerLocked(item: ChatQueuedItem): boolean {
 export function queueItemCanPauseFromQueueHeader(
   item: ChatQueuedItem,
 ): boolean {
+  // The header's Pause button holds the user's own backlog. A managed-command
+  // digest is system-owned, so it is not a "human queued message" the button
+  // speaks for - it rides the queue's pause state, but never justifies
+  // offering the button.
+  if (item.kind !== "prompt") return false;
   if (item.sender.type !== "user") return false;
   if (item.status === "paused") return false;
   if (item.status === "steering" || item.status === "injected") return false;

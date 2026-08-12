@@ -33,6 +33,7 @@ const DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
   localHostState: "unknown",
   stage: "loading",
   progress: null,
+  lastProgress: null,
   provisioningError: null,
   provisioning: false,
   removed: false,
@@ -49,6 +50,9 @@ const DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
     errorMessage: null,
     retrying: false,
     retry: () => undefined,
+    degraded: false,
+    unreachable: false,
+    hostStatus: null,
   },
 };
 
@@ -567,8 +571,9 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Could not start Traycer Host",
-      message: "Traycer Host could not start.",
-      code: null,
+      message:
+        "Traycer Host could not start. Host health: host unknown, compat compatible.",
+      code: "HOST_PROVISIONING_FAILED",
       source: "Host startup",
     });
   });
@@ -604,11 +609,292 @@ describe("<SurfaceReadinessBoundary /> restored default-host detail (MED7)", () 
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
       title: "Host update required",
-      message: "Traycer Host requires an update.",
-      code: null,
+      message:
+        "Traycer Host requires an update. Host health: host unknown, compat incompatible.",
+      code: "HOST_INCOMPATIBLE",
+      source: "Host compatibility",
+    });
+  });
+
+  // traycer#858 / #860 / #862: three field reports, one template, three
+  // unrelated causes. The pre-filled report must name the family it was filed
+  // from, and carry the state the shell already knew.
+  it("files an unreachable-host report, not a compatibility one, when the probe never reached the host", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      localHostState: "ready",
+      hostBusy: true,
+      compatibility: {
+        ...DEFAULT_HOST_PRESENTATION.compatibility,
+        status: "failed",
+        errorMessage: "fetch failed",
+        unreachable: true,
+      },
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "compatibility-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    expect(screen.getByText("Traycer Host is not responding.")).toBeTruthy();
+    expect(screen.getByText("fetch failed")).toBeTruthy();
+    expect(
+      screen.queryByText(/Could not verify host compatibility/),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Traycer Host is not responding",
+      message:
+        "The app could not reach Traycer Host. Host health: host ready, compat unreachable, busy.",
+      code: "HOST_UNREACHABLE",
+      source: "Host connection",
+    });
+  });
+
+  it("keeps compatibility wording when the host itself rejected the handshake", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      localHostState: "ready",
+      compatibility: {
+        ...DEFAULT_HOST_PRESENTATION.compatibility,
+        status: "failed",
+        errorMessage: "status probe failed",
+        unreachable: false,
+      },
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "compatibility-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    expect(
+      screen.getByText("Could not verify host compatibility."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Could not verify Traycer Host compatibility",
+      message:
+        "Traycer Host rejected the compatibility handshake. Host health: host ready, compat rejected.",
+      code: "HOST_COMPAT_PROBE_REJECTED",
+      source: "Host connection",
+    });
+  });
+
+  // traycer#860 / #4747: a host that answered host.status as busy-serving
+  // turns must not read like one that never started. The pre-filled report
+  // health line carries the host's own busy session count.
+  it("names the host's busy sessions in the provisioning-error report health line", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      provisioningError: new Error("ensure failed"),
+      compatibility: {
+        ...DEFAULT_HOST_PRESENTATION.compatibility,
+        hostStatus: {
+          busy: true,
+          busySessionCount: 3,
+          hostVersion: "x",
+        },
+      },
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "provisioning-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Could not start Traycer Host",
+      message:
+        "Traycer Host could not start. Host health: host unknown, compat compatible, busy 3 sessions.",
+      code: "HOST_PROVISIONING_FAILED",
       source: "Host startup",
     });
   });
+
+  it("singularizes the busy session count in the report health line", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      provisioningError: new Error("ensure failed"),
+      compatibility: {
+        ...DEFAULT_HOST_PRESENTATION.compatibility,
+        hostStatus: {
+          busy: true,
+          busySessionCount: 1,
+          hostVersion: "x",
+        },
+      },
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "provisioning-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Could not start Traycer Host",
+      message:
+        "Traycer Host could not start. Host health: host unknown, compat compatible, busy 1 session.",
+      code: "HOST_PROVISIONING_FAILED",
+      source: "Host startup",
+    });
+  });
+
+  // traycer#862: once the provisioning mutation settles, live `progress` is
+  // null. The report must still name the last observed stage via lastProgress.
+  it("falls back to lastProgress in the provisioning-error report when live progress is null", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const presentation: DefaultHostReadinessPresentation = {
+      ...DEFAULT_HOST_PRESENTATION,
+      progress: null,
+      lastProgress: {
+        stage: "extract",
+        percent: 80,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+      },
+      provisioningError: new Error("ensure failed"),
+    };
+    const controller: HostReadinessController = {
+      readinessFor: () => ({ kind: "provisioning-error" }),
+      defaultHostPresentation: presentation,
+    };
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="epic" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Could not start Traycer Host",
+      message:
+        "Traycer Host could not start. Host health: host unknown, compat compatible, last progress extract 80%.",
+      code: "HOST_PROVISIONING_FAILED",
+      source: "Host startup",
+    });
+  });
+
+  // The retained stage outlives the attempt that produced it (cleared only by
+  // a new attempt or a successful settle), so a host that failed to install,
+  // came up by some other route, and later stopped answering the probe would
+  // otherwise append a dead install stage to a #860-shaped report - pointing
+  // triage at provisioning, the exact wrong place. Only the provisioning-error
+  // card, which renders only while its own converge error is live, may use it.
+  it.each([
+    {
+      name: "unreachable-host",
+      readiness: { kind: "compatibility-error" } as const,
+      compatibility: {
+        status: "failed" as const,
+        errorMessage: "fetch failed",
+        unreachable: true,
+      },
+      expected: {
+        title: "Traycer Host is not responding",
+        message:
+          "The app could not reach Traycer Host. Host health: host ready, compat unreachable.",
+        code: "HOST_UNREACHABLE",
+        source: "Host connection",
+      },
+    },
+    {
+      name: "incompatible-host",
+      readiness: { kind: "incompatible-host" } as const,
+      compatibility: {
+        status: "incompatible" as const,
+        errorMessage: null,
+        unreachable: false,
+      },
+      expected: {
+        title: "Host update required",
+        message:
+          "Traycer Host requires an update. Host health: host ready, compat incompatible.",
+        code: "HOST_INCOMPATIBLE",
+        source: "Host compatibility",
+      },
+    },
+  ])(
+    "keeps a settled install stage out of the $name report",
+    ({ readiness, compatibility, expected }) => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+      const presentation: DefaultHostReadinessPresentation = {
+        ...DEFAULT_HOST_PRESENTATION,
+        localHostState: "ready",
+        progress: null,
+        // Left over from an install that died long before this failure.
+        lastProgress: {
+          stage: "extract",
+          percent: 80,
+          bytes: null,
+          totalBytes: null,
+          message: null,
+        },
+        compatibility: {
+          ...DEFAULT_HOST_PRESENTATION.compatibility,
+          ...compatibility,
+        },
+      };
+      const controller: HostReadinessController = {
+        readinessFor: () => readiness,
+        defaultHostPresentation: presentation,
+      };
+
+      renderWithProviders(
+        controller,
+        <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+          <Member id="epic" />
+        </SurfaceReadinessBoundary>,
+        buildRunnerHost(),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Report issue/i }));
+      const context = useDesktopDialogStore.getState().reportIssueContext;
+      expect(context).toEqual(expected);
+      expect(context?.message).not.toContain("last progress");
+    },
+  );
 });
 
 describe("<SurfaceReadinessBoundary /> single respawn owner (MED6)", () => {

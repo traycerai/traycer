@@ -233,11 +233,52 @@ describe("systemd unit — scaffolding and the token guard", () => {
       cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
     });
     expect(unit).toContain("[Service]\nType=simple");
+    expect(unit).toContain("\nOOMPolicy=continue\n");
     expect(unit).toContain("Restart=on-failure");
     expect(unit).toContain("[Install]\nWantedBy=default.target");
     expect(unit).not.toContain("--environment");
     expect(unit).not.toContain("--bundle");
     expect(unit).not.toContain("--node-bin");
+  });
+
+  it("names the journald stream after the label, not the /bin/sh wrapper", () => {
+    // journald's default SYSLOG_IDENTIFIER is the basename of the Exec
+    // line's first executable - `sh` - and the stdout stream opens BEFORE
+    // the wrapper exec's the CLI, so exec never renames it. Without this
+    // line every supervisor message the debugging user reads in
+    // `journalctl --user -u <unit>` is attributed to `sh[pid]`.
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+    expect(unit).toContain("\nSyslogIdentifier=ai.traycer.host.dev\n");
+  });
+
+  it("gates the start on the CLI binary existing, so a stranded definition goes inert instead of restart-looping", () => {
+    // A definition can outlive the CLI it points at (`apt remove
+    // traycer-cli` with the unit still enabled). Without the condition,
+    // every login exec's a missing $0 → exit 127 → Restart=on-failure loops
+    // it into a `failed` unit on every boot. With it, systemd skips the
+    // start as "condition not met": visible in status, not failing, and
+    // re-evaluated fresh by the next `systemctl start` after a reinstall.
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+    expect(unit).toContain(
+      "\nConditionFileIsExecutable=/home/test/.traycer/cli/bin/traycer\n",
+    );
+  });
+
+  it("omits the path condition for a non-absolute CLI command", () => {
+    // systemd rejects relative paths in Condition*= values; the self-invoke
+    // fallback can in principle yield a bare command, which must degrade to
+    // "no condition" rather than an invalid unit.
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "traycer", args: [] },
+    });
+    expect(unit).not.toContain("ConditionFileIsExecutable");
   });
 
   it("refuses to emit a unit when a CLI path carries a character systemd would mis-parse", () => {

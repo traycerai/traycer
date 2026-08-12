@@ -15,6 +15,7 @@ import {
   profileDisplayLabel,
   profileAuthStatusText,
   profileRowStatusSuffix,
+  type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
 import {
   profileUsageAccessibleStatus,
@@ -26,7 +27,7 @@ import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usag
 import { ProfileUsageCompactMeter } from "@/components/providers/profile-usage-compact-meter";
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const PROFILE_DROPDOWN_KEYS = new Set([
@@ -76,6 +77,14 @@ interface ProfileDropdownProps {
   /** Picker-only cached usage presentation. Settings passes `null`, which
    *  preserves the identity-only rows and mounts no usage observers/sidecar. */
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  /** Per-row admission override keyed by `profileCommitId` (the TUI continue-
+   *  under-another-profile dialog's bulk fork-admission preflight). `null`
+   *  for every other caller - no row is overridden, matching today's
+   *  behavior exactly. */
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
 }
 
 /**
@@ -99,6 +108,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     contentContainer,
     onCloseAutoFocus,
     usagePresentation,
+    admissionByProfileId,
   } = props;
   const activeProfile =
     profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
@@ -198,20 +208,33 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         }}
       >
         {profiles.map((profile, index) => {
-          const statusSuffix = profileRowStatusSuffix(profile);
-          const commitId = profileCommitId(profile);
-          const label = profileDisplayLabel(profile);
-          const shortcutHint = shortcutHintForIndex(index);
-          const usageEntry = usagePresentation?.entries.get(commitId);
-          const selected = commitId === activeProfileId;
-          const accessibleLabel = profileRowAccessibleLabel({
-            label,
-            profile,
-            selected,
+          const {
             statusSuffix,
+            commitId,
+            label,
+            shortcutHint,
             usageEntry,
+            selected,
+            admission,
+            rowDisabled,
+            accessibleLabel,
+          } = computeProfileRowState({
+            profile,
+            index,
+            activeProfileId,
+            shortcutHintForIndex,
+            usagePresentation,
+            admissionByProfileId,
           });
-          return (
+          // Radix's roving-tabindex skips a disabled item entirely, so its
+          // accessible label (which carries the admission reason) is never
+          // read for keyboard/AT users - the hover-only tooltip below has
+          // the same gap. A disabled row with a reason renders that reason
+          // as a static second line instead, which needs no focus/hover to
+          // be perceivable.
+          const visibleDisabledReason =
+            rowDisabled && admission !== null ? admission.reason : null;
+          const row = (
             <DropdownMenuItem
               key={profile.profileId}
               ref={(node) => {
@@ -219,50 +242,64 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                   setPreviewAnchor(node);
                 }
               }}
+              disabled={rowDisabled}
               aria-label={accessibleLabel}
               aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
               aria-current={selected ? "true" : undefined}
-              className={cn("pr-1.5", statusSuffix !== null && "opacity-60")}
+              className={cn(
+                "pr-1.5",
+                (statusSuffix !== null || rowDisabled) && "opacity-60",
+                visibleDisabledReason !== null &&
+                  "flex-col items-start gap-0.5",
+              )}
               onFocus={(event) => preview(commitId, event.currentTarget)}
               onPointerMove={(event) => preview(commitId, event.currentTarget)}
               onSelect={() => onSelectProfile(commitId)}
             >
-              <AccentDot
-                profileId={profile.profileId}
-                accentColor={profile.accentColor}
-                label={null}
-                variant="inline"
-                size="default"
-                className={undefined}
-              />
-              <span className="flex min-w-0 flex-1 items-center gap-2">
-                <span className="min-w-0 truncate">{label}</span>
-                {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+              <span className="flex w-full min-w-0 items-center gap-1.5">
+                <AccentDot
+                  profileId={profile.profileId}
+                  accentColor={profile.accentColor}
+                  label={null}
+                  variant="inline"
+                  size="default"
+                  className={undefined}
+                />
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 truncate">{label}</span>
+                  {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+                </span>
+                {statusSuffix !== null ? (
+                  <span className="shrink-0 text-muted-foreground">
+                    {statusSuffix}
+                  </span>
+                ) : null}
+                {usageEntry !== undefined ? (
+                  <ProfileUsageCompactMeter entry={usageEntry} />
+                ) : null}
+                {shortcutHint !== null && !rowDisabled ? (
+                  <DropdownMenuShortcut
+                    data-testid={`model-profile-digit-${shortcutHint.digit}`}
+                  >
+                    <Kbd className="font-mono tabular-nums">
+                      {shortcutHint.label}
+                    </Kbd>
+                  </DropdownMenuShortcut>
+                ) : null}
+                <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">
+                  {commitId === activeProfileId ? (
+                    <CheckIcon className="size-4" />
+                  ) : null}
+                </span>
               </span>
-              {statusSuffix !== null ? (
-                <span className="shrink-0 text-muted-foreground">
-                  {statusSuffix}
+              {visibleDisabledReason !== null ? (
+                <span className="pl-[22px] text-left text-[11px] leading-tight text-muted-foreground">
+                  {visibleDisabledReason}
                 </span>
               ) : null}
-              {usageEntry !== undefined ? (
-                <ProfileUsageCompactMeter entry={usageEntry} />
-              ) : null}
-              {shortcutHint !== null ? (
-                <DropdownMenuShortcut
-                  data-testid={`model-profile-digit-${shortcutHint.digit}`}
-                >
-                  <Kbd className="font-mono tabular-nums">
-                    {shortcutHint.label}
-                  </Kbd>
-                </DropdownMenuShortcut>
-              ) : null}
-              <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">
-                {commitId === activeProfileId ? (
-                  <CheckIcon className="size-4" />
-                ) : null}
-              </span>
             </DropdownMenuItem>
           );
+          return admissionTooltipRow(profile.profileId, admission, row);
         })}
         <DropdownMenuSeparator />
         <TooltipWrapper
@@ -300,6 +337,82 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   );
 }
 
+/** Every per-row derived value the `.map()` callback needs, computed in one
+ *  place - split out purely to keep that callback's branch count down. */
+function computeProfileRowState(input: {
+  readonly profile: ProviderProfile;
+  readonly index: number;
+  readonly activeProfileId: string | null;
+  readonly shortcutHintForIndex: (
+    index: number,
+  ) => ProfileDropdownShortcutHint | null;
+  readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
+}): {
+  readonly statusSuffix: string | null;
+  readonly commitId: string | null;
+  readonly label: string;
+  readonly shortcutHint: ProfileDropdownShortcutHint | null;
+  readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+  readonly selected: boolean;
+  readonly admission: ProfileRowAdmission | null;
+  readonly rowDisabled: boolean;
+  readonly accessibleLabel: string;
+} {
+  const statusSuffix = profileRowStatusSuffix(input.profile);
+  const commitId = profileCommitId(input.profile);
+  const label = profileDisplayLabel(input.profile);
+  const shortcutHint = input.shortcutHintForIndex(input.index);
+  const usageEntry = input.usagePresentation?.entries.get(commitId);
+  const selected = commitId === input.activeProfileId;
+  const admission = input.admissionByProfileId?.get(commitId) ?? null;
+  const rowDisabled = admission?.disabled === true;
+  const accessibleLabel = profileRowAccessibleLabel({
+    label,
+    profile: input.profile,
+    selected,
+    statusSuffix,
+    usageEntry,
+    admissionReason: admission?.reason ?? null,
+  });
+  return {
+    statusSuffix,
+    commitId,
+    label,
+    shortcutHint,
+    usageEntry,
+    selected,
+    admission,
+    rowDisabled,
+    accessibleLabel,
+  };
+}
+
+/** Wraps a disabled-with-reason row in a tooltip; passes an admitted (or
+ *  reasonless) row through unchanged. Split out of the row `.map()` purely to
+ *  keep that callback's branch count down. */
+function admissionTooltipRow(
+  key: string,
+  admission: ProfileRowAdmission | null,
+  row: ReactNode,
+): ReactNode {
+  if (admission === null || admission.reason === null) return row;
+  return (
+    <TooltipWrapper
+      key={key}
+      label={admission.reason}
+      side="right"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="flex w-full">{row}</span>
+    </TooltipWrapper>
+  );
+}
+
 /** Marks the terminal/default-CLI-login profile next to its name, on both the
  *  closed trigger and the open rows. */
 function TerminalProfileBadge() {
@@ -326,8 +439,28 @@ function profileRowAccessibleLabel(input: {
   readonly selected: boolean;
   readonly statusSuffix: string | null;
   readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+  /** The row's admission-disabled reason (`ProfileRowAdmission.reason`), when
+   *  set. Radix skips a disabled item during roving-focus arrow navigation,
+   *  so the tooltip that also renders this text is hover-only for keyboard/AT
+   *  users - folding it into the accessible name is what makes the reason
+   *  perceivable to them at all. */
+  readonly admissionReason: string | null;
 }): string {
   const label = `${input.label}${terminalBadgeSuffix(input.profile)}`;
+  const base = profileRowAccessibleLabelBase(input, label);
+  if (input.admissionReason === null) return base;
+  return `${base}, ${input.admissionReason}`;
+}
+
+function profileRowAccessibleLabelBase(
+  input: {
+    readonly profile: ProviderProfile;
+    readonly selected: boolean;
+    readonly statusSuffix: string | null;
+    readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+  },
+  label: string,
+): string {
   if (input.usageEntry === undefined) {
     if (input.statusSuffix === null) return label;
     return `${label}, ${input.statusSuffix}`;

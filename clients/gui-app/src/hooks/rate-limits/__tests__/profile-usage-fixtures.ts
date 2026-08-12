@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
@@ -10,6 +11,7 @@ export function rateLimitProviderState(
   return {
     enabled: true,
     disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     selected: { kind: "bundled" },
     candidates: [],
     authPending: false,

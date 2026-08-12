@@ -75,8 +75,8 @@ export interface AuthState {
   readonly shareableTeams: ReadonlyArray<EpicShareableTeam>;
   /**
    * Mirrors `userSubscription.subscriptionStatus` from the signed-in user.
-   * `null` while signed-out or signing-in. Surfaced for subscription display;
-   * refreshes only on full re-sign-in / revalidation, not reactively.
+   * `null` while signed-out or signing-in. AuthService projects it after each
+   * successful validation so entitlement-gated surfaces react to restores.
    */
   readonly subscriptionStatus: SubscriptionStatus | null;
   setSigningIn(): void;

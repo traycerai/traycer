@@ -52,12 +52,14 @@ import {
   getPaneScopedDndId,
   getWorkspaceFileDragId,
   WORKSPACE_FILE_DND_TYPE,
+  WORKSPACE_FOLDER_DND_TYPE,
   type EpicCanvasDragSourceData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
+import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   InputGroup,
@@ -580,10 +582,9 @@ export function FileTreePanelBodyForWorkspace(props: {
     handlersRef.current.onOpen(treePath);
   }, []);
 
-  // Bridge Pierre's shadow-DOM rows into the canvas dnd-kit drag flow. The row
-  // under the activating pointer is recovered via the same `data-item-path`
-  // scrape used for open; directory rows resolve to `null` and stay
-  // non-draggable.
+  // Bridge Pierre's shadow-DOM rows into the root dnd-kit drag flow. Files keep
+  // their canvas-openable source; directory rows carry a composer-only mention
+  // source instead of masquerading as file tabs.
   const epicId = props.epicId;
   const viewTabId = props.tabId;
   const resolveDragSourceData = useCallback(
@@ -591,11 +592,30 @@ export function FileTreePanelBodyForWorkspace(props: {
       const treePath = extractPierreItemPathFromEvent({ nativeEvent: event });
       if (treePath === null) return null;
       const ref = workspaceFileRefForTreePath(treePath);
-      return ref === null
-        ? null
-        : { kind: WORKSPACE_FILE_DND_TYPE, epicId, viewTabId, ref };
+      if (ref !== null) {
+        return { kind: WORKSPACE_FILE_DND_TYPE, epicId, viewTabId, ref };
+      }
+      if (!treePath.endsWith("/")) return null;
+      if (activeHostId === null) return null;
+      const name = getBasename(treePath);
+      if (name.length === 0) return null;
+      return {
+        kind: WORKSPACE_FOLDER_DND_TYPE,
+        epicId,
+        viewTabId,
+        hostId: activeHostId,
+        workspacePath: props.workspacePath,
+        folderPath: treePath,
+        name,
+      };
     },
-    [epicId, viewTabId, workspaceFileRefForTreePath],
+    [
+      activeHostId,
+      epicId,
+      props.workspacePath,
+      viewTabId,
+      workspaceFileRefForTreePath,
+    ],
   );
   const bridge = usePierreCanvasDragBridge({
     // Pane-scoped: the same workspace file tree can be open in both sides of a

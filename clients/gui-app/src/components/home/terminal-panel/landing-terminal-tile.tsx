@@ -17,14 +17,23 @@ import type {
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
+  clearPendingTerminalFocus,
+  focusTerminalInstance,
+  terminalFocusOwnsInstance,
+} from "@/lib/terminals/terminal-focus-registry";
+import {
+  landingTerminalLayoutFor,
   useLandingTerminalStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
+import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 
 export interface LandingTerminalTileProps {
+  readonly landingPageId: string;
   readonly tab: LandingTerminalTabRef;
   readonly active: boolean;
   /** True only after active-host probe/reconciliation has settled. */
@@ -57,6 +66,26 @@ function LandingTerminalTileBootstrap(
   const removeExitedTab = useLandingTerminalStore(
     (state) => state.removeExitedTab,
   );
+  const handleExitedTab = useCallback(
+    (instanceId: string): void => {
+      const ownsFocus = terminalFocusOwnsInstance(instanceId);
+      const wasActive =
+        useLandingTerminalStore.getState().activeInstanceId === instanceId;
+      removeExitedTab(props.landingPageId, instanceId);
+      if (!wasActive || !ownsFocus) return;
+      const state = useLandingTerminalStore.getState();
+      if (
+        landingTerminalLayoutFor(state, props.landingPageId).panelOpen &&
+        state.activeInstanceId !== null
+      ) {
+        focusTerminalInstance(state.activeInstanceId);
+        return;
+      }
+      clearPendingTerminalFocus(instanceId);
+      focusActiveComposer();
+    },
+    [props.landingPageId, removeExitedTab],
+  );
   const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
   const hostEntry = useHostDirectoryEntry(props.tab.hostId);
   const preparePayload = useCallback(
@@ -82,8 +111,8 @@ function LandingTerminalTileBootstrap(
 
   useEffect(() => {
     if (!bootstrap.hostSessionExited) return;
-    removeExitedTab(props.tab.instanceId);
-  }, [bootstrap.hostSessionExited, props.tab.instanceId, removeExitedTab]);
+    handleExitedTab(props.tab.instanceId);
+  }, [bootstrap.hostSessionExited, handleExitedTab, props.tab.instanceId]);
 
   useEffect(() => {
     if (bootstrap.createError?.code !== "TERMINAL_ID_TAKEN") return;
@@ -135,7 +164,7 @@ function LandingTerminalTileBootstrap(
     <LandingTerminalTileLive
       handle={bootstrap.handle}
       tab={props.tab}
-      onExited={removeExitedTab}
+      onExited={handleExitedTab}
     />
   );
 }
@@ -147,8 +176,38 @@ function LandingTerminalTileLive(props: {
 }): ReactNode {
   const { handle, tab, onExited } = props;
   const status = useStore(handle.store, (state) => state.status);
+  const snapshotLoaded = useStore(
+    handle.store,
+    (state) => state.snapshotLoaded,
+  );
   const effectiveCols = useStore(handle.store, (state) => state.effectiveCols);
   const effectiveRows = useStore(handle.store, (state) => state.effectiveRows);
+  const title = useStore(handle.store, (state) => state.title);
+  const activeProcessName = useStore(
+    handle.store,
+    (state) => state.activeProcessName,
+  );
+  const currentCwd = useStore(handle.store, (state) => state.currentCwd);
+  const currentCwdReported = useStore(
+    handle.store,
+    (state) => state.currentCwdReported,
+  );
+  const syncDefaultTitle = useLandingTerminalStore(
+    (state) => state.syncDefaultTitle,
+  );
+  const syncedTitle = resolveLandingTerminalSyncedTitle({
+    snapshotLoaded,
+    title,
+    activeProcessName,
+    currentCwd,
+    currentCwdReported,
+    launchCwd: tab.cwd,
+  });
+
+  useEffect(() => {
+    if (syncedTitle === null) return;
+    syncDefaultTitle(tab.instanceId, syncedTitle);
+  }, [syncedTitle, syncDefaultTitle, tab.instanceId]);
 
   useEffect(() => {
     if (status !== "exited") return;
@@ -204,6 +263,7 @@ function LandingTerminalTileLive(props: {
             // already consumed). The registry follower disposes the engine
             // when the lingering handle is finally evicted.
             keepAlive={status !== "exited"}
+            onTerminalReady={null}
           />
         </Suspense>
       </div>

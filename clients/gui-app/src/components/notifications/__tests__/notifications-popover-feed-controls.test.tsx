@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -88,12 +87,19 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => activeHostIdRef.value,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string) => {
-    if (hostId.length === 0 || directoryRef.value === null) return null;
-    return directoryRef.value.findById(hostId);
-  },
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string) => {
+      if (hostId.length === 0 || directoryRef.value === null) return null;
+      return directoryRef.value.findById(hostId);
+    },
+  };
+});
 
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
@@ -1239,6 +1245,9 @@ describe("NotificationsPopover feed controls (T05)", () => {
 
       const pill = await screen.findByTestId("notifications-new-arrivals");
       expect(pill.textContent).toMatch(/1 new notification$/);
+      expect(pill.className).toContain("sticky");
+      expect(pill.className).toContain("top-2");
+      expect(pill.className).toContain("z-30");
 
       const scrollToSpy = vi.fn();
       scrollport.scrollTo = scrollToSpy as typeof scrollport.scrollTo;

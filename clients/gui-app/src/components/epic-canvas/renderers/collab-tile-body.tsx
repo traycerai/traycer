@@ -69,6 +69,8 @@ import { seedArtifactTitleHeading } from "./artifact-editor-seed";
 import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
 import { useArtifactLinkOpener } from "./use-artifact-link-opener";
+import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
+import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 
 /**
  * Hint shown inside the empty leading title heading of a freshly seeded
@@ -96,6 +98,25 @@ const GUEST_COLLAB_USER: CollabUser = deriveCollabUser({
   email: null,
 });
 
+type ArtifactPasteHandlers = Pick<
+  UseComposerPasteResult,
+  "onPaste" | "onDrop" | "onDragOver" | "onDragEnter" | "onDragLeave"
+>;
+
+function artifactPasteHandlers(
+  enabled: boolean,
+  paste: UseComposerPasteResult,
+): Partial<ArtifactPasteHandlers> {
+  if (!enabled) return {};
+  return {
+    onPaste: paste.onPaste,
+    onDrop: paste.onDrop,
+    onDragOver: paste.onDragOver,
+    onDragEnter: paste.onDragEnter,
+    onDragLeave: paste.onDragLeave,
+  };
+}
+
 /**
  * Shared body for spec / ticket / story tiles. Resolves the node's
  * `Y.XmlFragment` from the per-Epic Y.Doc and wires it into a live Tiptap
@@ -104,6 +125,8 @@ const GUEST_COLLAB_USER: CollabUser = deriveCollabUser({
  * locks the surface.
  */
 export function CollabTileBody(props: CollabTileBodyProps) {
+  // `useEpicArtifactFragment` takes the artifact-room lease itself, which is
+  // what materializes the room and pins it for this editor's lifetime.
   const fragment = useEpicArtifactFragment(props.node.id);
   const artifactRoomAwareness = useEpicArtifactBodyAwareness(props.node.id);
   const bodyAvailability = useEpicArtifactBodyAvailability(props.node.id);
@@ -274,6 +297,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     placeholderText: hasChildren ? "" : kindPlaceholder,
     titlePlaceholderText: ARTIFACT_TITLE_PLACEHOLDER,
   });
+  const artifactImagePaste = useArtifactImagePaste(editor, epicId, node.id);
 
   // Notion-style title inheritance: a hand-created artifact whose title still
   // follows the doc renames itself from the leading `# ` heading as the user
@@ -471,7 +495,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
         <div className="tc-editor-surface">
-          <div className="tc-editor-body">
+          <div
+            className="tc-editor-body"
+            {...artifactPasteHandlers(
+              artifactImagePaste.supported && editable,
+              artifactImagePaste.paste,
+            )}
+          >
             {editor !== null && isEpicArtifactKind(node.type) ? (
               <ArtifactFindAdapterRegistration editor={editor} node={node} />
             ) : null}

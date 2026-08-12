@@ -20,9 +20,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
-import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -46,6 +46,8 @@ import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
@@ -114,6 +116,7 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
 // eslint-disable-next-line complexity
 function ChatForkDialogBody(props: ChatForkDialogProps) {
   const { epicId, onOpenChange, open, tabId, target } = props;
+  const activityEnabled = useSurfaceActivity();
   const stagingKey = useMemo(() => pendingForkChatStagingKey(epicId), [epicId]);
   const [titleState, setTitleState] = useState(() => ({ open, title: "" }));
   const titleInputId = useId();
@@ -175,8 +178,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
-  const agentMode = useStore(toolbarStore, (s) => s.agentMode);
-  const setAgentMode = useStore(toolbarStore, (s) => s.setAgentMode);
   const modelPickerKey =
     target === null ? "fork-dialog-closed" : forkDialogModelPickerKey(target);
   const trimmedTitle = title.trim();
@@ -248,7 +249,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
-      agentMode: toolbar.agentMode,
     });
     createChat.mutate(
       {
@@ -261,6 +261,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         worktreeIntent,
         initialMessage: null,
         forkSource: {
+          boundary: "assistantMessage",
           sourceChatId: target.sourceChatId,
           assistantMessageId: target.assistantMessageId,
           interviewBlockId: target.interviewBlockId,
@@ -308,6 +309,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     trimmedTitle,
   ]);
+  usePrimaryActionShortcut(activityEnabled, submit);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -346,15 +348,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 registerActivation={false}
                 createProfileHostId={tabHostId}
                 runTargetHostId={tabHostId}
+                profileAdmission={null}
               />
-              <div className="shrink-0">
-                <AgentModeToggle
-                  value={agentMode}
-                  disabled={createChat.isPending}
-                  showTooltip={false}
-                  onChange={setAgentMode}
-                />
-              </div>
             </div>
           </section>
           <ActiveHostWorkspaceControls
@@ -376,7 +371,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           >
             Cancel
           </Button>
-          <Button type="button" disabled={!canSubmit} onClick={submit}>
+          <Button
+            type="button"
+            aria-label="Fork"
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            disabled={!canSubmit}
+            onClick={submit}
+          >
             {createChat.isPending ? (
               <AgentSpinningDots
                 className="text-current"
@@ -385,6 +386,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               />
             ) : null}
             Fork
+            <PrimaryActionShortcutHint />
           </Button>
         </DialogFooter>
       </DialogContent>

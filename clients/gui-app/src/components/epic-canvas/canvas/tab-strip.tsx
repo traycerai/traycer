@@ -10,8 +10,11 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
+  Activity,
   FileDiff,
   FilePlus,
+  GitPullRequest,
+  Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -33,6 +36,7 @@ import {
 import {
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
+  useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
 import {
   useInlineRename,
@@ -53,20 +57,30 @@ import type {
 } from "@/stores/epics/canvas/types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
+  isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
+  isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
+import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
+import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
+import { useChatUsageDialogStore } from "@/stores/chats/chat-usage-dialog-store";
 import {
   TabStripContextMenu,
   type TabStripContextMenuProps,
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
@@ -230,14 +244,14 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
-  const notificationIndicators = useHostNotificationIndicators({
+  const notificationIndicators = useNotificationIndicators({
     epicIds: [],
     chatIds,
     enabled: chatIds.length > 0,
   });
 
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+    <NotificationIndicatorsProvider indicators={notificationIndicators}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -401,9 +415,35 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onCopyFilePath" | "onEditTitle"
+    "canRename" | "onCopyFilePath" | "onEditTitle" | "onOpenUsage"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
+}
+
+// Ticket 12's chat cost line: the tab's own overflow (this context menu),
+// never the header. `null` for every non-chat tab kind and for a chat whose
+// host hasn't negotiated `host.usage.summary` - "unsupported chats show
+// nothing" applied to the menu item itself rather than opening a dialog that
+// would then show a capability notice. Extracted out of `TabItem` to keep
+// that component's branching under the complexity budget.
+function useChatUsageMenuHandler(
+  tab: EpicCanvasTileRef,
+  chatTitle: string,
+): (() => void) | null {
+  const usageChatHostId =
+    tab.type === "chat" && "hostId" in tab ? tab.hostId : null;
+  const usageSupported = useUsageSummarySupported(usageChatHostId);
+  const openChatUsageDialog = useChatUsageDialogStore((s) => s.open);
+  return useMemo(() => {
+    if (usageChatHostId === null || !usageSupported) return null;
+    return () => {
+      openChatUsageDialog({
+        hostId: usageChatHostId,
+        chatId: tab.id,
+        chatTitle,
+      });
+    };
+  }, [chatTitle, openChatUsageDialog, tab.id, usageChatHostId, usageSupported]);
 }
 
 function TabItem(props: TabItemProps) {
@@ -485,6 +525,7 @@ function TabItem(props: TabItemProps) {
     epicId,
     terminalHostClient,
   );
+  const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
   );
@@ -541,6 +582,8 @@ function TabItem(props: TabItemProps) {
   const handleCopyFilePath = useCallback(() => {
     if (absoluteFilePath !== null) copy(absoluteFilePath);
   }, [absoluteFilePath, copy]);
+
+  const onOpenUsage = useChatUsageMenuHandler(tab, displayTitle);
 
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
@@ -635,6 +678,7 @@ function TabItem(props: TabItemProps) {
             />
             <TabItemLabelSlot
               displayTitle={displayTitle}
+              isArchived={isArchived}
               tooltipContent={tooltipContent}
               inputProps={rename.inputProps}
               isActive={isActive}
@@ -653,6 +697,7 @@ function TabItem(props: TabItemProps) {
         canRename={canRename}
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
+        onOpenUsage={onOpenUsage}
       />
     </ContextMenu>
   );
@@ -665,6 +710,7 @@ interface CanvasLeaderBadge {
 
 interface TabItemLabelSlotProps {
   readonly displayTitle: string;
+  readonly isArchived: boolean;
   readonly tooltipContent: ReactNode;
   readonly inputProps: InlineRenameInputProps;
   readonly isActive: boolean;
@@ -679,6 +725,7 @@ interface TabItemLabelSlotProps {
 function TabItemLabelSlot(props: TabItemLabelSlotProps) {
   const {
     displayTitle,
+    isArchived,
     tooltipContent,
     inputProps,
     isActive,
@@ -709,12 +756,15 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
             <span
               data-testid={`tab-title-${tabInstanceId}`}
               className={cn(
-                "inline-block max-w-full truncate pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
+                "inline-flex max-w-full min-w-0 items-center gap-1 pr-1 align-bottom group-focus-within:opacity-0 group-hover:opacity-0",
                 isPreview && "italic",
                 isActive ? "font-medium" : "font-normal",
               )}
             >
-              {displayTitle}
+              <TabDisplayTitle
+                displayTitle={displayTitle}
+                isArchived={isArchived}
+              />
             </span>
           </TooltipTrigger>
           <TooltipContent>{tooltipContent}</TooltipContent>
@@ -722,13 +772,16 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
         <span
           aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden truncate pr-1 group-focus-within:block group-hover:block",
+            "pointer-events-none absolute inset-y-0 left-0 right-5 hidden min-w-0 items-center gap-1 pr-1 group-focus-within:flex group-hover:flex",
             leaderBadge !== null && "right-7",
             isPreview && "italic",
             isActive ? "font-medium" : "font-normal",
           )}
         >
-          {displayTitle}
+          <TabDisplayTitle
+            displayTitle={displayTitle}
+            isArchived={isArchived}
+          />
         </span>
       </span>
       <AnimatePresence initial={false}>
@@ -758,6 +811,27 @@ function TabItemLabelSlot(props: TabItemLabelSlotProps) {
           <X className="size-3" />
         </button>
       ) : null}
+    </>
+  );
+}
+
+function TabDisplayTitle(props: {
+  readonly displayTitle: string;
+  readonly isArchived: boolean;
+}): ReactNode {
+  return (
+    <>
+      {props.isArchived ? (
+        <>
+          <span className="shrink-0 font-semibold text-muted-foreground">
+            Archived
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-muted-foreground">
+            ·
+          </span>
+        </>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">{props.displayTitle}</span>
     </>
   );
 }
@@ -918,11 +992,48 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab)) {
+  // Unconditional so hook order holds across tab kinds; the placeholder
+  // answers "reachable", which keeps every non-chat tab on its normal glyph.
+  const boundHostReachability = useHostReachability(
+    props.tab.type === "chat" ? props.tab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isPrDetailTileRef(props.tab)) {
+    return (
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isManagedCommandOutputTileRef(props.tab)) {
+    return <Activity className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isCommGraphTileRef(props.tab)) {
+    return <CommGraphTileIcon className="size-3.5" />;
+  }
+  // A published copy carries the lock rather than a chat glyph: the tab is
+  // readable but cannot be steered, and that is the one thing about it that
+  // differs from the chat tab beside it.
+  if (isPublishedChatTileRef(props.tab)) {
+    return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  // A live chat tab whose bound host is unreachable renders the published
+  // copy (see tab-group-view's fallback), so its strip icon must say the same
+  // thing the surface does: locked, not steerable, exactly like a copy tab.
+  // Flips back to the chat glyph reactively when the host returns.
+  if (
+    props.tab.type === "chat" &&
+    boundHostReachability.status === "unreachable"
+  ) {
+    return (
+      <Lock
+        className="size-3.5 shrink-0 text-muted-foreground"
+        data-testid={`tab-live-chat-lock-${props.tab.instanceId}`}
+      />
+    );
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import {
 } from "@testing-library/react";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import { isUnknownHost } from "@/lib/host/constants";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { EpicSurface } from "@/components/epic-tabs/epic-surface";
 import { TabSurfaceActivityProvider } from "@/components/layout/tab-surface-activity";
@@ -33,12 +33,27 @@ const hostBoundary = vi.hoisted(() => ({
   seenTileHostIds: new Set<string>(),
 }));
 
+const activeHostEntry = vi.hoisted(() => ({
+  hostId: "default-host",
+  label: "Default host",
+  kind: "mock" as const,
+  websocketUrl: "ws://default-host.test/stream",
+  version: null,
+  status: "available" as const,
+}));
+
 const activeHostClient = vi.hoisted(() => ({
+  // The remote-aware owner identity key (R-1) reads the full active entry, not
+  // just its id, so the fake must answer `getActiveHost` too - with the real
+  // entry, matching `resolveHostById` below rather than contradicting it.
+  getActiveHost: () => activeHostEntry,
   getActiveHostId: () => "default-host",
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
   onChange: () => () => undefined,
   request: () => Promise.resolve({}),
+  resolveHostById: (hostId: string) =>
+    hostId === activeHostEntry.hostId ? activeHostEntry : null,
 }));
 
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
@@ -47,25 +62,48 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   },
 }));
 
-vi.mock("@/lib/host", () => ({
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
-  useHostBinding: () => ({ hostClient: activeHostClient }),
-  useHostClient: () => activeHostClient,
-}));
+// Spread the real module rather than enumerate the three exports this suite
+// overrides: this is a whole-app render, so it reaches host hooks no one
+// listed here (`useHostDirectory`, via the status row's sweep dialog). An
+// enumerating factory does not leave those undefined - Vitest THROWS on the
+// access, and the nearest boundary swallows it into a degraded subtree, so
+// the suite fails on an unrelated assertion instead of on the missing export.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useAuthService: () => ({
+      revalidateCurrentContext: () =>
+        Promise.resolve({ kind: "valid" as const }),
+    }),
+    useHostBinding: () => ({ hostClient: activeHostClient }),
+    useHostClient: () => activeHostClient,
+  };
+});
 
-vi.mock("@/lib/host/runtime", () => ({
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
-  useHostBinding: () => ({ hostClient: activeHostClient }),
-  useHostClient: () => activeHostClient,
-}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useAuthService: () => ({
+      revalidateCurrentContext: () =>
+        Promise.resolve({ kind: "valid" as const }),
+    }),
+    useHostBinding: () => ({ hostClient: activeHostClient }),
+    useHostClient: () => activeHostClient,
+  };
+});
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => {
-    hostBoundary.seenTileHostIds.add(hostId);
+    // `UNKNOWN_HOST_PLACEHOLDER` is the sentinel tab-kind-agnostic callers
+    // pass to keep hook order stable across tab kinds - the real hook answers
+    // "reachable" for it without consulting the directory. It names no host,
+    // so recording it would put a value in `seenTileHostIds` that the
+    // isolation assertion below is not about.
+    if (!isUnknownHost(hostId)) {
+      hostBoundary.seenTileHostIds.add(hostId);
+    }
     return { status: "reachable" as const, hostLabel: hostId };
   },
 }));

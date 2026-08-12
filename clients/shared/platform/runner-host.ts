@@ -1,5 +1,19 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type {
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  RetainedStepUpVerifyFetchResult,
+} from "../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+import type { HostListFetchResult } from "../host-client/remote-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "../host-client/host-version-policy-fetcher";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -57,6 +71,17 @@ export interface IRunnerHost {
   readonly authnBaseUrl: string;
 
   /**
+   * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
+   * (Architecture §3/§4b, S2/T14), e.g. `wss://relay.traycer.ai/attach`.
+   * Shell-owned, read-only, parity with `authnBaseUrl`. Populated onto a
+   * connectable `RemoteHostDirectoryEntry.websocketUrl` so the existing
+   * `kind === "remote"` transport branch (`createRemoteHostTransport`) can
+   * dial it — the relay itself routes by the opaque `rendezvousId` carried
+   * inside the CS-minted attach grant, so this URL never varies per host.
+   */
+  readonly relayBaseUrl: string;
+
+  /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
    * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
    * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it
@@ -68,6 +93,99 @@ export interface IRunnerHost {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+
+  /**
+   * Fetches the signed-in user's host registry + live status from authn-v3's
+   * `GET /api/v3/hosts` with the user bearer (Remote Host Support §7). Desktop
+   * shells run this in Electron main so renderer-origin CORS does not block the
+   * request — authn-v3's CORS allow-list is the web dashboard origin, not the
+   * app renderer — exactly as the token-validation calls above do. Browser/dev
+   * shells may call the shared `fetchRegisteredHostsViaHttp` helper directly.
+   * Never throws: transport failures collapse into the discriminated result.
+   */
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+
+  /**
+   * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
+   * run this in Electron main for the same renderer-origin CORS reason as token
+   * validation. Transport failures collapse into the result rather than
+   * throwing; a cancellation via `signal` is the one case that may reject.
+   *
+   * `signal` is the reading TanStack query's cancellation. It matters beyond
+   * saving a request: the caller's repair path spends a single-use refresh
+   * rotation, so a list nobody is waiting on must stop before it gets there.
+   * Shells that own the request in-process abort it for real; shells that run it
+   * behind an IPC boundary settle the caller and let the bounded request finish.
+   */
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult>;
+
+  /**
+   * Revokes one session family. Callers pass the user's normal session bearer
+   * plus whether the runner-host boundary should attach its retained step-up
+   * credential. Renderer callers never pass the raw step-up bearer.
+   */
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+
+  /**
+   * Revokes all other sessions and broadcasts host/session invalidation. This
+   * is the panic lever: callers verify a fresh step-up challenge for every
+   * invocation, then the runner-host boundary attaches the retained step-up
+   * credential internally.
+   */
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+
+  /**
+   * Mints a device credential for a connected host, so the host can keep
+   * working on the user's behalf after this client disconnects. The renderer
+   * passes its ordinary bearer; there is no step-up variant, because the mint is
+   * not step-up gated (see the mint route's doc comment).
+   *
+   * Unlike the revoke calls, the RESULT here carries live credentials (a
+   * host-audience access JWS and a refresh JWE). They necessarily cross back
+   * into the renderer, because the stream socket that must carry them to the
+   * host lives there.
+   */
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+
+  /**
+   * Verifies a step-up OTP and retains the short-TTL bearer credential inside
+   * the runner-host boundary. Returns only expiry metadata for renderer batch
+   * window logic.
+   */
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
+
+  /**
+   * Applies a version-policy write for one host with the user bearer
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` — "Update
+   * now" (`desiredVersion`), the auto-update toggle (`updatePolicy`), or the
+   * drain-gate force ("Apply now — ends N sessions", `force: true`). Desktop
+   * shells run this in Electron main for the same CORS reason as
+   * `listRegisteredHosts`; browser/dev shells may call the shared
+   * `updateHostVersionPolicyViaHttp` helper directly. Never throws: transport
+   * failures collapse into the discriminated result.
+   */
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 
@@ -186,6 +304,22 @@ export interface IRunnerHost {
   onLocalHostChange(
     handler: (snapshot: LocalHostSnapshot | null) => void,
   ): Disposable;
+
+  /**
+   * The `hostId` this machine's local host most recently published, read from
+   * durable host metadata rather than from a live connection - so it still
+   * answers while the host is stopped, restarting, or unreachable.
+   *
+   * `onLocalHostChange` deliberately emits a snapshot only for a host that is
+   * actually dialable, which leaves a blind spot: the registry also lists this
+   * machine, and during a local restart its remote-kind twin is the only entry
+   * carrying that id. Without this, a shell cannot tell "another machine" from
+   * "my own host, currently down" in exactly the window where it matters.
+   *
+   * `null` when this shell has no local host, or when no host has ever
+   * published metadata on this machine.
+   */
+  getLastKnownLocalHostId(): Promise<string | null>;
 
   /**
    * Subscribes to OS wake events (device resume / screen unlock). The handler
@@ -611,10 +745,10 @@ export interface StoredAuthTokens {
 }
 
 /**
- * The identity block a caller supplies on interactive sign-in. The `authnBaseUrl`
- * and `savedAt` are NOT supplied here — the main-process `FileTokenStore` stamps
- * them (env-scoped `authnBaseUrl` from its own config, `savedAt` at write time),
- * so the renderer can never write a mismatched authn origin into the shared file.
+ * The identity block a caller supplies on interactive sign-in. `savedAt` is NOT
+ * supplied here — the main-process `FileTokenStore` stamps it at write time.
+ * The file carries no authn URL at all: every refresh/probe targets the
+ * consuming process's own configured authn origin.
  */
 export type StoredCredentialsIdentity = StoredCredentials["user"];
 
@@ -628,6 +762,8 @@ export type StoredCredentialsIdentity = StoredCredentials["user"];
  *   - `deleted`         → the file was signed out mid-rotate (sign-out wins);
  *   - `user-mismatch`   → the file now holds a different account (`pair` is theirs);
  *   - `lock-busy`       → a live holder held the lock; bounded retry, no state lost;
+ *   - `spend-pending`   → a sibling process spent this base and is still landing
+ *                         the successor; transient exactly like `lock-busy`;
  *   - `refresh-rejected`→ authn rejected the refresh; UI-only sign-out, file KEPT;
  *   - `refresh-network` → transient; the access token in hand stays valid, retry;
  *   - `commit-failed`   → spent + local-commit failed; `pair` is the minted pair
@@ -640,6 +776,7 @@ export type TokenRotateOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "spend-pending"
   | "refresh-rejected"
   | "refresh-network"
   | "commit-failed";
@@ -649,7 +786,7 @@ export interface TokenRotateResult {
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
   // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
-  // `refresh-rejected`/`refresh-network`).
+  // `spend-pending`/`refresh-rejected`/`refresh-network`).
   readonly pair: StoredCredentials | null;
 }
 
@@ -768,6 +905,34 @@ export interface ITokenStore {
   ): Promise<CredentialsMigrationOutcome>;
 }
 
+/**
+ * What the shell's delivery decision actually did with a `show` request.
+ *
+ * - `presented`: an alert surface exists somewhere - an OS banner was shown,
+ *   the display was relayed to the focused window, or the focused sender
+ *   already owns its own in-app surfaces.
+ * - `duplicate`: this delivery key was already handled app-wide; another
+ *   window's request won.
+ * - `undeliverable`: the platform cannot present notifications and no window
+ *   is focused, so NOTHING was shown or relayed and the key is burnt. The
+ *   caller is the sole owner of any fallback cue. This is a resolved outcome,
+ *   not a rejection, deliberately: rejection semantics are load-bearing for
+ *   retry loops (see `drainPendingNotifications`), and an unsupported
+ *   platform must not retry forever.
+ */
+export type NotificationShowOutcome =
+  "presented" | "duplicate" | "undeliverable";
+
+/**
+ * Which feed produced the notification being shown - delivery provenance,
+ * carried SEPARATELY from the activation payload on purpose. The payload is
+ * click routing and degrades to `null` for unrecognized/cross-kind rows, so
+ * anything derived from it loses provenance exactly on the rows that need it
+ * most; the foreground relay's receive-side gates key redundancy decisions
+ * off this field instead.
+ */
+export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
+
 export interface INotificationHost {
   show(
     title: string,
@@ -775,8 +940,35 @@ export interface INotificationHost {
     payload: unknown,
     replaceKey: string | null,
     deliveryKey: string | null,
-  ): Promise<void>;
+    feedSource: NotificationFeedSource | null,
+    foregroundAppLocal: NotificationForegroundAppLocal | null,
+  ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
+  onForegroundDisplay(
+    handler: (display: NotificationForegroundDisplay) => void,
+  ): Disposable;
+}
+
+/**
+ * App-local data that must cross renderer realms when another Traycer window
+ * owns the foreground. `entry` stays unknown at the shell boundary; gui-app
+ * validates it before merging it into the focused renderer's store.
+ */
+export interface NotificationForegroundAppLocal {
+  readonly userId: string;
+  readonly entry: unknown;
+}
+
+/** Plain-data main -> renderer relay used instead of an OS notification while
+ * another Traycer window is focused. */
+export interface NotificationForegroundDisplay {
+  readonly title: string;
+  readonly body: string;
+  readonly payload: unknown;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+  readonly feedSource: NotificationFeedSource | null;
+  readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
 export interface ITrayState {
@@ -816,6 +1008,13 @@ export interface IHostPicker {
 }
 
 export interface IWorkspaceFoldersHost {
+  /**
+   * Whether THIS shell can open a native OS folder dialog (desktop shells).
+   * Shells without one (mobile/browser) install a no-op pickFolders and set
+   * this false - gui-app then routes remote-host folder adds through the
+   * RPC-backed remote folder picker instead.
+   */
+  readonly canPickNatively: boolean;
   pickFolders(): Promise<readonly string[]>;
 }
 

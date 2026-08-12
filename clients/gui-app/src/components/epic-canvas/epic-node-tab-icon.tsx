@@ -14,6 +14,7 @@ import {
 import {
   useMaybeEpicTuiAgentHarnessId,
   useRegisteredEpicActiveAgentIds,
+  useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -45,11 +46,53 @@ export function EpicNodeTabIcon(props: {
    */
   readonly defaultIcon: ReactNode | undefined;
 }) {
+  if (
+    props.variant === "live" &&
+    (props.node.type === "chat" || props.node.type === "terminal-agent")
+  ) {
+    return <ArchiveAwareEpicNodeTabIcon {...props} />;
+  }
+  return <EpicNodeTabIconContent {...props} />;
+}
+
+/**
+ * Live chat/TUI tab icon decoration. Kept in a leaf so non-archivable node
+ * kinds do not subscribe to the epic projection, and provider-less drag
+ * previews keep rendering through the registry-backed selector.
+ */
+function ArchiveAwareEpicNodeTabIcon(props: {
+  readonly node: EpicNodeRef;
+  readonly epicId: string;
+  readonly variant: "live" | "static";
+  readonly className: string;
+  readonly defaultIcon: ReactNode | undefined;
+}) {
+  const isArchived = useRegisteredEpicNodeArchived(props.epicId, props.node.id);
+  const icon = <EpicNodeTabIconContent {...props} />;
+  if (!isArchived) return icon;
+  return (
+    <span
+      className="inline-flex size-3.5 shrink-0 opacity-50"
+      data-testid="archived-tab-icon"
+    >
+      {icon}
+    </span>
+  );
+}
+
+function EpicNodeTabIconContent(props: {
+  readonly node: EpicNodeRef;
+  readonly epicId: string;
+  readonly variant: "live" | "static";
+  readonly className: string;
+  readonly defaultIcon: ReactNode | undefined;
+}) {
   if (props.node.type === "chat" && props.variant === "live") {
     return (
       <ChatProgressIcon
         epicId={props.epicId}
         chatId={props.node.id}
+        originHostId={props.node.hostId}
         className={props.className}
         mutedClassName="text-muted-foreground"
         testId="chat-tab-spinner"
@@ -70,8 +113,10 @@ export function EpicNodeTabIcon(props: {
       <TerminalNodeTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        originHostId={props.node.hostId}
         running={false}
         runningTitle=""
+        statusPresentation="spinner"
         defaultIcon={
           <StaticEpicNodeIcon type="terminal" className={props.className} />
         }
@@ -83,6 +128,8 @@ export function EpicNodeTabIcon(props: {
       <TuiAgentLiveTabIcon
         nodeId={props.node.id}
         epicId={props.epicId}
+        originHostId={props.node.hostId}
+        statusPresentation="message"
         pendingTuiHarnessId={props.node.pendingTuiHarnessId}
         className={props.className}
       />
@@ -105,14 +152,19 @@ export function EpicNodeTabIcon(props: {
 function TerminalNodeTabIcon(props: {
   readonly nodeId: string;
   readonly epicId: string;
+  readonly originHostId: string;
   readonly running: IndicatorRunningKind;
   readonly runningTitle: string;
+  readonly statusPresentation: "message" | "spinner";
   readonly defaultIcon: ReactNode;
 }) {
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId,
-    chatId: props.nodeId,
-  });
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    {
+      epicId: props.epicId,
+      chatId: props.nodeId,
+    },
+    props.originHostId,
+  );
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
@@ -123,7 +175,7 @@ function TerminalNodeTabIcon(props: {
       style={undefined}
       runningTitle={props.runningTitle}
       defaultIcon={props.defaultIcon}
-      statusPresentation="spinner"
+      statusPresentation={props.statusPresentation}
     />
   );
 }
@@ -145,6 +197,8 @@ function TerminalNodeTabIcon(props: {
 function TuiAgentLiveTabIcon(props: {
   readonly nodeId: string;
   readonly epicId: string;
+  readonly originHostId: string;
+  readonly statusPresentation: "message" | "spinner";
   readonly pendingTuiHarnessId: EpicArtifactRef["pendingTuiHarnessId"];
   readonly className: string;
 }) {
@@ -155,8 +209,10 @@ function TuiAgentLiveTabIcon(props: {
     <TerminalNodeTabIcon
       nodeId={props.nodeId}
       epicId={props.epicId}
+      originHostId={props.originHostId}
       running={isActive ? "turn" : false}
       runningTitle="Agent in progress"
+      statusPresentation={props.statusPresentation}
       defaultIcon={
         <TuiAgentTabIcon
           nodeId={props.nodeId}

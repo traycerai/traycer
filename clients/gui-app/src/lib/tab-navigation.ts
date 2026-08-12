@@ -283,6 +283,7 @@ function currentLayout(): PersistedTabStripLayout {
     items: state.items,
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
+    activationHistory: state.activationHistory,
   };
 }
 
@@ -564,6 +565,11 @@ export class TabNavigationController {
     const replace =
       options?.replace === true ||
       activeItemContainsRef(layoutBefore, focusedRef);
+    const search = this.activationSearch(
+      canonical,
+      focusedRef,
+      options?.search,
+    );
     this.supersedeAll();
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(focusedRef),
@@ -571,7 +577,7 @@ export class TabNavigationController {
     );
     const routeOptions = {
       ...tabRouteOptions(canonical),
-      ...(options?.search === undefined ? {} : { search: options.search }),
+      ...(search === undefined ? {} : { search }),
       replace,
     } satisfies NavigateOptions;
     const pending: PendingNavigation = {
@@ -797,7 +803,16 @@ export class TabNavigationController {
     }
 
     const activationTarget = this.activationTarget(requestedIntent);
-    const activation = tabCommandCoordinator.activateTab(activationTarget);
+    // Same convention as `activateExternalTarget` below: `activateTab` can
+    // throw for a migrated-epic target whose identity resolution was raced
+    // out from under it (see `resolveMigratedEpicActivation` in
+    // tab-command-coordinator.ts) - treat that the same as a `null` result.
+    let activation: CoordinatedTabActivation | null;
+    try {
+      activation = tabCommandCoordinator.activateTab(activationTarget);
+    } catch {
+      return false;
+    }
     if (activation === null) return false;
     const intent = this.canonicalIntent(requestedIntent, activation.ref);
     if (intent === null) {
@@ -807,6 +822,11 @@ export class TabNavigationController {
     const replace =
       options?.replace === true ||
       activeItemContainsRef(layoutBefore, activation.ref);
+    const search = this.activationSearch(
+      intent,
+      activation.ref,
+      options?.search,
+    );
     this.supersedeAll();
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(activation.ref),
@@ -814,7 +834,7 @@ export class TabNavigationController {
     );
     const routeOptions = {
       ...tabRouteOptions(intent),
-      ...(options?.search === undefined ? {} : { search: options.search }),
+      ...(search === undefined ? {} : { search }),
       replace,
     } satisfies NavigateOptions;
     const pending: PendingNavigation = {
@@ -917,6 +937,30 @@ export class TabNavigationController {
       });
     }
     return requested;
+  }
+
+  /**
+   * History is the only top-level tab whose view state is carried in route
+   * search. Reactivating it must start from its last committed search, not the
+   * unrelated route we are leaving. A caller reducer (for example, clearing a
+   * modal overlay) is therefore applied to that committed snapshot.
+   */
+  private activationSearch(
+    intent: TabNavigationIntent,
+    ref: TabRef,
+    requestedSearch: TabNavigationOptions["search"],
+  ): TabNavigationOptions["search"] {
+    const rememberedHistorySearch =
+      intent.kind === "history"
+        ? this.latestRouteByRef.get(tabRefKey(ref))?.committedSearch
+        : undefined;
+    if (
+      typeof requestedSearch === "function" &&
+      rememberedHistorySearch !== undefined
+    ) {
+      return requestedSearch(rememberedHistorySearch);
+    }
+    return requestedSearch ?? rememberedHistorySearch;
   }
 
   private prepareEpicTarget(

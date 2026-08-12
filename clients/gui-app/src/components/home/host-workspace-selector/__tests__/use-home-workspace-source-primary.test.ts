@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useHomeWorkspaceSource } from "../use-home-workspace-source";
@@ -12,11 +11,13 @@ const FIRST: WorkspaceFolderInfo = {
   path: "/tmp/first-repo",
   name: "first-repo",
   repoIdentifier: null,
+  hostId: null,
 };
 const PINNED: WorkspaceFolderInfo = {
   path: "/tmp/pinned-repo",
   name: "pinned-repo",
   repoIdentifier: null,
+  hostId: null,
 };
 
 function resetStores(): void {

@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render } from "@testing-library/react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import type { ExternalToast } from "sonner";

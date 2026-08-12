@@ -4,6 +4,7 @@ import * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
 
 function Popover({
@@ -40,7 +41,11 @@ function PopoverContent({
   // The close-autofocus half lives in `usePaneAwareContentGuard`.
   const { paneFocused, handleCloseAutoFocus } =
     usePaneAwareContentGuard(onCloseAutoFocus);
-  if (!paneFocused) return null;
+  // Concealed region (see `portal-concealment-context`): the portal's DOM
+  // escapes the region's own concealment, so it un-presents here and
+  // re-presents intact when the region returns.
+  const concealed = usePortalConcealed();
+  if (!paneFocused || concealed) return null;
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content

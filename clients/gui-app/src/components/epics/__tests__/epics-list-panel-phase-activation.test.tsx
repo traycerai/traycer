@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -182,7 +180,9 @@ function renderPanel() {
         <TooltipProvider>
           <EpicsListPanel
             variant="embedded"
+            className={undefined}
             onSelectEpic={null}
+            onOpenItem={null}
             routeSearch={null}
             historyNowMs={null}
             autoFocusSearch={false}

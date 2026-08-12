@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -19,12 +18,17 @@ const directoryRef = vi.hoisted(() => ({
     findById: (hostId: string) => typeof mockLocalHostEntry | null;
   } | null,
 }));
+const notificationFeedModeRef = vi.hoisted(() => ({
+  value: "local",
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateSpy,
 }));
 
 vi.mock("@/hooks/notifications/use-notification-activation", () => ({
+  notificationPayloadRequiresOriginHost: (payload: { readonly kind: string }) =>
+    payload.kind === "approval" || payload.kind === "interview",
   useNotificationActivation: () => ({
     activate,
     pendingFeedId: null,
@@ -68,6 +72,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
+vi.mock("@/lib/notifications/notification-feed-mode", () => ({
+  useNotificationFeedMode: () => notificationFeedModeRef.value,
+}));
+
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -76,6 +84,7 @@ import {
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
@@ -135,6 +144,7 @@ describe("NotificationFocusBridge", () => {
     navigateSpy.mockReset();
     activate.mockReset();
     markAsRead.mockReset();
+    notificationFeedModeRef.value = "local";
     activeHostIdRef.value = mockLocalHostEntry.hostId;
     directoryRef.value = {
       findById: (hostId) => {
@@ -144,6 +154,7 @@ describe("NotificationFocusBridge", () => {
             ...mockLocalHostEntry,
             hostId: "other-host",
             label: "Other Machine",
+            status: "unavailable",
           };
         }
         return null;
@@ -158,6 +169,7 @@ describe("NotificationFocusBridge", () => {
     useNotificationEventsStore.getState().clear();
     useNotificationsPopoverStore.getState().setOpen(false);
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
   });
 
   afterEach(() => {
@@ -167,6 +179,7 @@ describe("NotificationFocusBridge", () => {
     useNotificationEventsStore.getState().clear();
     useNotificationsPopoverStore.getState().setOpen(false);
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
   });
 
   it("opens the center for unknown payloads without routing or acknowledging", () => {
@@ -180,6 +193,29 @@ describe("NotificationFocusBridge", () => {
     expect(activate).not.toHaveBeenCalled();
     expect(markAsRead).not.toHaveBeenCalled();
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it("routes a cloud envelope whose exact row was already pruned", () => {
+    notificationFeedModeRef.value = "cloud";
+    renderBridge();
+
+    act(() => {
+      useNotificationEventsStore.getState().recordClick(
+        buildNotificationActivationEnvelope({
+          route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+          feed: { source: "cloud", id: "removed-row" },
+          originHostId: "host-a",
+        }),
+      );
+    });
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    const input = activate.mock.calls.at(0)?.at(0);
+    if (input === undefined) {
+      throw new Error("expected cloud activation input");
+    }
+    input.onResult?.("success");
+    expect(markAsRead).not.toHaveBeenCalled();
   });
 
   it("routes a legacy known payload without opening the center or acknowledging", () => {
@@ -197,6 +233,7 @@ describe("NotificationFocusBridge", () => {
       payload: { kind: "epic", epicId: "epic-1" },
       receivedAt: 1_777_768_800_000,
       feedId: null,
+      originHostId: null,
       onResult: null,
     });
     expect(markAsRead).not.toHaveBeenCalled();
@@ -225,9 +262,44 @@ describe("NotificationFocusBridge", () => {
       },
       receivedAt: 1_777_768_800_000,
       feedId: null,
+      originHostId: null,
       onResult: null,
     });
     expect(markAsRead).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "approval",
+      {
+        kind: "approval" as const,
+        epicId: "epic-legacy",
+        chatId: "chat-legacy",
+        approvalId: "approval-legacy",
+        sessionId: undefined,
+        artifactId: undefined,
+      },
+    ],
+    [
+      "interview",
+      {
+        kind: "interview" as const,
+        epicId: "epic-legacy",
+        chatId: "chat-legacy",
+        interviewBlockId: "interview-legacy",
+      },
+    ],
+  ])("fails closed for a null-origin legacy %s payload", (_label, payload) => {
+    renderBridge();
+
+    act(() => {
+      useNotificationEventsStore.getState().recordClick(payload);
+    });
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
+    expect(activate).not.toHaveBeenCalled();
+    expect(markAsRead).not.toHaveBeenCalled();
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 
   it("routes a legacy chat payload without opening the center or acknowledging", () => {
@@ -245,6 +317,7 @@ describe("NotificationFocusBridge", () => {
       payload: { kind: "chat", epicId: "epic-9", chatId: "chat-1" },
       receivedAt: 1_777_768_800_000,
       feedId: null,
+      originHostId: null,
       onResult: null,
     });
     expect(markAsRead).not.toHaveBeenCalled();
@@ -275,6 +348,7 @@ describe("NotificationFocusBridge", () => {
       },
       receivedAt: 1_777_768_800_123,
       feedId: null,
+      originHostId: null,
       onResult: null,
     });
     expect(navigateSpy).not.toHaveBeenCalled();
@@ -319,6 +393,7 @@ describe("NotificationFocusBridge", () => {
       payload: terminalPayload,
       receivedAt: 1_777_768_800_000,
       feedId: null,
+      originHostId: null,
       onResult: null,
     });
     expect(navigateSpy).not.toHaveBeenCalled();
@@ -375,9 +450,17 @@ describe("NotificationFocusBridge", () => {
   });
 
   it("acknowledges the correlated feed only on V1 success", () => {
+    seedHostRow("n-1");
     renderBridge();
     const envelope = buildNotificationActivationEnvelope({
-      route: { kind: "epic", epicId: "epic-1" },
+      route: {
+        kind: "approval",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        approvalId: "approval-1",
+        sessionId: undefined,
+        artifactId: undefined,
+      },
       feed: { source: "host", id: "n-1" },
       originHostId: mockLocalHostEntry.hostId,
     });
@@ -407,7 +490,14 @@ describe("NotificationFocusBridge", () => {
   it("origin-mismatch opens origin-unavailable center without routing, acknowledging, or switching hosts", () => {
     renderBridge();
     const envelope = buildNotificationActivationEnvelope({
-      route: { kind: "epic", epicId: "epic-1" },
+      route: {
+        kind: "approval",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        approvalId: "approval-1",
+        sessionId: undefined,
+        artifactId: undefined,
+      },
       feed: { source: "host", id: "n-cross" },
       originHostId: "other-host",
     });
@@ -490,7 +580,14 @@ describe("NotificationFocusBridge", () => {
       const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
       renderBridge();
       const envelope = buildNotificationActivationEnvelope({
-        route: { kind: "epic", epicId: "epic-1" },
+        route: {
+          kind: "approval",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          approvalId: "approval-1",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
         feed: { source: "host", id: "n-cross" },
         originHostId: "other-host",
       });

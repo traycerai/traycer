@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -7,15 +5,18 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BackgroundItem,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import type { AccumulatedFileChange } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import type { SegmentTodoItem } from "@/stores/composer/chat-store";
+import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 
 interface CapturedDndContextProps {
   readonly children: ReactNode;
@@ -54,6 +55,26 @@ vi.mock("@dnd-kit/sortable", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/agent-stop-button", () => ({
+  AgentStopButton: (props: { readonly label: string }) => (
+    <button type="button">{props.label}</button>
+  ),
+}));
+
+// The background panel reaches for the managed half's RPCs whether or not any
+// managed command is on screen; this suite is about the dock's layout and
+// dispatch, so the host boundary behind them is the one thing faked.
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  () => ({
+    useManagedCommandStart: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStop: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAll: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandDelete: () => ({ mutate: vi.fn(), isPending: false }),
+    useManagedCommandStopAllIsPending: () => false,
+  }),
+);
+
 const SETTINGS: ChatRunSettings = {
   harnessId: "codex",
   model: "codex-test",
@@ -76,6 +97,8 @@ describe("<ChatLowerDock />", () => {
       todo: todoSnapshot([todoItem("Current task")]),
       changes: [fileChange()],
       backgroundItems: undefined,
+      selfAgent: null,
+      activeAgents: [],
       onBackgroundItemClick: () => undefined,
       onBackgroundItemStop: () => null,
       onBackgroundItemsStopAll: () => null,
@@ -103,6 +126,8 @@ describe("<ChatLowerDock />", () => {
       todo: null,
       changes: [fileChange()],
       backgroundItems: undefined,
+      selfAgent: null,
+      activeAgents: [],
       onBackgroundItemClick: () => undefined,
       onBackgroundItemStop: () => null,
       onBackgroundItemsStopAll: () => null,
@@ -134,6 +159,8 @@ describe("<ChatLowerDock />", () => {
       todo: null,
       changes: [],
       backgroundItems: [item],
+      selfAgent: null,
+      activeAgents: [],
       onBackgroundItemClick,
       onBackgroundItemStop,
       onBackgroundItemsStopAll,
@@ -157,50 +184,89 @@ describe("<ChatLowerDock />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop Command" }));
     expect(onBackgroundItemStop).toHaveBeenCalledWith("task-1");
   });
+
+  it("mounts the parent Active agents bar when awareness reports an active child", () => {
+    renderDock({
+      queue: queueState([]),
+      todo: null,
+      changes: [],
+      backgroundItems: undefined,
+      selfAgent: agentRow("parent", "Parent agent", false),
+      activeAgents: [agentRow("child", "Unopened child", true)],
+      onBackgroundItemClick: () => undefined,
+      onBackgroundItemStop: () => null,
+      onBackgroundItemsStopAll: () => null,
+    });
+
+    expect(screen.getByTestId("active-agents-panel")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /Active agents.*1 running/i }),
+    ).toBeDefined();
+  });
 });
 
-function renderDock(input: {
+interface DockInput {
   readonly queue: ChatSessionState["queue"];
   readonly todo: PinnedTodoSnapshot | null;
   readonly changes: ReadonlyArray<AccumulatedFileChange>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  readonly selfAgent: AgentRow | null;
+  readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
-}) {
+}
+
+function renderDock(input: DockInput) {
   return render(
-    <TooltipProvider delayDuration={0}>
-      <ChatLowerDock
-        snapshotLoaded
-        epicId="epic-1"
-        viewTabId="tab-1"
-        selfAgent={null}
-        activeAgents={[]}
-        todo={input.todo}
-        restore={baseRestore(input.changes)}
-        queue={input.queue}
-        backgroundItems={input.backgroundItems}
-        backgroundStopPendingTaskIds={new Set()}
-        backgroundStopAllPending={false}
-        activeTurnStatus="running"
-        canAct
-        readOnly={false}
-        editingQueueItemId={null}
-        topSpacing="normal"
-        scrollRegionMaxHeightClass="max-h-96"
-        onQueuePause={() => null}
-        onQueueResume={() => null}
-        onQueueEdit={vi.fn()}
-        onQueueCancel={vi.fn()}
-        onQueueAbortSteer={vi.fn()}
-        onQueueReorder={vi.fn()}
-        onQueueSteerNow={vi.fn()}
-        onBackgroundItemClick={input.onBackgroundItemClick}
-        onBackgroundItemStop={input.onBackgroundItemStop}
-        onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
-      />
-    </TooltipProvider>,
+    // The dock's background panel reads the tile's bound host to open a
+    // managed command's output window, the same as it does inside a real tile.
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <ChatLowerDock
+          snapshotLoaded
+          epicId="epic-1"
+          chatId="chat-1"
+          viewTabId="tab-1"
+          selfAgent={input.selfAgent}
+          activeAgents={input.activeAgents}
+          todo={input.todo}
+          restore={baseRestore(input.changes)}
+          queue={input.queue}
+          backgroundItems={input.backgroundItems}
+          runningManagedCommandCount={0}
+          backgroundStopPendingTaskIds={new Set()}
+          backgroundStopAllPending={false}
+          activeTurnStatus="running"
+          canAct
+          readOnly={false}
+          editingQueueItemId={null}
+          topSpacing="normal"
+          scrollRegionMaxHeightClass="max-h-96"
+          onQueuePause={() => null}
+          onQueueResume={() => null}
+          onQueueEdit={vi.fn()}
+          onQueueCancel={vi.fn()}
+          onQueueAbortSteer={vi.fn()}
+          onQueueReorder={vi.fn()}
+          onQueueSteerNow={vi.fn()}
+          onBackgroundItemClick={input.onBackgroundItemClick}
+          onBackgroundItemStop={input.onBackgroundItemStop}
+          onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
+        />
+      </TooltipProvider>
+    </TabHostProvider>,
   );
+}
+
+function agentRow(id: string, title: string, active: boolean): AgentRow {
+  return {
+    id,
+    title,
+    surface: "gui",
+    active,
+    hostId: "host-1",
+  };
 }
 
 function baseRestore(
@@ -226,8 +292,9 @@ function queueState(
   return { status: "idle", items: [...items] };
 }
 
-function queuedItem(queueItemId: string, text: string): ChatQueuedItem {
+function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId: `${queueItemId}-message`,
     message: {

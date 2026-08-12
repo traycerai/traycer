@@ -263,6 +263,7 @@ function createReleasedPeerClient(
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
       frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
     }),
   };
 }
@@ -385,6 +386,7 @@ describe.skipIf(baselines.length === 0)(
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
         });
 
         const pending = client.request(
@@ -444,6 +446,7 @@ describe.skipIf(baselines.length === 0)(
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
         });
 
         const pending = client.request(
@@ -513,6 +516,7 @@ describe.skipIf(baselines.length === 0)(
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
         });
 
         const pending = client.request(
@@ -577,6 +581,7 @@ describe.skipIf(baselines.length === 0)(
           endpoint: () => mockLocalHostEntry,
           bearer: () => ctx.credentials,
           auth: null,
+          hostCredentialMint: null,
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           openAckTimeoutMs: 1000,

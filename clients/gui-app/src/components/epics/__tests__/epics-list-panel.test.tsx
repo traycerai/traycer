@@ -1,5 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
-
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -301,6 +299,14 @@ function historyWorktree(): WorktreeHostEntryV12 {
 }
 
 function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
+  return renderPanelWithOpenItem(variant, initialEntry, null);
+}
+
+function renderPanelWithOpenItem(
+  variant: EpicsListPanelVariant,
+  initialEntry: string,
+  onOpenItem: ((item: HistoryItem) => void) | null,
+) {
   const rootRoute = createRootRoute({
     component: () => <RootOutlet />,
   });
@@ -310,7 +316,9 @@ function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
     component: () => (
       <EpicsListPanel
         variant={variant}
+        className={undefined}
         onSelectEpic={null}
+        onOpenItem={onOpenItem}
         routeSearch={null}
         historyNowMs={null}
         autoFocusSearch={false}
@@ -383,6 +391,52 @@ describe("<EpicsListPanel />", () => {
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+
+  it("lets a destination picker replace normal row navigation", async () => {
+    const onOpenItem = vi.fn();
+    const router = renderPanelWithOpenItem("embedded", "/", onOpenItem);
+
+    fireEvent.click(
+      await screen.findByRole("link", { name: "Open task Open from landing" }),
+    );
+
+    expect(onOpenItem).toHaveBeenCalledWith(testState.items[0]);
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("hides the bulk select/delete flow in the read-only picker variant", async () => {
+    renderPanel("picker", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    expect(
+      screen.queryByRole("button", { name: "Select history items" }),
+    ).toBeNull();
+    // The per-row delete affordance stays rendered (matches the disabled
+    // hover-reveal treatment used elsewhere) but must be inert: clicking it
+    // must not open the destructive delete-confirmation flow.
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    expect(screen.queryByText("This action cannot be undone.")).toBeNull();
+  });
+
+  it("disables the row sweep affordance in the read-only picker variant", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("picker", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    // A worktree-owning task normally renders the LIVE sweep button (not the
+    // aria-disabled variant) - confirm the picker still shows the disabled
+    // treatment instead of a live-looking control whose click is neutered.
+    expect(screen.queryByTestId("epics-list-row-sweep")).toBeNull();
+    expect(
+      screen
+        .getByTestId("epics-list-row-sweep-disabled")
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 
   afterEach(() => {
@@ -1336,6 +1390,22 @@ describe("<EpicsListPanel />", () => {
       expect(useHistorySearchStore.getState().search).toMatchObject({
         query: "hello ",
       });
+    });
+  });
+
+  it("renders the picker search in the filters toolbar", async () => {
+    renderPanel("picker", "/");
+
+    const input = await screen.findByRole("searchbox", {
+      name: "Search tasks",
+    });
+    const toolbar = screen.getByRole("button", { name: /filter/i })
+      .parentElement?.parentElement;
+
+    expect(toolbar?.contains(input)).toBe(true);
+    fireEvent.change(input, { target: { value: "logging" } });
+    await waitFor(() => {
+      expect(useHistorySearchStore.getState().search.query).toBe("logging");
     });
   });
 

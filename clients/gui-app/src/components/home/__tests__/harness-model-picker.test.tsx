@@ -1,5 +1,5 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
 // actions. This unit test renders the picker bare (no RouterProvider), so stub
@@ -114,7 +114,7 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type { Key, KeyboardEvent, ReactNode } from "react";
+import { useState, type Key, type KeyboardEvent, type ReactNode } from "react";
 
 interface CatalogHarness extends HarnessOption {
   readonly models: ReadonlyArray<ModelOption>;
@@ -170,7 +170,20 @@ const queryMock = vi.hoisted(() => ({
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    ensurePack: [] as string[],
   },
+}));
+
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  // Mocked alongside its sibling `use-providers-list-query` below: both are
+  // host-backed and this suite runs without a QueryClient/HostRuntimeProvider.
+  // The retry click is recorded so the rail's gated-tab behaviour can be
+  // asserted without a real mutation.
+  useProvidersEnsurePackForClient: () => ({
+    mutate: (variables: { readonly providerId: string }) => {
+      queryMock.calls.ensurePack.push(variables.providerId);
+    },
+  }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -457,6 +470,12 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationOwnership,
+} from "@/components/epic-canvas/pane-activation";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
+import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
 } from "@/stores/composer/composer-toolbar-store";
@@ -599,6 +618,16 @@ function providerCliState(input: {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -630,9 +659,24 @@ function providerCliStateWithProfiles(input: {
     // this to exercise the capability gate.
     loginCapability:
       input.loginCapability === undefined
-        ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
+        ? {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          }
         : input.loginCapability,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: input.profiles,
   };
 }
@@ -743,6 +787,10 @@ interface RenderPickerInput {
   readonly disabled?: boolean;
   readonly activityEnabled?: boolean;
   readonly createProfileHostId?: string | null;
+  readonly profileAdmission?: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
 }
 
 interface PickerHarness {
@@ -750,7 +798,10 @@ interface PickerHarness {
   readonly selections: HarnessModelSelection[];
   readonly reasoningChanges: ReasoningLevel[];
   readonly serviceTierChanges: ServiceTier[];
-  readonly element: (disabled: boolean) => ReactNode;
+  readonly element: (
+    disabled: boolean,
+    activityEnabled: boolean | undefined,
+  ) => ReactNode;
 }
 
 function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
@@ -763,7 +814,6 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       selection,
       reasoning: resolvedInput.reasoning ?? "",
       serviceTier: resolvedInput.serviceTier ?? "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
@@ -791,8 +841,13 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       serviceTierChanges.push(state.serviceTier);
     }
   });
-  const element = (disabled: boolean): ReactNode => (
-    <SurfaceActivityProvider active={resolvedInput.activityEnabled ?? true}>
+  const element = (
+    disabled: boolean,
+    activityEnabled: boolean | undefined,
+  ): ReactNode => (
+    <SurfaceActivityProvider
+      active={activityEnabled ?? resolvedInput.activityEnabled ?? true}
+    >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
           store={store}
@@ -803,6 +858,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           registerActivation={false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
+          profileAdmission={resolvedInput.profileAdmission ?? null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -810,9 +866,34 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
   return { store, selections, reasoningChanges, serviceTierChanges, element };
 }
 
+function ColdInactivePanePicker(props: { readonly harness: PickerHarness }) {
+  const [active, setActive] = useState(false);
+  const activation = usePaneActivationOwnership({
+    active,
+    activate: () => setActive(true),
+  });
+  return (
+    <PaneActivationFocusIntentContext.Provider value={activation.focusIntent}>
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: active }}
+      >
+        <div
+          data-testid="cold-inactive-pane"
+          data-active={active ? "true" : "false"}
+          onFocusCapture={activation.onFocusCapture}
+          onPointerCancelCapture={activation.onPointerCancelCapture}
+          onPointerDownCapture={activation.onPointerDownCapture}
+        >
+          {props.harness.element(false, active)}
+        </div>
+      </PaneSurfaceActivityContext.Provider>
+    </PaneActivationFocusIntentContext.Provider>
+  );
+}
+
 function renderPicker(input: RenderPickerInput | undefined): PickerHarness {
   const harness = pickerHarness(input);
-  render(harness.element(input?.disabled ?? false));
+  render(harness.element(input?.disabled ?? false, undefined));
   return harness;
 }
 
@@ -845,6 +926,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.models = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
+    queryMock.calls.ensurePack = [];
     profileUsageHookMock.runTargetHostIds = [];
     profileUsageHookMock.calls = [];
     openSettingsMock.mockClear();
@@ -859,6 +941,7 @@ describe("<HarnessModelPicker />", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     cleanup();
+    resetPaneActivationFocusIntentsForTests();
     useKeybindingStore.getState().resetAll();
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
@@ -1316,15 +1399,15 @@ describe("<HarnessModelPicker />", () => {
 
   it("closes and blocks selection when disabled while already open", async () => {
     const harness = pickerHarness(undefined);
-    const view = render(harness.element(false));
+    const view = render(harness.element(false, undefined));
 
     await openPicker();
-    view.rerender(harness.element(true));
+    view.rerender(harness.element(true, undefined));
 
     await waitFor(() => {
       expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     });
-    view.rerender(harness.element(false));
+    view.rerender(harness.element(false, undefined));
 
     expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     expect(harness.selections).toEqual([]);
@@ -1352,6 +1435,28 @@ describe("<HarnessModelPicker />", () => {
       enabled: false,
       subscribed: false,
     });
+  });
+
+  it("opens on the first click when both pickers are closed and its pane is inactive", async () => {
+    const harness = pickerHarness(undefined);
+    render(<ColdInactivePanePicker harness={harness} />);
+
+    const trigger = screen.getByRole("button", { name: "Select model" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByTestId("cold-inactive-pane").dataset.active).toBe(
+      "false",
+    );
+
+    fireEvent.pointerDown(trigger);
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const input = await screen.findByRole("textbox", { name: /^Search/ });
+    expect(input).toBe(document.activeElement);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("cold-inactive-pane").dataset.active).toBe(
+      "true",
+    );
   });
 
   it("keeps provider state warm before opening the picker", () => {
@@ -1437,6 +1542,261 @@ describe("<HarnessModelPicker />", () => {
     ).toBeNull();
   });
 
+  // R11 · the settled UX decision, at the surface it was decided for. On a
+  // first boot the host converges every enabled provider (~1.6 GB), so a rail
+  // tab whose pack is still downloading is the COMMON early state - it must be
+  // visible, labelled, and not selectable. The host resolver refuses the turn
+  // regardless; this is the half that tells the user before they try.
+  function preparingClaudeSetup(
+    managedInstallState: ProviderCliState["managedInstallState"],
+  ): void {
+    const codex = codexModels();
+    const unavailableClaude: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      available: false,
+      error: null,
+    };
+    queryMock.harnesses = [unavailableClaude, CODEX_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(unavailableClaude, []),
+      catalogHarness(CODEX_HARNESS, codex),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    queryMock.providerStates = [
+      {
+        ...providerCliState({
+          providerId: "claude-code",
+          authStatus: "authenticated",
+          apiKey: { supported: false, configured: false, source: null },
+        }),
+        managedInstallState,
+      },
+    ];
+  }
+
+  it("keeps a downloading provider visible, labelled with its percent, and not selectable", async () => {
+    preparingClaudeSetup({ status: "downloading", percent: 42 });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: "Preparing Claude… 42%",
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("downloading");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+
+    // Clicking a downloading tab does nothing at all - it neither switches the
+    // browsed provider nor fires a retry (there is nothing to retry).
+    fireEvent.click(claudeTab);
+    expect(queryMock.calls.ensurePack).toEqual([]);
+    expect(selections).toEqual([]);
+  });
+
+  // P1. Every other test in this file leaves `candidates: []`, so
+  // `fallbackRunnable` has always been false and the picker's "is this provider
+  // selectable" logic has only ever been exercised against packs that DO block.
+  // The state below - downloading behind a runnable binary - is the common one
+  // on a first boot, and it is the one the rail deliberately keeps selectable.
+  // P6. An ungated tab is an ordinary destination, so its accessible NAME is
+  // the plain harness label - the progress sentence lives in its description,
+  // where a number that changes every 1.5s belongs. It used to be the name, so
+  // arrowing across a converging rail announced thirteen nine-word sentences.
+  const PREPARING_TAB_NAME = "Claude";
+  // The same fact, as the rail's non-blocking SHORT copy: one subject (the
+  // managed copy updating), no percentage theatre.
+  const PREPARING_TAB_DESCRIPTION = "Updating in background";
+
+  function tabDescription(tab: HTMLElement): string {
+    const id = tab.getAttribute("aria-describedby");
+    expect(id).not.toBeNull();
+    return document.getElementById(id ?? "")?.textContent ?? "";
+  }
+
+  function downloadingBehindRunnableBinarySetup(): void {
+    const codex = codexModels();
+    // available: true - the bundled binary is on disk and the host will spawn
+    // it. The managed pack downloading in the background is an upgrade, not a
+    // prerequisite.
+    queryMock.harnesses = [CLAUDE_HARNESS, CODEX_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CLAUDE_HARNESS, []),
+      catalogHarness(CODEX_HARNESS, codex),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    queryMock.providerStates = [
+      {
+        ...providerCliState({
+          providerId: "claude-code",
+          authStatus: "authenticated",
+          apiKey: { supported: false, configured: false, source: null },
+        }),
+        candidates: [
+          {
+            kind: "bundled",
+            path: "/opt/traycer/resources/providers/claude/claude",
+            version: "1.0.0",
+            available: true,
+            versionPending: false,
+          },
+        ],
+        managedInstallState: { status: "downloading", percent: 30 },
+      },
+    ];
+  }
+
+  it("offers the tab of a provider downloading behind a runnable binary", async () => {
+    // The PRECONDITION for the bounce below, pinned separately because it is
+    // the rail's decision (`railEntryPackGated`) and not the picker's: this
+    // assertion passes with or without the resolveActiveProviderId fix. The tab
+    // is labelled, because the download is real and worth reporting, and NOT
+    // disabled, because nothing about it stops the user running a turn - which
+    // is precisely why the selection landing elsewhere was a visible bounce
+    // rather than a harmless no-op.
+    downloadingBehindRunnableBinarySetup();
+
+    renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", { name: PREPARING_TAB_NAME });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("downloading");
+    expect(claudeTab.getAttribute("aria-disabled")).toBeNull();
+    // ...and the detail is not lost by keeping it out of the name: the
+    // description still reports the install, which is the half that makes the
+    // shorter name a relocation rather than a deletion.
+    expect(tabDescription(claudeTab)).toContain(PREPARING_TAB_DESCRIPTION);
+  });
+
+  it("does not bounce the selection off a provider downloading behind a runnable binary", async () => {
+    // The failure P1 named: the rail offered the tab, `handleRailEntryChange`
+    // committed the selection, and `resolveActiveProviderId` then recomputed
+    // and threw it away - so the tab visibly sprang back, once per provider,
+    // until the whole ~1.6 GB queue drained. Asserted on the browsed provider
+    // rather than the click handler because the bounce happened AFTER the
+    // commit: a test that only checked the click would have passed throughout.
+    downloadingBehindRunnableBinarySetup();
+
+    renderPicker(undefined);
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("tab", { name: PREPARING_TAB_NAME }));
+
+    expect(
+      screen
+        .getByRole("tab", { name: PREPARING_TAB_NAME })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("labels an unknown-progress download without inventing a percent", async () => {
+    // N13: a live sibling host owns the transfer, so there is no byte count to
+    // report. "0%" would read as stalled; the honest label omits it.
+    preparingClaudeSetup({ status: "downloading", percent: null });
+
+    renderPicker(undefined);
+    await openPicker();
+
+    expect(
+      screen.getByRole("tab", { name: "Preparing Claude…" }),
+    ).not.toBeNull();
+  });
+
+  it("makes a FAILED pack's tab a retry affordance that reaches ensurePack", async () => {
+    preparingClaudeSetup({
+      status: "error",
+      reason: "network",
+      message: "registry unreachable",
+      retryAtMs: 1_700_000_000_000,
+    });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: /Claude setup failed/,
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("error");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(claudeTab);
+
+    // The click is a retry, NOT a provider switch. Reaching the host through
+    // `providers.ensurePack` is what marks it user-initiated.
+    expect(queryMock.calls.ensurePack).toEqual(["claude-code"]);
+    expect(selections).toEqual([]);
+  });
+
+  // The exception to the exception above. `unrepairable` is TERMINAL host-side:
+  // the bytes verified against their signed digest and were defective anyway,
+  // so the manager refuses further installs for the cell and `ensurePack` is a
+  // guaranteed no-op. A clickable tab here is not a harmless dead button - it
+  // is the UI promising an action the wire contract says cannot exist, and the
+  // only feedback the user gets is the same failure again.
+  it("withholds the retry affordance entirely for a TERMINAL unrepairable pack", async () => {
+    preparingClaudeSetup({
+      status: "error",
+      reason: "unrepairable",
+      message: "pack.json failed schema validation",
+      retryAtMs: null,
+    });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: /Claude setup failed/,
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("error");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+    // Not reachable by keyboard either - the retry WAS its only action.
+    expect(claudeTab.getAttribute("tabindex")).toBe("-1");
+    // The accessible name may not invite the click.
+    expect(claudeTab.getAttribute("aria-label")).not.toMatch(/retry/i);
+    // The hover copy lives in the tooltip now, not a `title` attribute: a
+    // native `title` beside a Radix tooltip put two on one trigger. Asserting
+    // its ABSENCE rather than its content keeps that fix pinned - and the
+    // retry sentence itself is gated by `providerPackRetryable`, which
+    // `provider-pack-readiness` tests directly.
+    expect(claudeTab.getAttribute("title")).toBeNull();
+
+    fireEvent.click(claudeTab);
+
+    // Dead in both directions: no no-op RPC, and still not a provider switch.
+    expect(queryMock.calls.ensurePack).toEqual([]);
+    expect(selections).toEqual([]);
+  });
+
+  it("never opens onto a preparing provider", async () => {
+    preparingClaudeSetup({ status: "downloading", percent: 5 });
+
+    renderPicker(undefined);
+    await openPicker();
+
+    // Claude is the composer's selected harness in this suite's default
+    // fixture, but it cannot be browsed while its pack is being readied - the
+    // picker must land on a provider whose models it can actually list.
+    expect(
+      screen.getByRole("tab", { name: "Codex" }).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("keeps a ready provider entirely ungated while a sibling downloads", async () => {
+    preparingClaudeSetup({ status: "downloading", percent: 42 });
+
+    renderPicker(undefined);
+    await openPicker();
+
+    const codexTab = screen.getByRole("tab", { name: "Codex" });
+    expect(codexTab.getAttribute("data-pack-preparing")).toBeNull();
+    expect(codexTab.getAttribute("aria-disabled")).toBeNull();
+  });
+
   it("keeps signed-out providers visible as degraded rail items", async () => {
     const codex = codexModels();
     const signedOutClaude: HarnessOption = {
@@ -1477,6 +1837,60 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("option", { name: "Claude unavailable" }),
     ).not.toBeNull();
+  });
+
+  it("degrades a signed-out provider even while its harness is still available", async () => {
+    // The Copilot-after-real-logout shape: the binary is installed, so the
+    // availability probe (which never consults auth) keeps reporting
+    // `available: true` - only the ambient account's definitive sign-out says
+    // this provider cannot run.
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+    const { selections } = renderPicker(undefined);
+
+    await openPicker();
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+
+    // Browse-only: clicking it rebases the rail but must NOT commit a switch.
+    fireEvent.click(claudeTab);
+    expect(claudeTab.getAttribute("aria-selected")).toBe("true");
+    expect(selections).toEqual([]);
+    // ...and the panel names the reason instead of leaving the gray-out mute.
+    expect(screen.getByText("Not authenticated")).not.toBeNull();
+  });
+
+  it("shows the ambient account's auth source for a single-profile provider", async () => {
+    // A single-profile provider can authenticate through a credential the user
+    // never handed to it (Copilot riding the GitHub CLI's login). The probe
+    // names the source and account; the picker surfaces both so the state is
+    // never mistaken for a stale catalog.
+    const codexState = providerCliState({
+      providerId: "codex",
+      authStatus: "authenticated",
+      apiKey: { supported: false, configured: false, source: null },
+    });
+    queryMock.providerStates = [
+      {
+        ...codexState,
+        auth: {
+          status: "authenticated",
+          badgeText: "GitHub CLI",
+          label: "Authenticated as hdkshingala",
+          detail: null,
+        },
+      },
+    ];
+    renderPicker(undefined);
+    await openPicker();
+
+    expect(screen.getByText("GitHub CLI")).not.toBeNull();
+    expect(screen.getByText("Authenticated as hdkshingala")).not.toBeNull();
   });
 
   it("keeps a provider visible when its terminal profile reports the logout before the provider summary converges", async () => {
@@ -1775,7 +2189,7 @@ describe("<HarnessModelPicker />", () => {
         profileId: "work-profile",
       },
     });
-    const { container, rerender } = render(harness.element(false));
+    const { container, rerender } = render(harness.element(false, undefined));
 
     expect(screen.getByRole("button", { name: "GPT-5.5, Work" })).toBeDefined();
     await openPickerByTriggerName("GPT-5.5, Work");
@@ -1792,7 +2206,7 @@ describe("<HarnessModelPicker />", () => {
     act(() => {
       harness.store.getState().setReasoning("medium");
     });
-    rerender(harness.element(false));
+    rerender(harness.element(false, undefined));
 
     expect(
       screen.getByRole("button", { name: "GPT-5.5, Personal" }),
@@ -2378,6 +2792,7 @@ describe("<HarnessModelPicker />", () => {
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         },
         profiles: [],
       }),
@@ -2404,6 +2819,7 @@ describe("<HarnessModelPicker />", () => {
           oauthArgs: ["auth", "login"],
           token: null,
           codePaste: null,
+          terminalLogin: null,
         },
         profiles: claudeProfilesForDropdown(),
       }),
@@ -2568,6 +2984,74 @@ describe("<HarnessModelPicker />", () => {
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBe("work-profile");
+  });
+
+  it("refuses the ⌘⇧ leader digit for an admission-disabled row - the shortcut must not bypass the gate the row itself enforces", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          {
+            profileId: "ambient",
+            kind: "ambient",
+            authType: "oauth",
+            label: "Terminal account",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+          {
+            profileId: "work-profile",
+            kind: "managed",
+            authType: "oauth",
+            label: "Work",
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          },
+        ],
+      }),
+    ];
+    const { selections } = renderPicker({
+      profileAdmission: new Map([
+        [
+          "work-profile",
+          { disabled: true, reason: "Can't continue this session under Work." },
+        ],
+      ]),
+    });
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    const baselineSelection = selections.at(-1);
+    // ⌘⇧2 -> the 2nd profile row (Work), which the admission map disables.
+    // A disabled row refuses a click; the digit shortcut must refuse the
+    // same way, or it bypasses the exact gate the row enforces.
+    act(() => {
+      fireLeaderDigit(2, "modShift");
+    });
+
+    expect(selections.at(-1)).toBe(baselineSelection);
   });
 
   it("leaves profiles beyond digit 9 click-only - ⌘⇧ overflow is a no-op", async () => {

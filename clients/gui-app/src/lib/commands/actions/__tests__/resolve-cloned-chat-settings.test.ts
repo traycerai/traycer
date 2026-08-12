@@ -75,6 +75,16 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }
@@ -94,6 +104,7 @@ function buildClient(
           : {
               "providers.list": () => ({
                 providers: [claudeState(profiles)],
+                native: null,
               }),
             },
     }),

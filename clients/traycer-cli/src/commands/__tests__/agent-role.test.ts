@@ -29,7 +29,7 @@ import {
   buildAgentRoleRelinquishCommand,
 } from "../agent-role";
 import { callHostRpc } from "../../internal/host-rpc";
-import { buildProgram } from "../../index";
+import { buildProgramWithAgentRoles } from "../../index";
 import { CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
@@ -274,7 +274,7 @@ describe("agent role relinquish command function", () => {
 
 describe("Commander registration (buildProgram)", () => {
   function findRoleCommand() {
-    const program = buildProgram();
+    const program = buildProgramWithAgentRoles(true);
     const agent = program.commands.find((cmd) => cmd.name() === "agent");
     expect(agent).toBeDefined();
     const role = agent?.commands.find((cmd) => cmd.name() === "role");
@@ -312,7 +312,7 @@ describe("Commander registration (buildProgram)", () => {
     const role = findRoleCommand();
     const list = role?.commands.find((cmd) => cmd.name() === "list");
     const longs = (list?.options ?? []).map((option) => option.long);
-    expect(longs).toContain("--epic-id");
+    expect(longs).not.toContain("--epic-id");
     expect(longs).not.toContain("--agent-id");
   });
 
@@ -322,5 +322,11 @@ describe("Commander registration (buildProgram)", () => {
     expect(help).toContain("claim");
     expect(help).toContain("list");
     expect(help).toContain("relinquish");
+  });
+
+  it("does not register the role subgroup when agent roles are disabled", () => {
+    const program = buildProgramWithAgentRoles(false);
+    const agent = program.commands.find((cmd) => cmd.name() === "agent");
+    expect(agent?.commands.map((cmd) => cmd.name())).not.toContain("role");
   });
 });

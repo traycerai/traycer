@@ -4,8 +4,10 @@ import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
 import type {
   EpicAgentMentionEntry,
   EpicMentionEntry,
+  EpicTerminalMentionEntry,
   MentionAttachment,
   MentionPreview,
+  MentionSuggestionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
@@ -24,17 +26,35 @@ import {
   iconForSuggestion,
   MENU_ICON_CLASS,
   previewForSuggestion,
+  terminalCategoryIcon,
   worktreeIcon,
 } from "./mention-entry-display";
-import { rankRootSearchEntries } from "./root-search-ranking";
+import {
+  rankRootSearchEntries,
+  type RankedRootSearch,
+} from "./root-search-ranking";
 import { taskMentionQueryForRequest } from "./task-mention-helpers";
+
+/**
+ * One step's menu rows plus the ranked root search's real-match count
+ * (null when the list is not a ranked root search - empty query, or a
+ * provider step). Same shape the ranking itself returns.
+ */
+export type MentionStepEntries = RankedRootSearch;
 
 const EMPTY_MENU_ENTRIES: ReadonlyArray<MentionMenuEntry> = [];
 const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | "artifacts";
+  | "files"
+  | "folders"
+  | "worktree"
+  | "git"
+  | "epic"
+  | "chat"
+  | "terminals"
+  | "artifacts";
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -62,6 +82,22 @@ export interface MentionMenuEntry {
   readonly description: string;
   readonly icon: ReactElement;
   readonly action: MentionMenuAction;
+  /**
+   * Last-activity timestamp rendered at the row's trailing edge (compact
+   * relative form, static per render - menu rows do not tick). Null for rows
+   * with no meaningful activity clock: files and categories, terminals
+   * (whose `updatedAt` is really a start time), and ARCHIVED Agents - the
+   * record clock is a mutation clock that the archive write itself bumps, so
+   * an archived row's time would always read as the archive action, not the
+   * Agent's real activity.
+   */
+  readonly updatedAt: number | null;
+  /**
+   * Renders the row's "Archived" badge. A flag rather than text baked into
+   * `detail` so the badge can be a styled element and never truncates away
+   * with the detail string.
+   */
+  readonly archived: boolean;
   /**
    * Full, untruncated preview content for the side preview panel. `null` for
    * `Back` and category-navigate rows, which have nothing to preview.
@@ -163,6 +199,8 @@ export interface ComposerMentionProviderContext {
   readonly currentEpicId: string | null;
   /** Every referenceable Agent in the open Task, both interfaces. */
   readonly agentEntries: ReadonlyArray<EpicAgentMentionEntry>;
+  /** Every plain terminal the open Task's Terminals panel lists. */
+  readonly terminalEntries: ReadonlyArray<EpicTerminalMentionEntry>;
   /**
    * The subset of `roots` demonstrably attached to `currentEpicId` on this
    * host (a binding running dir or resolved workspace folder). File/folder
@@ -611,6 +649,51 @@ class AgentMentionProvider extends ComposerMentionProvider {
   }
 }
 
+/**
+ * Plain interactive terminals in the open Task - the shells themselves, not
+ * Agents reached through one. A separate category from **Agents** because the
+ * two are not interchangeable: an Agent can be messaged, a terminal can only be
+ * read, so collapsing them would imply an inbox that does not exist.
+ *
+ * Its rows mirror the Task's Terminals panel one-to-one (same host rows, same
+ * visibility rule), so a terminal is mentionable exactly while it is listed.
+ */
+class TerminalMentionProvider extends ComposerMentionProvider {
+  readonly id = "terminals" as const;
+  readonly rootOrder = 47;
+  protected readonly label = "Terminals";
+  protected readonly description = "Task terminals";
+
+  rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
+    if (context.currentEpicId === null) return null;
+    return providerEntry({
+      id: "provider:terminals",
+      label: this.label,
+      description: this.description,
+      icon: terminalCategoryIcon(),
+      step: this.providerStep("root", null),
+    });
+  }
+
+  rootSearchEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    if (context.currentEpicId === null) return EMPTY_MENU_ENTRIES;
+    return terminalSuggestionEntries(context);
+  }
+
+  stepEntries(
+    _step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [backEntry("Mentions"), ...terminalSuggestionEntries(context)];
+  }
+
+  menuCopy(_step: MentionFlowStep): MentionMenuCopy {
+    return { header: "Terminals", empty: "No terminals available" };
+  }
+}
+
 const EPIC_ARTIFACT_MENTION_METHODS: Record<
   EpicArtifactKind,
   EpicArtifactMentionMethod
@@ -710,9 +793,7 @@ class MentionProviderRegistry {
     );
   }
 
-  rootEntries(
-    context: ComposerMentionProviderContext,
-  ): ReadonlyArray<MentionMenuEntry> {
+  rootEntries(context: ComposerMentionProviderContext): MentionStepEntries {
     if (context.query.trim().length > 0) {
       return rankRootSearchEntries(
         this.orderedProviders.flatMap((provider) =>
@@ -723,18 +804,37 @@ class MentionProviderRegistry {
         context.query,
       );
     }
-    return this.orderedProviders.flatMap((provider) => {
-      const entry = provider.rootEntry(context);
-      return entry === null ? [] : [entry];
-    });
+    return {
+      entries: this.orderedProviders.flatMap((provider) => {
+        const entry = provider.rootEntry(context);
+        return entry === null ? [] : [entry];
+      }),
+      matchedCount: null,
+    };
   }
 
   entries(
     step: MentionFlowStep,
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
+    return this.entriesWithMatches(step, context).entries;
+  }
+
+  /**
+   * Entries plus the ranked root search's real-match count, for the one
+   * consumer (the mention item hook) whose dismissal policy needs to know
+   * whether anything actually matched - the entry list alone cannot say,
+   * because unmatched-but-source-matched rows are appended, never dropped.
+   */
+  entriesWithMatches(
+    step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): MentionStepEntries {
     if (step.kind === "root") return this.rootEntries(context);
-    return this.provider(step.providerId).stepEntries(step, context);
+    return {
+      entries: this.provider(step.providerId).stepEntries(step, context),
+      matchedCount: null,
+    };
   }
 
   workspaceRequests(
@@ -786,6 +886,7 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new GitMentionProvider(),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
+  new TerminalMentionProvider(),
   new ArtifactMentionProvider(),
 ]);
 
@@ -813,6 +914,8 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
     description: args.description,
     icon: args.icon,
     action: { kind: "navigate", step: args.step },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
@@ -825,15 +928,23 @@ function backEntry(description: string): MentionMenuEntry {
     description,
     icon: <CornerUpLeft className={MENU_ICON_CLASS} aria-hidden />,
     action: { kind: "back" },
+    updatedAt: null,
+    archived: false,
     preview: null,
   };
 }
 
-function suggestionEntry(
-  entry: WorkspaceEntry | EpicMentionEntry,
-): MentionMenuEntry[] {
+function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
   const mention = mentionAttachmentFromSuggestion(entry);
   if (mention === null) return [];
+  // Agent rows are the only ones whose `updatedAt` approximates activity (it
+  // bumps on streaming ticks); a terminal's is its start time, so terminals
+  // keep a null clock and no badge semantics apply outside Agents. Archived
+  // Agents get no time either: the record clock is bumped by the archive
+  // write itself (and other metadata writes), so it would always claim the
+  // archive action as "activity" - the badge alone tells their story.
+  const isAgent =
+    entry.kind === "epic-chat" || entry.kind === "epic-terminal-agent";
   return [
     {
       id: entry.id,
@@ -842,6 +953,8 @@ function suggestionEntry(
       description: descriptionForSuggestion(entry),
       icon: iconForSuggestion(entry),
       action: { kind: "complete", mention },
+      updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,
+      archived: isAgent ? entry.archived : false,
       preview: previewForSuggestion(entry),
     },
   ];
@@ -857,6 +970,36 @@ function agentSuggestionEntries(
   ).flatMap((entry) => suggestionEntry(entry));
 }
 
+function terminalSuggestionEntries(
+  context: ComposerMentionProviderContext,
+): ReadonlyArray<MentionMenuEntry> {
+  return rankByLabelAndId(
+    context.terminalEntries,
+    (entry) => entry.terminalId,
+    context.query,
+    context.limit,
+  ).flatMap((entry) => suggestionEntry(entry));
+}
+
+/**
+ * Agent-specific ranking: `rankByLabelAndId`'s match scoring, with
+ * archived-ness slotted BETWEEN match quality and recency. An archived Agent
+ * never outranks a live one of equal match quality, but archived-ness never
+ * overrides relevance either - an archived exact/prefix hit still beats a
+ * live substring hit. This provider-level order also feeds the root `@`
+ * search as the candidates' input order, where the fuzzy pass breaks equal
+ * scores by input index and the prefix/substring tiers are a stable resort -
+ * so the same rule carries through there: demotion applies within a match
+ * tier, never across tiers.
+ *
+ * The recency tie-break reads the record's `updatedAt`, which is a MUTATION
+ * clock, not a pure activity clock: the archive write itself bumps it, as do
+ * renames and other metadata writes. Among archived rows it therefore orders
+ * by roughly "most recently archived/touched first" - accepted, since their
+ * true pre-archive activity time is unrecoverable client-side (the archive
+ * write overwrote it), and archive recency is a reasonable order for
+ * archived rows. Their menu rows show no time label for the same reason.
+ */
 function rankAgentEntries(
   entries: ReadonlyArray<EpicAgentMentionEntry>,
   query: string,
@@ -865,7 +1008,55 @@ function rankAgentEntries(
   const normalizedQuery = query.trim().toLowerCase();
   return entries
     .flatMap((entry) => {
-      const score = scoreAgentEntry(entry, normalizedQuery);
+      const score = scoreLabelAndId(
+        entry.label,
+        agentEntryRecordId(entry),
+        normalizedQuery,
+      );
+      if (score === null) return [];
+      return [{ entry, score }];
+    })
+    .toSorted((left, right) => {
+      if (left.score !== right.score) return left.score - right.score;
+      if (left.entry.archived !== right.entry.archived) {
+        return left.entry.archived ? 1 : -1;
+      }
+      return right.entry.updatedAt - left.entry.updatedAt;
+    })
+    .map((item) => item.entry)
+    .slice(0, limit);
+}
+
+/** The Agent's durable record id, whichever interface it uses. */
+function agentEntryRecordId(entry: EpicAgentMentionEntry): string {
+  return entry.kind === "epic-chat" ? entry.chatId : entry.terminalAgentId;
+}
+
+interface RankableMentionEntry {
+  readonly label: string;
+  readonly updatedAt: number;
+}
+
+/**
+ * Ranks the locally-sourced Task entries (Agents, terminals) the picker filters
+ * itself rather than re-querying per keystroke: best label match first, ties
+ * broken by recency. `recordId` supplies the durable id these rows can also be
+ * addressed by, so pasting a raw id finds its row.
+ */
+function rankByLabelAndId<Entry extends RankableMentionEntry>(
+  entries: ReadonlyArray<Entry>,
+  recordId: (entry: Entry) => string,
+  query: string,
+  limit: number,
+): ReadonlyArray<Entry> {
+  const normalizedQuery = query.trim().toLowerCase();
+  return entries
+    .flatMap((entry) => {
+      const score = scoreLabelAndId(
+        entry.label,
+        recordId(entry),
+        normalizedQuery,
+      );
       if (score === null) return [];
       return [{ entry, score }];
     })
@@ -878,18 +1069,14 @@ function rankAgentEntries(
     .slice(0, limit);
 }
 
-/** The Agent's durable record id, whichever interface it uses. */
-function agentEntryRecordId(entry: EpicAgentMentionEntry): string {
-  return entry.kind === "epic-chat" ? entry.chatId : entry.terminalAgentId;
-}
-
-function scoreAgentEntry(
-  entry: EpicAgentMentionEntry,
+function scoreLabelAndId(
+  rawLabel: string,
+  rawId: string,
   normalizedQuery: string,
 ): number | null {
   if (normalizedQuery.length === 0) return 0;
-  const label = entry.label.toLowerCase();
-  const id = agentEntryRecordId(entry).toLowerCase();
+  const label = rawLabel.toLowerCase();
+  const id = rawId.toLowerCase();
   if (label === normalizedQuery || id === normalizedQuery) return 0;
   if (label.startsWith(normalizedQuery)) return 100;
   if (label.includes(normalizedQuery)) return 200;

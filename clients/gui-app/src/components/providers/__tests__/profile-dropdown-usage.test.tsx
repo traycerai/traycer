@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -229,6 +228,7 @@ function renderDropdown(
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
+      admissionByProfileId={null}
     />,
   );
 }

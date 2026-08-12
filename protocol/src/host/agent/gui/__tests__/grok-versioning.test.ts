@@ -16,6 +16,12 @@ import {
   agentListDowngradeV6ToV3,
   agentListDowngradeV6ToV4,
   agentListDowngradeV6ToV5,
+  agentListDowngradeV7ToV1,
+  agentListDowngradeV7ToV2,
+  agentListDowngradeV7ToV3,
+  agentListDowngradeV7ToV4,
+  agentListDowngradeV7ToV5,
+  agentListDowngradeV7ToV6,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   listAgentsResponseSchema,
@@ -24,6 +30,7 @@ import {
   listAgentsResponseSchemaV30,
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
+  listAgentsResponseSchemaV60,
 } from "@traycer/protocol/host/agent/shared";
 import {
   agentGuiListHarnessesDowngradeV2ToV1,
@@ -41,6 +48,12 @@ import {
   agentGuiListHarnessesDowngradeV6ToV3,
   agentGuiListHarnessesDowngradeV6ToV4,
   agentGuiListHarnessesDowngradeV6ToV5,
+  agentGuiListHarnessesDowngradeV7ToV1,
+  agentGuiListHarnessesDowngradeV7ToV2,
+  agentGuiListHarnessesDowngradeV7ToV3,
+  agentGuiListHarnessesDowngradeV7ToV4,
+  agentGuiListHarnessesDowngradeV7ToV5,
+  agentGuiListHarnessesDowngradeV7ToV6,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   guiHarnessOptionSchema,
@@ -51,8 +64,10 @@ import {
   listGuiHarnessesResponseSchemaV30,
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
+  listGuiHarnessesResponseSchemaV60,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
+  providersListResponseSchemaV70,
   PROVIDER_AUTH_STATUS_SCHEMA,
   PROVIDER_AUTH_STATUS_SCHEMA_V10,
   providerCliStateSchemaV10,
@@ -62,17 +77,16 @@ import {
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full structural
 // + schema-compatibility validation) at module load, so this import alone
-// asserts the new v2.0/v3.0/v4.0/v5.0/v6.0 lines and their upgrade/downgrade
+// asserts the new v2.0/v3.0/v4.0/v5.0/v6.0/v7.0 lines and their upgrade/downgrade
 // bridges are well-formed.
 import {
-  providersAwaitLoginDowngradeV2ToV1,
+  providersAwaitLoginDowngradeV21ToV10,
   providersListDowngradeV2ToV1,
-  providersListDowngradeV3ToV1,
-  providersListDowngradeV3ToV2,
   providersListDowngradeV4ToV1,
   providersListDowngradeV4ToV2,
   providersListDowngradeV4ToV3,
@@ -85,7 +99,13 @@ import {
   providersListDowngradeV6ToV3,
   providersListDowngradeV6ToV4,
   providersListDowngradeV6ToV5,
-  providersSetApiKeyDowngradeV2ToV1,
+  providersListDowngradeV7ToV1,
+  providersListDowngradeV7ToV2,
+  providersListDowngradeV7ToV3,
+  providersListDowngradeV7ToV4,
+  providersListDowngradeV7ToV5,
+  providersListDowngradeV7ToV6,
+  providersSetApiKeyDowngradeV21ToV10,
 } from "@traycer/protocol/host/registry";
 
 function harnessOption(id: string) {
@@ -113,6 +133,11 @@ function agentSummary(id: string, harnessId: string | null) {
     active: false,
     folderPaths: [],
     isWorktree: false,
+    runConfig: {
+      model: { kind: "concrete", slug: "gpt-5.6-sol" },
+      reasoningEffort: "high",
+      fastMode: true,
+    },
   };
 }
 
@@ -130,6 +155,13 @@ function providerState(providerId: string, status: string) {
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
   };
 }
 
@@ -232,7 +264,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     const state = providersListResponseSchema.parse({
       providers: [providerState("cursor", "unavailable")],
     }).providers[0];
-    const setApiKey = providersSetApiKeyDowngradeV2ToV1.downgradeResponse({
+    const setApiKey = providersSetApiKeyDowngradeV21ToV10.downgradeResponse({
       state,
     });
 
@@ -243,7 +275,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
       providersSetApiKeyResponseSchemaV10.parse(setApiKey.value),
     ).not.toThrow();
 
-    const awaitLogin = providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
+    const awaitLogin = providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
       state,
       existingProfileId: null,
       codeRejected: false,
@@ -253,7 +285,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     expect(awaitLogin.value.state?.auth.status).toBe("unknown");
 
     expect(
-      providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
+      providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
         state: null,
         existingProfileId: null,
         codeRejected: false,
@@ -270,7 +302,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     ).toBe(false);
 
     expect(
-      providersSetApiKeyDowngradeV2ToV1.downgradeRequest({
+      providersSetApiKeyDowngradeV21ToV10.downgradeRequest({
         providerId: "grok",
         apiKey: "grok-key",
       }),
@@ -286,7 +318,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     });
 
     expect(
-      providersSetApiKeyDowngradeV2ToV1.downgradeRequest(
+      providersSetApiKeyDowngradeV21ToV10.downgradeRequest(
         requestWithFutureField,
       ),
     ).toMatchObject({
@@ -295,7 +327,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     });
 
     expect(
-      providersSetApiKeyDowngradeV2ToV1.downgradeRequest({
+      providersSetApiKeyDowngradeV21ToV10.downgradeRequest({
         providerId: "cursor",
         apiKey: "cursor-key",
       }),
@@ -400,15 +432,29 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops the Amp provider from providers.list for v2.0 and v1.0 callers", () => {
-    const v3Response = providersListResponseSchemaV30.parse({
+  it("drops the Amp provider from providers.list for v3.0, v2.0, and v1.0 callers", () => {
+    const liveResponse = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
       ],
     });
 
-    const toV2 = providersListDowngradeV3ToV2.downgradeResponse(v3Response);
+    const toV3 = providersListDowngradeV7ToV3.downgradeResponse(
+      providersListResponseSchemaV70.parse(liveResponse),
+    );
+    expect(toV3.ok).toBe(true);
+    if (!toV3.ok) return;
+    expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor", "amp"],
+    );
+    expect(() =>
+      providersListResponseSchemaV30.parse(toV3.value),
+    ).not.toThrow();
+
+    const toV2 = providersListDowngradeV7ToV2.downgradeResponse(
+      providersListResponseSchemaV70.parse(liveResponse),
+    );
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -418,7 +464,9 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV3ToV1.downgradeResponse(v3Response);
+    const toV1 = providersListDowngradeV7ToV1.downgradeResponse(
+      providersListResponseSchemaV70.parse(liveResponse),
+    );
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -430,7 +478,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 });
 
-describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade bridges", () => {
+describe("post-v3.0 Devin/Pi downgrade bridges (agent.gui.listHarnesses/agent.list v4, providers.list v4.0)", () => {
   it("drops Devin/Pi from agent.gui.listHarnesses for v3.0, v2.0, and v1.0 callers", () => {
     const v4Response = listGuiHarnessesResponseSchemaV40.parse({
       harnesses: [
@@ -564,12 +612,13 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
   });
 });
 
-describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
-  // These three catalog methods all had to open a new major when the v1.1.8
-  // tags froze their previous line: omp cannot ride a released version, so
-  // the live shape sits on v6.0 and every older caller gets omp filtered out.
-  it("drops omp from agent.gui.listHarnesses for every released caller down to v1.0", () => {
-    const v6Response = listGuiHarnessesResponseSchema.parse({
+describe("post-v5.0 omp/Hugging Face non-breaking downgrade bridges", () => {
+  // These three catalog methods all had to open a new major when the v1.1.9
+  // tags froze their previous line: `huggingface` cannot ride a released
+  // version, so the live shape sits on v7.0 and every older caller gets it
+  // filtered out.
+  it("drops Hugging Face from agent.gui.listHarnesses for every released caller down to v1.0", () => {
+    const v7Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("cursor"),
@@ -578,12 +627,30 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
         harnessOption("pi"),
         harnessOption("hermes"),
         harnessOption("omp"),
+        harnessOption("huggingface"),
       ],
     });
 
-    // v5.0 shipped with Hermes, so it keeps Hermes and loses only omp.
+    // v6.0 shipped with omp, so it keeps omp and loses only Hugging Face.
+    const toV6 =
+      agentGuiListHarnessesDowngradeV7ToV6.downgradeResponse(v7Response);
+    expect(toV6.ok).toBe(true);
+    if (!toV6.ok) return;
+    expect(toV6.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+      "cursor",
+      "amp",
+      "devin",
+      "pi",
+      "hermes",
+      "omp",
+    ]);
+    expect(() =>
+      listGuiHarnessesResponseSchemaV60.parse(toV6.value),
+    ).not.toThrow();
+
     const toV5 =
-      agentGuiListHarnessesDowngradeV6ToV5.downgradeResponse(v6Response);
+      agentGuiListHarnessesDowngradeV7ToV5.downgradeResponse(v7Response);
     expect(toV5.ok).toBe(true);
     if (!toV5.ok) return;
     expect(toV5.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -599,7 +666,7 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
     ).not.toThrow();
 
     const toV4 =
-      agentGuiListHarnessesDowngradeV6ToV4.downgradeResponse(v6Response);
+      agentGuiListHarnessesDowngradeV7ToV4.downgradeResponse(v7Response);
     expect(toV4.ok).toBe(true);
     if (!toV4.ok) return;
     expect(toV4.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -614,7 +681,7 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
     ).not.toThrow();
 
     const toV3 =
-      agentGuiListHarnessesDowngradeV6ToV3.downgradeResponse(v6Response);
+      agentGuiListHarnessesDowngradeV7ToV3.downgradeResponse(v7Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -627,7 +694,7 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
     ).not.toThrow();
 
     const toV2 =
-      agentGuiListHarnessesDowngradeV6ToV2.downgradeResponse(v6Response);
+      agentGuiListHarnessesDowngradeV7ToV2.downgradeResponse(v7Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -639,7 +706,7 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
     ).not.toThrow();
 
     const toV1 =
-      agentGuiListHarnessesDowngradeV6ToV1.downgradeResponse(v6Response);
+      agentGuiListHarnessesDowngradeV7ToV1.downgradeResponse(v7Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -651,8 +718,8 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("drops omp agents from agent.list for every released caller down to v1.0", () => {
-    const v6Response = listAgentsResponseSchema.parse({
+  it("drops Hugging Face agents from agent.list for every released caller down to v1.0", () => {
+    const v7Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
@@ -662,12 +729,31 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
         agentSummary("a-pi", "pi"),
         agentSummary("a-hermes", "hermes"),
         agentSummary("a-omp", "omp"),
+        agentSummary("a-hf", "huggingface"),
         agentSummary("a-null", null),
       ],
     });
 
-    // v5.0 shipped with Hermes, so a Hermes agent row survives; only omp goes.
-    const toV5 = agentListDowngradeV6ToV5.downgradeResponse(v6Response);
+    // v6.0 shipped with omp, so an omp agent row survives; only Hugging Face
+    // goes.
+    const toV6 = agentListDowngradeV7ToV6.downgradeResponse(v7Response);
+    expect(toV6.ok).toBe(true);
+    if (!toV6.ok) return;
+    expect(toV6.value.agents.map((agent) => agent.id)).toEqual([
+      "a-claude",
+      "a-amp",
+      "a-devin",
+      "a-pi",
+      "a-hermes",
+      "a-omp",
+      "a-null",
+    ]);
+    expect(toV6.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
+    expect(() => listAgentsResponseSchemaV60.parse(toV6.value)).not.toThrow();
+
+    const toV5 = agentListDowngradeV7ToV5.downgradeResponse(v7Response);
     expect(toV5.ok).toBe(true);
     if (!toV5.ok) return;
     expect(toV5.value.agents.map((agent) => agent.id)).toEqual([
@@ -678,9 +764,12 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
       "a-hermes",
       "a-null",
     ]);
+    expect(toV5.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV50.parse(toV5.value)).not.toThrow();
 
-    const toV4 = agentListDowngradeV6ToV4.downgradeResponse(v6Response);
+    const toV4 = agentListDowngradeV7ToV4.downgradeResponse(v7Response);
     expect(toV4.ok).toBe(true);
     if (!toV4.ok) return;
     expect(toV4.value.agents.map((agent) => agent.id)).toEqual([
@@ -690,9 +779,12 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
       "a-pi",
       "a-null",
     ]);
+    expect(toV4.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV40.parse(toV4.value)).not.toThrow();
 
-    const toV3 = agentListDowngradeV6ToV3.downgradeResponse(v6Response);
+    const toV3 = agentListDowngradeV7ToV3.downgradeResponse(v7Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.agents.map((agent) => agent.id)).toEqual([
@@ -700,31 +792,41 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
       "a-amp",
       "a-null",
     ]);
+    expect(toV3.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV30.parse(toV3.value)).not.toThrow();
 
-    const toV2 = agentListDowngradeV6ToV2.downgradeResponse(v6Response);
+    const toV2 = agentListDowngradeV7ToV2.downgradeResponse(v7Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.agents.map((agent) => agent.id)).toEqual([
       "a-claude",
       "a-null",
     ]);
+    expect(toV2.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV20.parse(toV2.value)).not.toThrow();
 
-    const toV1 = agentListDowngradeV6ToV1.downgradeResponse(v6Response);
+    const toV1 = agentListDowngradeV7ToV1.downgradeResponse(v7Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.agents.map((agent) => agent.id)).toEqual([
       "a-claude",
       "a-null",
     ]);
+    expect(toV1.value.agents.every((agent) => !("runConfig" in agent))).toBe(
+      true,
+    );
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops omp from providers.list for every released caller down to v1.0", () => {
-    // v6.0 is the live line: `cli-v1.1.8` shipped v5.0, so omp could not join
-    // it and every v5.0-and-older caller must have omp filtered out.
-    const v6Response = providersListResponseSchema.parse({
+  it("drops Hugging Face from providers.list for every released caller down to v1.0", () => {
+    // `cli-v1.1.9` shipped v6.0, so `huggingface` could not join it and every
+    // v6.0-and-older caller must have it filtered out. Driven from v7.0, the
+    // newest line, which carries the id because it is still unreleased.
+    const v7Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
@@ -732,20 +834,25 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
         providerState("pi", "unknown"),
         providerState("hermes", "unknown"),
         providerState("omp", "unknown"),
+        providerState("huggingface", "unknown"),
       ],
     });
 
-    const toV4 = providersListDowngradeV6ToV4.downgradeResponse(v6Response);
-    expect(toV4.ok).toBe(true);
-    if (!toV4.ok) return;
-    expect(toV4.value.providers.map((provider) => provider.providerId)).toEqual(
-      ["cursor", "amp", "devin", "pi"],
+    const toV6 = providersListDowngradeV7ToV6.downgradeResponse(
+      providersListResponseSchemaV70.parse(v7Response),
+    );
+    expect(toV6.ok).toBe(true);
+    if (!toV6.ok) return;
+    expect(toV6.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor", "amp", "devin", "pi", "hermes", "omp"],
     );
     expect(() =>
-      providersListResponseSchemaV40.parse(toV4.value),
+      providersListResponseSchemaV60.parse(toV6.value),
     ).not.toThrow();
 
-    const toV5 = providersListDowngradeV6ToV5.downgradeResponse(v6Response);
+    const toV5 = providersListDowngradeV7ToV5.downgradeResponse(
+      providersListResponseSchemaV70.parse(v7Response),
+    );
     expect(toV5.ok).toBe(true);
     if (!toV5.ok) return;
     expect(toV5.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -755,7 +862,21 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
       providersListResponseSchemaV50.parse(toV5.value),
     ).not.toThrow();
 
-    const toV3 = providersListDowngradeV6ToV3.downgradeResponse(v6Response);
+    const toV4 = providersListDowngradeV7ToV4.downgradeResponse(
+      providersListResponseSchemaV70.parse(v7Response),
+    );
+    expect(toV4.ok).toBe(true);
+    if (!toV4.ok) return;
+    expect(toV4.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor", "amp", "devin", "pi"],
+    );
+    expect(() =>
+      providersListResponseSchemaV40.parse(toV4.value),
+    ).not.toThrow();
+
+    const toV3 = providersListDowngradeV7ToV3.downgradeResponse(
+      providersListResponseSchemaV70.parse(v7Response),
+    );
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -765,7 +886,9 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
       providersListResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
 
-    const toV2 = providersListDowngradeV6ToV2.downgradeResponse(v6Response);
+    const toV2 = providersListDowngradeV7ToV2.downgradeResponse(
+      providersListResponseSchemaV70.parse(v7Response),
+    );
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -775,7 +898,9 @@ describe("post-v4.0 Hermes/omp non-breaking downgrade bridges", () => {
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV6ToV1.downgradeResponse(v6Response);
+    const toV1 = providersListDowngradeV7ToV1.downgradeResponse(
+      providersListResponseSchemaV70.parse(v7Response),
+    );
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(

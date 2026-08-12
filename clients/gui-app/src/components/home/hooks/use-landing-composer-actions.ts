@@ -12,7 +12,7 @@ import type {
   WorktreeBindingSelectorRowV12,
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
@@ -59,8 +59,9 @@ import {
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
   stringValue,
+  type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
-import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
+import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import {
   collectImageAtoms,
   containsImageAtoms,
@@ -85,7 +86,6 @@ import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-inten
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type {
   PermissionMode,
-  AgentMode,
   HarnessModelSelection,
   ReasoningLevel,
   ServiceTier,
@@ -95,7 +95,10 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { toast } from "sonner";
-import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
+import {
+  buildDefaultBranchByPath,
+  EMPTY_DEFAULT_BRANCH,
+} from "@/lib/worktree/default-branch-name";
 import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -103,18 +106,23 @@ export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
+  /**
+   * The composer's loaded command catalog, or null when it has not loaded.
+   * Submit-time chip conversion resolves a written `/command` / `$skill`
+   * against it - see `buildSubmittedChatJSONContent`. Read at submit time by
+   * the caller, which owns the picker store.
+   */
+  readonly slashCatalog: SlashCommandCatalog | null;
   readonly toolbar: {
     readonly selection: HarnessModelSelection;
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
-    readonly agentMode: AgentMode;
   };
 }
 
 export interface TerminalAgentLaunch {
   readonly harnessId: TuiHarnessId;
-  readonly agentMode: AgentMode;
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly terminalAgentArgs: string | null;
@@ -278,7 +286,10 @@ export function useLandingComposerActions(): LandingComposerActions {
         return;
       }
 
-      const submittedContent = buildSubmittedChatJSONContent(resolvedContent);
+      const submittedContent = buildSubmittedChatJSONContent(
+        resolvedContent,
+        args.slashCatalog,
+      );
       const profile = useAuthStore.getState().profile;
 
       const settings = buildChatRunSettings({
@@ -286,7 +297,6 @@ export function useLandingComposerActions(): LandingComposerActions {
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
-        agentMode: toolbar.agentMode,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);
@@ -487,14 +497,27 @@ export function useLandingComposerActions(): LandingComposerActions {
       const { editor } = args;
       if (editor === null) return;
 
-      const editorContent = normalizeComposerContent(editor.getJSON());
+      const normalized = normalizeComposerContentWithSelection(
+        editor.getJSON(),
+        null,
+      );
+      const editorContent = normalized.content;
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
       if (text.trim().length === 0 && !hasImages) return;
       const draftId = ensureSubmissionDraft(args.draftId, editorContent);
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return;
-      runtime.setSnapshot(editorContent, runtime.store.getState().selection);
+      // The runtime's stored content already reflects the latest edit (every
+      // keystroke flows through `onDocumentChange` synchronously, well before
+      // a later submit click) or was just seeded verbatim by
+      // `ensureSubmissionDraft` - so only a genuine legacy-shape rewrite here
+      // is a real document mutation worth recording. `normalized.changed` is
+      // a cheap structural flag, not a document comparison, so this never
+      // walks/serializes the (possibly multi-megabyte inline-image) content.
+      if (normalized.changed) {
+        runtime.setSnapshot(editorContent, runtime.store.getState().selection);
+      }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
       );
@@ -604,7 +627,6 @@ export function useLandingComposerActions(): LandingComposerActions {
     ) => {
       const {
         harnessId,
-        agentMode,
         model,
         reasoningEffort,
         terminalAgentArgs,
@@ -691,8 +713,9 @@ export function useLandingComposerActions(): LandingComposerActions {
               harnessId,
               model,
               reasoningEffort,
-              agentMode,
               forkSourceHarnessSessionId: null,
+              sourceTuiAgentId: null,
+              sourceProfileId: null,
               onStatusChange: null,
               worktreeIntent: workspaceContext.worktreeIntent,
               workspaceMode: workspaceContext.workspaceMode,
@@ -977,7 +1000,7 @@ function readCachedDefaultWorktreeIntent(
   workspace: LandingDraftWorkspaceSnapshot,
 ): WorktreeIntent | null {
   const response = queryClient.getQueryData<{
-    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV13>;
+    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
   }>(
     hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
       hostId,
@@ -1024,14 +1047,16 @@ function readCachedDefaultWorktreeIntent(
         isPrimary: summary.workspacePath === primaryPath,
         isGitRepo: true,
         currentBranch,
-        defaultNewBranchName: defaultBranchByPath[summary.workspacePath] ?? "",
+        defaultNewBranchName: (
+          defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
+        ).name,
       }),
     ),
   };
 }
 
 function branchForCachedSummary(
-  summary: WorktreeWorkspaceSummaryV13,
+  summary: WorktreeWorkspaceSummaryV14,
 ): string | null {
   const mainEntry = summary.worktrees.find((worktree) => worktree.isMain);
   return mainEntry?.branch ?? summary.mainBranch ?? null;

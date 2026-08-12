@@ -16,6 +16,8 @@ import {
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger } from "@/lib/logger";
+import { flushLiveReadingPositions } from "@/lib/reading-position";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -123,14 +125,11 @@ export function QuitInterceptBridge(): null | React.ReactElement {
   // ambient debounce so main does not observe a stale push right after our fresh
   // reply.
   //
-  // Crucially, AWAIT the per-window projection flush before replying: the flush
-  // resolves only once its `perWindowState.update` IPC has been processed by
-  // main, so main's `PerWindowState` (and the `desktopStateStore.flush()` it
-  // runs right after this query resolves) already reflects the latest tabs /
-  // canvas / drafts. Because we await the projection IPC before sending the
-  // reply IPC, main processes them in order and the layout can't be lost to the
-  // quit. Reply even if the flush rejects - a failed projection write must not
-  // make main wait out its fresh-snapshot timeout and fall back to stale state.
+  // Crucially, AWAIT both projection and file-recovery flushes before replying.
+  // The projection resolves only after its `perWindowState.update` IPC reaches
+  // main; the recovery flush resolves only after the latest editor draft is in
+  // IndexedDB. Reply even if either rejects so main does not wait out its fresh
+  // snapshot timeout and fall back to stale state.
   useEffect(() => {
     if (appLifecycle === null) return;
     const onGet = appLifecycle.onGetFreshUnsyncedSnapshot;
@@ -138,12 +137,14 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     if (onGet === undefined || respond === undefined) return;
     const subscription = onGet((request) => {
       cancelAmbientPushRef.current();
+      flushLiveReadingPositions(null);
       const snapshot = registry.getUnsyncedEdits();
       const reply = (): Promise<void> =>
         respond({ requestId: request.requestId, snapshot });
       void Promise.allSettled([
         flushActiveDesktopPerWindowProjection(),
         drainDesktopTabsPersistence(),
+        fileEditRuntimeRegistry.flushRecovery(),
       ])
         .then(reply)
         .catch((error: unknown) => {

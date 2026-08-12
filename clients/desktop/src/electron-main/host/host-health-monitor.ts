@@ -17,10 +17,27 @@ import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 
 /**
  * Steady-state watchdog for the CLI-owned host. Runs on every platform (see
- * `desktop-startup.ts`); auto-respawn matters most on Windows, where the
- * Scheduled Task cannot restart-on-failure (its hidden-launcher action
- * detaches the host and exits, so the job "completed" long before the host
- * can die), while the snapshot-convergence duty matters everywhere.
+ * `desktop-startup.ts`); auto-respawn has historically mattered most on
+ * Windows, while the snapshot-convergence duty matters everywhere.
+ *
+ * This comment used to justify the Windows gap with "the Scheduled Task cannot
+ * restart-on-failure (its hidden-launcher action detaches the host and exits,
+ * so the job 'completed' long before the host can die)". That was FALSE, and
+ * saying so here is worth the lines because it was the stated reason nobody
+ * pursued the gap: `traycer host start` spawns the host with no `detached` and
+ * no `unref()` (it must stay attached to tee the child's stderr), and the VBS
+ * launcher uses `shell.Run(..., True)`, which waits. The chain therefore lives
+ * as long as the host and exits with the host's own code - a crashed host DID
+ * surface to Task Scheduler as a failed run, and it still was not restarted.
+ *
+ * The supervisor now relaunches its own child on any non-clean exit
+ * (`MAX_CONSECUTIVE_RELAUNCHES` in `commands/host-start.ts`, int #4826), which
+ * covers the case this monitor structurally cannot: a crash while the desktop
+ * app is CLOSED, when nothing here is running to notice. The two layers do not
+ * fight - the supervisor is faster, so a later tick's `reloadSnapshotFromDisk`
+ * simply converges onto the replacement, and any respawn this monitor does
+ * request goes through `traycer host restart`, which announces stop intent and
+ * so suppresses the supervisor's own relaunch.
  *
  * `HostLifecycle`'s steady state is pid.json-watcher driven plus a
  * retry-until-reachable ladder for metadata whose endpoint doesn't answer.

@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import {
   readCredentialsFile,
@@ -179,7 +180,6 @@ function fileCreds(over: Partial<StoredCredentials>): StoredCredentials {
   return {
     token: "F-access",
     refreshToken: "F-refresh",
-    authnBaseUrl: AUTHN_BASE_URL,
     savedAt: "2024-01-01T00:00:00.000Z",
     user: { id: "user-a", email: "a@example.com", name: "A" },
     ...over,
@@ -201,6 +201,7 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
     const store = new FileTokenStore({
       environment: ENVIRONMENT,
       authnBaseUrl: AUTHN_BASE_URL,
+      watchImpl: undefined,
     });
     stores.push(store);
     return store;
@@ -213,7 +214,7 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
   beforeEach(async () => {
     homeDir = mkdtempSync(join(tmpdir(), "traycer-credentials-migration-"));
     previousHome = process.env.HOME;
-    process.env.HOME = homeDir;
+    sandboxHome(homeDir);
     vi.resetModules();
     ({ FileTokenStore } = await import("../file-token-store"));
   });
@@ -341,7 +342,6 @@ describe("FileTokenStore.migrateLegacyCredentials (real fs + lock/WAL)", () => {
     const onDisk = await readCredentialsFile(credentialsPath());
     expect(onDisk?.token).toBe("L-refresh-tok");
     expect(onDisk?.user.id).toBe("user-b");
-    expect(onDisk?.authnBaseUrl).toBe(AUTHN_BASE_URL);
   });
 
   it("step 4: F absent, L refresh explicitly rejected → terminal-dead, no file created", async () => {

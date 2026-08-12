@@ -6,7 +6,10 @@
  * suggestions.
  */
 import { z } from "zod";
-import { taskRepoIdentifierSchema } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  preparedWorkspaceFolderSchema,
+  taskRepoIdentifierSchema,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   SEARCH_TEXT_PREVIEW_MAX_BYTES,
   searchTextPreviewRangeSchema,
@@ -337,6 +340,69 @@ export type WorkspaceListDirectoryResponse = z.infer<
   typeof workspaceListDirectoryResponseSchema
 >;
 
+/**
+ * Absolute in HOST-native terms, which is not the same thing on every host:
+ * POSIX `/srv/app`, a Windows drive `C:\Users\alice` (or `C:/Users/alice`,
+ * which Windows accepts too), or a UNC share `\\server\share`.
+ *
+ * Enforced on the wire rather than left to the endpoints because both
+ * directions can do damage with a relative path: the host resolves a request
+ * against its own working directory, and the picker can submit a response
+ * path straight to `workspace.prepareFolders` without it passing through the
+ * typed-path validation that would otherwise have caught it.
+ */
+const ABSOLUTE_HOST_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
+const absoluteHostPathSchema = z
+  .string()
+  .min(1)
+  .regex(ABSOLUTE_HOST_PATH, "must be an absolute host path");
+
+export const workspaceBrowseFolderEntrySchema = z.object({
+  /** Absolute host-native path of the folder. */
+  path: absoluteHostPathSchema,
+  /** Display basename, computed by the host. */
+  name: z.string().min(1),
+});
+export type WorkspaceBrowseFolderEntry = z.infer<
+  typeof workspaceBrowseFolderEntrySchema
+>;
+
+/**
+ * Pre-workspace folder browsing for the remote folder picker: unlike
+ * `workspace.listDirectory` (scoped to an already-added workspace), this
+ * lists the host filesystem so a remote client can choose a folder to add.
+ * One level per request; `directoryPath: null` starts at the host user's
+ * home directory (the response reveals the resolved path).
+ *
+ * A folder the OS refuses to list fails the request with a classified error
+ * instead of a fake-empty listing: permission denial, a nonexistent path,
+ * and a listing timeout are each distinct. The host bounds every read with
+ * a timeout, so the RPC always answers; a timeout does not PROVE a consent
+ * prompt (a huge or slow directory can exceed it too), but on a macOS host
+ * one may be waiting on screen (Files & Folders TCC can prompt a
+ * GUI-session host on first touch) - approving it there and retrying here
+ * is the remote consent flow.
+ */
+export const workspaceBrowseFoldersRequestSchema = z.object({
+  directoryPath: absoluteHostPathSchema.nullable(),
+});
+export type WorkspaceBrowseFoldersRequest = z.infer<
+  typeof workspaceBrowseFoldersRequestSchema
+>;
+
+export const workspaceBrowseFoldersResponseSchema = z.object({
+  /** Absolute path that was listed (resolved from a null request). */
+  directoryPath: absoluteHostPathSchema,
+  /** Null only at the filesystem root; even the home directory walks up. */
+  parentPath: absoluteHostPathSchema.nullable(),
+  /** Direct child DIRECTORIES only; files never cross the wire. */
+  entries: z.array(workspaceBrowseFolderEntrySchema),
+});
+export type WorkspaceBrowseFoldersResponse = z.infer<
+  typeof workspaceBrowseFoldersResponseSchema
+>;
+
 export const workspaceReadFileRequestSchema = z.object({
   workspacePath: z.string(),
   filePath: z.string(),
@@ -355,6 +421,154 @@ export const workspaceReadFileResponseSchema = z.object({
 });
 export type WorkspaceReadFileResponse = z.infer<
   typeof workspaceReadFileResponseSchema
+>;
+
+export const WORKSPACE_WRITE_FILE_MAX_CHARS = 1_000_000;
+
+const workspaceFileRevisionSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 revision");
+
+/**
+ * Conflict-safe text-file write. `expectedRevision` is the SHA-256 of the
+ * exact UTF-8 text returned by the read that started the edit session. The
+ * host only saves when the live file still matches it (or already equals the
+ * submitted content, making a lost-ack retry idempotent).
+ */
+export const workspaceWriteFileRequestSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+  expectedRevision: workspaceFileRevisionSchema,
+  content: z.string().max(WORKSPACE_WRITE_FILE_MAX_CHARS),
+});
+export type WorkspaceWriteFileRequest = z.infer<
+  typeof workspaceWriteFileRequestSchema
+>;
+
+const workspaceWriteFileResponseBaseSchema = z.object({
+  workspacePath: z.string(),
+  filePath: z.string(),
+});
+
+export const workspaceWriteFileResponseSchema = z.discriminatedUnion("status", [
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("saved"),
+    revision: workspaceFileRevisionSchema,
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("conflict"),
+    currentRevision: workspaceFileRevisionSchema,
+    error: z.string(),
+  }),
+  workspaceWriteFileResponseBaseSchema.extend({
+    status: z.literal("error"),
+    error: z.string(),
+  }),
+]);
+export type WorkspaceWriteFileResponse = z.infer<
+  typeof workspaceWriteFileResponseSchema
+>;
+
+// -----------------------------------------------------------------------------
+// Workspace root picking (T14, Journey 3; re-homed onto `workspace.prepareFolders`
+// v1.1 by T18 - see the RPC backward-compat decision log) - the pre-workspace
+// operations a remote client needs before it has a workspace to browse at all:
+// the folder lives on the host, so a client can only enter/paste a path, never
+// open a native OS dialog. Distinct from the mention/tree/read RPCs above,
+// which all assume a workspace root is already chosen.
+// -----------------------------------------------------------------------------
+
+export const workspacePathRejectionReasonSchema = z.enum([
+  "NOT_ABSOLUTE",
+  "NOT_FOUND",
+  "NOT_A_DIRECTORY",
+  "NO_PERMISSION",
+]);
+export type WorkspacePathRejectionReason = z.infer<
+  typeof workspacePathRejectionReasonSchema
+>;
+
+/**
+ * Shared outcome shape for both the `validatePath` operation (live,
+ * as-you-type probing - safe to call on every keystroke, never records
+ * anything) and `recordRecentWorkspace` (an explicit commit action:
+ * re-validates, and only on success appends to the recent list).
+ * `resolvedPath` is the realpath-canonicalized absolute directory the client
+ * should bind the workspace to.
+ */
+export const workspaceValidatePathResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), resolvedPath: z.string() }),
+  z.object({ ok: z.literal(false), reason: workspacePathRejectionReasonSchema }),
+]);
+export type WorkspaceValidatePathResponse = z.infer<
+  typeof workspaceValidatePathResponseSchema
+>;
+
+export const workspaceRecentEntrySchema = z.object({
+  path: z.string(),
+  lastOpenedAt: z.string(),
+});
+export type WorkspaceRecentEntry = z.infer<typeof workspaceRecentEntrySchema>;
+
+// -----------------------------------------------------------------------------
+// `workspace.prepareFolders` v1.1 - additive `operation` discriminator folding
+// the 4 standalone workspace-picker methods (`workspace.getHomeDir`,
+// `workspace.validatePath`, `workspace.recordRecentWorkspace`,
+// `workspace.listRecentWorkspaces`) onto the existing method name (T18). Kept
+// as a flat object rather than a discriminated union at the top level: the
+// versioned-RPC framework's minor-line additivity check requires the same
+// JSON-Schema "kind" across a minor bump, and v1.0's request/response are
+// plain objects.
+//
+// `folderPaths` stays a plain (non-nullable) array ONLY for `operation:
+// "prepare"` - every other operation sends `folderPaths: null`, which v1.0's
+// `z.array(z.string())` request schema rejects. That is deliberate: it makes
+// the framework's automatic same-major downgrade (Zod-parsing a newer
+// request through the older schema when a v1.1 client talks to a v1.0 host)
+// fail closed with a per-call `RPC_ERROR` for the 4 genuinely-new operations,
+// instead of silently succeeding with a nonsensical "prepared 0 folders"
+// response. A real `prepare` call still degrades transparently against a
+// v1.0 host - the whole point of folding onto this method instead of a new
+// name.
+// -----------------------------------------------------------------------------
+
+export const workspacePrepareFoldersOperationSchema = z.enum([
+  "prepare",
+  "getHomeDir",
+  "validatePath",
+  "recordRecentWorkspace",
+  "listRecentWorkspaces",
+]);
+export type WorkspacePrepareFoldersOperation = z.infer<
+  typeof workspacePrepareFoldersOperationSchema
+>;
+
+export const workspacePrepareFoldersRequestSchemaV11 = z.object({
+  operation: workspacePrepareFoldersOperationSchema,
+  /** Set only for `operation: "prepare"`. */
+  folderPaths: z.array(z.string()).nullable(),
+  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+  path: z.string().nullable(),
+});
+export type WorkspacePrepareFoldersRequestV11 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV11
+>;
+
+export const workspacePrepareFoldersResponseSchemaV11 = z.object({
+  operation: workspacePrepareFoldersOperationSchema,
+  /** Set for `operation: "prepare"`; `[]` otherwise. */
+  folders: z.array(preparedWorkspaceFolderSchema),
+  /** Set for `operation: "prepare"`; `[]` otherwise. */
+  repoIdentifiers: z.array(taskRepoIdentifierSchema),
+  /** Set only for `operation: "getHomeDir"`. */
+  homeDir: z.string().nullable(),
+  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+  validation: workspaceValidatePathResponseSchema.nullable(),
+  /** Set only for `operation: "listRecentWorkspaces"`. */
+  recentWorkspaces: z.array(workspaceRecentEntrySchema).nullable(),
+});
+export type WorkspacePrepareFoldersResponseV11 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV11
 >;
 
 /**

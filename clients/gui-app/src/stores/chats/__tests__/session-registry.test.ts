@@ -20,6 +20,7 @@ function createHandle(epicId: string, chatId: string) {
   let closeCount = 0;
   return {
     handle: createChatSessionStore({
+      hostId: "host-a",
       epicId,
       chatId,
       userId: null,
@@ -434,12 +435,12 @@ function markRunning(handle: ChatSessionStoreHandle): void {
   handle.store.setState({
     runStatus: "running",
     activeTurn: {
+      agentMode: "regular",
       sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
       model: "gpt-5-codex",
-      agentMode: "regular",
       profileId: null,
       userMessageId: "message-1",
       startedAt: 1,

@@ -32,18 +32,32 @@ vi.mock("@sentry/electron/main", () => ({
   isInitialized: vi.fn((): boolean => false),
   captureFeedback: vi.fn((): string => "sentry-event-id"),
   flush: vi.fn(async (): Promise<boolean> => true),
+  // No client exercised in this file - `submitReport` falls back to
+  // `flush`'s own boolean, exactly as before the afterSendEvent mechanism.
+  getClient: vi.fn(() => undefined),
 }));
 
 import * as Sentry from "@sentry/electron/main";
 import { DesktopSupportService } from "../support";
 
 const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
-  title: "Something broke",
-  whatHappened: "",
-  stepsToReproduce: "",
-  expectedBehavior: "",
-  actualBehavior: "",
+  draftId: 1,
+  type: "bug",
+  intent: "",
+  frequency: null,
+  location: null,
+  allowContact: false,
+  includeDesktopLog: true,
+  includeHostLog: true,
+  includeDiagnostics: true,
+  images: [],
+  overrideTitle: null,
+  privateOutcome: "none",
 };
+
+// Frozen-evidence key is composed in the IPC layer (sender id + draftId);
+// these tests exercise the service directly, so a fixed key stands in.
+const KEY = "sender-1:1";
 
 /**
  * The `layer0` bytes under test are copied from the real published record
@@ -64,6 +78,7 @@ async function withPidMetadataFile(
     await run({
       rootDir: dir,
       pidMetadataFile,
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
@@ -162,7 +177,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
     vi.mocked(Sentry.captureFeedback).mockClear();
   });
 
-  it("tags a degraded layer0 record and carries the full record in a Sentry context", async () => {
+  it("tags a degraded layer0 record and carries the full record in a Sentry context, path-pseudonymized (ticket 09)", async () => {
     await withPidMetadataFile(
       {
         pid: 25149,
@@ -179,11 +194,17 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.submitReport(EMPTY_REPORT_FORM);
+        await service.freezeEvidence(KEY, null);
+        await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
         const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
           .calls[0];
+        // The deep scrubber (ticket 09) runs on `contexts` right before this
+        // call: the absolute path in `evidence` is pseudonymized (host.log
+        // and stack-carried paths are the dominant leak vector this scrubber
+        // exists for), while the rest of the record - status/attemptId/cause,
+        // none of them path-shaped - survives untouched.
         expect(hint?.captureContext).toMatchObject({
           tags: expect.objectContaining({ layer0Status: "degraded" }),
           contexts: {
@@ -191,8 +212,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
               status: "degraded",
               attemptId: "sea-addon-degraded",
               cause: "addon-load-failed",
-              evidence:
-                "Cannot find module '/Applications/Traycer.app/Contents/Resources/lifecycle_lock.node'",
+              evidence: "Cannot find module '<path-1>'",
             },
           },
         });
@@ -206,7 +226,8 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
   it("tags an absent layer0 record without fabricating a structured context", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {
       const service = buildService(hostLayout);
-      await service.submitReport(EMPTY_REPORT_FORM);
+      await service.freezeEvidence(KEY, null);
+      await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
       expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
       const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock.calls[0];
@@ -215,6 +236,150 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       });
       expect(hint?.captureContext).not.toHaveProperty("contexts");
       expect(feedback.message).not.toContain("Layer 0:");
+    });
+  });
+
+  /**
+   * The structured `os-error` arm is the reason T1 stops flattening cause to
+   * a string: syscall/code/fsType must arrive intact in `contexts.layer0`,
+   * not as a pre-stringified blob that loses typed filtering later.
+   */
+  it("carries a structured os-error layer0 discriminant intact in Sentry contexts.layer0", async () => {
+    const osErrorCause = {
+      kind: "os-error" as const,
+      syscall: "open",
+      code: "EACCES",
+      fsType: null,
+    };
+    await withPidMetadataFile(
+      {
+        pid: 25149,
+        hostId: "36bee6d0-test",
+        version: "0.0.0-dev",
+        websocketUrl: "ws://127.0.0.1:63857/rpc",
+        layer0: {
+          status: "degraded",
+          attemptId: "host-os-error",
+          cause: osErrorCause,
+          evidence: "kernel lifecycle lock acquisition was not determinable",
+        },
+      },
+      async (hostLayout) => {
+        const service = buildService(hostLayout);
+        await service.freezeEvidence(KEY, null);
+        await service.submitReport(EMPTY_REPORT_FORM, KEY);
+
+        expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
+        const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
+          .calls[0];
+        expect(hint?.captureContext).toMatchObject({
+          tags: expect.objectContaining({ layer0Status: "degraded" }),
+          contexts: {
+            layer0: {
+              status: "degraded",
+              attemptId: "host-os-error",
+              cause: osErrorCause,
+              evidence:
+                "kernel lifecycle lock acquisition was not determinable",
+            },
+          },
+        });
+        // Nested fields must still be objects on the wire, not a JSON string.
+        const layer0Context = (
+          hint?.captureContext as {
+            contexts?: { layer0?: { cause?: unknown } };
+          }
+        )?.contexts?.layer0;
+        expect(typeof layer0Context?.cause).toBe("object");
+        expect(layer0Context?.cause).toEqual(osErrorCause);
+        expect(feedback.message).toContain(
+          `Layer 0: degraded (${JSON.stringify(osErrorCause)})`,
+        );
+      },
+    );
+  });
+
+  it("tags an unrecognized newer-host layer0 and preserves the raw payload in Sentry context", async () => {
+    const newerHostLayer0 = {
+      status: "degraded",
+      attemptId: "future-host-attempt",
+      cause: "future-unknown-cause",
+      evidence: "host emits a cause this desktop build does not list yet",
+    };
+    await withPidMetadataFile(
+      {
+        pid: 25149,
+        hostId: "36bee6d0-test",
+        version: "0.0.0-dev",
+        websocketUrl: "ws://127.0.0.1:63857/rpc",
+        layer0: newerHostLayer0,
+      },
+      async (hostLayout) => {
+        const service = buildService(hostLayout);
+        await service.freezeEvidence(KEY, null);
+        await service.submitReport(EMPTY_REPORT_FORM, KEY);
+
+        expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
+        const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
+          .calls[0];
+        expect(hint?.captureContext).toMatchObject({
+          tags: expect.objectContaining({ layer0Status: "unrecognized" }),
+          contexts: {
+            layer0: {
+              status: "unrecognized",
+              raw: JSON.stringify(newerHostLayer0),
+            },
+          },
+        });
+        expect(feedback.message).toContain(
+          `Layer 0: unrecognized (${JSON.stringify(newerHostLayer0)})`,
+        );
+      },
+    );
+  });
+
+  it("ships image attachments on captureFeedback and keeps them out of contexts (ticket 08)", async () => {
+    const png = new Uint8Array(24);
+    png[0] = 0x89;
+    png[1] = 0x50;
+    png[2] = 0x4e;
+    png[3] = 0x47;
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      await service.submitReport(
+        {
+          ...EMPTY_REPORT_FORM,
+          images: [
+            {
+              fileName: "layer0-context.png",
+              mimeType: "image/png",
+              bytes: png.buffer,
+            },
+          ],
+        },
+        KEY,
+      );
+
+      expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
+      const [, hint] = vi.mocked(Sentry.captureFeedback).mock.calls[0] as [
+        unknown,
+        {
+          attachments?: ReadonlyArray<{
+            filename: string;
+            data: unknown;
+            contentType?: string;
+          }>;
+          captureContext?: { contexts?: Record<string, unknown> };
+        },
+      ];
+      const image = hint?.attachments?.find(
+        (a) => a.filename === "layer0-context.png",
+      );
+      expect(image?.contentType).toBe("image/png");
+      expect(image?.data).toBeInstanceOf(Uint8Array);
+      // Images must never ride through the scrubbed contexts object.
+      expect(hint?.captureContext?.contexts ?? {}).not.toHaveProperty("images");
     });
   });
 });

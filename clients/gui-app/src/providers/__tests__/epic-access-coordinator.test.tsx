@@ -1,4 +1,3 @@
-import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -322,7 +321,11 @@ describe("EpicAccessCoordinator", () => {
     // A revoke or delete discovered on (re)open surfaces indistinguishably as
     // an unreadable room; the toast must not claim either cause.
     handle.store.setState({
-      snapshotFetchError: { code: "UNAUTHORIZED", message: "null roomInfo" },
+      snapshotFetchError: {
+        code: "UNAUTHORIZED",
+        message: "null roomInfo",
+        upgradeGuidance: null,
+      },
     });
 
     await waitFor(() =>

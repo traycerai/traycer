@@ -2,6 +2,12 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
+import {
+  imageByteLengthSchema,
+  imageDimensionSchema,
+  imageSha256HexSchema,
+  supportedImageMediaTypeSchema,
+} from "@traycer/protocol/persistence/epic/images";
 
 /**
  * Discriminated union of content blocks rendered inside an assistant
@@ -123,7 +129,10 @@ export const providerNoticeMetadataSchema = z
     metadata: providerNoticeNormalizedMetadataSchema.nullable(),
   })
   .superRefine((notice, ctx) => {
-    if (notice.metadata !== null && notice.noticeKind !== notice.metadata.type) {
+    if (
+      notice.metadata !== null &&
+      notice.noticeKind !== notice.metadata.type
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "noticeKind must match metadata.type",
@@ -131,7 +140,9 @@ export const providerNoticeMetadataSchema = z
       });
     }
   });
-export type ProviderNoticeMetadata = z.infer<typeof providerNoticeMetadataSchema>;
+export type ProviderNoticeMetadata = z.infer<
+  typeof providerNoticeMetadataSchema
+>;
 
 export const textBlockSchema = z.object({
   ...baseBlockFields,
@@ -229,6 +240,24 @@ export const backgroundTaskOutputSchema = z.object({
 });
 export type BackgroundTaskOutput = z.infer<typeof backgroundTaskOutputSchema>;
 
+// One generated/edited image produced by a tool call (Codex `image_generation`
+// and future equivalents), carried on the `tool_call` content block and its
+// `tool_call.completed` runtime event. `attachmentHash` is the render source
+// (SHA-256 content address into the epic attachment map); `filePath` is
+// display-only metadata, never the render source. Array from day one - a
+// single tool call can produce more than one image.
+export const imageGenerationResultSchema = z.object({
+  attachmentHash: imageSha256HexSchema,
+  mediaType: supportedImageMediaTypeSchema,
+  byteLength: imageByteLengthSchema,
+  width: imageDimensionSchema.default(null),
+  height: imageDimensionSchema.default(null),
+  alt: z.string().nullable().default(null),
+  revisedPrompt: z.string().nullable().default(null),
+  filePath: z.string().nullable().default(null),
+});
+export type ImageGenerationResult = z.infer<typeof imageGenerationResultSchema>;
+
 export const toolCallBlockSchema = z.object({
   ...baseBlockFields,
   status: actionBlockStatus,
@@ -289,8 +318,36 @@ export const toolCallBlockSchema = z.object({
   // a genuine failure. `status` itself is unchanged - this only adds the
   // finer distinction. Defaulted so pre-existing blocks parse cleanly.
   stopped: z.boolean().default(false),
+  // Images this call produced (`chat.subscribe@1.7`). Defaulted so blocks
+  // persisted before this field existed parse cleanly. See
+  // `imageGenerationResultSchema`.
+  imageResults: z.array(imageGenerationResultSchema).default([]),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
+// existed (`chat.subscribe@1.0-1.6`). Bound (via the frozen content-block
+// union below) to every released `chat.subscribe` minor so those lines can
+// never observe image data - see `contentBlockSchemaPreImage`. Hand-frozen,
+// NOT derived from the live shape via `.omit()`, so a future field added to
+// the live block cannot silently leak onto a released wire line.
+export const toolCallBlockSchemaPreImage = z.object({
+  ...baseBlockFields,
+  status: actionBlockStatus,
+  type: z.literal("tool_call"),
+  toolName: z.string(),
+  inputSummary: z.string().nullable().default(null),
+  inputDetail: toolInputDetailSchema.nullable().default(null),
+  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+  error: z.string().nullable(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  progress: z.string().nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+  startedAt: z.number().nullable().default(null),
+  endedAt: z.number().nullable().default(null),
+  backgroundTask: z.boolean().nullable().default(false),
+  stopped: z.boolean().default(false),
+});
 
 // `diffSource: "snapshot"` ⇒ `reason: "snapshot"` and contents non-null
 // (or single-null for create/delete). Any other reason ⇒ `"none"` and
@@ -351,6 +408,25 @@ export const commandBlockSchema = z.object({
   // (e.g. grep over a large tree) and there is no durable store to lazy-fetch
   // them from. The card shows command + cwd + exit code + status, which is the
   // load-bearing signal.
+  // Persistent marker with the same three-state meaning as
+  // `toolCallBlockSchema.backgroundTask`: true once this command has been
+  // promoted to a backgrounded one (Codex yields a long-running exec to the
+  // background and keeps it alive past the turn that started it). The marker
+  // survives EVERY terminal path and reload, so the GUI keeps rendering it as a
+  // standalone background card once it settles instead of collapsing back into
+  // the generic activity group. `null` means "not yet known" - the promotion is
+  // only decided at the parent turn's end, so a command that is still running
+  // has no confirmed answer yet. Defaulted to `false` (not `null`) for blocks
+  // persisted before this field existed, since backgrounding didn't exist as a
+  // concept then.
+  backgroundTask: z.boolean().nullable().default(false),
+  // Set when the terminal outcome was an explicit stop - the host asked the
+  // provider to terminate a backgrounded command, or a teardown killed it -
+  // rather than the command failing on its own. The provider reports its own
+  // kill with a synthetic exit code, and rendering that as a failure would
+  // blame the command for something we did. Mirrors
+  // `toolCallBlockSchema.stopped`. Defaulted so pre-existing blocks parse.
+  stopped: z.boolean().default(false),
 });
 export type CommandBlock = z.infer<typeof commandBlockSchema>;
 
@@ -576,6 +652,35 @@ export const autonomousResumeTriggerSchema = z.object({
     .object({ serverName: z.string(), toolName: z.string() })
     .nullable()
     .default(null),
+  // The producer was STILL RUNNING when this digest was rendered - a monitor
+  // that keeps watching, or a backgrounded shell streaming mid-run output. It
+  // is a separate defaulted key rather than a `status` value for the same
+  // reason `mcp` and `wakeTriggers` are: `status` is a persisted enum, and an
+  // unknown enum value fails the WHOLE chat's `safeParse` on an older host,
+  // whereas an unknown defaulted key is silently stripped. `status` therefore
+  // still carries the command's terminal outcome; renderers that understand
+  // `live` must prefer it, because a running command has no terminal outcome
+  // and `status` is reporting the least-wrong of three wrong answers.
+  live: z.boolean().default(false),
+  // Structured identity of the shell whose delivery woke this turn. Exactly the
+  // `mcp` pattern above and for the same reason: `kind` is a PERSISTED enum,
+  // and an unknown value in it fails the WHOLE chat's `safeParse` on an older
+  // host, whereas an unknown defaulted key is silently stripped. So `kind`
+  // stays `"monitor"` for every shell, and the id the divider needs to open the
+  // output window on click rides here.
+  //
+  // `monitoring` is defaulted rather than required because this key is READ BACK
+  // from chats written before it existed (and from ones written while it was
+  // still `kind`, whose value strips on parse): a trigger that cannot say
+  // whether its shell was watching renders as a plain shell rather than failing
+  // the whole chat.
+  managedCommand: z
+    .object({
+      commandId: z.string(),
+      monitoring: z.boolean().default(false),
+    })
+    .nullable()
+    .default(null),
 });
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
@@ -663,13 +768,16 @@ export function decodeAutonomousResumeBlock(
     ...rest,
     triggers: [
       ...rest.triggers,
-      ...wakeTriggers.map(
-        (wake): AutonomousResumeTrigger => ({
-          ...wake,
-          kind: "wakeup",
-          mcp: null,
-        }),
-      ),
+      ...wakeTriggers.map((wake): AutonomousResumeTrigger => ({
+        ...wake,
+        kind: "wakeup",
+        mcp: null,
+        // A fired schedule is not a managed command and never had one.
+        managedCommand: null,
+        // A fired wake is terminal by construction: it happened, then it was
+        // over. Nothing about a schedule keeps producing.
+        live: false,
+      })),
     ],
   };
 }
@@ -688,12 +796,19 @@ function isWakeupTrigger(
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
-  const triggers = domain.triggers.filter((trigger) => !isWakeupTrigger(trigger));
+  const triggers = domain.triggers.filter(
+    (trigger) => !isWakeupTrigger(trigger),
+  );
   const wakeTriggers = domain.triggers
     .filter(isWakeupTrigger)
     .map(
-      ({ kind: _kind, mcp: _mcp, ...wake }): AutonomousResumeWakeTrigger =>
-        wake,
+      ({
+        kind: _kind,
+        mcp: _mcp,
+        live: _live,
+        managedCommand: _managedCommand,
+        ...wake
+      }): AutonomousResumeWakeTrigger => wake,
     );
   return { ...domain, triggers, wakeTriggers };
 }
@@ -710,7 +825,9 @@ export const autonomousResumeBlockSchema = z.codec(
     // typed against the concrete, fully-defaulted `AutonomousResumeBlock` - the
     // shape every real caller (e.g. the host storage write funnel) has.
     encode: (domain) =>
-      encodeAutonomousResumeBlock(domainAutonomousResumeBlockSchema.parse(domain)),
+      encodeAutonomousResumeBlock(
+        domainAutonomousResumeBlockSchema.parse(domain),
+      ),
   },
 );
 
@@ -856,6 +973,30 @@ export const contentBlockSchema = z.discriminatedUnion("type", [
 ]);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
 
+// Wire-freeze copy of `contentBlockSchema` with `tool_call` swapped for its
+// pre-image freeze (`toolCallBlockSchemaPreImage`) - the only member that
+// gains image data. Bound (via the frozen message/chat schemas) to every
+// released `chat.subscribe@1.0-1.6` minor so those lines structurally match
+// the shipped wire and can never observe `imageResults`. Every other member
+// reuses the live sub-schema (same convention as `messageSchemaPreInReplyTo`).
+export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
+  textBlockSchema,
+  reasoningBlockSchema,
+  toolCallBlockSchemaPreImage,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchema,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchema,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
+
 // The on-disk/wire shape - identical to `ContentBlock` except
 // `autonomous_resume`, whose persisted member carries `wakeTriggers` instead
 // of inline `kind: "wakeup"` triggers. Used by the host storage layer's
@@ -868,5 +1009,4 @@ export type ContentBlock = z.infer<typeof contentBlockSchema>;
 // different on-disk representation - every other member's persisted shape is
 // its normal (fully-defaulted) domain shape.
 export type PersistedContentBlock =
-  | Exclude<ContentBlock, AutonomousResumeBlock>
-  | PersistedAutonomousResumeBlock;
+  Exclude<ContentBlock, AutonomousResumeBlock> | PersistedAutonomousResumeBlock;

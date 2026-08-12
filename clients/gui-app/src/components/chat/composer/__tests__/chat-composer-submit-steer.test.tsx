@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { createRef, type RefObject } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { createComposerPickerStore } from "../picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   useChatComposerSubmit,
   type ChatComposerSubmitResult,
@@ -36,6 +36,7 @@ const DIRTY: JsonContent = {
 };
 
 const MATCHING_TURN: ChatActiveTurn = {
+  agentMode: "regular",
   sameTurnSteeringSupported: true,
   turnId: "turn-1",
   status: "running",
@@ -43,7 +44,6 @@ const MATCHING_TURN: ChatActiveTurn = {
   model: "claude-sonnet",
   reasoningEffort: "medium",
   serviceTier: null,
-  agentMode: "regular",
   profileId: null,
   userMessageId: "message-1",
   startedAt: 1,
@@ -170,7 +170,6 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(input.settings).toMatchObject({
       harnessId: "claude",
       model: "claude-opus",
-      agentMode: "regular",
       profileId: null,
     } satisfies Partial<ChatRunSettings>);
     expect(result.current.steerConflict.open).toBe(false);
@@ -642,7 +641,6 @@ function mountSubmit(input: MountSubmitInput): {
       },
       reasoning: "medium",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: false,
@@ -689,15 +687,20 @@ function mountSubmit(input: MountSubmitInput): {
 }
 
 function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => false,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,

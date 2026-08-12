@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
@@ -471,6 +470,13 @@ describe("T9 split interactions", () => {
     const choices = getFillableSlotChoices("split-a", "left");
 
     expect(choices.map((choice) => choice.id)).not.toContain("open:epic:phase");
+    expect(
+      resolveFillableSlotDestination("split-a", "left", {
+        kind: "phase-migration",
+        phaseId: "phase-1",
+        name: "Phase",
+      }),
+    ).toEqual({ kind: "invalid" });
     unregister();
   });
 

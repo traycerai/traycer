@@ -126,7 +126,11 @@ function UsageLeafProbe() {
 const RUNTIME: ChatLowerRuntimeState = {
   snapshotLoaded: true,
 };
-const ACCESS: ChatLowerAccessState = { isViewer: false, canAct: true };
+const ACCESS: ChatLowerAccessState = {
+  isViewer: false,
+  canAct: true,
+  readOnlyNotice: null,
+};
 const TURN_IDLE: ChatLowerTurnState = {
   activeTurnStatus: null,
   stopDisabled: true,
@@ -146,6 +150,8 @@ const TURN_RUNNING: ChatLowerTurnState = {
 const INTERVIEW: ChatLowerInterviewState = {
   pending: null,
   isBusy: false,
+  unanswerable: [],
+  unanswerableBusy: false,
   onAnswer: () => null,
   onError: () => null,
   onFork: null,

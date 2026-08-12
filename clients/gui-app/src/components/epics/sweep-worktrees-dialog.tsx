@@ -339,6 +339,7 @@ function SweepWorktreeRowItem(props: {
             maximumVisible={2}
             className="max-w-full overflow-hidden"
             testId={`sweep-worktrees-prs-${entry.worktreePath}`}
+            openPrInApp={null}
           />
         </div>
         {/* The path is truncated to keep rows scannable, so the full value

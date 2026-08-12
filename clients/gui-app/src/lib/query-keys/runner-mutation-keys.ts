@@ -1,5 +1,25 @@
 import type { GlobalShortcutId } from "@traycer-clients/shared/keybindings/global-shortcuts";
 
+const supportBridgeQueryScopeIds = new WeakMap<object, number>();
+let nextSupportBridgeQueryScopeId = 1;
+
+/**
+ * TanStack Query hashes keys through JSON serialization, so a bridge object
+ * whose public surface is methods would serialize as `{}`. Give each bridge
+ * instance a stable, serializable scope instead.
+ */
+export function supportBridgeQueryScopeId(
+  support: object | null,
+): number | null {
+  if (support === null) return null;
+  const existing = supportBridgeQueryScopeIds.get(support);
+  if (existing !== undefined) return existing;
+  const scopeId = nextSupportBridgeQueryScopeId;
+  nextSupportBridgeQueryScopeId += 1;
+  supportBridgeQueryScopeIds.set(support, scopeId);
+  return scopeId;
+}
+
 export const runnerMutationKeys = {
   requestHostRespawn: () => ["runner.requestHostRespawn"] as const,
   serviceInstall: () => ["runner.serviceInstall"] as const,
@@ -33,8 +53,24 @@ export const runnerMutationKeys = {
   uninstallTraycer: () => ["runner.host.uninstallTraycer"] as const,
   reinstallTraycer: () => ["runner.host.reinstallTraycer"] as const,
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
+  supportFreezeEvidence: () => ["runner.support.freezeEvidence"] as const,
+  supportSaveDiagnosticBundle: () =>
+    ["runner.support.saveDiagnosticBundle"] as const,
+  // Builds the scrubbed public draft for the publish preview (ticket 09/07).
+  supportBuildPublicDraft: () => ["runner.support.buildPublicDraft"] as const,
+  // Opens the previewed draft's GitHub issue-form URL in the browser
+  // (ticket 07's publish preview - Flow 3b), separate from the fetch above so
+  // the preview can render before the user opts to leave the app.
+  supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
+  // On-demand V8 heap snapshot of this renderer (Diagnostics → Memory).
+  // The key identifies the mutation; it does NOT serialize it - TanStack
+  // Query only serializes on `scope`, which the caller sets, and which is
+  // what keeps a double-click from starting a second renderer-freezing
+  // heap walk.
+  captureHeapSnapshot: () =>
+    ["runner.diagnostics.captureHeapSnapshot"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
   // on-disk cache). Used by the Settings → Host Updates row's
   // "Check now" / "Retry" buttons so stale cached failures don't survive
@@ -56,15 +92,43 @@ export const runnerMutationKeys = {
   // Settings → log level (desktop/cli/host). Machine-local config, not
   // host-scoped, so a single static key suffices.
   logLevelsSet: () => ["runner.logLevels.set"] as const,
+  agentRolesEnabledSet: () =>
+    ["runner.featureSettings.agentRoles.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
     ["runner.globalShortcuts.set", id] as const,
 };
 
+const runnerHostQueryScopeIds = new WeakMap<object, number>();
+let nextRunnerHostQueryScopeId = 1;
+
+/**
+ * Same hazard `supportBridgeQueryScopeId` above exists for: TanStack Query
+ * hashes keys STRUCTURALLY (JSON serialization), so two runner-host instances
+ * whose enumerable surface serializes identically hash to the same key - and a
+ * pending `fetchQuery` for the OLD runner then dedupes the NEW runner's read
+ * onto it, seeding the replacement directory with the previous shell's
+ * identity. A per-instance primitive token is what actually delivers the
+ * "scoped by instance" the key promises.
+ */
+export function runnerHostQueryScopeId(runnerHost: object): number {
+  const existing = runnerHostQueryScopeIds.get(runnerHost);
+  if (existing !== undefined) return existing;
+  const scopeId = nextRunnerHostQueryScopeId;
+  nextRunnerHostQueryScopeId += 1;
+  runnerHostQueryScopeIds.set(runnerHost, scopeId);
+  return scopeId;
+}
+
 export const runnerQueryKeys = {
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
+  // The shell's durable answer to "which host id belongs to THIS machine",
+  // read once while the host directory bootstraps. Takes the SCOPE ID, not
+  // the runner object - see `runnerHostQueryScopeId`.
+  lastKnownLocalHostId: (runnerHostScopeId: number) =>
+    ["runner.host.lastKnownLocalHostId", runnerHostScopeId] as const,
   // `traycerCli: object` keys these queries to a specific runner-host
   // instance so a host swap (test setups, hot reload) invalidates the
   // cache cleanly. Identity comparison only - the object is never
@@ -101,6 +165,11 @@ export const runnerQueryKeys = {
     ["runner.host.controllerStatus", management] as const,
   hostInstalledRecord: (management: object) =>
     ["runner.host.installedRecord", management] as const,
+  // The no-bridge variant of the key above: a disabled placeholder query
+  // still needs a key, and an inlined one drifts when this resource's keys
+  // change.
+  hostInstalledRecordUnavailable: () =>
+    ["runner.host.installedRecord", "unavailable"] as const,
   hostLogs: (management: object, tailLines: number) =>
     ["runner.host.logs", management, tailLines] as const,
   hostDoctor: (management: object) =>
@@ -121,6 +190,7 @@ export const runnerQueryKeys = {
   // The three configurable log thresholds, read together from the desktop
   // platform bridge. Machine-local, so not host-scoped.
   logLevels: () => ["runner.logLevels"] as const,
+  featureSettings: () => ["runner.featureSettings"] as const,
   // Fonts installed on this machine (Settings → Appearance font pickers).
   // Machine-local and effectively static for the session, so a single
   // static key suffices.
@@ -128,10 +198,36 @@ export const runnerQueryKeys = {
   zoomPercent: (scope: string | null) =>
     ["runner.zoom.percent", scope] as const,
   // Desktop support log viewer (Diagnostics → Logs). Scoped by the support
-  // bridge object identity so a host/shell swap invalidates cleanly, matching
+  // bridge scope so a host/shell swap invalidates cleanly, matching
   // the other runner-host queries.
-  supportLogList: (support: object | null) =>
-    ["runner.support.logList", support] as const,
-  supportLogTail: (support: object | null, target: string) =>
-    ["runner.support.logTail", support, target] as const,
+  supportLogList: (supportScopeId: number | null) =>
+    ["runner.support.logList", supportScopeId] as const,
+  supportLogTail: (supportScopeId: number | null, target: string) =>
+    ["runner.support.logTail", supportScopeId, target] as const,
+  // Report-issue dialog's machine/user/delivery snapshot. Scoped by bridge
+  // identity so shell swaps never reuse another bridge's cached state.
+  supportSnapshot: (supportScopeId: number | null) =>
+    ["runner.support.snapshot", supportScopeId] as const,
+  // Report-issue consent panel's log "view" affordance (ticket 07/04): reads
+  // the tail FROZEN at report-open, not a live tail, so what the user reviews
+  // is exactly what a submit would send. Scoped by draftId (frozen evidence
+  // is per-draft) as well as support identity.
+  supportFrozenLogTail: (
+    supportScopeId: number | null,
+    draftId: number,
+    target: string,
+  ) =>
+    ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
+  // Report-issue evidence strip's "Nth time on this install" line (ticket 06
+  // ledger read). Scoped by fingerprint - each distinct defect caches
+  // independently.
+  supportFingerprintOccurrence: (
+    supportScopeId: number | null,
+    fingerprint: string,
+  ) =>
+    [
+      "runner.support.fingerprintOccurrence",
+      supportScopeId,
+      fingerprint,
+    ] as const,
 };

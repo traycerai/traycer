@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +11,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -175,6 +175,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       actions.submit({
         draftId,
         editor: editorHandleForPrompt("Plan the GUI migration"),
+        slashCatalog: null,
         toolbar: {
           selection: {
             harnessId: "codex",
@@ -184,7 +185,6 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           reasoning: "high",
           serviceTier: "",
           permission: "supervised",
-          agentMode: "regular",
         },
       });
     };
@@ -386,6 +386,7 @@ describe("<HomePage />", () => {
           path: "/tmp/draft-app",
           name: "draft-app",
           repoIdentifier: null,
+          hostId: null,
         },
       },
     });
@@ -398,6 +399,7 @@ describe("<HomePage />", () => {
           path: "/tmp/global-app",
           name: "global-app",
           repoIdentifier: null,
+          hostId: null,
         },
       },
     });
@@ -425,6 +427,7 @@ describe("<HomePage />", () => {
           path: "/tmp/traycer",
           name: "traycer",
           repoIdentifier: null,
+          hostId: null,
         },
       },
     });
@@ -522,11 +525,13 @@ describe("<HomePage />", () => {
           path: "/tmp/gui-app",
           name: "gui-app",
           repoIdentifier: { owner: "traycerai", repo: "gui-app" },
+          hostId: null,
         },
         "/tmp/host": {
           path: "/tmp/host",
           name: "host",
           repoIdentifier: { owner: "traycerai", repo: "host" },
+          hostId: null,
         },
       },
     });
@@ -720,15 +725,20 @@ describe("<HomePage />", () => {
 
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
   const content = jsonContentForPrompt(prompt);
+  const editorIncarnation = createComposerEditorIncarnation();
   return {
     isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
     focus: () => undefined,
     focusAtEnd: () => undefined,
     getJSON: () => content,
     isEmpty: () => prompt.length === 0,
     clear: () => undefined,
     setContent: () => undefined,
+    syncContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
     beginPathInsertion: () => null,
     rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,

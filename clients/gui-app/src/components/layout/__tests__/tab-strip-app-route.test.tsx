@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RouterProvider,
@@ -66,6 +65,13 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
+// The app shell mounts the fork-episode poll (it feeds the `pendingFork`
+// indicator's open/close edge). Stubbed like every other host-runtime consumer
+// in this file: these tests own tab-strip layout and navigation, and the real
+// hook would need a host client this tree deliberately does not build.
+vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
+  useChatForkEventQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),
 }));
@@ -307,7 +313,7 @@ describe("app route tab-strip navigation", () => {
     });
   });
 
-  it("covers the header baseline beneath the active tab caps", async () => {
+  it("aligns active tab border joins and covers the header baseline", async () => {
     const epicTabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-current", "Current Epic");
@@ -331,11 +337,20 @@ describe("app route tab-strip navigation", () => {
     expect(screen.getByTestId("tab-chrome-center").className).not.toContain(
       "z-10",
     );
+    expect(screen.getByTestId("tab-chrome-center").className).toContain(
+      "border-t",
+    );
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
     ).toContain("M -2 39.5 L 0 39.5");
     expect(
+      screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
+    ).toContain("10.6 0.5 15 0.5 L 20 0.5");
+    expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
     ).toContain("L 22 39.5");
+    expect(
+      screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
+    ).toContain("M 0 0.5 L 5 0.5 C 9.4 0.5");
   });
 });

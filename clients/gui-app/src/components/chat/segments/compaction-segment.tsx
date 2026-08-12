@@ -1,6 +1,5 @@
 import { ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
 import { useState } from "react";
-import { useChatMeasuredBooleanToggle } from "@/components/chat/chat-measured-item-change-context";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TraycerMarkdown } from "@/markdown";
@@ -71,7 +70,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
   const isStreaming = status === "streaming";
   const isErrored = status === "errored";
   const [expanded, setExpanded] = useState(false);
-  const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded);
+  const toggleExpanded = (): void => setExpanded((current) => !current);
 
   // A failed compaction has no boundary, so there are no real metrics and no
   // summary to expand - only the failure and its reason.

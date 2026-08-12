@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useNewConversationModalStore } from "../new-conversation-modal-store";
 import { emptyLandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
@@ -10,11 +9,13 @@ const WORKSPACE_A: WorkspaceFolderInfo = {
   path: "/tmp/workspace-a",
   name: "workspace-a",
   repoIdentifier: null,
+  hostId: null,
 };
 const WORKSPACE_B: WorkspaceFolderInfo = {
   path: "/tmp/workspace-b",
   name: "workspace-b",
   repoIdentifier: null,
+  hostId: null,
 };
 
 beforeEach(() => {

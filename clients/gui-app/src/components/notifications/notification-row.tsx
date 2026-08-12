@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
+import { m, useReducedMotion } from "motion/react";
 import {
   Bell,
   Check,
   CheckCircle2,
-  CircleAlert,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -12,11 +12,26 @@ import {
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
+import {
+  FAILURE_TONE,
+  notificationFeedTone,
+} from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
+import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
+import {
+  classifyProviderPackNotificationLocality,
+  presentProviderPackNotificationBody,
+  providerPackNotificationAllowsLocalAction,
+  providerPackViewingLocalityFromShell,
+  type ProviderPackNotificationLocality,
+} from "@/lib/notifications/provider-pack-notification-attribution";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
   useMergedNotificationRow,
@@ -28,12 +43,8 @@ import {
 
 interface NotificationRowProps {
   readonly feedId: string;
-  /** Attention rows always carry the rail, regardless of read state - an
-   * unresolved prompt must keep drawing the eye even after activation marks
-   * it read (needs_action attention membership is keyed on `resolvedAt`,
-   * not `readAt` - see `classifyNotificationLifecycle`). Recent rows pass
-   * `false` and fall back to the unread-only rule. */
-  readonly alwaysShowRail: boolean;
+  /** Briefly identifies a row that just moved from Attention into Recent. */
+  readonly highlightRelocation: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   /** Dismiss an unresolved `needs_action` Attention row (stamps `resolvedAt`).
@@ -42,52 +53,146 @@ interface NotificationRowProps {
   readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
+function isOriginUnavailable(input: {
+  readonly row: MergedNotificationRow;
+  readonly originStatus: "available" | "unavailable" | undefined;
+}): boolean {
+  const requiresOriginHost =
+    input.row.payload !== null &&
+    notificationPayloadRequiresOriginHost(input.row.payload);
+  if (!requiresOriginHost) return false;
+  if (input.row.originHostId === null) return true;
+  return input.originStatus !== "available";
+}
+
+/**
+ * The motion props the row's `layout` animation needs, or their inert forms.
+ *
+ * Extracted rather than inlined as four ternaries because this row now carries
+ * both the reduced-motion branches and the pack-attribution presentation, and
+ * the union of the two pushed `NotificationRow` past the module's complexity
+ * ceiling. The reduced-motion answer is one decision, so it reads better as
+ * one function than as the same conditional spelled four times.
+ */
+function rowMotionProps(options: {
+  readonly feedId: string;
+  readonly shouldReduceMotion: boolean;
+}): {
+  readonly layout: "position" | false;
+  readonly layoutId: string | undefined;
+  readonly exit: { readonly opacity: number } | undefined;
+} {
+  if (options.shouldReduceMotion) {
+    return { layout: false, layoutId: undefined, exit: undefined };
+  }
+  return {
+    layout: "position",
+    layoutId: `notification-row-${options.feedId}`,
+    exit: { opacity: 0 },
+  };
+}
+
+function isBlockingAttentionRow(row: MergedNotificationRow): boolean {
+  const lifecycle = classifyNotificationLifecycle(row);
+  return lifecycle.section === "attention" && lifecycle.tier === "blocking";
+}
+
 /**
  * One flat, balanced two-line row - a small semantic glyph, title/meta
  * content, trailing relative time, and exactly one primary interactive
  * control. A navigable row's primary control is the row itself (click to
- * activate) with a sibling "mark as read" affordance while unread; a
+ * activate) with a sibling resolve/mark-as-read affordance while unread; a
  * payload-less row never pretends to navigate - its only control is an
  * explicit acknowledge button, so neither shape ever nests a button inside
- * a button. Unread state (or Attention membership) is a full-height accent
+ * a button. Unread state is a full-height accent
  * rail on the row's leading edge (matching the app's pre-existing rail
  * language) plus title weight - the rail is absolutely positioned inside a
  * permanently-reserved edge inset (`pl-6` on the row regardless of rail
  * visibility), so its presence never shifts row content. The row itself
  * spans the popover's true edge-to-edge width (no section-level inset) so
  * its bottom divider isn't cut off short of the popover's edges - `pl-6`/
- * `pr-4` reproduce the old section inset (px-4) plus the rail gutter purely
- * as content padding.
+ * `pr-4` reproduce the section inset plus the rail gutter purely as content
+ * padding.
  */
 export function NotificationRow(props: NotificationRowProps): ReactNode {
   const row = useMergedNotificationRow(props.feedId);
+  // Hooks must remain unconditional while an exact-removal frame makes this
+  // row disappear between renders.
+  const originHost = useHostDirectoryEntry(row?.originHostId ?? "");
+  // This machine — not the ambient active host (G8 / D7). Pack-store events
+  // are machine-local; comparing against active would mis-caption when the
+  // user has a remote host selected.
+  const localHost = useReactiveLocalHostEntry();
+  const runnerHost = useRunnerHostOrNull();
+  const shouldReduceMotion = useReducedMotion() === true;
   if (row === null) return null;
+
+  const packPresentation = resolvePackRowPresentation({
+    attribution: row.providerPackAttribution,
+    hasLocalHost: runnerHost?.hasLocalHost ?? false,
+    localHostId: localHost?.hostId ?? null,
+    body: row.body,
+    hasPayload: row.payload !== null,
+  });
   const isRead = row.readAt !== null;
-  const isNavigable = row.payload !== null;
-  const showRail = props.alwaysShowRail || !isRead;
-  // A blocking-tier Attention row (unresolved `needs_action`) keeps its
-  // trailing control even once navigation marked it read - its only exit from
-  // Attention is `resolvedAt`, which `onAcknowledge` (readAt-only) can't set.
-  const lifecycle = classifyNotificationLifecycle(row);
-  const isBlockingAttention =
-    lifecycle.section === "attention" && lifecycle.tier === "blocking";
+  const originUnavailable = isOriginUnavailable({
+    row,
+    originStatus: originHost?.status,
+  });
+  const isBlockingAttention = isBlockingAttentionRow(row);
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
 
+  const motionProps = rowMotionProps({
+    feedId: row.feedId,
+    shouldReduceMotion,
+  });
+
   return (
-    <li
+    <m.li
+      layout={motionProps.layout}
+      layoutId={motionProps.layoutId}
+      exit={motionProps.exit}
+      transition={{
+        layout: { duration: 0.24, ease: "easeOut" },
+        opacity: { duration: 0.12, ease: "easeOut" },
+      }}
       // hover:/has-[:focus-visible]: give the whole row a subtle tint
       // whenever any of its interactive controls is hovered or keyboard-
       // focused, so the user can see what they're targeting - distinct from
       // the unread rail, which is a persistent state marker, not a hover
       // affordance (no persistent row tint).
-      className="relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-muted/70 has-[:focus-visible]:bg-muted/70"
+      //
+      // Remote pack-store entries stay fully listed (needs_action evidence)
+      // but are visually de-emphasised so this machine's actionable items
+      // lead — de-emphasis, not filter-out (D7).
+      className={cn(
+        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 last:border-b-0 hover:bg-muted/70 has-[:focus-visible]:bg-muted/70",
+        packPresentation.packRemote && "opacity-60",
+      )}
       data-testid="notification-entry"
       data-notification-id={row.feedId}
       data-notification-read={isRead ? "true" : "false"}
       data-notification-severity={row.severity}
+      data-notification-origin-state={
+        originUnavailable ? "unavailable" : "available"
+      }
+      data-notification-pack-remote={
+        packPresentation.packRemote ? "true" : "false"
+      }
+      data-notification-pack-locality={packPresentation.locality}
     >
-      {showRail ? (
+      {props.highlightRelocation && !shouldReduceMotion ? (
+        <m.span
+          aria-hidden
+          data-testid="notification-relocation-highlight"
+          className="pointer-events-none absolute inset-0 bg-primary/15"
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 0 }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+        />
+      ) : null}
+      {!isRead ? (
         <span
           aria-hidden
           data-testid="notification-unread-rail"
@@ -100,31 +205,121 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       >
         <Icon className={cn("size-4", glyph.colorClassName)} />
       </span>
-      {isNavigable ? (
-        <button
-          type="button"
-          onClick={() => props.onActivate(row)}
-          className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <NotificationRowBody row={row} isRead={isRead} />
-        </button>
-      ) : (
-        <div className="min-w-0 flex-1">
-          <NotificationRowBody row={row} isRead={isRead} />
-        </div>
-      )}
+      <NotificationRowMain
+        row={row}
+        displayBody={packPresentation.displayBody}
+        isRead={isRead}
+        isNavigable={packPresentation.isNavigable}
+        originUnavailable={originUnavailable}
+        packRemote={packPresentation.packRemote}
+        remoteHostLabel={packPresentation.remoteHostLabel}
+        onActivate={props.onActivate}
+      />
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
         <NotificationTimestamp createdAt={row.createdAt} />
         <NotificationRowTrailingControl
           row={row}
-          isNavigable={isNavigable}
+          isNavigable={packPresentation.isNavigable}
           isRead={isRead}
           isBlockingAttention={isBlockingAttention}
           onAcknowledge={props.onAcknowledge}
           onResolve={props.onResolve}
         />
       </div>
-    </li>
+    </m.li>
+  );
+}
+
+function resolvePackRowPresentation(options: {
+  readonly attribution: MergedNotificationRow["providerPackAttribution"];
+  readonly hasLocalHost: boolean;
+  readonly localHostId: string | null;
+  readonly body: string;
+  readonly hasPayload: boolean;
+}): {
+  readonly locality: ProviderPackNotificationLocality;
+  readonly packRemote: boolean;
+  readonly displayBody: string;
+  readonly isNavigable: boolean;
+  readonly remoteHostLabel: string | null;
+} {
+  const viewing = providerPackViewingLocalityFromShell({
+    hasLocalHost: options.hasLocalHost,
+    localHostId: options.localHostId,
+  });
+  const locality = classifyProviderPackNotificationLocality({
+    attribution: options.attribution,
+    viewing,
+  });
+  return {
+    locality,
+    packRemote: locality === "remote",
+    displayBody: presentProviderPackNotificationBody({
+      body: options.body,
+      attribution: options.attribution,
+      locality,
+    }),
+    isNavigable:
+      options.hasPayload && providerPackNotificationAllowsLocalAction(locality),
+    remoteHostLabel: options.attribution?.hostLabel ?? null,
+  };
+}
+
+function NotificationRowMain(props: {
+  readonly row: MergedNotificationRow;
+  readonly displayBody: string;
+  readonly isRead: boolean;
+  readonly isNavigable: boolean;
+  readonly originUnavailable: boolean;
+  readonly packRemote: boolean;
+  readonly remoteHostLabel: string | null;
+  readonly onActivate: (row: MergedNotificationRow) => void;
+}): ReactNode {
+  const body = (
+    <NotificationRowBody
+      title={props.row.title}
+      body={props.displayBody}
+      isRead={props.isRead}
+    />
+  );
+
+  if (props.isNavigable && !props.originUnavailable) {
+    return (
+      <button
+        type="button"
+        onClick={() => props.onActivate(props.row)}
+        className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        {body}
+      </button>
+    );
+  }
+
+  const remoteHint =
+    props.remoteHostLabel === null
+      ? "Act on this from that machine — it cannot be applied here."
+      : `Act on this from ${props.remoteHostLabel} — it cannot be applied here.`;
+
+  return (
+    <div className="min-w-0 flex-1">
+      {body}
+      {props.originUnavailable ? (
+        <span
+          data-testid="notification-origin-unavailable"
+          className="block text-ui-xs text-muted-foreground"
+        >
+          The originating host is unavailable.
+        </span>
+      ) : null}
+      {props.packRemote ? (
+        <span
+          data-testid="notification-pack-remote-hint"
+          className="block text-ui-xs text-muted-foreground"
+        >
+          {remoteHint}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -140,16 +335,15 @@ interface NotificationRowTrailingControlProps {
 /** The sibling trailing control. On an unresolved `needs_action` Attention row
  * it is a "Dismiss" affordance - the same right-edge tick normal rows carry,
  * but wired to `onResolve` (which stamps `resolvedAt`) so the row leaves
- * Attention without answering the underlying prompt. It stays available even
- * after navigation marked the row read, because Attention membership here is
- * keyed on `resolvedAt`, not `readAt`. Every other row keeps the original
- * acknowledge control - "Mark as read" on a navigable row, "Acknowledge" on a
- * payload-less one - shown only while unread: a read Recent row has nothing
- * left to press, and a dead-looking (grayed, unclickable) control reads as
- * broken rather than done. */
+ * Attention without answering the underlying prompt. Every other row keeps
+ * the original acknowledge control - "Mark as read" on a navigable row or
+ * "Acknowledge" on a payload-less one. All variants are shown only while
+ * unread: a read row has nothing left to press, and reusing the tick for
+ * another disposition makes the read-state affordance ambiguous. */
 function NotificationRowTrailingControl(
   props: NotificationRowTrailingControlProps,
 ): ReactNode {
+  if (props.isRead) return null;
   if (props.isBlockingAttention) {
     return (
       <NotificationRowControlButton
@@ -159,7 +353,6 @@ function NotificationRowTrailingControl(
       />
     );
   }
-  if (props.isRead) return null;
   return (
     <NotificationRowControlButton
       label={props.isNavigable ? "Mark as read" : "Acknowledge"}
@@ -208,19 +401,19 @@ function NotificationRowControlButton(
 }
 
 interface NotificationRowBodyProps {
-  readonly row: MergedNotificationRow;
+  readonly title: string;
+  readonly body: string;
   readonly isRead: boolean;
 }
 
 function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
-  const { row, isRead } = props;
-  const { ref: titleRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
-    row.title,
-  );
+  const { title, body, isRead } = props;
+  const { ref: titleRef, isTruncated } =
+    useIsTextTruncated<HTMLSpanElement>(title);
   return (
     <>
       <TooltipWrapper
-        label={isTruncated ? row.title : null}
+        label={isTruncated ? title : null}
         side="bottom"
         sideOffset={6}
         align="start"
@@ -235,14 +428,14 @@ function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
               : "font-semibold text-foreground",
           )}
         >
-          {row.title}
+          {title}
         </span>
       </TooltipWrapper>
       <span
         data-testid="notification-body"
         className="block truncate text-ui-xs text-muted-foreground"
       >
-        {row.body}
+        {body}
       </span>
     </>
   );
@@ -272,9 +465,7 @@ interface RowGlyph {
   readonly colorClassName: string;
 }
 
-const PROMPT_COLOR = "text-amber-600 dark:text-amber-400";
 const FAILURE_COLOR = "text-destructive";
-const DONE_COLOR = "text-blue-600 dark:text-blue-400";
 const NEUTRAL_COLOR = "text-muted-foreground";
 const SUCCESS_COLOR = "text-success-foreground";
 const INVITE_COLOR = "text-primary";
@@ -287,31 +478,25 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     return globalEventGlyph(row.globalEntry.event);
   }
   if (row.appLocalKind !== null) {
-    return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
-  }
-  if (row.severity === "failure") {
-    return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
-  }
-  if (row.severity === "needs_action") {
     return {
-      icon: row.hostKind === "approval.requested" ? Shield : MessageCircle,
-      colorClassName: PROMPT_COLOR,
+      icon: FAILURE_TONE.Icon,
+      colorClassName: FAILURE_TONE.className,
     };
   }
-  if (row.severity === "done") {
-    return { icon: Bell, colorClassName: DONE_COLOR };
+  const statusTone = notificationFeedTone(row);
+  if (statusTone !== null) {
+    return { icon: statusTone.Icon, colorClassName: statusTone.className };
   }
   switch (row.hostKind) {
     case "agent.stopped":
-      return { icon: Bell, colorClassName: DONE_COLOR };
+      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     case "agent.stalled":
-      return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
+      return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
     case "approval.requested":
-      return { icon: Shield, colorClassName: PROMPT_COLOR };
     case "interview.requested":
-      return { icon: MessageCircle, colorClassName: PROMPT_COLOR };
+      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     case "workspace.operation.failed":
-      return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
+      return { icon: MessageSquareX, colorClassName: FAILURE_COLOR };
     // Only reachable for an `info` row: the severity branches above already
     // claim every `done`/`failure`/`needs_action` host-operation row, and the
     // kind itself says nothing about how the operation ended.

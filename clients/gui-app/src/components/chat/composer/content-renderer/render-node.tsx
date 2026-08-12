@@ -9,7 +9,7 @@ import {
   mentionAttachmentFromAttrs,
   mentionPlainTextFromAttrs,
   numberValue,
-  slashCommandPlainTextFromAttrs,
+  slashCommandLabelFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 import { cn } from "@/lib/utils";
@@ -79,7 +79,10 @@ function renderSlashCommand(
   return (
     <SlashCommandChip
       key={key}
-      name={slashCommandPlainTextFromAttrs(node.attrs)}
+      // Label, not plain text: a chip picked (or written into a next step) with
+      // `$` reads back as `$name` here just as it does in the live composer,
+      // while the node it came from still serializes to the canonical `/name`.
+      name={slashCommandLabelFromAttrs(node.attrs)}
       density={context.profile.inlineChipDensity}
     />
   );
@@ -195,6 +198,20 @@ const RENDERERS: Partial<Record<string, NodeRenderer>> = {
     }),
   codeBlock: renderCodeBlock,
   blockquote: (node, key, context) =>
+    context.profile.renderBlockquote({
+      children: (
+        <ComposerNodeList
+          nodes={node.content ?? []}
+          keyPrefix={key}
+          context={context}
+        />
+      ),
+      nodeKey: key,
+    }),
+  // A sourced quote reads as a quote; its source rides in the attrs for the
+  // coding agent, and the accompanying mention chip is what shows the reader
+  // where it came from. Rendering it any louder would double-state that.
+  sourcedQuote: (node, key, context) =>
     context.profile.renderBlockquote({
       children: (
         <ComposerNodeList

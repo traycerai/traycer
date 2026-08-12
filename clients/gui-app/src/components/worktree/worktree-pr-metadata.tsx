@@ -1,10 +1,15 @@
-import { use, useCallback, type MouseEvent, type ReactNode } from "react";
+import { use, type MouseEvent, type ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
-  WorktreeWorkspaceSummaryV13,
+  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
-import { ExternalLink, FolderGit2, GitBranch } from "lucide-react";
+import {
+  ExternalLink,
+  FolderGit2,
+  GitBranch,
+  PanelsTopLeft,
+} from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surface";
@@ -25,45 +30,32 @@ import {
 } from "@/components/worktree/worktree-pr-metadata-model";
 import {
   PR_STATE_ICON,
+  PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
 
 /**
- * The one theme-aware PR-pill palette, used wherever a pill renders: the Epic
- * history list (page background) and the chat/owner hover preview (the
- * `bg-popover` hover-preview card). Both are normal, non-inverted surfaces, so
- * a single palette covers them.
+ * PR pills for the Epic history list (page background) and the chat/owner
+ * hover preview (the `bg-popover` hover-preview card). Both are normal,
+ * non-inverted surfaces, so one palette covers them - and it now lives in
+ * `worktree-pr-state-palette.ts` (`PR_STATE_PILL_CLASS` + `PR_STATE_TINT_CLASS`)
+ * alongside the glyph ramp, shared with the sidebar's icon variant and the
+ * Epic PR panel row.
  *
  * **The LABEL's contrast comes from `text-foreground`, not a tuned ramp.** It
  * used to be `-800` light / `-300` dark, picked against the pill's own 10%
  * tint. Coloured label text is gone, so that tuning no longer applies here:
  * `text-foreground` is the theme's own body-text token, already contrast-checked
- * against every preset surface.
- *
- * The tuning did NOT become moot, though - it moved. The state GLYPH inherited
- * the job of carrying the state, so it inherited the ramp too, and it lives in
- * `worktree-pr-state-palette.ts` shared with the sidebar's icon variant.
+ * against every preset surface. The tuning did NOT become moot, though - the
+ * state GLYPH inherited the job of carrying the state, so it inherited the ramp.
  */
-// Borderless tinted chips. The outline + fill + colored text of the previous
-// pill stacked three signals for one fact, which read as a warning box rather
-// than a link; the tint alone carries the state and the label stays legible
-// foreground text. State lives in the leading glyph (below), so the pill no
-// longer spells "Open" - the word cost more width than the status deserved
-// beside a PR number, and it duplicated what the glyph already said.
-const PR_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
-  open: "border-transparent bg-green-500/10 text-foreground hover:bg-green-500/20",
-  closed:
-    "border-transparent bg-red-500/10 text-foreground hover:bg-red-500/20",
-  merged:
-    "border-transparent bg-purple-500/10 text-foreground hover:bg-purple-500/20",
-};
-
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly detailOnHover: boolean;
   readonly maximumVisible: number | null;
   readonly className: string | undefined;
   readonly testId: string;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const references = worktreePrReferences(props.worktrees);
   if (references.length === 0) return null;
@@ -84,10 +76,14 @@ export function WorktreePrPills(props: {
           reference={reference}
           detailOnHover={props.detailOnHover}
           flexible={props.maximumVisible !== null}
+          openPrInApp={props.openPrInApp}
         />
       ))}
       {overflowReferences.length === 0 ? null : (
-        <WorktreePrOverflow references={overflowReferences} />
+        <WorktreePrOverflow
+          references={overflowReferences}
+          openPrInApp={props.openPrInApp}
+        />
       )}
     </span>
   );
@@ -97,6 +93,7 @@ function WorktreePrPill(props: {
   readonly reference: WorktreePrReference;
   readonly detailOnHover: boolean;
   readonly flexible: boolean;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   // The pill is a real PR link everywhere it renders - the Epic history list
   // and the chat/owner hover preview (now an interactive HoverCard, so a
@@ -108,11 +105,12 @@ function WorktreePrPill(props: {
       className={cn(
         "group/pr-pill gap-1.5 rounded-full px-2 font-medium",
         props.flexible && "min-w-0 shrink",
-        PR_PILL_CLASS[props.reference.state],
+        PR_STATE_PILL_CLASS[props.reference.state],
       )}
     >
       <WorktreePrAnchor
         reference={props.reference}
+        openPrInApp={props.openPrInApp}
         className={cn("max-w-[min(60vw,16rem)]", props.flexible && "min-w-0")}
       />
     </Badge>
@@ -132,6 +130,7 @@ function WorktreePrPill(props: {
 
 function WorktreePrOverflow(props: {
   readonly references: readonly WorktreePrReference[];
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const count = props.references.length;
   return (
@@ -165,6 +164,7 @@ function WorktreePrOverflow(props: {
               reference={reference}
               detailOnHover={false}
               flexible={false}
+              openPrInApp={props.openPrInApp}
             />
           ))}
         </span>
@@ -176,6 +176,7 @@ function WorktreePrOverflow(props: {
 function WorktreePrPillContent(props: {
   readonly label: string;
   readonly state: WorktreeDisplayedPrState;
+  readonly opensInApp: boolean;
 }): ReactNode {
   const StateIcon = PR_STATE_ICON[props.state];
   return (
@@ -191,10 +192,17 @@ function WorktreePrPillContent(props: {
           on hover it confirms the affordance exactly when it is being
           considered. `opacity` (not conditional mount) so the pill's width is
           identical in both states and a row of them cannot reflow on hover. */}
-      <ExternalLink
-        className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
-        aria-hidden
-      />
+      {props.opensInApp ? (
+        <PanelsTopLeft
+          className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
+          aria-hidden
+        />
+      ) : (
+        <ExternalLink
+          className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
+          aria-hidden
+        />
+      )}
     </>
   );
 }
@@ -202,18 +210,21 @@ function WorktreePrPillContent(props: {
 function WorktreePrAnchor(props: {
   readonly reference: WorktreePrReference;
   readonly className: string | undefined;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
   const openExternalLink = useRunnerOpenExternalLink();
-  const openExternal = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>): void => {
-      event.stopPropagation();
-      if (runnerHost === null) return;
+  const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
+    event.stopPropagation();
+    if (props.openPrInApp !== null && hasNativePrCoordinates(props.reference)) {
       event.preventDefault();
-      openExternalLink.mutate(props.reference.url);
-    },
-    [openExternalLink, props.reference.url, runnerHost],
-  );
+      props.openPrInApp(props.reference);
+      return;
+    }
+    if (runnerHost === null) return;
+    event.preventDefault();
+    openExternalLink.mutate(props.reference.url);
+  };
   return (
     <a
       href={props.reference.url}
@@ -223,13 +234,30 @@ function WorktreePrAnchor(props: {
       className={props.className}
       data-testid="worktree-context-pr-pill"
       data-pr-state={props.reference.state}
-      onClick={openExternal}
+      onClick={openPr}
     >
       <WorktreePrPillContent
         label={props.reference.label}
         state={props.reference.state}
+        opensInApp={
+          props.openPrInApp !== null && hasNativePrCoordinates(props.reference)
+        }
       />
     </a>
+  );
+}
+
+function hasNativePrCoordinates(
+  reference: WorktreePrReference,
+): reference is WorktreePrReference & {
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+} {
+  return (
+    reference.githubHost !== null &&
+    reference.owner !== null &&
+    reference.repo !== null
   );
 }
 
@@ -261,9 +289,10 @@ function WorktreePrHoverDetail(props: {
 export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
-  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
   readonly pending: boolean;
   readonly error: boolean;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   if (props.pending && props.binding === null) {
     return (
@@ -337,6 +366,7 @@ export function OwnerWorkspaceMetadataContent(props: {
               maximumVisible={null}
               className="mt-0.5 flex-wrap overflow-visible"
               testId={`owner-workspace-prs-${item.key}`}
+              openPrInApp={props.openPrInApp}
             />
           )}
         </span>

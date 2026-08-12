@@ -1,4 +1,3 @@
-import "../../../../../__tests__/test-browser-apis";
 import { createRef, type RefObject } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import { createComposerPickerStore } from "../picker/composer-picker-store";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
 import { useChatComposerSubmit } from "../use-chat-composer-submit";
 import { useChatComposerDraft } from "../use-chat-composer-draft";
+import { createFakeComposerPromptEditorHandle } from "./composer-prompt-editor-handle-fixtures";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { Attachment } from "@/lib/composer/types";
@@ -79,7 +79,6 @@ describe("chat-composer submit gate (path resolution)", () => {
         },
         reasoning: "medium",
         serviceTier: "",
-        agentMode: "regular",
       },
       onSettingsChange: null,
       tuiOnly: false,
@@ -264,7 +263,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
 
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
     expect(clear).toHaveBeenCalledTimes(1);
-    expect(editor.setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+    expect(editor.syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
     expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
       EMPTY_DOC,
     );
@@ -274,7 +273,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
 /**
  * Root cause 2: multiple composers share one draft-store entry per taskId.
  * Submit clears only the submitting editor's local Tiptap doc via clear();
- * siblings must observe clearDraft's resetEpoch and setContent(empty).
+ * siblings must observe clearDraft's resetEpoch and syncContent(empty).
  */
 describe("chat-composer submit multi-surface clear", () => {
   it("clears a sibling composer's Tiptap document when A submits for the same taskId", () => {
@@ -333,8 +332,8 @@ describe("chat-composer submit multi-surface clear", () => {
     // A is cleared by the direct clear() call in finalizeSend.
     expect(clearA).toHaveBeenCalledTimes(1);
     // B never gets clear() - it must learn via the store's resetEpoch broadcast.
-    // Old clearDraft deleted the map entry and B.setContent was never called.
-    expect(b.setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+    // Old clearDraft deleted the map entry and B.syncContent was never called.
+    expect(b.syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
     expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
       EMPTY_DOC,
     );
@@ -358,7 +357,6 @@ function mountSubmitHook(args: {
       },
       reasoning: "medium",
       serviceTier: "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: false,
@@ -394,38 +392,30 @@ interface ControllableEditorArgs {
 function controllableEditorHandle(args: ControllableEditorArgs): {
   readonly handle: ComposerPromptEditorHandle;
   readonly setContent: ComposerPromptEditorHandle["setContent"];
+  readonly syncContent: ComposerPromptEditorHandle["syncContent"];
   readonly clear: () => void;
   readonly markReady: () => void;
 } {
-  let isReady = args.ready;
-  // Plain function first, then wrap so the handle type is exact and
-  // assertions still work through the mock.
-  const setContentImpl: ComposerPromptEditorHandle["setContent"] = (
-    _content,
-    _selection,
-  ) => undefined;
-  const setContent = vi.fn(setContentImpl);
+  const fake = createFakeComposerPromptEditorHandle({
+    ready: args.ready,
+    content: args.content,
+    selection: null,
+    isEmpty: false,
+    onFocus: null,
+    onClear: null,
+  });
+  // Preserve the explicit clear mock the submit-gate suite spies on.
   const handle: ComposerPromptEditorHandle = {
-    isReady: () => isReady,
-    focus: () => undefined,
-    focusAtEnd: () => undefined,
-    getJSON: () => args.content,
-    isEmpty: () => false,
+    ...fake.handle,
     clear: args.clear,
-    setContent,
-    insertImageAttachments: () => undefined,
-    beginPathInsertion: () => null,
-    rewriteImageAttachmentHashById: () => false,
-    removeImageAttachmentById: () => undefined,
-    insertDictatedText: () => undefined,
-    dismissActiveSuggestion: () => false,
   };
   return {
     handle,
-    setContent,
+    setContent: fake.setContent,
+    syncContent: fake.syncContent,
     clear: args.clear,
     markReady: () => {
-      isReady = true;
+      fake.markReady(true);
     },
   };
 }

@@ -140,6 +140,26 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       `spend: ${formatNumber(rateLimits.dailySpend)} today, ${formatNumber(rateLimits.weeklySpend)} this week, ${formatNumber(rateLimits.monthlySpend)} this month`,
     ].join("\n");
   }
+  if (rateLimits.provider === "huggingface") {
+    // Spend-only when the account carries no included allowance: reporting
+    // "0/unknown included" there would invent a plan the user does not have.
+    return [
+      rateLimits.includedUsd === null
+        ? `spend: ${formatNumber(rateLimits.usedUsd)} this period`
+        : `included credits: ${formatNumber(rateLimits.remainingIncludedUsd)}/${formatNumber(rateLimits.includedUsd)} remaining (${formatNumber(rateLimits.usedUsd)} used)`,
+      rateLimits.limitUsd === null
+        ? null
+        : `spend limit: ${formatNumber(rateLimits.remainingLimitUsd)}/${formatNumber(rateLimits.limitUsd)} remaining`,
+      rateLimits.numRequests === null
+        ? null
+        : `requests: ${rateLimits.numRequests}`,
+      rateLimits.periodStart === null || rateLimits.periodEnd === null
+        ? null
+        : `billing period: ${rateLimits.periodStart} - ${rateLimits.periodEnd}`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
   if (rateLimits.provider === "grok") {
     return [
       `tier: ${rateLimits.subscriptionTier ?? "unknown"}`,

@@ -12,6 +12,7 @@ import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
 import HermesAgentMono from "@lobehub/icons/es/HermesAgent/components/Mono";
+import HuggingFaceColor from "@lobehub/icons/es/HuggingFace/components/Color";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -40,6 +41,11 @@ export const DroidIcon: HarnessIcon = (props) => (
 );
 export const OpenRouterIcon: HarnessIcon = (props) => (
   <OpenRouterMono {...props} />
+);
+// Hugging Face uses the colored smiley (the official brand mark) so it keeps
+// its brand yellow in both themes, like the Claude sunburst.
+export const HuggingFaceIcon: HarnessIcon = (props) => (
+  <HuggingFaceColor {...props} />
 );
 export const KimiIcon: HarnessIcon = (props) => <KimiMono {...props} />;
 

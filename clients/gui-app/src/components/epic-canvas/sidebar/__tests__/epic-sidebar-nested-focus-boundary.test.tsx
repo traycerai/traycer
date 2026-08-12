@@ -26,7 +26,6 @@
  * fires exactly ONCE per batch (a per-item loop fires N times) with a target
  * that is a genuine survivor / the unchanged current focus.
  */
-import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
   fireEvent,
@@ -307,6 +306,7 @@ vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicArchiveChats: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicCreateChatForHostClient: () => ({
     mutate: vi.fn(),
@@ -489,6 +489,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useChatFilter: () => ({ origin: "all" }),
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
+  usePanelVisibilityOverrides: () => ({}),
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       clearAcknowledgedRootCreatePending: vi.fn(),

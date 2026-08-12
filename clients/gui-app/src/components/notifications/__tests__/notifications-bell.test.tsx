@@ -1,4 +1,3 @@
-import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -65,12 +64,19 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => activeHostIdRef.value,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string) => {
-    if (hostId.length === 0 || directoryRef.value === null) return null;
-    return directoryRef.value.findById(hostId);
-  },
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string) => {
+      if (hostId.length === 0 || directoryRef.value === null) return null;
+      return directoryRef.value.findById(hostId);
+    },
+  };
+});
 
 function buildSnapshot(entries: ReadonlyArray<NotificationEntry>): Uint8Array {
   const donor = new Y.Doc();
@@ -144,6 +150,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");
@@ -477,6 +484,20 @@ describe("NotificationsBell", () => {
     expect(
       (await screen.findByTestId("notifications-subtitle")).textContent,
     ).toBe(`Task activity from ${mockLocalHostEntry.label}`);
+  });
+
+  it("omits the subtitle row in cloud mode", async () => {
+    const streamClient = new MockWsStreamClient();
+    streamClient.methodSupportByName.set(
+      "host.notifications.cloudFeed.subscribe",
+      "supported",
+    );
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, { wsStreamClient: streamClient });
+
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(screen.queryByTestId("notifications-subtitle")).toBeNull();
   });
 
   describe("notification center opened analytics", () => {

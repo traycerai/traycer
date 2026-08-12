@@ -20,5 +20,10 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vitest.config.ts"]
+  "include": [
+    "vitest.config.ts",
+    "vitest.react-compiler.config.ts",
+    "scripts",
+    "types"
+  ]
 }

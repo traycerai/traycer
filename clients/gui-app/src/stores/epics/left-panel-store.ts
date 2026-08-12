@@ -16,6 +16,7 @@ export const LEFT_PANEL_IDS = [
   "terminals",
   "artifacts",
   "git-diff",
+  "pull-requests",
   "file-tree",
   "sharing",
   "comments",
@@ -42,6 +43,24 @@ export const CHAT_ORIGIN = {
   Tui: "tui",
 } as const;
 export type ChatOriginFilter = (typeof CHAT_ORIGIN)[keyof typeof CHAT_ORIGIN];
+
+export const CHAT_ARCHIVE_VISIBILITY = {
+  Unarchived: "unarchived",
+  Archived: "archived",
+  All: "all",
+} as const;
+export type ChatArchiveVisibility =
+  (typeof CHAT_ARCHIVE_VISIBILITY)[keyof typeof CHAT_ARCHIVE_VISIBILITY];
+export const DEFAULT_CHAT_ARCHIVE_VISIBILITY =
+  CHAT_ARCHIVE_VISIBILITY.Unarchived;
+
+function isChatArchiveVisibility(
+  value: unknown,
+): value is ChatArchiveVisibility {
+  return Object.values(CHAT_ARCHIVE_VISIBILITY).some(
+    (visibility) => visibility === value,
+  );
+}
 
 export const ARTIFACT_READ = {
   All: "all",
@@ -154,6 +173,7 @@ export const DEFAULT_LEFT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats", "artifacts"] },
   { panelIds: ["terminals"] },
   { panelIds: ["git-diff"] },
+  { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
   { panelIds: ["sharing"] },
   { panelIds: ["comments"] },
@@ -178,6 +198,9 @@ type RootCreatePendingByPanel<T> = Readonly<
 type PanelSectionCollapsedByPanelId = Readonly<
   Partial<Record<LeftPanelId, boolean>>
 >;
+export type PanelVisibilityOverrideById = Readonly<
+  Partial<Record<LeftPanelId, boolean>>
+>;
 type PanelSectionWeightsByPanelId = Readonly<
   Partial<Record<LeftPanelId, number>>
 >;
@@ -190,18 +213,31 @@ interface LeftPanelStore {
   readonly panelSectionCollapsedByPanelId: PanelSectionCollapsedByPanelId;
   readonly panelSectionWeightsByPanelId: PanelSectionWeightsByPanelId;
   readonly commentsPanelRevealedByTabId: Readonly<Record<string, boolean>>;
+  /**
+   * Explicit show/hide chosen from the rail context menu, keyed by panel. An
+   * entry wins over the panel's own availability rule: `true` keeps the icon in
+   * the rail even when the rule would drop it (a PR-less epic, an artifact with
+   * no comments), `false` hides a panel that would otherwise be there. An
+   * absent entry means "follow the rule", which is why the map is sparse rather
+   * than a full record - see `isLeftPanelVisible`.
+   *
+   * Global (not per tab or per epic) because it expresses a durable preference
+   * about the rail's shape, the same way `panelGroups` does: hiding a panel in
+   * one epic should not have to be repeated in the next.
+   */
+  readonly panelVisibilityOverrideById: PanelVisibilityOverrideById;
   readonly localRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelRootCreatePending>;
   readonly acknowledgedRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelAcknowledgedRootCreatePending>;
   readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
   /**
-   * Per-epic "Show archived" reveal for the Agents panel. Deliberately NOT a
-   * field on {@link ChatFilter}: `isChatFilterActive` drives the visible-id set
-   * that `mergeForcedExpanded` force-expands, so folding this in would expand
-   * the entire tree the moment anything was archived. It is also the opposite
-   * of a filter - it reveals rows rather than hiding them - so it must not
-   * light the "your view is filtered" dot either.
+   * Per-epic archive visibility for the Agents panel. Deliberately NOT a field
+   * on {@link ChatFilter}: `isChatFilterActive` drives the visible-id set that
+   * `mergeForcedExpanded` force-expands, so folding this in would expand the
+   * entire tree whenever the archive view changes.
    */
-  readonly chatShowArchivedByEpicId: Readonly<Record<string, boolean>>;
+  readonly chatArchiveVisibilityByEpicId: Readonly<
+    Record<string, ChatArchiveVisibility>
+  >;
   readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   readonly chatSortByEpicId: Readonly<Record<string, SortMode>>;
   readonly artifactSortByEpicId: Readonly<Record<string, SortMode>>;
@@ -242,6 +278,17 @@ interface LeftPanelStore {
   readonly isCommentsPanelRevealed: (tabId: string) => boolean;
   readonly revealCommentsPanel: (tabId: string) => void;
 
+  /**
+   * `null` drops the override so the panel goes back to following its own
+   * availability rule. Callers pass `null` whenever the value they are setting
+   * already matches that rule, keeping the persisted map to real preferences.
+   */
+  readonly setPanelVisibilityOverride: (
+    panelId: LeftPanelId,
+    override: boolean | null,
+  ) => void;
+  readonly clearPanelVisibilityOverrides: () => void;
+
   readonly getLocalRootCreatePending: (
     epicId: string,
     panelId: RootCreatePanelId,
@@ -272,7 +319,10 @@ interface LeftPanelStore {
 
   readonly setChatOrigin: (epicId: string, origin: ChatOriginFilter) => void;
   readonly clearChatFilter: (epicId: string) => void;
-  readonly toggleChatShowArchived: (epicId: string) => void;
+  readonly setChatArchiveVisibility: (
+    epicId: string,
+    visibility: ChatArchiveVisibility,
+  ) => void;
   readonly toggleArtifactStatus: (
     epicId: string,
     status: ArtifactStatusFilter,
@@ -282,8 +332,10 @@ interface LeftPanelStore {
   readonly clearArtifactFilter: (epicId: string) => void;
   readonly setChatSortField: (epicId: string, field: SortField) => void;
   readonly toggleChatSortDirection: (epicId: string) => void;
+  readonly resetChatView: (epicId: string) => void;
   readonly setArtifactSortField: (epicId: string, field: SortField) => void;
   readonly toggleArtifactSortDirection: (epicId: string) => void;
+  readonly resetArtifactView: (epicId: string) => void;
 }
 
 const PERSIST_KEY = persistKey(STORE_KEYS.leftPanel);
@@ -296,18 +348,66 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-function isLeftPanelGroup(value: unknown): value is LeftPanelGroup {
-  if (!isRecord(value)) return false;
-  if (!Array.isArray(value.panelIds)) return false;
-  return value.panelIds.every(isLeftPanelId);
+/**
+ * v2 replaces the binary `chatShowArchivedByEpicId` preference with the full
+ * three-state archive visibility model. A legacy `true` meant exactly what
+ * `All` means now; absent/false remains the default unarchived-only view.
+ */
+export function migrateLeftPanelPersistedState(persisted: unknown): unknown {
+  if (!isRecord(persisted)) return persisted;
+  const archiveVisibilityByEpicId: Record<string, ChatArchiveVisibility> = {};
+  if (isRecord(persisted.chatArchiveVisibilityByEpicId)) {
+    for (const [epicId, visibility] of Object.entries(
+      persisted.chatArchiveVisibilityByEpicId,
+    )) {
+      if (
+        isChatArchiveVisibility(visibility) &&
+        visibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY
+      ) {
+        archiveVisibilityByEpicId[epicId] = visibility;
+      }
+    }
+  } else if (isRecord(persisted.chatShowArchivedByEpicId)) {
+    for (const [epicId, showArchived] of Object.entries(
+      persisted.chatShowArchivedByEpicId,
+    )) {
+      if (showArchived === true) {
+        archiveVisibilityByEpicId[epicId] = CHAT_ARCHIVE_VISIBILITY.All;
+      }
+    }
+  }
+  const migrated = { ...persisted };
+  delete migrated.chatShowArchivedByEpicId;
+  migrated.chatArchiveVisibilityByEpicId = archiveVisibilityByEpicId;
+  return migrated;
 }
 
+function isPersistedPanelGroupShape(
+  value: unknown,
+): value is { readonly panelIds: ReadonlyArray<unknown> } {
+  if (!isRecord(value)) return false;
+  return Array.isArray(value.panelIds);
+}
+
+/**
+ * Sidebar grouping as some build of the app wrote it. Only structure is
+ * rejected here; an id this build does not know is dropped, and the group with
+ * it once nothing is left in it.
+ *
+ * Removing a panel has to be as gentle as adding one. Rejecting the whole
+ * value over one unknown id sends a user who had ever rearranged their sidebar
+ * straight back to defaults on the release that retires a panel - and every
+ * such user carries the retired id, because it shipped in the defaults.
+ */
 function readPersistedPanelGroups(
   value: unknown,
 ): ReadonlyArray<LeftPanelGroup> | null {
   if (!Array.isArray(value)) return null;
-  if (!value.every(isLeftPanelGroup)) return null;
-  return value;
+  if (!value.every(isPersistedPanelGroupShape)) return null;
+  return value.flatMap((group) => {
+    const panelIds = group.panelIds.filter(isLeftPanelId);
+    return panelIds.length === 0 ? [] : [{ panelIds }];
+  });
 }
 
 function getPersistedPanelSectionCollapsedByPanelId(
@@ -323,10 +423,69 @@ function getPersistedPanelSectionCollapsedByPanelId(
   }, {});
 }
 
-function getStoredPanelGroups(groups: unknown): ReadonlyArray<LeftPanelGroup> {
+/**
+ * Drop entries a newer/older build (or a hand-edited localStorage) could have
+ * left behind: an unknown panel id, or a non-boolean where the override map
+ * only ever holds `true`/`false`.
+ */
+function getPersistedPanelVisibilityOverrides(
+  panelVisibilityOverrideById: PanelVisibilityOverrideById,
+): PanelVisibilityOverrideById {
+  return Object.entries(panelVisibilityOverrideById).reduce<
+    Partial<Record<LeftPanelId, boolean>>
+  >((nextOverrides, [panelId, visible]) => {
+    if (isLeftPanelId(panelId) && typeof visible === "boolean") {
+      nextOverrides[panelId] = visible;
+    }
+    return nextOverrides;
+  }, {});
+}
+
+// `normalizeLeftPanelGroups` returns its input untouched only when the stored
+// value is ALREADY normalized; otherwise it builds a new array. Persisted
+// groups written before a panel id existed can never be already-normalized -
+// the missing group is appended on every call - so the uncached function
+// returns a different reference each time it runs.
+//
+// `useLeftPanelGroups` feeds that value straight into `useSyncExternalStore`,
+// and zustand v5 calls `getSnapshot` as `() => selector(getState())` with no
+// memoization of its own. An unstable reference therefore reads as "the store
+// changed" on every commit, so React re-renders forever and throws "Maximum
+// update depth exceeded" (minified error #185) - which is what every user
+// carrying pre-Pull-Requests sidebar state hit on opening an epic.
+//
+// Keyed by the stored array's identity rather than held as ONE last-input
+// slot: a single slot only guarantees stability while every reader passes the
+// same input, so two readers alternating between two identities (a rehydrated
+// persisted array and the live slice, say) would each miss and hand
+// `useSyncExternalStore` a fresh array on every commit again - the exact
+// condition above. A WeakMap keeps every observed input stable and lets the
+// entry die with the array it belongs to.
+const storedPanelGroupsCache = new WeakMap<
+  object,
+  ReadonlyArray<LeftPanelGroup>
+>();
+
+function normalizeStoredPanelGroups(
+  groups: unknown,
+): ReadonlyArray<LeftPanelGroup> {
   const storedGroups = readPersistedPanelGroups(groups);
-  if (storedGroups === null) return DEFAULT_LEFT_PANEL_GROUPS;
-  return normalizeLeftPanelGroups(storedGroups);
+  return storedGroups === null
+    ? DEFAULT_LEFT_PANEL_GROUPS
+    : normalizeLeftPanelGroups(storedGroups);
+}
+
+function getStoredPanelGroups(groups: unknown): ReadonlyArray<LeftPanelGroup> {
+  // A non-object input cannot key a WeakMap, but it also cannot be normalized
+  // to anything but the default constant, which is already a stable reference.
+  if (typeof groups !== "object" || groups === null) {
+    return normalizeStoredPanelGroups(groups);
+  }
+  const cached = storedPanelGroupsCache.get(groups);
+  if (cached !== undefined) return cached;
+  const normalizedGroups = normalizeStoredPanelGroups(groups);
+  storedPanelGroupsCache.set(groups, normalizedGroups);
+  return normalizedGroups;
 }
 
 function getPersistedActivePanelIds(
@@ -720,10 +879,11 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
       panelSectionCollapsedByPanelId: {},
       panelSectionWeightsByPanelId: {},
       commentsPanelRevealedByTabId: {},
+      panelVisibilityOverrideById: {},
       localRootCreatePendingByEpicPanel: {},
       acknowledgedRootCreatePendingByEpicPanel: {},
       chatFilterByEpicId: {},
-      chatShowArchivedByEpicId: {},
+      chatArchiveVisibilityByEpicId: {},
       artifactFilterByEpicId: {},
       chatSortByEpicId: {},
       artifactSortByEpicId: {},
@@ -747,6 +907,17 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
 
       setActivePanelIdAndExpand: (tabId, panelId) => {
         set((state) => {
+          // A panel the user explicitly switched off never becomes the active
+          // one. Several call sites switch panels FOR the user - activating a
+          // comment thread, focusing a tab type - and without this they would
+          // point the sidebar at a panel that has no rail icon, leaving the
+          // body to fall back to a different panel than the one asked for.
+          // Only an explicit `false` blocks: a presence-gated panel that is
+          // merely absent is not a user decision, and its own reveal path
+          // (`revealCommentsPanel`) makes it visible in the same turn.
+          if (state.panelVisibilityOverrideById[panelId] === false) {
+            return state;
+          }
           const currentPanelId =
             state.activePanelIdByTabId[tabId] ?? DEFAULT_LEFT_PANEL_ID;
           const currentCollapsed = state.mainCollapsedByTabId[tabId] ?? false;
@@ -930,6 +1101,30 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
+      setPanelVisibilityOverride: (panelId, override) => {
+        set((state) => {
+          const current = state.panelVisibilityOverrideById;
+          if (override === null) {
+            if (!Object.hasOwn(current, panelId)) return state;
+            const next = { ...current };
+            delete next[panelId];
+            return { panelVisibilityOverrideById: next };
+          }
+          if (current[panelId] === override) return state;
+          return {
+            panelVisibilityOverrideById: { ...current, [panelId]: override },
+          };
+        });
+      },
+
+      clearPanelVisibilityOverrides: () => {
+        set((state) =>
+          Object.keys(state.panelVisibilityOverrideById).length === 0
+            ? state
+            : { panelVisibilityOverrideById: {} },
+        );
+      },
+
       getLocalRootCreatePending: (epicId, panelId) =>
         getPanelRootPending(
           get().localRootCreatePendingByEpicPanel,
@@ -1034,20 +1229,22 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
-      toggleChatShowArchived: (epicId) => {
+      setChatArchiveVisibility: (epicId, visibility) => {
         set((state) => {
-          const current = state.chatShowArchivedByEpicId[epicId] ?? false;
-          if (current) {
-            // Drop the key rather than storing `false` so the default state
-            // leaves no entry behind, matching how an inactive filter clears.
-            const next = { ...state.chatShowArchivedByEpicId };
+          const current =
+            state.chatArchiveVisibilityByEpicId[epicId] ??
+            DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+          if (current === visibility) return state;
+          if (visibility === DEFAULT_CHAT_ARCHIVE_VISIBILITY) {
+            // Drop the key so the default view leaves no persisted entry.
+            const next = { ...state.chatArchiveVisibilityByEpicId };
             delete next[epicId];
-            return { chatShowArchivedByEpicId: next };
+            return { chatArchiveVisibilityByEpicId: next };
           }
           return {
-            chatShowArchivedByEpicId: {
-              ...state.chatShowArchivedByEpicId,
-              [epicId]: true,
+            chatArchiveVisibilityByEpicId: {
+              ...state.chatArchiveVisibilityByEpicId,
+              [epicId]: visibility,
             },
           };
         });
@@ -1155,6 +1352,32 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
+      resetChatView: (epicId) => {
+        set((state) => {
+          const hasFilter = Object.hasOwn(state.chatFilterByEpicId, epicId);
+          const hasArchiveVisibility = Object.hasOwn(
+            state.chatArchiveVisibilityByEpicId,
+            epicId,
+          );
+          const hasSort = Object.hasOwn(state.chatSortByEpicId, epicId);
+          if (!hasFilter && !hasArchiveVisibility && !hasSort) return state;
+
+          const chatFilterByEpicId = { ...state.chatFilterByEpicId };
+          const chatArchiveVisibilityByEpicId = {
+            ...state.chatArchiveVisibilityByEpicId,
+          };
+          const chatSortByEpicId = { ...state.chatSortByEpicId };
+          delete chatFilterByEpicId[epicId];
+          delete chatArchiveVisibilityByEpicId[epicId];
+          delete chatSortByEpicId[epicId];
+          return {
+            chatFilterByEpicId,
+            chatArchiveVisibilityByEpicId,
+            chatSortByEpicId,
+          };
+        });
+      },
+
       setArtifactSortField: (epicId, field) => {
         set((state) => {
           const current = getFilterOrEmpty(
@@ -1190,9 +1413,24 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           };
         });
       },
+
+      resetArtifactView: (epicId) => {
+        set((state) => {
+          const hasFilter = Object.hasOwn(state.artifactFilterByEpicId, epicId);
+          const hasSort = Object.hasOwn(state.artifactSortByEpicId, epicId);
+          if (!hasFilter && !hasSort) return state;
+
+          const artifactFilterByEpicId = { ...state.artifactFilterByEpicId };
+          const artifactSortByEpicId = { ...state.artifactSortByEpicId };
+          delete artifactFilterByEpicId[epicId];
+          delete artifactSortByEpicId[epicId];
+          return { artifactFilterByEpicId, artifactSortByEpicId };
+        });
+      },
     }),
     {
       ...basePersistOptions(PERSIST_KEY),
+      version: 2,
       storage: createJSONStorage(() => window.localStorage),
       partialize: (state) => ({
         activePanelIdByTabId: getPersistedActivePanelIds(
@@ -1205,16 +1443,16 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
             state.panelSectionCollapsedByPanelId,
           ),
         panelSectionWeightsByPanelId: state.panelSectionWeightsByPanelId,
+        panelVisibilityOverrideById: getPersistedPanelVisibilityOverrides(
+          state.panelVisibilityOverrideById,
+        ),
         chatFilterByEpicId: filterActiveByEpic(
           state.chatFilterByEpicId,
           isChatFilterActive,
         ),
-        // Only the `true` entries; the toggle already deletes on the way back
-        // to the default, so this is belt-and-braces against a stale persisted
-        // `false` from an older build.
-        chatShowArchivedByEpicId: filterActiveByEpic(
-          state.chatShowArchivedByEpicId,
-          (showArchived) => showArchived,
+        chatArchiveVisibilityByEpicId: filterActiveByEpic(
+          state.chatArchiveVisibilityByEpicId,
+          (visibility) => visibility !== DEFAULT_CHAT_ARCHIVE_VISIBILITY,
         ),
         artifactFilterByEpicId: filterActiveByEpic(
           state.artifactFilterByEpicId,
@@ -1229,6 +1467,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           isSortModeActive,
         ),
       }),
+      migrate: (persisted) => migrateLeftPanelPersistedState(persisted),
     },
   ),
 );
@@ -1241,12 +1480,16 @@ export function useChatFilter(epicId: string): ChatFilter {
   );
 }
 
-/**
- * Whether the Agents panel is currently revealing archived rows for this epic.
- * Default `false` - archived rows and their subtrees stay hidden.
- */
-export function useChatShowArchived(epicId: string): boolean {
-  return useLeftPanelStore((s) => s.chatShowArchivedByEpicId[epicId] ?? false);
+/** Archive visibility for this epic's Agents panel. */
+export function useChatArchiveVisibility(
+  epicId: string,
+): ChatArchiveVisibility {
+  return useLeftPanelStore((state) => {
+    const visibility = state.chatArchiveVisibilityByEpicId[epicId];
+    return isChatArchiveVisibility(visibility)
+      ? visibility
+      : DEFAULT_CHAT_ARCHIVE_VISIBILITY;
+  });
 }
 
 export function useArtifactFilter(epicId: string): ArtifactFilter {
@@ -1295,6 +1538,10 @@ export function useCommentsPanelRevealed(tabId: string): boolean {
   return useLeftPanelStore(
     (s) => s.commentsPanelRevealedByTabId[tabId] ?? false,
   );
+}
+
+export function usePanelVisibilityOverrides(): PanelVisibilityOverrideById {
+  return useLeftPanelStore((s) => s.panelVisibilityOverrideById);
 }
 
 export function useLocalRootCreatePending(
